@@ -1,0 +1,37 @@
+# This is a TOML document
+
+# name代表服务名
+# id代表服务id
+[Service]
+name = "logd"
+id = 1
+
+[Log]
+root_path = "./logs"
+
+[ThreadPool]
+normal = 3 #标准线程池数
+urgent = 1 #加急线程池数
+queue = 1  #有序线程池数
+max_task_count = 1000000
+
+[Timer]
+offset_ms = 50		#定时器间隔,必须被1000整除
+timer_lv_count = 4	#定时器分割等级数,必须>=2
+#每一个偏移等级对应的tick数基数
+#lv[0] = timer_lvs[0]
+#lv[1] = timer_lvs[0]*timer_lvs[1]
+#lv[2] = timer_lvs[0]*timer_lvs[1]*timer_lvs[2]
+#lv[3] = timer_lvs[0]*timer_lvs[1]*timer_lvs[2]*timer_lvs[3]
+timer_lvs = [128,128,128,1] #每级定时器对应的间隔,最后一级只能是1
+
+# ip port 必须为字符串.
+[LogClient]
+ip		= "127.0.0.1"
+port	= "19995"
+type   	= "tcp"
+
+[LogServer]
+ip		= "127.0.0.1"
+port	= "19995"
+type   	= "tcp"

@@ -1,0 +1,15 @@
+*.o
+
+*.log
+
+*.pyc
+
+build
+/.vs
+/out
+/.vscode
+/proto/module_gen_test/include/proto_header
+/proto/module_gen_test/test1
+/proto/module_gen_test/test2
+/proto/module_gen_test/test3
+/proto/proto_tool/config/module_gen_test/

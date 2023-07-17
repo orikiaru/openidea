@@ -1,0 +1,16 @@
+<!--Module为模块,其中组件目前均为网络组件,Module基础代码和组件基础代码均为生成-->
+
+<Modules>
+    <!--component.name.tolow()就是组件的文件名,component.name为类名 component.type为组件的类型对应xml-->>
+    <!--LOGD是logserver,目前不需要组件-->>
+	
+	<!--LOGD为缺省模块,是为Log服务,不需要组件,组件直接代码集成-->>
+    <module name="LogD">
+    </module>
+  
+    <module name="Test">
+        <component name="TestClient"/>
+	    <component name="TestServer"/>
+	</module>
+
+</Modules>

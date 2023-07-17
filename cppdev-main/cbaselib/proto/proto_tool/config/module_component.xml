@@ -1,0 +1,15 @@
+
+<!--目前只有网络组件,组件内部主要是用来导出协议-->
+<!--name为组件类名,type区别代码生成类型,是ClientSessionMgr还是ServerSessionMgr-->
+<Components>
+    <component name="TestClient" type="Client">
+        <protocol name="TestProtocol2"/>
+        <protocol name="TestProtocol"/>
+        <protocol name="TestRpc"/>
+    </component>
+
+    <component name="TestServer" type="Server">
+        <protocol name="TestProtocol2"/>
+    </component>
+</Components>
+

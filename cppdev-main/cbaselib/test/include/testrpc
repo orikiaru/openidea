@@ -1,0 +1,13 @@
+
+    TestRpc (RpcData* req, RpcData* res): Rpc( RPC_TYPE_TESTRPC , req, res){}
+    TestRpc (const TestRpc& that): Rpc(that){}
+    enum { RPC_TYPE_TESTRPC = 1001, };
+    static proto_type_t RpcType() { return RPC_TYPE_TESTRPC; }
+    int TimeOut() { return 25; }
+    virtual void SetReq(RpcData* req)
+    {
+        SAFE_DELETE(_req);
+        TestReq* t_req = dynamic_cast<TestReq*>(req->Clone());
+        assert(_req = t_req);
+    }   
+    Protocol* Clone() { return new TestRpc(*this); }        

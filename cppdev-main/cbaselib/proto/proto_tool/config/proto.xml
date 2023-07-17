@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<Protocols>
+
+	<rpcdata name="TestDataReq">
+		<member type="int" name="data"/>
+		<member type="int" name="test_data2" default="1"/>
+		<member type="int" name="test_data3" default="1"/>
+		<member type="int" name="test_data4" default="1"/>
+	</rpcdata>
+
+	<rpcdata name="TestReq">
+    <member type="int" name="a"/>
+    <member type="long" name="b"/>
+    <member type="double" name="c"/>
+	</rpcdata>
+
+  <rpcdata name="TestRes">
+    <member type="int" name="retcode"/>
+  </rpcdata>
+
+    <rpcdata name="TestDataRes">
+		<member type="int" name="retcode"/>
+	</rpcdata>
+
+	<!--timeout可忽略 缺省时间为30s-->
+	<rpc name="TestData" id = "1" request = "TestDataReq" response = "TestDataRes" timeout = "25"/>
+
+  <rpc name="TestRpc" id = "2" request = "TestReq" response = "TestRes" timeout = "25"/>
+
+
+  <protocol name="TestProtocol" id="3">
+		<member type="char" name="_cid"/>
+    <member type="short" name="_sid" default="1"/>
+    <member type="int" name="_iid" default="1"/>
+    <member type="int64_t" name="_lid" default="1"/>
+    <member type="float" name="_fscore" default="1"/>
+    <member type="double" name="_dscore" default="1"/>
+    <member type="Bytes" name="_bytes" default="Bytes()"/>
+    <member type="std::string" name="_msg" default="std::string()"/>
+  </protocol>
+
+	<protocol name="TestProtocol2" id="4">
+		<member type="int" name="test_data"/>
+		<member type="int" name="test_data1" default="2"/>
+	</protocol>
+
+
+
+</Protocols>
+
+
+

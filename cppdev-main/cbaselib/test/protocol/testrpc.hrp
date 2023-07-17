@@ -1,0 +1,24 @@
+#pragma once
+#include "net_header.h"
+#include "rpc.h"
+#include "testreq"
+#include "testres"
+class TestRpc : public Rpc 
+{
+public:
+      #include "testrpc"
+      void DoRequest(SessionManager* mgr, sid_t sid)
+      {
+          //TestReq * req = dynamic_cast<TestReq*>(_req);
+          //TestRes * res = dynamic_cast<TestRes*>(_res);
+      }
+      void DoResponse(SessionManager* mgr, sid_t sid)
+      {
+          //TestReq * req = dynamic_cast<TestReq*>(_req);
+          //TestRes * res = dynamic_cast<TestRes*>(_res);
+      }
+      void OnTimeOut()
+      {
+          //TestReq * req = dynamic_cast<TestReq*>(_req)
+      }
+};

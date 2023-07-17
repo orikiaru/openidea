@@ -1,0 +1,21 @@
+
+    int test_data;
+    int test_data1;
+     
+    explicit TestProtocol2 (): Protocol( PROTOCOL_TYPE_TESTPROTOCOL2 ){}
+    TestProtocol2 ( const int & l_test_data, const int & l_test_data1 = 2 ) : Protocol( PROTOCOL_TYPE_TESTPROTOCOL2 )
+    { 
+        test_data = l_test_data;
+        test_data1 = l_test_data1;
+         
+    } 
+    enum { PROTOCOL_TYPE_TESTPROTOCOL2 = 1003, };
+    virtual BytesStream& serialize(BytesStream& os) const 
+    { 
+        return os  << test_data << test_data1; 
+    } 
+    virtual BytesStream& deserialize(BytesStream& os) 
+    { 
+        return os  >> test_data >> test_data1; 
+    } 
+    virtual Protocol* Clone()	{  return new TestProtocol2(*this);  }

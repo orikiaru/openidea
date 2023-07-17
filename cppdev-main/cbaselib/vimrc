@@ -1,0 +1,364 @@
+syntax on
+set autoindent
+set smartindent
+colorscheme desert
+set nocompatible
+set nu
+set noic 
+set wmh=0
+set hlsearch
+set incsearch
+set cindent
+set nobackup
+set writebackup
+set tabstop=8
+set sw=8
+set fileformat=unix
+set clipboard=unnamed
+set guifont=Courier_New:h12:cANSI
+set ignorecase
+set cdpath=d:\work,d:\gqf
+""Disable toolbar 
+set guioptions-=T
+set guioptions+=a
+set mouse=v
+set fdm=marker
+""set columns=120
+set encoding=utf-8
+set fileencoding=utf-8
+"set encoding=utf-8
+"set fileencoding=utf-8
+set fileencodings=ucs-bom,utf-8,cp936,gb18030,big5,euc-jp,euc-kr,latin1
+au BufNewFile,BufRead *.hrp set filetype=c
+
+let mapleader = ','
+let Tlist_Ctags_Cm = "usr/bin/ctags"
+let Tlist_Use_Right_Window=1 
+let Tlist_File_Fold_Auto_Close=1
+
+map <c-m> <c-w>_
+map <c-j> <c-w>j
+map <c-k> <c-w>k
+map <c-y> <c-w>=
+map <leader>, :q
+map <leader>t :Tlist<Enter><C-W><C-W>
+map <leader>x :Tlist<Enter>
+
+map ,n :cn<enter>
+map ,y ^"ay$
+map ,s ^c$<C-R>a<Esc>
+map ,j :set wrap 
+map ,d :cd <C-R>=expand("%:p:h")<enter><enter>
+cmap ,e hide e
+
+au GUIEnter * simal ~x
+
+iabbr zdt =strftime("%b %d %Y")
+iabbr ztm =strftime("%b %d %Y %H:%M")
+iabbr hdr #include <stdio.h>int main(void){
+iabbr jte import java.io.*;public class test{public static void main(String argv[]){
+iabbr jpr System.out.println(
+
+"" **************************************************************************************
+"" Function Definition Section
+"" **************************************************************************************
+function! ShowAscii()
+	normal "yy$
+	let str=@y
+	let len=strlen(str)
+	let result=""
+	let i=0
+	while i<len
+		let result=result.Dec2Hex(char2nr(str[i]))
+		let i=i+1
+	endwhile
+	let @*=result
+	let @y=result
+	echo "0x".result
+endfunction
+
+"" Function CountLine : Count the number of bytes in a line
+function! CountLine(flag)
+	normal "yy$
+	let str=substitute(@y,"\\X.*$","","")
+	if a:flag == 0
+		let str=substitute(str,"\\(FF\\)*$","","")
+	endif
+	let length=strlen(str)
+
+	let len1="0x".Dec2Hex(length)
+	let len2="0x".Dec2Hex(length/2)
+	echo length/2 "(".len2.")" length "(".len1.")" 
+endfunction
+
+"" Function ShowHex : Show hex value of the number under cursor
+function! ShowHex(flag)
+	if a:flag==1
+		normal "yy$
+		let str=substitute(@y,"^\\D\\+","","")
+	else
+		let str=substitute(@0,"^\\D\\+","","")
+	endif
+	let str=substitute(str,"\\D\\+.*","","")
+	let str=substitute(str,"^0*","","")
+	let result = Dec2Hex(str)
+	let @y=result
+	let @*=result
+	echo "0x".result."(".nr2char(str).")"
+endfunction
+
+"" Function ReverseStr : Reverse a text string
+function! ReverseStr(str)
+	let len=strlen(a:str)
+	let output=""
+	while len>0
+		let output=output.a:str[len-1]
+		let len=len-1
+	endwhile
+	return output
+endfunction
+
+function! Dec2Hex(dec)
+	if strlen(a:dec)>10
+		return "INF"
+	endif
+	if strlen(a:dec)==10&&(a:dec[0]>2||(a:dec[0]==2&&a:dec[1]+0>1)) 
+		return "INF"
+	endif
+
+	let ndec=a:dec+0
+	let nhex=""
+	if ndec==0
+		return "00"
+	endif
+
+	while ndec > 0
+		let remain=ndec%16
+		if remain>9
+			let remain = remain - 10 + char2nr("A")
+			let nhex=nhex.nr2char(remain)
+		else
+			let nhex=nhex.nr2char(remain+char2nr("0"))
+		endif
+		let ndec=ndec/16
+	endwhile
+	if strlen(nhex)==1
+		return "0".ReverseStr(nhex)
+	else
+		return ReverseStr(nhex)
+	endif
+endfunction
+
+function! Hex2Dec(hex)
+	if strlen(a:hex)>8
+		return "INF"
+	endif
+	if strlen(a:hex)==8&&(a:hex[0] > "7"||(a:hex[0]=="7"&&a:hex[1]=="F")) 
+		return "INF"
+	endif
+
+	let len=strlen(a:hex)-1
+	let dec=0
+	let power=1
+	while len>=0 
+		if a:hex[len] >= "A"
+			let dec = dec + power * (char2nr(a:hex[len])-55)
+		else
+			let dec = dec + power * a:hex[len]
+		endif
+		let power = power*16
+		let len = len - 1
+	endwhile
+
+	return dec
+endfunction
+
+"" Function ShowDec : Show dec value of the number under cursor
+function! ShowDec(flag)
+	if a:flag==1
+		normal "yy$
+		let str=substitute(@y,"^\\X*0x","","")
+		let str=substitute(str,"^\\X\\+","","")
+	else
+		let str=substitute(@0,"^\\X0x","","")
+		let str=substitute(str,"^\\X\\+","","")
+	endif
+	let str=substitute(str,"\\X\\+.*","","")
+	let str=toupper(str)
+	let result=Hex2Dec(str)
+	let @y=result
+	let @*=result
+	echo result
+endfunction
+
+function! ByteShow(flag)
+	if a:flag!=0
+		normal "yy$
+		let str=substitute(@y,"^\\X*0x","","")
+		let str=substitute(str,"^\\X\\+","","")
+	else
+		let str=substitute(@0,"^\\X0x","","")
+		let str=substitute(str,"^\\X\\+","","")
+	endif
+	let str=substitute(str,"\\X\\+.*","","")
+	let str=toupper(str)
+	let len=strlen(str)
+	let idx=0
+	let result = ""
+	while idx<len-1
+		let value = 0
+		if str[idx] >= "A"
+			let value = (char2nr(str[idx])-55)*16
+		else
+			let value = (char2nr(str[idx])-48)*16
+		endif
+		if str[idx+1] >= "A"
+			let value = value + char2nr(str[idx+1])-55
+		else
+			let value = value + char2nr(str[idx+1])-48
+		endif
+
+		if a:flag==2
+			let result = result.nr2char(value)
+		elsei a:flag==3
+			if(value>32 && value<127)
+				let result = result.nr2char(value)
+			elsei(value==32)
+				let result = result."_"
+			else
+				let result = result."."
+			endif
+		else
+			let result = result.str[idx].str[idx+1]."(".value."+".nr2char(value).")"
+		endif
+		let idx = idx+2
+	endwhile
+	let @y=result
+	let @*=result
+	echo result
+endfunction
+
+function! SaveWord(...)
+	if a:0 > 1
+		let file = a:1
+	else
+		let file = 'd:\gqf\text\word.txt'
+	endif
+	exec 'redir >> '.file 
+	silent echo expand("<cword>")
+	redir END
+endfunction
+
+function! BuildCompile()
+	let path = ".;C:\\j2sdk1.4.0-rc\\jre\\lib\\rt.jar;C:\\j2sdk1.4.0-rc\\lib\\dt.jar;"
+	let path = path . "C:\\j2sdk1.4.0-rc\\lib\\tools.jar;"
+	let path = path . "C:\\j2sdk1.4.0-rc\\jre\\lib\\ext\\dnsns.jar;"
+	let path = path . "C:\\j2sdk1.4.0-rc\\jre\\lib\\ext\\ldapsec.jar;"
+	let path = path . "C:\\j2sdk1.4.0-rc\\jre\\lib\\ext\\localedata.jar;"
+	let path = path . "C:\\j2sdk1.4.0-rc\\jre\\lib\\ext\\sunjce_provider.jar;"
+	let path = path . "D:\\Test\\Java\\ "
+	let out = expand("%:p:h") . " "
+	let javacmd = "!c:\\j2sdk1.4.0-rc\\bin\\javac.exe -classpath " . path . "-d " . out . @% 
+    exe javacmd
+endfunction
+
+function! RunClass()
+	let classfile = expand("%:t:r")
+	let path = expand("%:p:h") . ";D:\\Test\\Java\\ "
+	let javacmd = "!c:\\j2sdk1.4.0-rc\\bin\\java.exe " . "-cp " . path . classfile
+	exe javacmd 
+endfunction
+
+" Function for use with Sort(), to compare two strings.
+func! Strcmp(str1, str2)
+  if (a:str1 < a:str2)
+	return -1
+  elseif (a:str1 > a:str2)
+	return 1
+  else
+	return 0
+  endif
+endfunction
+
+" Sort lines.  SortR() is called recursively.
+func! SortR(start, end, cmp)
+  if (a:start >= a:end)
+	return
+  endif
+  let partition = a:start - 1
+  let middle = partition
+  let partStr = getline((a:start + a:end) / 2)
+  let i = a:start
+  while (i <= a:end)
+	let str = getline(i)
+	exec "let result = " . a:cmp . "(str, partStr)"
+	if (result <= 0)
+	    " Need to put it before the partition.  Swap lines i and partition.
+	    let partition = partition + 1
+	    if (result == 0)
+		let middle = partition
+	    endif
+	    if (i != partition)
+		let str2 = getline(partition)
+		call setline(i, str2)
+		call setline(partition, str)
+	    endif
+	endif
+	let i = i + 1
+  endwhile
+
+  " Now we have a pointer to the "middle" element, as far as partitioning
+  " goes, which could be anywhere before the partition.  Make sure it is at
+  " the end of the partition.
+  if (middle != partition)
+	let str = getline(middle)
+	let str2 = getline(partition)
+	call setline(middle, str2)
+	call setline(partition, str)
+  endif
+  call SortR(a:start, partition - 1, a:cmp)
+  call SortR(partition + 1, a:end, a:cmp)
+endfunc
+
+" To Sort a range of lines, pass the range to Sort() along with the name of a
+" function that will compare two lines.
+func! Sort(cmp) range
+  call SortR(a:firstline, a:lastline, a:cmp)
+endfunc
+
+" :Sort takes a range of lines and sorts them.
+command! -nargs=0 -range Sort <line1>,<line2>call Sort("Strcmp")
+
+
+noremap <Tab> <C-W>w:cd %:p:h<CR>:<CR>
+
+
+"set mouse=a
+"注释颜色
+"red
+"highlight Comment ctermfg=9
+"浅蓝
+highlight Comment ctermfg=14
+"常量颜色   
+"深蓝
+highlight constant ctermfg=171
+"红色
+"highlight constant ctermfg=9
+"类型名颜色
+"橘黄
+"highlight type ctermfg=220
+"绿色
+highlight type ctermfg=84
+"字符串颜色
+highlight string ctermfg=206
+"条件语句颜色
+"highlight conditional ctermfg=33		
+"
+hi Search term=standout ctermfg=0 ctermbg=3
+hi Folded ctermbg=30     ctermfg=15
+"hi Folded ctermbg=3	ctermfg=0
+iabbr jdd [Type]    Demand  [Src]     TAPD-dw11111111[Tag]     Trunk [Desc]     
+iabbr jdb [Type]    Debug   [Src]     TAPD-1111111111[Tag]     Seasia[Desc]     
+iabbr jo  [Type]    Optimize[Src]     Review         [Tag]     Trunk [Desc]     
+iabbr jtd [Type]    Log     [Src]     Review         [Tag]     Trunk [Desc]     [ToDel]   
+iabbr jc  [Type]    Config

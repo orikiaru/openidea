@@ -1,0 +1,24 @@
+#pragma once
+#include "net_header.h"
+
+class TestRes : public RpcData
+{
+public:
+    int retcode;
+    
+    explicit TestRes (){}
+    TestRes ( const int & l_retcode )
+    {
+        retcode = l_retcode;
+        
+    }
+    virtual BytesStream& serialize(BytesStream& os) const
+    {
+        return os  << retcode;
+    }
+    virtual BytesStream& deserialize(BytesStream& os)
+    {
+        return os  >> retcode;
+    }
+    virtual RpcData* Clone() { return new TestRes(*this); }
+};

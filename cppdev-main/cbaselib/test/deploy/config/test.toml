@@ -1,0 +1,26 @@
+# This is a TOML document
+
+# ip port ±ØÐëÎª×Ö·û´®.
+[owner]
+name = "test"
+
+[ThreadPool]
+count = 3
+max_task_count = 10000
+
+[TestClient]
+ip 		= "127.0.0.1"
+port 	= "8889"
+type   	= "tcp"
+
+[TestServer]
+ip 		= "127.0.0.1"
+port 	= "8889"
+type   	= "tcp"
+
+[Test]
+test_net = false
+test_timer = true
+test_timer_count = 1000000
+test_timer_range = 1000
+

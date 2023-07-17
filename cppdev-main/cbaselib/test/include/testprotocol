@@ -1,0 +1,35 @@
+
+    char _cid;
+    short _sid;
+    int _iid;
+    int64_t _lid;
+    float _fscore;
+    double _dscore;
+    Bytes _bytes;
+    std::string _msg;
+    std::vector < int > _i_list;
+     
+    explicit TestProtocol (): Protocol( PROTOCOL_TYPE_TESTPROTOCOL ){}
+    TestProtocol ( const char & l__cid, const short & l__sid = 1, const int & l__iid = 1, const int64_t & l__lid = 1, const float & l__fscore = 1, const double & l__dscore = 1, const Bytes & l__bytes = Bytes(), const std::string & l__msg = std::string(), const std::vector < int > & l__i_list = std::vector < int > () ) : Protocol( PROTOCOL_TYPE_TESTPROTOCOL )
+    { 
+        _cid = l__cid;
+        _sid = l__sid;
+        _iid = l__iid;
+        _lid = l__lid;
+        _fscore = l__fscore;
+        _dscore = l__dscore;
+        _bytes = l__bytes;
+        _msg = l__msg;
+        _i_list = l__i_list;
+         
+    } 
+    enum { PROTOCOL_TYPE_TESTPROTOCOL = 1002, };
+    virtual BytesStream& serialize(BytesStream& os) const 
+    { 
+        return os  << _cid << _sid << _iid << _lid << _fscore << _dscore << _bytes << _msg << _i_list; 
+    } 
+    virtual BytesStream& deserialize(BytesStream& os) 
+    { 
+        return os  >> _cid >> _sid >> _iid >> _lid >> _fscore >> _dscore >> _bytes >> _msg >> _i_list; 
+    } 
+    virtual Protocol* Clone()	{  return new TestProtocol(*this);  }

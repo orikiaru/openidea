@@ -1,0 +1,17 @@
+<!--Module为模块,其中组件目前均为网络组件,Module基础代码和组件基础代码均为生成-->
+
+<Modules>
+    <!--component.name.tolow()就是组件的文件名,component.name为类名 component.type为组件的类型对应xml-->>
+    <module name="Test1">
+        <component name="TestClient"/>
+    </module>
+
+    <module name="Test2">
+        <component name="TestServer"/>
+    </module>
+
+    <module name="Test3">
+        <component name="TestClient"/>
+    </module>
+
+</Modules>

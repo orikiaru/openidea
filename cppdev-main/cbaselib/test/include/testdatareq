@@ -1,0 +1,30 @@
+#pragma once
+#include "net_header.h"
+
+class TestDataReq : public RpcData
+{
+public:
+    int data;
+    int test_data2;
+    int test_data3;
+    int test_data4;
+    
+    explicit TestDataReq (){}
+    TestDataReq ( const int & l_data, const int & l_test_data2 = 1, const int & l_test_data3 = 1, const int & l_test_data4 = 1 )
+    {
+        data = l_data;
+        test_data2 = l_test_data2;
+        test_data3 = l_test_data3;
+        test_data4 = l_test_data4;
+        
+    }
+    virtual BytesStream& serialize(BytesStream& os) const
+    {
+        return os  << data << test_data2 << test_data3 << test_data4;
+    }
+    virtual BytesStream& deserialize(BytesStream& os)
+    {
+        return os  >> data >> test_data2 >> test_data3 >> test_data4;
+    }
+    virtual RpcData* Clone() { return new TestDataReq(*this); }
+};
