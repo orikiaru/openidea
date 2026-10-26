@@ -5,3 +5,5 @@
 /out
 /modules/include
 /deploy/bin
+/*.obj
+/build-win
