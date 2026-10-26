@@ -13,5 +13,5 @@ public:
 private:
 	virtual void OnAddSession(Session* pSession);
 	virtual void OnDelSession(const Session* pSession);
-	virtual Session* CloneSession() { return new LogServerSession(this); }	//×Ô¶¨ÖÆ»Ø»°ÀàĞÍ
+	virtual Session* CloneSession() { return new LogServerSession(this); }	//è‡ªå®šåˆ¶å›è¯ç±»å‹
 };

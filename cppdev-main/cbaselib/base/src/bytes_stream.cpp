@@ -1,5 +1,6 @@
 #include "bytes_stream.h"
 #include <string>
+#include <string.h>
 #include "serialize.h"
 
 //暂不处理大小端问题，默认小端
@@ -22,127 +23,6 @@
 	   uint64_t be64toh(uint64_t big_endian_64bits);
 	   uint64_t le64toh(uint64_t little_endian_64bits);
 */
-
-//暂时先不压缩,省着出问题
-BytesStream& BytesStream::operator<< (const char& a)
-{
-	Append(&a, sizeof(a));
-	return *this;
-}
-BytesStream& BytesStream::operator>> (char& a)
-{
-	if (RemainSize() < sizeof(a))
-	{
-		throw ParserException();
-	}
-	char* p_a = GetCurPtr();
-	a = *(char*)(p_a);
-	_cur_pos += sizeof(a);
-	return *this;
-}
-
-BytesStream& BytesStream::operator<< (const short& a)
-{
-	Append(&a, sizeof(a));
-	return *this;
-}
-BytesStream& BytesStream::operator>> (short& a)
-{
-	if (RemainSize() < sizeof(a))
-	{
-		throw ParserException();
-	}
-	char* p_a = GetCurPtr();
-	a = *(short*)(p_a);
-	_cur_pos += sizeof(a);
-	return *this;
-}
-
-BytesStream& BytesStream::operator<< (const int& a)
-{
-	Append(&a, sizeof(a));
-	return *this;
-}
-BytesStream& BytesStream::operator>> (int& a)
-{
-	if (RemainSize() < sizeof(a))
-	{
-		throw ParserException();
-	}
-	char* p_a = GetCurPtr();
-	a = *(int*)(p_a);
-	_cur_pos += sizeof(a);
-	return *this;
-}
-
-BytesStream& BytesStream::operator<< (const uint32_t& a)
-{
-	Append(&a, sizeof(a));
-	return *this;
-}
-
-BytesStream& BytesStream::operator>> (uint32_t & a)
-{
-	if (RemainSize() < sizeof(a))
-	{
-		throw ParserException();
-	}
-	char* p_a = GetCurPtr();
-	a = *(int*)(p_a);
-	_cur_pos += sizeof(a);
-	return *this;
-}
-
-BytesStream& BytesStream::operator<< (const int64_t& a)
-{
-	Append(&a, sizeof(a));
-	return *this;
-}
-BytesStream& BytesStream::operator>> (int64_t& a)
-{
-	if (RemainSize() < sizeof(a))
-	{
-		throw ParserException();
-	}
-	char* p_a = GetCurPtr();
-	a = *(int64_t*)(p_a);
-	_cur_pos += sizeof(a);
-	return *this;
-}
-
-BytesStream& BytesStream::operator<< (const float& a)
-{
-	Append(&a, sizeof(a));
-	return *this;
-}
-BytesStream& BytesStream::operator>> (float& a)
-{
-	if (RemainSize() < sizeof(a))
-	{
-		throw ParserException();
-	}
-	char* p_a = GetCurPtr();
-	a = *(float*)(p_a);
-	_cur_pos += sizeof(a);
-	return *this;
-}
-
-BytesStream& BytesStream::operator<< (const double& a)
-{
-	Append(&a, sizeof(a));
-	return *this;
-}
-BytesStream& BytesStream::operator>> (double& a)
-{
-	if (RemainSize() < sizeof(a))
-	{
-		throw ParserException();
-	}
-	char* p_a = GetCurPtr();
-	a = *(double*)(p_a);
-	_cur_pos += sizeof(a);
-	return *this;
-}
 
 BytesStream& BytesStream::operator<< (const std::string& a)
 {
@@ -195,4 +75,152 @@ BytesStream& BytesStream::operator>> (Serialize& a)
 {
 	a.deserialize(*this);
 	return *this;
+}
+
+BytesStream& BytesStream::WritePbRaw(uint32_t seq, const void* data, uint32_t size)
+{
+	if ((int32_t)seq < 0 || (int32_t)size < 0)
+	{
+		throw ParserException();
+	}
+	Append(&seq, sizeof(seq));
+	Append(&size, sizeof(size));
+	if (size > 0)
+	{
+		if (!data)
+		{
+			throw ParserException();
+		}
+		Append(data, size);
+	}
+	return *this;
+}
+
+PbHeaderState BytesStream::PreparePbHeader(uint32_t& seq, uint32_t& size)
+{
+	if (RemainSize() < sizeof(uint32_t) * 2)
+	{
+		return PB_HEADER_NEED_MORE;
+	}
+	uint32_t seq_v = 0;
+	uint32_t size_v = 0;
+	memcpy(&seq_v, GetCurPtr(), sizeof(seq_v));
+	memcpy(&size_v, GetCurPtr() + sizeof(seq_v), sizeof(size_v));
+	if ((int32_t)seq_v < 0 || (int32_t)size_v < 0)
+	{
+		return PB_HEADER_BAD;
+	}
+	if (RemainSize() < sizeof(uint32_t) * 2 + (size_t)size_v)
+	{
+		return PB_HEADER_NEED_MORE;
+	}
+	_cur_pos += sizeof(uint32_t) * 2;
+	seq = seq_v;
+	size = size_v;
+	return PB_HEADER_OK;
+}
+
+void BytesStream::ReadPbHeader(uint32_t& seq, uint32_t& size)
+{
+	if (PreparePbHeader(seq, size) != PB_HEADER_OK)
+	{
+		throw ParserException();
+	}
+}
+
+void BytesStream::SkipPb(uint32_t size)
+{
+	if (RemainSize() < size)
+	{
+		throw ParserException();
+	}
+	_cur_pos += size;
+}
+
+BytesStream& BytesStream::WritePb(uint32_t seq, const std::string& value)
+{
+	if (value.size() > (size_t)0x7FFFFFFF)
+	{
+		throw ParserException();
+	}
+	const void* data = value.empty() ? NULL : value.data();
+	return WritePbRaw(seq, data, (uint32_t)value.size());
+}
+
+BytesStream& BytesStream::WritePb(uint32_t seq, const Bytes& value)
+{
+	if (value.Size() > (size_t)0x7FFFFFFF)
+	{
+		throw ParserException();
+	}
+	uint32_t size = (uint32_t)value.Size();
+	const void* data = size ? value.Data() : NULL;
+	return WritePbRaw(seq, data, size);
+}
+
+BytesStream& BytesStream::WritePb(uint32_t seq, const Serialize& value)
+{
+	BytesStream inner;
+	value.serialize(inner);
+	if (inner.Size() > (size_t)0x7FFFFFFF)
+	{
+		throw ParserException();
+	}
+	uint32_t size = (uint32_t)inner.Size();
+	const void* data = NULL;
+	if (size > 0)
+	{
+		data = inner.Begin();
+	}
+	return WritePbRaw(seq, data, size);
+}
+
+void BytesStream::ReadPb(uint32_t size, std::string& value)
+{
+	if (RemainSize() < size)
+	{
+		throw ParserException();
+	}
+	if (size == 0)
+	{
+		value.clear();
+	}
+	else
+	{
+		value.assign(GetCurPtr(), size);
+	}
+	_cur_pos += size;
+}
+
+void BytesStream::ReadPb(uint32_t size, Bytes& value)
+{
+	if (RemainSize() < size)
+	{
+		throw ParserException();
+	}
+	value.Clear();
+	if (size > 0)
+	{
+		value.Append(GetCurPtr(), size);
+	}
+	_cur_pos += size;
+}
+
+void BytesStream::ReadPb(uint32_t size, Serialize& value)
+{
+	if (RemainSize() < size)
+	{
+		throw ParserException();
+	}
+	BytesStream sub;
+	if (size > 0)
+	{
+		sub.Append(GetCurPtr(), size);
+	}
+	value.deserialize(sub);
+	if (sub.RemainSize() != 0)
+	{
+		throw ParserException();
+	}
+	_cur_pos += size;
 }

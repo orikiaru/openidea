@@ -1,19 +1,24 @@
-#include <fcntl.h>
-#include <unistd.h>
 #include "channel.h"
 #include "session.h"
+#include "poll.h"
+#include "net_os.h"
 
 Channel::~Channel()
 {
-	close(_socket.GetSocket());
+	if (_poll_token)
+	{
+		Poll::GetInstance()->IOEventUnRegister(this);
+	}
+	NetOs_Close(_socket.GetSocket());
+	_socket.Detach();
 }
 
 void Channel::AllowSend()
 {
 	MutexGuard l(_locker);
-	if (!_p_session->IsClosed() && (0 == (_event_mask & EPOLLOUT)))
+	if (_p_session && !_p_session->IsClosed() && (0 == (_event_mask & IO_EV_WRITE)))
 	{
-		_event_mask |= EPOLLOUT;
+		_event_mask |= IO_EV_WRITE;
 		Poll::GetInstance()->IOEventMod(this, _event_mask);
 	}
 }
@@ -21,9 +26,9 @@ void Channel::AllowSend()
 void Channel::ForbidSend()
 {
 	MutexGuard l(_locker);
-	if (!_p_session->IsClosed() && (_event_mask & EPOLLOUT))
+	if (_p_session && !_p_session->IsClosed() && (_event_mask & IO_EV_WRITE))
 	{
-		_event_mask &= ~EPOLLOUT;
+		_event_mask &= ~IO_EV_WRITE;
 		Poll::GetInstance()->IOEventMod(this, _event_mask);
 	}
 }
@@ -31,9 +36,9 @@ void Channel::ForbidSend()
 void Channel::AllowRead()
 {
 	MutexGuard l(_locker);
-	if (!_p_session->IsClosed() && (0 == (_event_mask & EPOLLIN)))
+	if (_p_session && !_p_session->IsClosed() && (0 == (_event_mask & IO_EV_READ)))
 	{
-		_event_mask |= EPOLLIN;
+		_event_mask |= IO_EV_READ;
 		Poll::GetInstance()->IOEventMod(this, _event_mask);
 	}
 }
@@ -41,9 +46,9 @@ void Channel::AllowRead()
 void Channel::ForbidRead()
 {
 	MutexGuard l(_locker);
-	if (!_p_session->IsClosed() && (_event_mask & EPOLLIN))
+	if (_p_session && !_p_session->IsClosed() && (_event_mask & IO_EV_READ))
 	{
-		_event_mask &= ~EPOLLIN;
+		_event_mask &= ~IO_EV_READ;
 		Poll::GetInstance()->IOEventMod(this, _event_mask);
 	}
 }

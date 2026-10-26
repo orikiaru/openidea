@@ -1,6 +1,6 @@
-#include <unistd.h>
 #include "tcp_channel.h"
 #include "session.h"
+#include "net_os.h"
 
 void TCP_Channel::DataIn()
 {
@@ -8,7 +8,7 @@ void TCP_Channel::DataIn()
 	tmp_bytes.Reserve(8192);
 	for (;;)
 	{
-		int read_num = read(_socket.GetSocket(), tmp_bytes.Begin(), tmp_bytes.Captity());
+		int read_num = NetOs_Recv(_socket.GetSocket(), tmp_bytes.Begin(), tmp_bytes.Captity());
 		if (read_num > 0)
 		{
 			_ibuff.Append(tmp_bytes.Begin(), read_num);
@@ -48,7 +48,7 @@ void TCP_Channel::DataOut()
 	_p_session->SwapOutBuff(_obuff);
 	while (_obuff.Size())
 	{
-		int write_num = write(_socket.GetSocket(), _obuff.Begin(), _obuff.Size());
+		int write_num = NetOs_Send(_socket.GetSocket(), _obuff.Begin(), _obuff.Size());
 		if (write_num > 0)
 		{
 			_obuff.Erase(0, write_num);

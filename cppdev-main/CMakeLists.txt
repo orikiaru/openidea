@@ -1,18 +1,25 @@
-cmake_minimum_required(VERSION 2.6)
+cmake_minimum_required(VERSION 3.10)
 
 #开启编译详细信息
 set(CMAKE_VERBOSE_MAKEFILE ON)
 
 project(CPP_DEV)
 
-#通用编译选项
-set(_CXX_OPTION_ -ggdb -g -Wall -std=gnu++11 
-    -Werror -Wno-unused-function 
-    -Wno-unused-but-set-variable 
-    -Wno-literal-suffix 
-    -Wno-format-security
-)
-add_compile_options(${_CXX_OPTION_})
+if(MSVC)
+    add_compile_options(/W3)
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/std:c++20>)
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/EHsc>)
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/utf-8>)
+    add_compile_definitions(__UNUSE_OPENSSL__)
+else()
+    set(_CXX_OPTION_ -ggdb -g -Wall -std=gnu++20
+        -Werror -Wno-unused-function
+        -Wno-unused-but-set-variable
+        -Wno-literal-suffix
+        -Wno-format-security
+    )
+    add_compile_options(${_CXX_OPTION_})
+endif()
 
 function (CheckLibExist lib_name)
     message(STATUS "CheckLibExist lib_name=" ${lib_name})
@@ -45,23 +52,28 @@ set(LOGD_M_LIBS timer_m_static logd_m_static net_m_static proto_m_static base_m_
 
 set(DEPOLY_PATH ${CMAKE_SOURCE_DIR}/deploy)
 
-#通用头文件目录
+# libuv 只编静态库，跟工程一起编译
+set(LIBUV_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+add_subdirectory(${BASE_LIB_PATH}/3rd/libuv EXCLUDE_FROM_ALL)
+
+#通用头文件目录。放在 libuv 后面，避免 proto/inc/rpc.h 盖住 Windows 的 rpc.h。
 include_directories(
-    #基础库头文件
 	${BASE_LIB_PATH}/include
     ${BASE_LIB_PATH}/base/inc
     ${BASE_LIB_PATH}/net/inc
     ${BASE_LIB_PATH}/timer/inc
     ${BASE_LIB_PATH}/logger/inc
     ${BASE_LIB_PATH}/proto/inc
-
-    #模块开发通用依赖头文件
     ${MODULES_PATH}/include
-
-    #一些三方库
 	${BASE_LIB_PATH}/3rd/cpptoml
-
+	${BASE_LIB_PATH}/3rd/libuv/include
 )
+
+if(MSVC)
+    include_directories(${BASE_LIB_PATH}/port ${BASE_LIB_PATH}/port/win)
+    add_compile_options("/FI${BASE_LIB_PATH}/port/win/msvc_prefix.h")
+endif()
 
 #标准库依赖目录
 add_subdirectory(${BASE_LIB_PATH}/base EXCLUDE_FROM_ALL)
@@ -82,8 +94,9 @@ set(PROTO_GEN_PARAM
     ${DEPOLY_PATH}
 )
 
+find_program(PYTHON_BIN NAMES python3 python)
 execute_process(COMMAND  echo "---------------ProtoAndModuleGen Start---------------")
-execute_process(COMMAND  python3 ${PROTO_TOOL_PATH} ${PROTO_GEN_PARAM})
+execute_process(COMMAND  ${PYTHON_BIN} ${PROTO_TOOL_PATH} ${PROTO_GEN_PARAM})
 execute_process(COMMAND  echo "---------------ProtoAndModuleGen End---------------")
 
 #设置可执行程序和库文件生成目录到 deploy/
@@ -92,9 +105,12 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${DEPOLY_PATH}/lib)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${DEPOLY_PATH}/bin)
 set(LIBRARY_OUTPUT_PATH ${DEPOLY_PATH}/path)
 
-#增加编译模块
-add_subdirectory(${MODULES_PATH}/test)
-add_subdirectory(${MODULES_PATH}/logd)
+#增加编译模块。新模块由 xml 生成到 modules/<name>/CMakeLists.txt
+foreach(_mod logd ipcclient ipcserver)
+    if(EXISTS ${MODULES_PATH}/${_mod}/CMakeLists.txt)
+        add_subdirectory(${MODULES_PATH}/${_mod})
+    endif()
+endforeach()
 
 
 

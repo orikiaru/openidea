@@ -165,7 +165,7 @@ bool NetSocket::SocketConnect(SessionManager* pMgr)
 	return NetHelper::SocketConnect(*this, pMgr);
 }
 
-//acceptÒ»¸öÌ×½Ó×Ö,·µ»Ø-1Ê§°Ü,·µ»Ø0ËµÃ÷Ã»ÓĞ¿É½ÓÊÜµÄÁË
+//acceptä¸€ä¸ªå¥—æ¥å­—,è¿”å›-1å¤±è´¥,è¿”å›0è¯´æ˜æ²¡æœ‰å¯æ¥å—çš„äº†
 int NetSocket::SocketAcceptOne(SessionManager* pMgr)
 {
 	return NetHelper::SocketAcceptOne(*this, pMgr);

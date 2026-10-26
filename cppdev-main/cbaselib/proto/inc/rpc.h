@@ -3,6 +3,7 @@
 
 #include "protocol.h"
 #include "base_timer.h"
+#include <functional>
 
 //定时器加入后使用
 class TimerProtocol: public Protocol
@@ -15,19 +16,18 @@ public:
 	virtual void OnTimeOut() = 0;	//超时处理
 };
 
-class RpcData: public Serialize
-{
-public:
-	virtual BytesStream& serialize(BytesStream& os) const = 0;
-	virtual BytesStream& deserialize(BytesStream& os) = 0;
-	virtual RpcData* Clone() = 0;
-};
-
 static bool IsReqID(rpc_id_t rid) 		{ return rid & RPC_REQ_MASK; }
 static void ClearReq(rpc_id_t& rid) 	{ rid &= ~RPC_REQ_MASK;}
 
 class Rpc : public TimerProtocol
 {
+public:
+	enum
+	{
+		RPC_PB_RID = 0,
+		RPC_PB_REQ = 1,
+		RPC_PB_RES = 2,
+	};
 protected:
 	rpc_id_t _rid;
 	RpcData* _req;
@@ -79,7 +79,11 @@ private:
 	void SetResStub(Rpc* p_rpc) { _p_stub = p_rpc;  }
 };
 
-#define RpcCall(RPC_TYPE, req) (dynamic_cast<RPC_TYPE*>(Rpc::Call(RPC_TYPE::RpcType(), req)))
+// 协议号 -> 这次调用传进来的 res。回包到了就调用它自己的 deserialize。
+void WatchRpc(proto_type_t id, std::function<void(BytesStream&)> decode);
+void HandleRpc(proto_type_t id, std::function<void(SessionManager*, sid_t, BytesStream&)> handle);
+// 先交给 RpcCall 登记的 res，否则交给该协议号的处理函数。都没有就把包丢掉。
+bool DeliverRpc(proto_type_t id, BytesStream& body, SessionManager* mgr, sid_t sid);
 	
 
 //可以考虑绑定到回话管理器上,一个会话管理器保存自身所有RPC存根,减少锁冲突

@@ -2,6 +2,27 @@
 #define _j_header_h__
 #include <stdint.h>
 
+#ifdef _MSC_VER
+#ifndef __attribute__
+#define __attribute__(x)
+#endif
+#ifndef SIGPIPE
+#define SIGPIPE 13
+#endif
+#ifndef SIGHUP
+#define SIGHUP 1
+#endif
+#ifndef SIGQUIT
+#define SIGQUIT 3
+#endif
+#ifndef SIGALRM
+#define SIGALRM 14
+#endif
+#ifndef EINPROGRESS
+#define EINPROGRESS 112
+#endif
+#endif
+
 #define FUNCTION_RUN_BEFORE_MAIN __attribute__((constructor))
 #define CONSTRUCTOR_FUNC(X) \
 	void __constructor_func_##X() FUNCTION_RUN_BEFORE_MAIN;\

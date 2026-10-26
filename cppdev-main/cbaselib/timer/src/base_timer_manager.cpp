@@ -1,57 +1,15 @@
-#include <signal.h>
 #include <unistd.h>
+#include <atomic>
 #include "base_timer_manager.h"
 #include "threadpool.h"
 #include "poll.h"
 
-//单多线程都需要定时器实际触发后,在进行tick处理
-class TimerManagerSignalTask : public Task
-{
-public:
-	TimerManagerSignalTask() :Task(PRIO_ENUM::PRIO_NORMAL) {}
-	void Exec()
-	{
-		BaseTimerManager::GetInstance()->OnSignal();
-#ifdef _SINGLE_THREAD_
-#else
-		BaseTimerManager::GetInstance()->Update();
-#endif
-	}
-};
+static std::atomic<bool> g_tick_queued(false);
 
-//单线程时由PollTask驱动
-class TimerManagerUpdateTask : public Task
+static void OnLoopTick()
 {
-public:
-	TimerManagerUpdateTask() :Task(PRIO_ENUM::PRIO_NORMAL){}
-	void Exec()
-	{
-		BaseTimerManager::GetInstance()->Resume();
-	}
-};
-
-//单线程时由PollTask驱动前 需要屏蔽闹钟信号
-class TimerManagerSuspendTask : public Task
-{
-public:
-	TimerManagerSuspendTask() :Task(PRIO_ENUM::PRIO_NORMAL) {}
-	void Exec()
-	{
-		BaseTimerManager::GetInstance()->Suspend();
-	}
-};
-
-#ifndef _SINGLE_THREAD_
-void* TimerThreadFunc(void* arg)
-{
-	ThreadPool::InitIgnoreSig();
-	while (1)
-	{
-		BaseTimerManager::GetInstance()->Update();
-		usleep(1000);
-	}
+	BaseTimerManager::GetInstance()->OnSignal();
 }
-#endif
 
 BaseTimerManager::BaseTimerManager()
 {
@@ -95,41 +53,32 @@ bool BaseTimerManager::Init()
 	int lv_tick = 1;
 	for (size_t i = 0; i < _timer_lv_count; ++i)
 	{
-		TimerLevel lv;
-		_timer_levels.push_back(lv);
+		_timer_levels.emplace_back();
 		_timer_levels[i].Init(timer_lvs[i], lv_tick);
 		lv_tick *= timer_lvs[i];
 	}
-
-	sigemptyset(&_sig_set);
-	sigaddset(&_sig_set, SIGALRM);
-	PTHREAD_SIGMASK(SIG_BLOCK, &_sig_set, NULL);
-
-	struct itimerval interval;
-	interval.it_interval.tv_sec = delta_us / 1000000;
-	interval.it_interval.tv_usec = delta_us % 1000000;
-	interval.it_value.tv_sec = delta_us / 1000000;
-	interval.it_value.tv_usec = delta_us % 1000000;
-	setitimer(ITIMER_REAL, &interval, NULL);
 
 	_tick_offset_ms = offset_ms;
 	gettimeofday(&_last_tick_tv, 0); //记录第0帧的时间
 	gettimeofday(&_cur_tv, 0);	 //记录第0帧的时间
 	_cur_time = time(NULL);
 	localtime_r(&_cur_time, &_cur_tm);
-	//单线程时需要注册PollAfterTask来驱动定时器逻辑,信号中断会触发io回执
-#ifdef _SINGLE_THREAD_
-	Poll::GetInstance()->AddPollTask(new TimerManagerUpdateTask(), Poll::PollTaskPosEnum::POLL_AFTER_TASK, false);
-	Poll::GetInstance()->AddPollTask(new TimerManagerSuspendTask(), Poll::PollTaskPosEnum::POLL_BEFORE_TASK, false);
-#endif
-	//多线程下，交给主线程处理
-	ThreadPool::GetInstance()->AddSigHandleTask(SIGALRM, new TimerManagerSignalTask());
+	// Windows / Linux 都用 poll 循环上的 libuv timer 叫醒
+	Poll::GetInstance()->ArmTick(_tick_offset_ms, OnLoopTick);
 	return true;
 }
 
 void BaseTimerManager::OnSignal()
 {
-	_trigger = true;
+	bool expected = false;
+	if (!g_tick_queued.compare_exchange_strong(expected, true))
+	{
+		return;
+	}
+	ThreadPool::GetInstance()->AddTask([]() {
+		BaseTimerManager::GetInstance()->Update();
+		g_tick_queued.store(false);
+	}, PRIO_ENUM::PRIO_QUEUE);
 }
 
 std::string BaseTimerManager::GenTraceLog()
@@ -154,6 +103,14 @@ void BaseTimerManager::Update()
 	localtime_r(&_cur_time, &_cur_tm);
 	gettimeofday(&_cur_tv, 0);
 
+	int64_t delta_us = (int64_t)_cur_tv.tv_sec - (int64_t)_last_tick_tv.tv_sec;
+	delta_us *= 1000000;
+	delta_us += (int64_t)_cur_tv.tv_usec - (int64_t)_last_tick_tv.tv_usec;
+	if (delta_us <= 0)
+	{
+		return;
+	}
+
 	//计算tick数,触发tick
 	int offset = get_offset_tick();
 	for (int i = 0; i < offset; ++i)
@@ -163,22 +120,6 @@ void BaseTimerManager::Update()
 	//struct timeval t;
 	//gettimeofday(&t, 0);
 	//printf("%s\n", GenTraceLog().c_str());
-}
-
-void BaseTimerManager::Suspend()
-{
-	//单线程时,由IO线程事件回调后触发,所以可能存在没有触发定时器消息的情况
-	PTHREAD_SIGMASK(SIG_BLOCK, &_sig_set, NULL);
-	if (_trigger)
-	{
-		Update();
-		_trigger = false;
-	}
-}
-
-void BaseTimerManager::Resume()
-{
-	PTHREAD_SIGMASK(SIG_UNBLOCK, &_sig_set, NULL);
 }
 
 void BaseTimerManager::add_timer(BaseTimer* pTimer)

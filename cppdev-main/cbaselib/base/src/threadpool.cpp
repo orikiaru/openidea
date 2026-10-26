@@ -1,9 +1,8 @@
 #include <assert.h>
-#include <unistd.h>
 #include <stdio.h>
-#include <sys/time.h>
-#include <signal.h>
 #include <stdlib.h>
+#include <chrono>
+#include <csignal>
 #include "base_timer_manager.h"
 #include "poll.h"
 #include "header.h"
@@ -47,7 +46,7 @@ public:
 bool ThreadPool::Init()
 {
 #ifndef _SINGLE_THREAD_
-	_main_thread_id = pthread_self();
+	_main_thread_id = std::this_thread::get_id();
 #endif
 	//AddSigHandleTask(SIGINT, new GeneralSignal_HandleTask(SIGINT));
 	AddSigHandleTask(SIGQUIT, new GeneralSignal_HandleTask(SIGQUIT));
@@ -57,7 +56,6 @@ bool ThreadPool::Init()
 	{
 		ThreadData& thread_data = _thread_data[i];
 		thread_data._thread_count = 1;
-		thread_data._thread_list.resize(thread_data._thread_count);
 	}
 #else
 	for(int i = PRIO_NORMAL; i < PRIO_NUM; ++i)
@@ -73,10 +71,6 @@ bool ThreadPool::Init()
 			thread_data._thread_count = 1;
 		}
 
-		thread_data._thread_list.resize(thread_data._thread_count);
-
-		pthread_mutex_init(&thread_data._mutex, NULL);
-		pthread_cond_init(&thread_data._cond, NULL);
 	}
 #endif
 	return true;
@@ -96,33 +90,21 @@ Task* FetchTask(ThreadPool::ThreadData* p_data)
 	return pTask;
 }
 
-void *_g_start_work(void *arg)
-{	
-	//工作线程不处理任何相关进程逻辑信号
+static void WorkerMain(ThreadPool::ThreadData* p_data)
+{
 	ThreadPool::InitIgnoreSig();
-
-	ThreadPool::ThreadData* p_data = (ThreadPool::ThreadData* )arg;
-	//默认不做线程分离,以为不是动态的线程池,没有意义,并不需要托管回收线程资源
-	//pthread_detach(pthread_self());
 	assert(p_data);
-	while(1)
+	for (;;)
 	{
 		Task* pTask = NULL;
-		pthread_mutex_lock(&p_data->_mutex);
-		if(p_data->_task_count)
 		{
-			pTask = p_data->_task_list.front();	
+			std::unique_lock<std::mutex> lock(p_data->_mutex);
+			p_data->_cond.wait(lock, [&]() { return p_data->_task_count > 0; });
+			pTask = p_data->_task_list.front();
 			p_data->_task_list.pop_front();
-			p_data->_task_count --;
-			pthread_mutex_unlock(&p_data->_mutex);
-			pTask->Exec();
+			p_data->_task_count--;
 		}
-		else
-		{
-			//no task wait the pthread_cond_broadcast after ThreadPool::AddTask
-			pthread_cond_wait(&p_data->_cond, &p_data->_mutex);
-			pthread_mutex_unlock(&p_data->_mutex);
-		}
+		pTask->Exec();
 	}
 }
 
@@ -141,64 +123,59 @@ void ThreadPool::OnSignal(int sig_num)
 	it->second->Exec();
 }
 
-bool ThreadPool::CreateSpecThread(pthread_t& pid, void* (*thread_handle)(void*), void* arg)
+bool ThreadPool::CreateSpecThread(std::thread::id& tid, void* (*thread_handle)(void*), void* arg)
 {
 #ifndef _SINGLE_THREAD_
 	InitIgnoreSig();
-	int ret = pthread_create(&pid, NULL, thread_handle, arg);
-	if (ret != 0)
+	try
 	{
-		perror("pthread_create");
+		std::thread worker(thread_handle, arg);
+		tid = worker.get_id();
+		worker.detach();
+	}
+	catch (...)
+	{
 		return false;
 	}
 	return true;
 #else
+	(void)tid;
+	(void)thread_handle;
+	(void)arg;
 	assert(false && "ThreadPool::CreateSpecThread is singlethread");
+	return false;
 #endif
 }
 
-class PollTask : public Task
+void ThreadPool::SetDrain(bool (*fn)())
 {
-public:
-	PollTask() :Task(PRIO_NORMAL) {}
-	virtual void Exec()
-	{
-		Poll::GetInstance()->PollWait();
-		ThreadPool::GetInstance()->AddTask(this);
-	}
-};
+	_drain = fn;
+}
 
 void ThreadPool::SingleThreadStartWork()
 {
 	//屏蔽一些危险信号
 	InitIgnoreSig();
 
-	//单线程直接执行信号函数
-	sigset_t sig_set;
-	sigemptyset(&sig_set);
-	for (SIG_HANDLE_MAP::iterator it = _sig_handle_map.begin(); it != _sig_handle_map.end(); ++it)
-	{
-		sigaddset(&sig_set, it->first);
-		signal(it->first, sig_handle);
-	}
-	PTHREAD_SIGMASK(SIG_UNBLOCK, &sig_set, 0);
-
-	//添加基础pollio任务,单线程一切任务由线程池驱动,定时器则可以随时打断pollio
-	Task* pTask = new PollTask;
-	AddTask(pTask);
-
 	while (1)
 	{
-		//不是在pollio,就是在执行任务或者定时器
-		for (int i = PRIO_NUM; i > PRIO_NORMAL; --i)
+		bool ran = false;
+		for (int i = PRIO_NUM - 1; i >= PRIO_NORMAL; --i)
 		{
-			ThreadData& thread_data = _thread_data[i - 1];
+			ThreadData& thread_data = _thread_data[i];
+			Task* pTask = NULL;
 			while ((pTask = FetchTask(&thread_data)))
 			{
+				// 协程 Task 只往前走一步。co_yield 会把自己放回队尾，下一轮才轮到它。
 				pTask->Exec();
+				ran = true;
 			}
 		}
-
+		// 队列空了才挂进 poll，等 libuv 的网络事件或定时器把循环叫醒
+		if (!ran)
+		{
+			Poll::GetInstance()->PollWait();
+		}
 	}
 }
 
@@ -210,30 +187,16 @@ void ThreadPool::MultiThreadStartWork()
 	for (int i = PRIO_NORMAL; i < PRIO_NUM; ++i)
 	{
 		ThreadData& thread_data = _thread_data[i];
-		for (int i = 0; i < thread_data._thread_count; ++i)
+		for (int n = 0; n < thread_data._thread_count; ++n)
 		{
-			if (pthread_create(&thread_data._thread_list[i], NULL, _g_start_work, &thread_data) == -1)
-			{
-				perror("pthread_create");
-			}
+			std::thread worker(WorkerMain, &thread_data);
+			worker.detach();
 		}
-	}
-	sigset_t sig_set;
-	sigemptyset(&sig_set);
-	for (SIG_HANDLE_MAP::iterator it = _sig_handle_map.begin(); it != _sig_handle_map.end(); ++it)
-	{
-		sigaddset(&sig_set, it->first);
 	}
 
-	//主线程在这等待信号处理即可
-	while (1)
+	for (;;)
 	{
-		int sig_id = -1;
-		if (0 == sigwait(&sig_set, &sig_id))
-		{
-			//TODO 做一些热更新?
-			sig_handle(sig_id);
-		}
+		std::this_thread::sleep_for(std::chrono::hours(24));
 	}
 #endif
 }
@@ -263,20 +226,18 @@ bool ThreadPool::AddTask(Task* pTask)
 	thread_data._task_list.push_back(pTask);
 #else
 	ThreadData& thread_data = _thread_data[prio];	
-	pthread_mutex_lock(&thread_data._mutex);
+	std::lock_guard<std::mutex> lock(thread_data._mutex);
 	if(thread_data._task_count > 0xFFFFFFFF)
 	{
 		SAFE_DELETE(pTask);
-		pthread_mutex_unlock(&thread_data._mutex);
 		return false;
 	}
 	thread_data._task_count ++;
 	thread_data._task_list.push_back(pTask);
-	if(thread_data._task_count == 1)	//old no task try awark all thread to work
+	if(thread_data._task_count == 1)
 	{
-		pthread_cond_broadcast(&thread_data._cond);
+		thread_data._cond.notify_all();
 	}
-	pthread_mutex_unlock(&thread_data._mutex);
 #endif
 	return true;
 }
@@ -288,41 +249,27 @@ void ThreadPool::AddSigHandleTask(int sig, Task* pTask)
 	assert(pTask);
 
 	_sig_handle_map[sig] = pTask;
-
-	sigset_t sig_set;
-	sigemptyset(&sig_set);
-	sigaddset(&sig_set, sig);
-	PTHREAD_SIGMASK(SIG_BLOCK, &sig_set, 0);
+	std::signal(sig, sig_handle);
 
 #ifndef _SINGLE_THREAD_
-	assert(_main_thread_id == pthread_self());
+	assert(_main_thread_id == std::this_thread::get_id());
 #endif
 }
 
 void ThreadPool::InitIgnoreSig()
 {
-	//当前线程屏蔽信号,只屏蔽一些常用的可能会自定义的信号处理,其他使用缺省处理
-	sigset_t set;
-	sigemptyset(&set);
-	sigaddset(&set, SIGPIPE);
-	sigaddset(&set, SIGHUP);
-
-	if (0 != PTHREAD_SIGMASK(SIG_BLOCK, &set, 0))
-	{
-		perror("ThreadPool::InitIgnoreSig pthread_sigmask");
-	}
+#ifdef SIGPIPE
+	std::signal(SIGPIPE, SIG_IGN);
+#endif
+#ifdef SIGHUP
+	std::signal(SIGHUP, SIG_IGN);
+#endif
 }
 
 
 void ThreadPool::InitUnIgnoreSig(int sig)
 {
-	sigset_t set;
-	sigemptyset(&set);
-	sigaddset(&set, sig);
-	if (0 != PTHREAD_SIGMASK(SIG_UNBLOCK, &set, 0))
-	{
-		perror("ThreadPool::InitUnIgnoreSig pthread_sigmask");
-	}
+	std::signal(sig, SIG_DFL);
 }
 
 

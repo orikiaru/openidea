@@ -1,44 +1,49 @@
 #ifndef __j_thread_pool_h__
 #define __j_thread_pool_h__
-#include <pthread.h>
+#include <map>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
 #include <vector>
+#include <type_traits>
+#include <utility>
 #include "config.h"
 #include "task.h"
 
-#ifdef _SINGLE_THREAD_
-#define PTHREAD_SIGMASK sigprocmask
-#else
-#define PTHREAD_SIGMASK pthread_sigmask
-#endif
-
-typedef std::vector<pthread_t> THREAD_LIST;
 typedef std::map<int, Task*> SIG_HANDLE_MAP;
 class ThreadPool
 {
 public:
 	struct ThreadData
 	{
-		THREAD_LIST	 	_thread_list;
 		TASK_LIST	 	_task_list;
 		unsigned int 	_task_count;
 		int 			_thread_count;
-		pthread_mutex_t		_mutex;
-		pthread_cond_t		_cond;
+		std::mutex		_mutex;
+		std::condition_variable _cond;
 	}_thread_data[PRIO_NUM];
 	
 	int  _status;
-	//主线程的signalHandle,一般是单线程不能自定制线程信号处理时,修改这个容器就行了
 	SIG_HANDLE_MAP	_sig_handle_map;
-	pthread_t		_main_thread_id;
+	std::thread::id	_main_thread_id;
+	bool (*_drain)();
 public:
 	static ThreadPool* GetInstance() { static ThreadPool inst; return &inst;	}
 	bool Init();
 	bool AddTask(Task* pTask);
+	template<typename F>
+	typename std::enable_if<!std::is_base_of<Task, typename std::remove_pointer<typename std::decay<F>::type>::type>::value, bool>::type
+	AddTask(F&& fn, PRIO_ENUM prio = PRIO_NORMAL)
+	{
+		typedef typename std::decay<F>::type Fn;
+		return AddTask(new FnTask<Fn>(std::forward<F>(fn), prio));
+	}
 	void StartWork();
 	void AddSigHandleTask(int sig, Task* pTask);
 	void OnSignal(int sig);
+	void SetDrain(bool (*fn)());
 
-	static bool CreateSpecThread(pthread_t& pid, void* (*thread_handle)(void*), void* arg);
+	static bool CreateSpecThread(std::thread::id& tid, void* (*thread_handle)(void*), void* arg);
 	static void InitIgnoreSig();
 	static void InitUnIgnoreSig(int sig);
 private:

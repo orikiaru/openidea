@@ -1,19 +1,10 @@
 
-<!--目前只有网络组件,组件内部主要是用来导出协议-->
-<!--name为组件类名,type区别代码生成类型,是ClientSessionMgr还是ServerSessionMgr-->
+<!--组件上挂的都是 rpc。req、res 各自一个协议号，内部是 seq+size+data。-->
 <Components>
-    <component name="TestClient" type="Client">
-        <protocol name="TestData"/>
-        <protocol name="TestRpc"/>
-		<protocol name="TestProtocol"/>
-		<protocol name="TestProtocol2"/>
-	</component>
-
-    <component name="TestServer" type="Server">
-		<protocol name="TestData"/>
-		<protocol name="TestRpc"/>
-		<protocol name="TestProtocol"/>
-		<protocol name="TestProtocol2"/>
+    <component name="IpcClient" type="Client">
+        <rpc name="AllEcho"/>
+    </component>
+    <component name="IpcServer" type="Server">
+        <rpc name="AllEcho"/>
     </component>
 </Components>
-

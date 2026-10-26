@@ -2,12 +2,16 @@
 #include <sys/time.h>
 #include <string.h>
 #include "header.h"
+#include <deque>
 #include <list>
 #include <vector>
 #include <time.h>
 #include "base_timer_level.h"
+#include "timer_task.h"
 #include <assert.h>
 #include <string>
+#include <type_traits>
+#include <utility>
 
 //返回差异ms数
 static int cal_timeval_delta(const timeval& old, const timeval& now)
@@ -20,7 +24,7 @@ static int cal_timeval_delta(const timeval& old, const timeval& now)
 	return delta_us/1000;
 }
 
-typedef std::vector<TimerLevel> TimerLevelVector;
+typedef std::deque<TimerLevel> TimerLevelVector;
 
 class BaseTimerManager
 {
@@ -33,9 +37,9 @@ public:
 		return &instance;
 	}
 	bool Init();
-	//闹钟信号触发后处理,设置标记,唤醒线程
+	// libuv 定时器到点。只把 Update 丢进任务队列，不在 poll 回调里跑时间轮
 	void OnSignal();
-	//定时器实际触发接口,单线程由PollAfterTask触发,多线程直接由timer线程触发
+	// 定时器实际触发。单线程在主循环取到任务后执行，多线程在有序队列线程执行
 	void Update();
 
 	timer_tick_t GetCurTick()				{	return _cur_tick;	}
@@ -58,15 +62,19 @@ public:
 		add_timer(pTimer);
 	}
 
+	template<typename F>
+	typename std::enable_if<!std::is_base_of<BaseTimer, typename std::remove_pointer<typename std::decay<F>::type>::type>::value, void>::type
+	AddTimer(F fn, int millisecond)
+	{
+		typedef typename std::decay<F>::type Fn;
+		AddTimer(new FnTimer<Fn>(std::move(fn)), millisecond);
+	}
+
 	bool RemoveTimer(BaseTimer* pTimer)
 	{
 		assert(pTimer->GetTimerLevel());
 		return pTimer->GetTimerLevel()->RemoveTimer(this, pTimer);
 	}
-	//屏蔽闹钟信号，仅在单线程有用
-	void Suspend();
-	//唤醒闹钟信号，仅在单线程有用
-	void Resume();
 	std::string GenTraceLog();
 private:
 	int get_offset_tick();
@@ -115,9 +123,4 @@ private:
 
 	time_t				_cur_time;
 	struct tm			_cur_tm;
-
-	sigset_t			_sig_set;
-#ifndef _SINGLE_THREAD_
-	pthread_t			_timer_thread_id;
-#endif
 };

@@ -11,16 +11,29 @@ class ClassMember:
         self.name = None
         self.type = None
         self.value = None
+        self.seq = None
     def GetName(self):
         return self.name
     def GetType(self):
         return self.type
     def GetValue(self):
         return self.value
+    def GetSeq(self):
+        return self.seq
     def ParseMember(self, member_xml):
         self.name = member_xml.get("name")
         self.type = member_xml.get("type")
         self.value = member_xml.get("default")
+        seq_text = member_xml.get("seq")
+        if seq_text is not None and seq_text != "":
+            try:
+                self.seq = int(seq_text)
+            except ValueError:
+                loginfo("ParseMember seq invalid name=", self.name, ",seq=", seq_text)
+                return False
+            if self.seq < 0:
+                loginfo("ParseMember seq must >= 0 name=", self.name, ",seq=", self.seq)
+                return False
         return True
 
 class SerializeData:
@@ -32,6 +45,7 @@ class SerializeData:
         self.name = ""
         self.proto_type = ""
         self.timeout = "30"
+        self.res_id = ""
 
     def GenLogHeader(self):
         log = 'type={},id={},name={},type_enum={}'.format(SerializeDataType(self.type), self.id, self.name, self.GetProtoType())
@@ -49,6 +63,8 @@ class SerializeData:
         return self.GetType() == SerializeDataType.RPC or self.GetType() == SerializeDataType.PROTOCOL
     def GetID(self):
         return self.id
+    def GetResID(self):
+        return self.res_id
     def GetTimeOut(self):
         return self.timeout
     def GetName(self):
@@ -91,7 +107,8 @@ class SerializeData:
         find_default = False
         for m_xml in self.xml_data.findall("member"):
             member = ClassMember()
-            member.ParseMember(m_xml)
+            if not member.ParseMember(m_xml):
+                return False
             if(find_default and not member.GetValue()):
                 #default用于填充c++构造参数,默认参数必须从后向前
                 loginfo("ParseProtocol error Proto[", self.name, "], member[", member.GetName(), "] need default data")
@@ -103,6 +120,27 @@ class SerializeData:
                     loginfo("ParseProtocol error Proto[", self.name, "], Variable with the same name [", member.GetName(),"]")
                     return False
             self.members.append(member)
+        return self.AssignFieldSeq()
+
+    # 没写 seq 的字段从 0 起补空位。写了 seq 就可以跳过中间的号，避免删字段后把后面的号全挤乱。
+    def AssignFieldSeq(self):
+        used = set()
+        for member in self.members:
+            if member.seq is None:
+                continue
+            if member.seq in used:
+                loginfo("ParseProtocol error Proto[", self.name, "], duplicate seq [", member.seq, "]")
+                return False
+            used.add(member.seq)
+        next_seq = 0
+        for member in self.members:
+            if member.seq is not None:
+                continue
+            while next_seq in used:
+                next_seq += 1
+            member.seq = next_seq
+            used.add(member.seq)
+            next_seq += 1
         return True  
     #解析Rpc的Req和Res
     def ParseRpcMember(self)->bool:
@@ -164,9 +202,10 @@ class SerializeData:
     #解析RPC
     def ParseRpc(self)->bool:
         self.id = self.xml_data.get("id")
+        self.res_id = self.xml_data.get("res_id")
         self.name = self.xml_data.get("name")
-        if(not self.id or not self.name):
-            loginfo("parseprotocol error not id or name, content=", self.xml_data.text, "id=", self.id, ",name=", self.name)
+        if(not self.id or not self.res_id or not self.name):
+            loginfo("parseprotocol error not id or res_id or name, id=", self.id, ",res_id=", self.res_id, ",name=", self.name)
             return False
         timeout = self.xml_data.get("timeout")
         if(timeout):

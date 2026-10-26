@@ -1,11 +1,18 @@
 #ifndef file_io_h__j
 #define file_io_h__j
+#ifdef _WIN32
+#include <io.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <stdio.h>
+#else
 #include <aio.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <string>
 #include <unistd.h>
 #include <fcntl.h>
+#endif
+#include <string>
 #include <assert.h>
 #include <string.h>
 
@@ -29,12 +36,22 @@ class FILE_IO
 public:
 	FILE_IO(int fd, int op):_fd(fd), _op(op){}
 	FILE_IO():_fd(-1),_op(F_OP_NULL){}
-	~FILE_IO()	{	close(_fd);	}
+	~FILE_IO()	{
+#ifdef _WIN32
+		if (_fd >= 0) _close(_fd);
+#else
+		if (_fd >= 0) close(_fd);
+#endif
+	}
 	bool OpenFile(std::string file_name, int op)
 	{
 		assert(_fd == -1);
 		_op = op;
+#ifdef _WIN32
+		_fd = _open(file_name.c_str(), _op, _S_IREAD | _S_IWRITE);
+#else
 		_fd = open(file_name.c_str(), _op, 0660);
+#endif
 		if(_fd == -1)
 		{
 			return false;
@@ -45,10 +62,18 @@ public:
 	{
 		MutexGuard l(_locker);
 		assert(_fd != -1);
-		lseek(_fd, 0, SEEK_SET);	//switch to file header
+#ifdef _WIN32
+		_lseek(_fd, 0, SEEK_SET);
+#else
+		lseek(_fd, 0, SEEK_SET);
+#endif
 		if(offset > 0)
 		{
+#ifdef _WIN32
+			if(-1 == _lseek(_fd, offset, SEEK_SET))
+#else
 			if(-1 == lseek(_fd, offset, SEEK_SET))
+#endif
 			{
 				perror("lseek");
 				return false;
@@ -58,7 +83,11 @@ public:
 		tmp_bytes.Reserve(8192);
 		for(;;)
 		{
+#ifdef _WIN32
+			int read_num = _read(_fd, tmp_bytes.Begin(), (unsigned)tmp_bytes.Captity());
+#else
 			int read_num = read(_fd, tmp_bytes.Begin(), tmp_bytes.Captity());
+#endif
 			if(read_num == -1 && errno != EAGAIN && errno != EINTR)
 			{
 				perror("SyncReadAll");	
@@ -89,10 +118,18 @@ public:
 		_obuff.Append(obuff);	
 		MutexGuard l(_locker);
 		assert(_fd != -1);
-		lseek(_fd, 0, SEEK_SET);	//switch to file header
+#ifdef _WIN32
+		_lseek(_fd, 0, SEEK_SET);
+#else
+		lseek(_fd, 0, SEEK_SET);
+#endif
 		if(offset > 0)
 		{
+#ifdef _WIN32
+			if(-1 == _lseek(_fd, offset, SEEK_SET))
+#else
 			if(-1 == lseek(_fd, offset, SEEK_SET))
+#endif
 			{
 				perror("lseek");
 				return false;
@@ -101,7 +138,11 @@ public:
 
 		for(;;)
 		{
+#ifdef _WIN32
+			int write_num = _write(_fd, _obuff.Begin(), (unsigned)_obuff.Size());
+#else
 			int write_num = write(_fd, _obuff.Begin(), _obuff.Size());
+#endif
 			if(write_num == 0)
 			{
 				goto write_finish;
@@ -151,6 +192,10 @@ write_fault:
 
 	bool ASyncReadAll(int offset = 0)
 	{
+#ifdef _WIN32
+		(void)offset;
+		return false;
+#else
 		MutexGuard l(_locker);
 		assert(_fd != -1);
 		struct stat st;
@@ -165,6 +210,7 @@ write_fault:
 		pcb->aio_reqprio = 0;
 		pcb->aio_lio_opcode = LIO_READ;
 		return true;
+#endif
 	}
 };
 

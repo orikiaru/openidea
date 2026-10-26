@@ -1,6 +1,7 @@
 #pragma once
 
 #include <list>
+#include <utility>
 enum PRIO_ENUM
 {
 	PRIO_NORMAL,	//正常排队,无序,复数线程池取到就处理,先取可能后处理,多线程处理时序无法保证
@@ -16,6 +17,20 @@ public:
 	Task(PRIO_ENUM prio = PRIO_NORMAL) :_prio(prio) {}
 	virtual ~Task() {}
 	virtual void Exec() = 0;
+};
+
+// 一次性任务。Exec 结束后释放自己，交给 ThreadPool::AddTask 使用。
+template<typename F>
+class FnTask : public Task
+{
+	F _fn;
+public:
+	FnTask(F fn, PRIO_ENUM prio = PRIO_NORMAL) : Task(prio), _fn(std::move(fn)) {}
+	void Exec()
+	{
+		_fn();
+		delete this;
+	}
 };
 
 typedef std::list<Task*> TASK_LIST;

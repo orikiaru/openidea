@@ -1,6 +1,7 @@
 #pragma once
 #include "spin_lock.h"
 #include "header.h"
+#include "net_os.h"
 #include "session.h"
 #include <map>
 #include <string>
@@ -48,6 +49,7 @@ public:
 		return Send(sid, &p);
 	}
 	bool Send(sid_t sid, const Protocol* p);
+	bool SendBytes(sid_t sid, const Bytes& data);
 
 	int BroadCast(const Protocol& p)
 	{
@@ -69,7 +71,7 @@ protected:
 	friend class ConnectChannel;
 	friend class NetHelper;
 	//AcceptSession调用,必然由IO线程触发
-	void AddSession(const int new_fd);
+	void AddSession(net_socket_t new_fd);
 	void AddSession(Session* pSession);
 	//ConnectSession调用,必然有IO线程触发
 	void AbortSession();
@@ -85,5 +87,6 @@ protected:
 	virtual void OnAddSession(Session* pSession) = 0;
 	virtual void OnDelSession(const Session* pSession) = 0;
 	virtual void OnAbortSession() {}
+	virtual void OnConnectFailed() {}
 };
 

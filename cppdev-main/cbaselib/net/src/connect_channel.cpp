@@ -6,6 +6,7 @@
 #include "connect_channel.h"
 #include "session_manager.h"
 #include "logger.h"
+#include "net_os.h"
 
 #ifndef __UNUSE_OPENSSL__
 #include <openssl/ssl.h>
@@ -63,10 +64,9 @@ bool ConnectChannel::CheckTcpConnect()
 	//use getsockopt(2) to read the SO_ERROR option at level SOL_SOCKET to determine whether connect() completed successfully (SO_ERROR is zero) or  
 	//unsuccessfully  (SO_ERROR is one of the usual error codes listed here, explaining the reason for the failure).
 	//       int getsockopt(int sockfd, int level, int optname, void *optval, socklen_t *optlen);
-	int value = -1;
+	int value = NetOs_GetSocketError(_socket.GetSocket());
 	bool finish = false;
-	socklen_t len = sizeof(value);
-	if (getsockopt(_socket.GetSocket(), SOL_SOCKET, SO_ERROR, &value, &len) || value)	//返回值不等于0,或者value不等于0
+	if (value)
 	{
 		//没链接完毕或者被中断等下次触发?
 		//暂时先等重连吧
@@ -79,7 +79,7 @@ bool ConnectChannel::CheckTcpConnect()
 	else
 	{
 		finish = true;
-		_p_session_mgr->AddSession(dup(_socket.GetSocket()));
+		_p_session_mgr->AddSession(NetOs_Dup(_socket.GetSocket()));
 	}
 	//普通tcp连接无论建立成功或失败都关闭连接会话
 	return finish;
@@ -208,7 +208,7 @@ bool ConnectChannel::StartSslConnect(SessionManager* pMgr, bool async)
 	}
 	else
 	{
-		pMgr->AddSession(dup(s.GetSocket()));
+		pMgr->AddSession(NetOs_Dup(s.GetSocket()));
 	}
 #else
 	assert(!"UseOpenSSL Must Modify CMakeLists.txt _USE_SSL_ == true to link libssl.so");

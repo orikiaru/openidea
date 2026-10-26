@@ -18,6 +18,10 @@ public:
 	virtual BytesStream EncodeProtocol(const PROTOCOL& proto) {return EncodeProtocol(&proto);}
 };
 
+// 整包：协议id + totalsize + (seqid + size + data) 重复。seqid 允许缺号。
+Protocol* DecodePbFrame(BytesStream& os, int& parser_err, Protocol* (*get_stub)(proto_type_t));
+BytesStream EncodePbFrame(proto_type_t id, BytesStream& body);
+
 //现有协议结构解码器
 class ProtocolParser: public Parser<Protocol>
 {

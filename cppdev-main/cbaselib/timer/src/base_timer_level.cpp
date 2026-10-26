@@ -21,7 +21,7 @@ void TimerLevel::RunTick(BaseTimerManager* pMgr, bool run_timer)
 	}
 
 #if __cplusplus >= 201103L
-	//执行定时器走上面,均匀定时器走下面
+	//鎵ц瀹氭椂鍣ㄨ蛋涓婇潰,鍧囧寑瀹氭椂鍣ㄨ蛋涓嬮潰
 	if (run_timer)
 	{
 		std::for_each(cur_list.begin(), cur_list.end(), [&](BaseTimer* pTimer) {	pMgr->run_timer(pTimer); });

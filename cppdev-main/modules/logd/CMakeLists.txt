@@ -5,7 +5,6 @@ cmake_minimum_required(VERSION 2.6)
 
 #设置可执行程序依赖的源文件
 set(MODULE_SRCS 
-        src/proto_stub.cpp 
 		src/main.cpp 
 		src/log_server.cpp
 		src/log_server_session.cpp

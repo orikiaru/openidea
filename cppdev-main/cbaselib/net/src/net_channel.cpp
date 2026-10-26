@@ -1,12 +1,10 @@
-#include <unistd.h>
-#include <fcntl.h>
 #include "net_channel.h"
 #include "session.h"
+#include "net_os.h"
 
 NetChannel::NetChannel(NetSocket s, Session* pSession):Channel(s, pSession)
 {
-	fcntl(_socket.GetSocket(), F_SETFL, (fcntl(_socket.GetSocket(), F_GETFL) | O_NONBLOCK));
-	fcntl(_socket.GetSocket(), F_SETFD, FD_CLOEXEC);
+	NetOs_SetNonblock(_socket.GetSocket());
 }
 
 NetChannel::~NetChannel()

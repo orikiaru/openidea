@@ -2,6 +2,7 @@ from encodings import utf_8
 import os
 from component_file_gen import ComponentFileGen
 from common import loginfo
+from common import write_utf8
 from module_data_parse import Module
 from serialize_data_file_gen import SerializeDataFileGen
 from serialize_data_parse import SerializeDataType
@@ -22,25 +23,25 @@ class ModuleFileGen:
     
     def GetModulePath(self, short_path = False):
         if(not self.module_path):
-            self.module_path = self.module_root_path + self.GetModuleDirName()
+            self.module_path = os.path.join(self.module_root_path, self.GetModuleDirName())
         if(short_path):
             return ""
         else:
             return self.module_path
     def GetConfigPath(self):
-        return self.module_deploy_path + "/config/"
+        return os.path.join(self.module_deploy_path, "config") + os.sep
     def GetModuleSrcPath(self, short_path = False):
-        return self.GetModulePath(short_path) + "src/"
+        return os.path.join(self.GetModulePath(short_path), "src") + os.sep
     def GetModuleIncPath(self, short_path = False):
-        return self.GetModulePath(short_path) + "inc/"
+        return os.path.join(self.GetModulePath(short_path), "inc") + os.sep
     def GetModuleProtoPath(self, short_path = False):
-        return self.GetModulePath(short_path) + "protocol/"
+        return os.path.join(self.GetModulePath(short_path), "protocol") + os.sep
     def GetModuleStubPath(self, short_path = False):
-        return self.GetModuleSrcPath(short_path) + "proto_stub.cpp"
+        return os.path.join(self.GetModuleSrcPath(short_path), "proto_stub.cpp")
     def GetModuleCMakePath(self, short_path = False):
-        return self.GetModulePath(short_path) + "CMakeLists.txt"
+        return os.path.join(self.GetModulePath(short_path), "CMakeLists.txt")
     def GetModuleMainPath(self, short_path = False):
-        return self.GetModuleSrcPath(short_path) + "main.cpp"
+        return os.path.join(self.GetModuleSrcPath(short_path), "main.cpp")
     def GetModuleConfigName(self):
         return "__MODULE_NAME_LOWER__" + ".toml"
     def GetModuleConfigPath(self):
@@ -91,13 +92,13 @@ class ModuleFileGen:
         module_name_lower = self.GetModuleNameLower()
 
         #stub_file_path = self.GetModuleStubPath()
-        cmake_stub_file_path = self.GetModuleStubPath(True)
+        cmake_stub_file_path = self.GetModuleStubPath(True).replace("\\", "/")
 
         #component_cpp_path = self.GetCompontCppsPath()
-        cmake_component_cpp_path = self.GetCompontCppsPath(True)
+        cmake_component_cpp_path = self.GetCompontCppsPath(True).replace("\\", "/")
 
         #main_cpp_path = self.GetModuleMainPath()
-        cmake_main_cpp_path = self.GetModuleMainPath(True)
+        cmake_main_cpp_path = self.GetModuleMainPath(True).replace("\\", "/")
         
         module_config_path = self.GetModuleConfigPath()
         
@@ -185,7 +186,7 @@ int main(int argc, char* argv[])
     //添加组件逻辑,如网络组件,自定义单例对象等初始化逻辑
     __MODULE_COMPONENTS_INIT__
  
-    //启动线程池,驱动进程逻辑
+    //单线程在这里跑任务、定时器和协程，没有任务时进入 poll
     ThreadPool::GetInstance()->StartWork();
     
     //此处是走不到的.
@@ -202,12 +203,7 @@ int main(int argc, char* argv[])
         if(not overwrite and os.access(file_path, os.F_OK)):
             loginfo("Module=[{}] file=[{}] already Gen".format(self.module.name, file_path))
             return True
-        fp = open(file_path, "w+")
-        if(not fp):
-            loginfo("Module=[{}] header open_file_error path={}".format(self.module.name, file_path))
-            return False
-        fp.write(file_data)
-        fp.close()
+        write_utf8(file_path, file_data)
         return True
     
     def GenComponentFile(self):
@@ -223,46 +219,6 @@ int main(int argc, char* argv[])
         return True
     
     def GenProtocolAndStub(self):
-        
-        #GenStub 协议存根暂时生成在src目录
-        file_path = self.GetModuleStubPath()
-        #先写所有依赖头文件
-        file_data = '#include "header.h" \n'
-        for p in self.module.protos.values():
-            if(p.GetType() != SerializeDataType.PROTOCOL and p.GetType() != SerializeDataType.RPC):
-                continue
-            file_data += '#include "' + p.GetProtoFileName() + '" \n'
-        
-        #后写所有存根注册
-        file_data += '''
-void s_RegisterStub() FUNCTION_RUN_BEFORE_MAIN;
-void s_RegisterStub()
-{
-'''
-        
-        for p in self.module.protos.values():
-            #这部分交给SerializeDataFileGen替换,关键词均与协议有关,而且高度重合
-            s_gen = SerializeDataFileGen(p)
-            file_data += "\t" + s_gen.GenStubFile()
-            
-        file_data += '''
-}
-''' 
-        
-        self.WriteFile(file_data, file_path, True) #存根每次均重新生成
-        
-        
-        #GenProtocol
-        proto_root_gen_path = self.GetModuleProtoPath()
-        if(not os.access(proto_root_gen_path, os.F_OK)):
-            os.makedirs(proto_root_gen_path)
-        proto_root_gen_path += "/"
-        
-        for c in self.module.protos.values():
-            gen_path =  proto_root_gen_path + c.GetProtoFileName()
-            f = SerializeDataFileGen(c)
-            file_data = f.GenHeaderFile()
-            self.WriteFile(file_data, gen_path, False) #模块的协议文件存在就不重新生成.
         return True
             
     def GenCMakeFile(self):
@@ -274,7 +230,7 @@ cmake_minimum_required(VERSION 2.6)
 
 #设置可执行程序依赖的源文件
 set(MODULE_SRCS 
-        __CMAKE_STUB_FILE_PATH__ __CMAKE_MAIN_CPP_PATH__ __CMAKE_COMPONTENTS_CPP_PATH__
+        __CMAKE_MAIN_CPP_PATH__ __CMAKE_COMPONTENTS_CPP_PATH__
     )
 #可执行程序
 add_executable(__MODULE_NAME_LOWER__ ${MODULE_SRCS})
@@ -289,18 +245,21 @@ target_include_directories(__MODULE_NAME_LOWER__
 set(SINGLE_THREAD TRUE)
 
 #链接base,net,proto,timer,logger
-if(SINGLE_THREAD)
-	target_link_libraries(__MODULE_NAME_LOWER__ PUBLIC -Wl,--start-group ${BASE_LIBS} -Wl,--end-group)
+if(MSVC)
+	if(SINGLE_THREAD)
+		target_link_libraries(__MODULE_NAME_LOWER__ PUBLIC ${BASE_LIBS})
+		target_compile_definitions(__MODULE_NAME_LOWER__ PUBLIC _SINGLE_THREAD_)
+	else()
+		target_link_libraries(__MODULE_NAME_LOWER__ PUBLIC ${BASE_M_LIBS})
+	endif()
 else()
-	target_link_libraries(__MODULE_NAME_LOWER__ PUBLIC -Wl,--start-group ${BASE_M_LIBS} -Wl,--end-group)
-endif()
-
-if(SINGLE_THREAD)
-	#__MODULE_NAME_LOWER__为单线程,需要设置_SINGLE_THREAD_宏
-	target_compile_definitions(__MODULE_NAME_LOWER__ PUBLIC _SINGLE_THREAD_)
-else()
-	#__MODULE_NAME_LOWER__为多线程,需要链接pthread
-	target_link_libraries(__MODULE_NAME_LOWER__ PUBLIC pthread)
+	if(SINGLE_THREAD)
+		target_link_libraries(__MODULE_NAME_LOWER__ PUBLIC -Wl,--start-group ${BASE_LIBS} -Wl,--end-group)
+		target_compile_definitions(__MODULE_NAME_LOWER__ PUBLIC _SINGLE_THREAD_)
+	else()
+		target_link_libraries(__MODULE_NAME_LOWER__ PUBLIC -Wl,--start-group ${BASE_M_LIBS} -Wl,--end-group)
+		target_link_libraries(__MODULE_NAME_LOWER__ PUBLIC pthread)
+	endif()
 endif()
 
 

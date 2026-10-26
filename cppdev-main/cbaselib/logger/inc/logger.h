@@ -11,7 +11,7 @@
 
 
 
-//ÈÕÖ¾µÄApi
+//æ—¥å¿—çš„Api
 namespace Log
 {
 	bool Init();

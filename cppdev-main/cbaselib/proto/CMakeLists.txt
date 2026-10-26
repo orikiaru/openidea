@@ -11,6 +11,7 @@ set(LIBSRC
 	src/proto_session.cpp
 	src/proto_session_manager.cpp
 	src/proto_stub_manager.cpp
+	src/rpc_coro.cpp
 	)
 
 add_library(${LIBRARY} STATIC ${LIBSRC})

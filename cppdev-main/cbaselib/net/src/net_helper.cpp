@@ -15,16 +15,9 @@
 
 bool NetHelper::CreateSocket(NetSocket& net_socket, SessionManager* pMgr, bool async)
 {
-	assert(async == true && u8"目前不支持同步Server,可以考虑起单独线程/协程维护?");
-	//默认不允许子进程继承套接字描述符
-	int sock_mask = SOCK_CLOEXEC;
-	sock_mask |= SOCK_STREAM;
-	sock_mask |= (async ? SOCK_NONBLOCK : 0);
-
-	int proto_type = AF_INET;
-	//TODO AF_INET6
-	net_socket_t sfd = socket(proto_type, sock_mask, 0);
-	if (sfd == -1)
+	assert(async == true && "sync server is not supported");
+	net_socket_t sfd = NetOs_CreateTcp(async);
+	if (sfd == INVALID_SOCKET_ID)
 	{
 		LOG_ERROR("NetHelper::CreateSocket id=%s, err=%s", pMgr->GetIDString().c_str(), strerror(errno));
 		return false;
@@ -49,7 +42,7 @@ bool NetHelper::SocketBind(NetSocket& sid, SessionManager* pMgr)
 		return false;
 	}
 
-	int ret = bind(sid.GetSocket(), sid.GetAddr().NetAttrPtr(), sid.GetAddr().NetAttrLen());
+	int ret = NetOs_Bind(sid.GetSocket(), sid.GetAddr().NetAttrPtr(), sid.GetAddr().NetAttrLen());
 	if (ret != 0)
 	{
 		LOG_TRACE("NetHelper::SocketBind error=%s, SessionManager=%s", strerror(errno), pMgr->GetIDString().c_str());
@@ -67,7 +60,7 @@ bool NetHelper::SocketListen(NetSocket& sid, SessionManager* pMgr)
 	}
 	int listen_count = 10;
 	//TODO Config
-	int ret = listen(sid.GetSocket(), listen_count);
+	int ret = NetOs_Listen(sid.GetSocket(), listen_count);
 	if (ret != 0)
 	{
 		LOG_TRACE("NetHelper::SocketListen error=%s, SessionManager=%s", strerror(errno), pMgr->GetIDString().c_str());
@@ -103,7 +96,7 @@ bool NetHelper::SocketConnect(NetSocket& sid, SessionManager* pMgr)
 
 	bool succ = false;
 
-	int ret = connect(sid.GetSocket(), sid.GetAddr().NetAttrPtr(), sid.GetAddr().NetAttrLen());
+	int ret = NetOs_Connect(sid.GetSocket(), sid.GetAddr().NetAttrPtr(), sid.GetAddr().NetAttrLen());
 	if (ret == -1 && errno == EINPROGRESS)
 	{
 		ConnectChannel* pChannel = new ConnectChannel(sid, pMgr);
@@ -144,19 +137,19 @@ int NetHelper::SocketAcceptOne(NetSocket& sid, SessionManager* pMgr)
 	int accpet_count = -1;
 	for (;;)
 	{
-		int cfd = accept(sid.GetSocket(), 0, 0);
-		if (cfd > 0)
+		net_socket_t cfd = NetOs_Accept(sid.GetSocket());
+		if (cfd != INVALID_SOCKET_ID)
 		{
 			pMgr->AddSession(cfd);
 			accpet_count = 1;
 			break;
 		}
-		else if (cfd == -1 && errno == EAGAIN)
+		else if (cfd == INVALID_SOCKET_ID && (errno == EAGAIN || errno == EINPROGRESS))
 		{
 			accpet_count = 0;
 			break;
 		}
-		else if (cfd == -1 && errno == EINTR)
+		else if (cfd == INVALID_SOCKET_ID && errno == EINTR)
 		{
 			continue;
 		}

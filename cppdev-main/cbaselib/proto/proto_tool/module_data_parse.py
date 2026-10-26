@@ -23,7 +23,7 @@ class Component:
     def Parse(self, c_xml:Element, proto_gen:ProtocolGen):
         self.name = c_xml.get("name")
         self.type = c_xml.get("type")
-        protocols = c_xml.findall("protocol")
+        protocols = c_xml.findall("rpc")
         if(not self.name or not self.type):
             #TODO 标志性错误提示,暂时这个日志提示不到出错位置?
             loginfo("ParseComponent Error NoName Or NoType Component = {} type = {}".format(self.name, self.type))

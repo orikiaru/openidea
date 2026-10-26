@@ -69,6 +69,18 @@ bool SessionManager::Send(sid_t sid, const Protocol* p)
 	return false;
 }
 
+bool SessionManager::SendBytes(sid_t sid, const Bytes& data)
+{
+	MutexGuard l(_locker);
+	SessionMap::iterator it = _session_map.find(sid);
+	if (it != _session_map.end())
+	{
+		it->second->Send(data);
+		return true;
+	}
+	return false;
+}
+
 int SessionManager::BroadCast(const Protocol* p)
 {
 	MutexGuard l(_locker);
@@ -94,7 +106,7 @@ void SessionManager::AddSession(Session* pSession)
 	}
 }
 
-void SessionManager::AddSession(const int new_fd)
+void SessionManager::AddSession(net_socket_t new_fd)
 {
 	Session* pSession = CloneSession();
 	Channel* pChannel = NULL;
@@ -127,6 +139,7 @@ void SessionManager::AbortSession()
 {
 	MutexGuard l(_locker);
 	++_cur_session_id;
+	OnConnectFailed();
 	OnAbortSession();
 }
 

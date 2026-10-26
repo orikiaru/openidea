@@ -4,6 +4,7 @@ from ast import Str
 import os
 from module_data_parse import ModuleGen
 from common import loginfo
+from common import write_utf8
 from module_file_gen import ModuleFileGen
 from serialize_data_parse import SerializeDataType
 from serialize_data_parse import SerializeData
@@ -47,11 +48,33 @@ class GenFile:
             elif(p.GetType() == SerializeDataType.RPC_DATA):
                 pass
 
+            if(data_file and p.GetType() == SerializeDataType.RPC_DATA):
+                extra = ""
+                for other in self.proto_parse.serialize_datas:
+                    if(other.GetType() != SerializeDataType.RPC_DATA or other.GetName() == p.GetName()):
+                        continue
+                    for member in p.members:
+                        if(other.GetName() in member.GetType()):
+                            extra += '#include "%s"\n' % other.GetName().lower()
+                            break
+                if(extra):
+                    data_file = data_file.replace('#include "serialize.h"\n', '#include "serialize.h"\n' + extra, 1)
             if(data_file):
-                fd= open(write_path + p.GetDataName(), "w")
-                if(not fd):
-                    loginfo("GenSerailizeIncludeFile open error 2")
-                    return False
-                fd.write(data_file)
-                fd.close()    
+                write_utf8(os.path.join(write_path, p.GetDataName()), data_file)
+        if(not self.GenRpcIds(write_path)):
+            return False
+        return True
+
+    def GenRpcIds(self, write_path):
+        lines = []
+        lines.append("#pragma once")
+        lines.append("#include \"header.h\"")
+        lines.append("template<typename T> struct RpcProtoId;")
+        for p in self.proto_parse.serialize_datas:
+            if(p.GetType() != SerializeDataType.RPC):
+                continue
+            lines.append("template<> struct RpcProtoId<%s> { static const proto_type_t value = %s; };" % (p.GetReq(), p.GetID()))
+            lines.append("template<> struct RpcProtoId<%s> { static const proto_type_t value = %s; };" % (p.GetRes(), p.GetResID()))
+        lines.append("")
+        write_utf8(os.path.join(write_path, "rpc_ids.h"), "\n".join(lines) + "\n")
         return True

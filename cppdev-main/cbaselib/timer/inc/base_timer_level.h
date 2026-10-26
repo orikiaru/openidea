@@ -11,16 +11,20 @@ class TimerLevel;
 typedef std::list<BaseTimer*>	TimerList;
 typedef std::vector<TimerList>	TimerListVector;
 
-//Ö»ÄÜÍ¨¹ýTimerManagerÇý¶¯,ËùÒÔ¾ùÎªË½ÓÐ
+//åªèƒ½é€šè¿‡TimerManageré©±åŠ¨,æ‰€ä»¥å‡ä¸ºç§æœ‰
 class TimerLevel
 {
 	friend class BaseTimerManager;
-	uint32_t		_max_tick;					//µ±Ç°µÈ¼¶µÄtimerµÄtickÊý
-	uint32_t		_lv_offset_tick;			//µ±Ç°µÈ¼¶»ù´¡Æ«ÒÆtickÊý,µÚÒ»¼¶¾ÍÊÇ1£¬µÚ¶þ¼¯¾ÍÊÇ1*lv[0]._max_tick =====
-	uint32_t		_offset;					//µ±Ç°Êý×éÆ«ÒÆÁ¿
-	TimerListVector _timer_tick_datas;			//¶¨Ê±Æ÷¶ÓÁÐ
+	uint32_t		_max_tick;					//å½“å‰ç­‰çº§çš„timerçš„tickæ•°
+	uint32_t		_lv_offset_tick;			//å½“å‰ç­‰çº§åŸºç¡€åç§»tickæ•°,ç¬¬ä¸€çº§å°±æ˜¯1ï¼Œç¬¬äºŒé›†å°±æ˜¯1*lv[0]._max_tick =====
+	uint32_t		_offset;					//å½“å‰æ•°ç»„åç§»é‡
+	TimerListVector _timer_tick_datas;			//å®šæ—¶å™¨é˜Ÿåˆ—
 	Mutex		_locker;
+public:
 	TimerLevel():_max_tick(0),_offset(0) {}
+	TimerLevel(const TimerLevel&) = delete;
+	TimerLevel& operator=(const TimerLevel&) = delete;
+private:
 	void Init(uint32_t max_tick, uint32_t lv_offset_tick)
 	{
 		assert(lv_offset_tick > 0);
@@ -30,7 +34,7 @@ class TimerLevel
 		_max_tick = max_tick;
 		for (uint32_t i = 0; i < max_tick; ++i)
 		{
-			_timer_tick_datas.push_back(TimerList());	//³õÊ¼»¯¶¨Ê±Æ÷¶ÓÁÐ
+			_timer_tick_datas.push_back(TimerList());	//åˆå§‹åŒ–å®šæ—¶å™¨é˜Ÿåˆ—
 		}
 	}
 
@@ -41,15 +45,15 @@ class TimerLevel
 		assert(level_offset >= 0 && level_offset < _max_tick);
 
 		MutexGuard l(_locker);
-		//ÔÚ´Ë¶¨Ê±Æ÷²ã¼¶,Ôò½øÈëÊÊµ±Ë÷ÒýµÄ¶¨Ê±Æ÷ÁÐ±íÖÐ
+		//åœ¨æ­¤å®šæ—¶å™¨å±‚çº§,åˆ™è¿›å…¥é€‚å½“ç´¢å¼•çš„å®šæ—¶å™¨åˆ—è¡¨ä¸­
 		int offset = (level_offset + _offset) % _max_tick;
 		_timer_tick_datas[offset].push_back(pTimer);
 		pTimer->_data._cur_level = this;
 		pTimer->_data._level_tick = offset;
 	}
 
-	//Í¨³£Çé¿öÏÂ, timerÒÆ³ý½¨ÒéÔÚOnTimer·µ»ØfalseÒÆ³ý
-	//ÔÚ¶àÏß³ÌÇé¿öÏÂ,¿ÉÄÜ»á´æÔÚÒÆ³ý¹ý³ÌÖÐ, timer±»´¥·¢µÄÇé¿ö, ´ËÊ±ÒÆ³ý½«ÊÇÊ§°ÜµÄ²Ù×÷
+	//é€šå¸¸æƒ…å†µä¸‹, timerç§»é™¤å»ºè®®åœ¨OnTimerè¿”å›žfalseç§»é™¤
+	//åœ¨å¤šçº¿ç¨‹æƒ…å†µä¸‹,å¯èƒ½ä¼šå­˜åœ¨ç§»é™¤è¿‡ç¨‹ä¸­, timerè¢«è§¦å‘çš„æƒ…å†µ, æ­¤æ—¶ç§»é™¤å°†æ˜¯å¤±è´¥çš„æ“ä½œ
 	bool RemoveTimer(BaseTimerManager* mgr, BaseTimer* pTimer)
 	{
 		assert(pTimer->GetLevelOffset() >= 0 && pTimer->GetLevelOffset() < _max_tick);
@@ -65,7 +69,7 @@ class TimerLevel
 		return false;
 	}
 
-	//ÊÇ·ñÅÜÍêÒ»´ÎÑ­»·
+	//æ˜¯å¦è·‘å®Œä¸€æ¬¡å¾ªçŽ¯
 	bool IsLevelEnd()
 	{
 		return _offset == 0;

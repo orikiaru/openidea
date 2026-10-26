@@ -26,3 +26,11 @@ public:
 		return deserialize(os);
 	}
 };
+
+class RpcData : public Serialize
+{
+public:
+	virtual BytesStream& serialize(BytesStream& os) const = 0;
+	virtual BytesStream& deserialize(BytesStream& os) = 0;
+	virtual RpcData* Clone() = 0;
+};

@@ -8,7 +8,7 @@
 	#error LOG_SERVER MUST BE MULTI THREAD
 #endif
 
-LogFileInstance::LogFileInstance(LogManager* p_mgr, LOG_LEVEL lv):_p_mgr(p_mgr), _lv(lv), _pid(0), _working(false)
+LogFileInstance::LogFileInstance(LogManager* p_mgr, LOG_LEVEL lv):_p_mgr(p_mgr), _lv(lv), _working(false)
 {
 	memset(_fp, 0, sizeof(_fp));
 	_write_size = 0;
@@ -110,7 +110,7 @@ void LogFileInstance::Dump()
 
 void LogFileInstance::WriteLog()
 {
-	assert(pthread_self() == _pid);
+	assert(std::this_thread::get_id() == _pid);
 	_working = true;
 
 

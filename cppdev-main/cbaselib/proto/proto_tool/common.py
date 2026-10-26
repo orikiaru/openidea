@@ -6,6 +6,14 @@ import xml.etree.ElementTree as ET
 def loginfo(*argv):
     #print(datetime.datetime.now(), argv)
     print(argv)
+
+def write_utf8(path, text):
+    # 生成结果固定 UTF-8、无 BOM、LF。不要用系统代码页。
+    if isinstance(text, bytes):
+        text = text.decode("utf-8")
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    with open(path, "wb") as fp:
+        fp.write(text.encode("utf-8"))
 def openxml(path):
 	if not os.path.exists(path):
 		loginfo("ERROR: not find:" + path)

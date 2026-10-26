@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <list>
 #include <map>
+#include <thread>
 #include "bytes.h"
 #include "spin_lock.h"
 
@@ -23,7 +24,7 @@ class LogFileInstance
 
 	//当前lv的日志缓存
 	LogCacheList	_logs;
-	pthread_t		_pid;
+	std::thread::id	_pid;
 	bool			_working;
 
 	//当前写入日志总数

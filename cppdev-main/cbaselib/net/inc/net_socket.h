@@ -1,6 +1,6 @@
 #pragma once
 #include "bytes.h"
-#include <sys/socket.h>
+#include "net_os.h"
 class SessionManager;
 
 class NetAddr
@@ -14,9 +14,6 @@ public:
 	sockaddr*	NetAttrPtr();
 	socklen_t	NetAttrLen();
 };
-
-typedef int net_socket_t;
-#define INVALID_SOCKET_ID -1
 
 class NetSocket
 {
@@ -53,6 +50,7 @@ public:
 	NetAddr GetNetAddr(SessionManager* pMgr);
 public:
 	net_socket_t GetSocket() const	{ return _sid; }
+	void Detach() { _sid = INVALID_SOCKET_ID; }
 	bool IsValidAttr() const		{ return _addr.IsValidAttr(); }
 	NetAddr& GetAddr()				{ return _addr; }
 };

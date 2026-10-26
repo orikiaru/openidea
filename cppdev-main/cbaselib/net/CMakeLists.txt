@@ -20,6 +20,7 @@ set(LIBSRC
 	src/net_channel.cpp 
 	src/tcp_channel.cpp
 	src/ssl_channel.cpp
+	../port/net_os.cpp
 
 	)
 
@@ -33,3 +34,10 @@ target_compile_options(${LIBRARY} PUBLIC ${_CXX_OPTION_})
 target_compile_options(${LIBRARY_M} PUBLIC ${_CXX_OPTION_})
 
 target_compile_definitions(${LIBRARY} PUBLIC _SINGLE_THREAD_)
+
+target_link_libraries(${LIBRARY} PUBLIC uv_a)
+target_link_libraries(${LIBRARY_M} PUBLIC uv_a)
+if(WIN32)
+    target_link_libraries(${LIBRARY} PUBLIC ws2_32)
+    target_link_libraries(${LIBRARY_M} PUBLIC ws2_32)
+endif()

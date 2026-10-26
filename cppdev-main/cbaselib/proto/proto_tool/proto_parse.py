@@ -45,11 +45,6 @@ class ProtocolGen:
         if(not ret):
             return False
         
-        #协议文件生成
-        ret = self.GenProtocols(root)
-        if(not ret):
-            return False
-        
         return True
     
     def GenRpc(self,root)->bool:

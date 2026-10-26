@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 
 <Protocols>
+	<!-- 字段默认按声明顺序从 0 编号。需要跳号时写 seq="N"，例如删掉 1 号字段后，后面的字段仍可保持原来的 seq。 -->
 
 	<rpcdata name="TestDataReq">
 		<member type="int" name="data"/>

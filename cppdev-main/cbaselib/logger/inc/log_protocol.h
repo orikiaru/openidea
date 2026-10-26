@@ -30,12 +30,31 @@ public:
 	{
 		return new RemoteLog(*this);
 	}
+	enum
+	{
+		PB_LV = 0,
+		PB_CONTENT = 1,
+	};
 	virtual BytesStream& serialize(BytesStream& os)const
 	{
-		return os << _lv << _log_content;
+		os.WritePb(PB_LV, _lv);
+		os.WritePb(PB_CONTENT, _log_content);
+		return os;
 	}
 	virtual BytesStream& deserialize(BytesStream& os)
 	{
-		return os >> _lv >> _log_content;
+		while (os.RemainSize() > 0)
+		{
+			uint32_t seq = 0;
+			uint32_t size = 0;
+			os.ReadPbHeader(seq, size);
+			switch (seq)
+			{
+			case PB_LV: os.ReadPb(size, _lv); break;
+			case PB_CONTENT: os.ReadPb(size, _log_content); break;
+			default: os.SkipPb(size); break;
+			}
+		}
+		return os;
 	}
 };

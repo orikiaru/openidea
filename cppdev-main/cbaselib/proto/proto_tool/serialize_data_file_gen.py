@@ -37,17 +37,39 @@ class SerializeDataFileGen:
             self.member_init_param_list = self.member_init_param_list[0:self.member_init_param_list.rindex(',')]
         return self.member_init_param_list       
     
-    def GetMemberSerializeList(self, op):
-        if(self.member_serialize_list == ""):
-            self.member_serialize_list = "os "
-            for m in self.data.members:
-                #" os << m.name << m.name2;"
-                #" os >> m.name >> m.name3;"
-                self.member_serialize_list += r' __OPERATOR__ ' + m.name
-            self.member_serialize_list += ";"
-        str = self.member_serialize_list
-        str = str.replace('__OPERATOR__', op)
-        return str
+    def GetFieldSeq(self, index, member):
+        if member.seq is None:
+            return index
+        return member.seq
+
+    # 每个字段一条：seq(从0起，与字段顺序对应) + size + data
+    def GetPbSerialize(self):
+        lines = []
+        for index, m in enumerate(self.data.members):
+            lines.append("        os.WritePb({}, {});".format(self.GetFieldSeq(index, m), m.name))
+        if(len(lines) == 0):
+            return ""
+        return "\n".join(lines) + "\n"
+
+    def GetPbDeserialize(self):
+        lines = []
+        for m in self.data.members:
+            if("vector" in m.type or "map" in m.type):
+                lines.append("        {}.clear();".format(m.name))
+        lines.append("        while (os.RemainSize() > 0)")
+        lines.append("        {")
+        lines.append("            uint32_t field_seq = 0;")
+        lines.append("            uint32_t field_size = 0;")
+        lines.append("            os.ReadPbHeader(field_seq, field_size);")
+        lines.append("            switch (field_seq)")
+        lines.append("            {")
+        for index, m in enumerate(self.data.members):
+            lines.append("            case {}: os.ReadPb(field_size, {}); break;".format(self.GetFieldSeq(index, m), m.name))
+        lines.append("            default: os.SkipPb(field_size); break;")
+        lines.append("            }")
+        lines.append("        }")
+        lines.append("        return os;")
+        return "\n".join(lines) + "\n"
         
     def GetMemberDeclareList(self):
         if(self.member_declare_list == ""):
@@ -62,8 +84,6 @@ class SerializeDataFileGen:
         class_name = self.data.GetName()
         data_file_name = self.data.GetDataName()
         member_declare = self.GetMemberDeclareList()
-        member_serialize = self.GetMemberSerializeList("<<")
-        member_unserialize = self.GetMemberSerializeList(">>")
         proto_type = self.data.GetProtoType()
         req_type = self.data.GetReq()
         res_type = self.data.GetRes()
@@ -76,8 +96,8 @@ class SerializeDataFileGen:
         file_data = file_data.replace("__MEMBER_INIT_LIST__", init)
         file_data = file_data.replace("__DATA_FILE_NAME__", data_file_name)
         file_data = file_data.replace("__MEMBER_DECLARE__", member_declare)
-        file_data = file_data.replace("__MEMBER_SERIALIZE__", member_serialize)
-        file_data = file_data.replace("__MEMBER_UNSERIALIZE__", member_unserialize)
+        file_data = file_data.replace("__PB_SERIALIZE__", self.GetPbSerialize())
+        file_data = file_data.replace("__PB_DESERIALIZE__", self.GetPbDeserialize())
         file_data = file_data.replace("__PROTO_TYPE__", proto_type)
         file_data = file_data.replace("__PROTO_ID__", proto_id)
         file_data = file_data.replace("__REQ_TYPE__", req_type)
@@ -157,7 +177,7 @@ public:
     def GenRpcDataFile(self):
         assert(self.data.GetType() == SerializeDataType.RPC_DATA)
         file_data = ""
-        file_data += common_include
+        file_data += '#pragma once\n#include "serialize.h"\n'
         file_data += '''
 class __CLASS_NAME__ : public RpcData
 {
@@ -170,12 +190,11 @@ public:
     }
     virtual BytesStream& serialize(BytesStream& os) const
     {
-        return __MEMBER_SERIALIZE__
+__PB_SERIALIZE__        return os;
     }
     virtual BytesStream& deserialize(BytesStream& os)
     {
-        return __MEMBER_UNSERIALIZE__
-    }
+__PB_DESERIALIZE__    }
     virtual RpcData* Clone() { return new __CLASS_NAME__(*this); }
 };
 '''        
@@ -212,12 +231,11 @@ public:
     enum { __PROTO_TYPE__ = __PROTO_ID__, };
     virtual BytesStream& serialize(BytesStream& os) const 
     { 
-        return __MEMBER_SERIALIZE__ 
+__PB_SERIALIZE__        return os; 
     } 
     virtual BytesStream& deserialize(BytesStream& os) 
     { 
-        return __MEMBER_UNSERIALIZE__ 
-    } 
+__PB_DESERIALIZE__    } 
     virtual Protocol* Clone()	{  return new __CLASS_NAME__(*this);  }
 '''
         file_data = self.DoReplace(file_data)
@@ -228,6 +246,6 @@ public:
         if(self.data.GetType() == SerializeDataType.PROTOCOL):
             file_data += "ProtocolStubs::GetInstance().RegisterStub(new __CLASS_NAME__ ( ));" + '\n'
         elif(self.data.GetType() == SerializeDataType.RPC):
-            file_data += "ProtocolStubs::GetInstance().RegisterStub(new __CLASS_NAME__ ( new __REQ_TYPE__(), new __RES_TYPE__()));" + '\n'
+            return ""
         file_data = self.DoReplace(file_data)
         return file_data
