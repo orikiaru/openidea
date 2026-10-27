@@ -6,6 +6,13 @@
 
 static std::atomic<bool> g_tick_queued(false);
 
+static void AddMs(timeval& tv, int64_t ms)
+{
+	int64_t us = (int64_t)tv.tv_sec * 1000000 + (int64_t)tv.tv_usec + ms * 1000;
+	tv.tv_sec = (time_t)(us / 1000000);
+	tv.tv_usec = (suseconds_t)(us % 1000000);
+}
+
 static void OnLoopTick()
 {
 	BaseTimerManager::GetInstance()->OnSignal();
@@ -101,8 +108,6 @@ std::string BaseTimerManager::GenTraceLog()
 void BaseTimerManager::Update()
 {
 	MutexGuard lock(_wheel_mu);
-	_cur_time = time(NULL);
-	localtime_r(&_cur_time, &_cur_tm);
 	gettimeofday(&_cur_tv, 0);
 
 	int64_t delta_us = (int64_t)_cur_tv.tv_sec - (int64_t)_last_tick_tv.tv_sec;
@@ -110,81 +115,81 @@ void BaseTimerManager::Update()
 	delta_us += (int64_t)_cur_tv.tv_usec - (int64_t)_last_tick_tv.tv_usec;
 	if (delta_us <= 0)
 	{
+		_cur_time = _cur_tv.tv_sec;
+		localtime_r(&_cur_time, &_cur_tm);
 		return;
 	}
 
-	//计算tick数,触发tick
-	int offset = get_offset_tick();
-	for (int i = 0; i < offset; ++i)
+	// 只取完整的 tick。剩下的毫秒留在 _last_tick_tv 和墙上时间的差里。
+	int64_t ticks = (delta_us / 1000) / (int64_t)_tick_offset_ms;
+	for (int64_t i = 0; i < ticks; ++i)
 	{
 		run_tick();
 	}
-	//struct timeval t;
-	//gettimeofday(&t, 0);
-	//printf("%s\n", GenTraceLog().c_str());
+	if (ticks == 0)
+	{
+		_cur_time = _cur_tv.tv_sec;
+		localtime_r(&_cur_time, &_cur_tm);
+	}
+}
+
+void BaseTimerManager::AddTimer(BaseTimer* pTimer, int millisecond)
+{
+	MutexGuard lock(_wheel_mu);
+	pTimer->InitData(this, millisecond, TicksFromWall(millisecond));
+	add_timer(pTimer);
+}
+
+int64_t BaseTimerManager::TicksFromWall(int millisecond) const
+{
+	struct timeval now;
+	gettimeofday(&now, 0);
+	int64_t elapsed_us = ((int64_t)now.tv_sec - (int64_t)_last_tick_tv.tv_sec) * 1000000;
+	elapsed_us += (int64_t)now.tv_usec - (int64_t)_last_tick_tv.tv_usec;
+	if (elapsed_us < 0)
+	{
+		elapsed_us = 0;
+	}
+	int64_t due_ms = elapsed_us / 1000 + millisecond;
+	int64_t ticks = (due_ms + (int64_t)_tick_offset_ms - 1) / (int64_t)_tick_offset_ms;
+	if (ticks < 1)
+	{
+		ticks = 1;
+	}
+	return ticks;
 }
 
 void BaseTimerManager::add_timer(BaseTimer* pTimer)
 {
-	int offset = pTimer->_data._trigger_tick - _cur_tick;
+	int64_t offset = pTimer->_data._trigger_tick - _cur_tick;
+	// 粗层倒出来时可能已经过了点。放到下一跳，避免在均匀过程里再进回调。
 	if (offset <= 0)
 	{
-		//TODO极端情况下可能存在, add_timer的时候进行了2次run_tick
 		offset = 1;
 	}
 
 	bool added = false;
-	//处理前 _timer_lv_count - 1 个固定分散层级
 	for (uint32_t i = 0; i < _timer_lv_count - 1; ++i)
 	{
 		TimerLevel& cur_level = _timer_levels[i];
-		uint32_t level_offset = offset / _timer_levels[i]._lv_offset_tick;
+		int64_t level_offset = offset / (int64_t)cur_level._lv_offset_tick;
 		assert(level_offset >= 1);
 		level_offset -= 1;
-		//不在此定时器层级
-		if (level_offset >= _timer_levels[i]._max_tick)
+		if (level_offset >= (int64_t)cur_level._max_tick)
 		{
 			continue;
 		}
 
-		//此处选择超过_max_tick才进行跨级,而不是采用 max_tick-offset跨级,是为了降低临近队列尾时的timer数量的不可控性
-		//大于一轮会丢到下一级，可能会被提前均匀，不过问题不大，大不了均匀时回到同级同offset的队列，这样可以保证每个offset队列均匀
-
-		//TODO 此处可能外部已经切换，比如第二级遍历完，导致第三级越界到下一个offset，此时加入的定时器可能会延时一整个第二级的执行时间
-		//TODO 尤其在多线程调试状态下，极其不稳定。
-		//TODO 锁粒度加大？
-
-		cur_level.AddTimer(this, pTimer, level_offset);
+		cur_level.AddTimer(this, pTimer, (uint32_t)level_offset);
 		added = true;
 		break;
 	}
 
-	//TODO 目前这种只在TimerLevel层级加小锁的情况,极端情况下可能引起Timer加入到timer时,正在切换,导致均匀被拖延一个tick
-	//因为现在分层至少1s,所以不太可能存在拖延n个tick情况.
-
-	//例: 比如虽然上面计算要加入到第二个层级,第一个,不过第二层已经RunTick,切换到下一层,这样这个timer可能会被延后一个或n个tick
-	//因为加入timer时,是按照当前offset计算,此时offset可能已经偏移
-	//毕竟计算时间时,是获取的本次触发逻辑时间的快照,并且无锁保护
-	//不过应该可以接受.
-
-	//没有入前三个分散层级,那么进入全队列
 	if (!added)
 	{
 		TimerLevel& cur_level = _timer_levels[_timer_lv_count - 1];
 		cur_level.AddTimer(this, pTimer, 0);
 	}
-}
-
-int BaseTimerManager::get_offset_tick()
-{
-	int offset = cal_timeval_delta(_last_tick_tv, _cur_tv);
-	suseconds_t offset_us = offset * 1000;
-	offset /= _tick_offset_ms;
-
-	_last_tick_tv.tv_usec += offset_us;
-	_last_tick_tv.tv_sec += _last_tick_tv.tv_usec / 1000000;
-	_last_tick_tv.tv_usec %= 1000000;
-	return offset;
 }
 
 void BaseTimerManager::run_timer(BaseTimer* pTimer)
@@ -195,7 +200,10 @@ void BaseTimerManager::run_timer(BaseTimer* pTimer)
 
 	if (pTimer->OnTimer())
 	{
-		AddTimer(pTimer, pTimer->GetOffsetTime());
+		// 周期定时器按逻辑 tick 续，停顿时后面的跳还能补上。
+		int64_t ticks = milling2tick(pTimer->GetOffsetTime());
+		pTimer->InitData(this, pTimer->GetOffsetTime(), ticks);
+		add_timer(pTimer);
 	}
 }
 
@@ -221,7 +229,11 @@ void BaseTimerManager::try_run_timer()
 
 void BaseTimerManager::run_tick()
 {
+	AddMs(_last_tick_tv, _tick_offset_ms);
 	++_cur_tick;
+	_cur_tv = _last_tick_tv;
+	_cur_time = _cur_tv.tv_sec;
+	localtime_r(&_cur_time, &_cur_tm);
 
 	try_run_timer();
 

@@ -1,4 +1,5 @@
 #include "log_manager.h"
+#include <string.h>
 #include "base_timer_helper.h"
 #include "file_helper.h"
 #include "log_file_instance.h"
@@ -8,6 +9,8 @@
 LogManager LogManager::inst;
 bool LogManager::Init()
 {
+	_log_title_index = 0;
+	memset(_log_title_data, 0, sizeof(_log_title_data));
 	_last_ts = TimerHelper::GetTime();
 	_last_tm = TimerHelper::GetLocalTime();
 
@@ -42,7 +45,7 @@ bool LogManager::OnTimer()
 	tm	_now_tm = TimerHelper::GetLocalTime();
 	time_t _now_ts = TimerHelper::GetTime();
 
-	bool is_cross_day = TimerHelper::IsCross<DT_DAY>(_last_tm, _now_tm);
+	bool is_cross_day = TimerHelper::CrossDay(_last_ts, _now_ts);
 	_last_tm = _now_tm;
 	_last_ts = _now_ts;
 
@@ -154,6 +157,7 @@ bool LogManager::CheckAndCreateRootPath()
 	char cur_path[64];
 	size_t len = strftime(cur_path, sizeof(cur_path) - 1, "%y_%m_%d", &_last_tm);
 	assert(len < sizeof(cur_path) - 1);
+	(void)len;
 	_cur_log_path = _log_root_path + "/" + cur_path;
 	return FileHelper::MakeDir(_cur_log_path);
 }

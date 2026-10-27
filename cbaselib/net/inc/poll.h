@@ -21,6 +21,7 @@ typedef std::list<PollInnerTask*> PollTaskList;
 class Poll
 {
 	std::thread::id	_loop_thread;
+	std::thread		_thread;
 	PollTaskList	_before_tasks;
 	PollTaskList	_after_tasks;
 
@@ -43,11 +44,19 @@ public:
 		return &inst;
 	}
 
+	bool InLoopThread() const
+	{
+		return std::this_thread::get_id() == _loop_thread;
+	}
+	// 已经在 poll 线程就直接执行，否则丢进 libuv 再执行。定时器轮子只能在这条线程上改。
+	void CallOnLoop(void (*fn)(void*), void* arg);
+
 	void IOEventRegister(Channel* pChannel, bool allow_read = true, bool allow_write = false);
 	void IOEventMod(Channel* pChannel, int new_mask);
 	void IOEventUnRegister(Channel* pChannel);
 
 	static void* StartThreadPollWait(void* arg);
+	void StopAndJoin();
 	void PollWait(int wait_ms = 1000);
 	// libuv 重复定时器。循环起来之前调用，到点在 poll 线程执行 fn。
 	void ArmTick(unsigned repeat_ms, void (*fn)());

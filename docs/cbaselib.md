@@ -1,0 +1,35 @@
+# 基础库
+
+`cbaselib` 编成两套静态库。多线程是 `base_m_static`、`net_m_static`、`proto_m_static`、`timer_m_static`、`logger_m_static`。单线程是不带 `_m_` 的同名库，编译时定义 `_SINGLE_THREAD_`。
+
+`_SINGLE_THREAD_` 下 `Mutex` 和 `SpinLock` 的加锁是空操作。多线程的 `Mutex` 是 `std::recursive_mutex`。
+
+## 目录
+
+`base` 是进程里的公共件。`Bytes` 是二进制缓冲，`BytesStream` 做序列化。`Config` 读 toml。`ThreadPool` 跑普通任务和协程句柄。`Task` 是线程池任务基类。
+
+`net` 是网络。`Poll` 包 libuv 的事件循环。`NetSocket`、`AcceptChannel`、`ConnectChannel`、`TcpChannel` 负责监听、连接和收发。`Session` 和 `SessionManager` 管一类连接，组件配置里的 ip、port、type 从这里读。
+
+`proto` 是自有协议。`Protocol` 是协议基类，`Rpc` 是远程调用。`rpc_coro.h` 是协程任务和 RPC 等待。`ProtoSession`、`ProtoStubManager` 管会话和协议号注册。`parser` 做解码。`proto_tool` 是 cmake 时跑的 Python 生成器。
+
+`timer` 是分层时间轮，见 [定时器](timer.md)。
+
+`logger` 是日志客户端。业务进程用它把日志发到 `logd`。`logd` 自己的服务端在 `modules/logd`。
+
+`port` 是套接字的平台差异。`port/win` 给 MSVC 补头文件。
+
+`3rd` 放进来一起编的第三方代码：`cpptoml`、`libuv`、`wepoll`。
+
+`include` 是给业务包含的汇总头：`header.h`、`base_header.h`、`net_header.h`。
+
+## 进程里谁先起来
+
+生成出来的 `main` 按这个顺序：
+
+1. `Config` 读 `deploy/config/<进程名>.toml`
+2. `ThreadPool::Init`
+3. `BaseTimerManager::Init`
+4. `Poll::Init`
+5. `Log::Init`
+6. 各组件 `Init`，服务端再 `StartServer`，客户端再 `StartClient`
+7. `ThreadPool::StartWork` 进入主循环

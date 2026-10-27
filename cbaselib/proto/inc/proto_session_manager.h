@@ -85,6 +85,7 @@ public:
 	virtual void OnAbortSession() = 0;	//客户端必须重写
 	bool SendProtocol(const Protocol& p) { return SendProtocol(&p); }
 	bool SendProtocol(const Protocol* p);
+	bool SendRaw(const Bytes& data);
 	void Reconnect(int delay_ms = 2000);
 
 };

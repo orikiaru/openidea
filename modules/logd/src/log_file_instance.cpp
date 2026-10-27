@@ -28,6 +28,8 @@ bool LogFileInstance::CreateNewFile(const char* path)
 	{
 		return false;
 	}
+	// 交给写线程按块刷。这里只把 stdio 缓冲放大，避免每条日志一次系统调用。
+	setvbuf(fp, NULL, _IOFBF, 1024 * 1024);
 	OnCreateNewFile(fp);
 	return true;
 }
@@ -108,50 +110,87 @@ void LogFileInstance::Dump()
 	LOG_TRACE("LogFileInstance::Dump lv=%d, write_size=%ld", _lv, _write_size);
 }
 
+static bool WriteAll(FILE* fp, const char* data, size_t size)
+{
+	while (size > 0)
+	{
+		size_t wrote = fwrite(data, 1, size, fp);
+		if (wrote == 0)
+		{
+			return false;
+		}
+		data += wrote;
+		size -= wrote;
+	}
+	return true;
+}
+
 void LogFileInstance::WriteLog()
 {
 	assert(std::this_thread::get_id() == _pid);
 	_working = true;
 
-
-	//留10MB的buff,
+	// 攒到一块再写。压力上来时大约 8MB 刷一次，队列空了把尾巴刷掉。
+	const size_t kChunk = 8 * 1024 * 1024;
 	Bytes tmp;
-	tmp.Reserve(10485760);
+	tmp.Reserve(kChunk);
+	int64_t unflushed = 0;
 	for(;;)
 	{
 		FILE* fp = GetActiveFile();
 
 		LogCacheList tmp_logs;
 		_cache_locker.Lock();
-
-		//TODO 这里先拿全量,回头再优化
 		tmp_logs.swap(_logs);
-
-		if (tmp_logs.empty())
+		if (tmp_logs.empty() && tmp.Size() == 0)
 		{
-			//没有日志等唤醒
 			Passive();
+			_cache_locker.UnLock();
+			continue;
 		}
 		_cache_locker.UnLock();
 
-
-		const char* time_title = GetLogTiTle();
-		for (LogCacheList::iterator it = tmp_logs.begin(); it != tmp_logs.end(); ++it)
+		if (!tmp_logs.empty())
 		{
-			tmp.Append(time_title, strlen(time_title));
-			tmp.Append(*it);
+			const char* time_title = GetLogTiTle();
+			size_t title_len = time_title ? strlen(time_title) : 0;
+			for (LogCacheList::iterator it = tmp_logs.begin(); it != tmp_logs.end(); ++it)
+			{
+				if (title_len > 0)
+				{
+					tmp.Append(time_title, title_len);
+				}
+				tmp.Append(*it);
+				if (tmp.Size() >= kChunk)
+				{
+					if (fp && WriteAll(fp, tmp.Begin(), tmp.Size()))
+					{
+						_write_size += (int64_t)tmp.Size();
+						unflushed += (int64_t)tmp.Size();
+					}
+					tmp.Reserve(0);
+					if (fp && unflushed >= (int64_t)kChunk)
+					{
+						fflush(fp);
+						unflushed = 0;
+					}
+				}
+			}
 		}
 
-		size_t w_size = fwrite(tmp.Begin(), tmp.Size(), 1, fp);
-		if (w_size < 1)
+		if (tmp_logs.empty() && tmp.Size() > 0)
 		{
-			//TODO 
+			if (fp && WriteAll(fp, tmp.Begin(), tmp.Size()))
+			{
+				_write_size += (int64_t)tmp.Size();
+			}
+			tmp.Reserve(0);
+			if (fp)
+			{
+				fflush(fp);
+			}
+			unflushed = 0;
 		}
-		fflush(fp);
-		_write_size += tmp.Size();
-		//这里不会缩容.主要是修改data_len
-		tmp.Reserve(0);
-		assert(tmp.Size() == 0 && tmp.Captity() > 0);
 	}
 }
 

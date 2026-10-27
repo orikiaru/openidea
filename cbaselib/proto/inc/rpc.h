@@ -81,8 +81,7 @@ private:
 
 // 协议号 -> 这次调用传进来的 res。回包到了就调用它自己的 deserialize。
 void WatchRpc(proto_type_t id, std::function<void(BytesStream&)> decode);
-void HandleRpc(proto_type_t id, std::function<void(SessionManager*, sid_t, BytesStream&)> handle);
-// 先交给 RpcCall 登记的 res，否则交给该协议号的处理函数。都没有就把包丢掉。
+// 先交给 RpcCall 登记的 res，否则交给该协议号的协程。都没有就把包丢掉。
 bool DeliverRpc(proto_type_t id, BytesStream& body, SessionManager* mgr, sid_t sid);
 	
 

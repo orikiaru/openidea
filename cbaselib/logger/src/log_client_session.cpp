@@ -1,12 +1,9 @@
 #include "log_client_session.h"
-#include "log_protocol.h"
-LogProtocolParser LogClientSession::_parser;
 
-void LogClientSession::SendProtocol(const LogProtocol* proto)
+void LogClientSession::Send(const Bytes& bytes)
 {
-	BytesStream os = _parser.EncodeProtocol(proto);
 	MutexGuard l(_locker);
-	_obuff.Append(os);
+	_obuff.Append(bytes);
 	AllowSend();
 }
 

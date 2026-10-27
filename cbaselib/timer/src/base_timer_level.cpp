@@ -9,8 +9,7 @@ void TimerLevel::RunTick(BaseTimerManager* pMgr, bool run_timer)
 	{
 		MutexGuard l(_locker);
 
-		cur_list = _timer_tick_datas[_offset];
-		_timer_tick_datas[_offset].clear();
+		cur_list.swap(_timer_tick_datas[_offset]);
 
 		++_offset;
 		if (_offset >= _max_tick)

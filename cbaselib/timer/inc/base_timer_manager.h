@@ -14,17 +14,6 @@
 #include <type_traits>
 #include <utility>
 
-//返回差异ms数
-static int cal_timeval_delta(const timeval& old, const timeval& now)
-{
-	//assert(now.tm_sec > old.tm_sec || (now.tv_usec >= old.tv_usec && now.tm_sec == old.tm_sec);
-	int64_t delta_us = now.tv_sec - old.tv_sec;
-	delta_us *= 1000000;
-	delta_us += now.tv_usec - old.tv_usec;
-	assert(delta_us > 0);
-	return delta_us/1000;
-}
-
 typedef std::deque<TimerLevel> TimerLevelVector;
 
 class BaseTimerManager
@@ -57,12 +46,7 @@ public:
 		return offset;
 	}
 
-	void AddTimer(BaseTimer* pTimer, int millisecond)
-	{
-		MutexGuard lock(_wheel_mu);
-		pTimer->InitData(this, millisecond);
-		add_timer(pTimer);
-	}
+	void AddTimer(BaseTimer* pTimer, int millisecond);
 
 	template<typename F>
 	typename std::enable_if<!std::is_base_of<BaseTimer, typename std::remove_pointer<typename std::decay<F>::type>::type>::value, void>::type
@@ -80,7 +64,8 @@ public:
 	}
 	std::string GenTraceLog();
 private:
-	int get_offset_tick();
+	// 墙上时间到到期点还要几个 tick。不满一跳的零头留着，避免提前回调。
+	int64_t TicksFromWall(int millisecond) const;
 
 	//增加定时器
 	void add_timer(BaseTimer* pTimer);
@@ -107,12 +92,10 @@ private:
 	friend class TimerLevel;
 	Mutex _wheel_mu;
 
-	//记录上一次触发定时器的理论tick时间,用来做tick补偿 
-	//比如某一tick事务过多,导致tick延时,那么下一个tick如果物理时间超过2tick,那么将两个tick一起执行
+	// 已经执行完的最后一个 tick 的逻辑时间。不满一跳的毫秒留在和墙上时间的差里，下次补齐。
 	struct timeval		_last_tick_tv;
 
-	//这里是每次run_tick的实际物理时间快照
-	//timer实际添加时,根据此tv做偏移计算?
+	// 最近一次 tick 的逻辑时间。这一跳还没满时，Update 会先写成墙上时间。
 	struct timeval		_cur_tv;
 
 	//当前tick数

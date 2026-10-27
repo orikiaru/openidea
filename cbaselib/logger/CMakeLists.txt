@@ -7,8 +7,6 @@ set(LIBRARY_M ${LIBNAME}_m_static)
 
 set(LIBSRC 	
 	src/log_client.cpp
-	src/log_parser.cpp
-	src/log_protocol.cpp
 	src/log_client_session.cpp
 	src/logger.cpp
 	)
@@ -32,7 +30,6 @@ set(LIBRARY_M2 ${LIBNAME2}_m_static)
 #logserver也会包含logclient,所以重复的target不需要包含
 set(LIBSRC2
 	src/log_client.cpp
-	src/log_parser.cpp
 	src/log_client_session.cpp
 	src/logger.cpp
 	)

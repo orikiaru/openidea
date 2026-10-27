@@ -1,6 +1,8 @@
 #include "logger.h"
 #include <assert.h>
 #include <stdarg.h>
+#include <stdio.h>
+#include <string>
 #include "log_client.h"
 #include "config.h"
 #include "base_header.h"
@@ -33,18 +35,26 @@ namespace Log
 	{
 		va_list vl;
 		va_start(vl, format);
-		char buff[4096];
-		int max_len = sizeof(buff) - 1;
-		int ret = vsnprintf(buff, max_len, format, vl);
-		if (ret == max_len)
+		va_list measure;
+		va_copy(measure, vl);
+		int need = vsnprintf(NULL, 0, format, measure);
+		va_end(measure);
+		if (need < 0)
 		{
-			//TODO
+			va_end(vl);
+			return false;
 		}
+		std::string body((size_t)need + 1, '\0');
+		int wrote = vsnprintf(&body[0], body.size(), format, vl);
 		va_end(vl);
+		if (wrote < 0)
+		{
+			return false;
+		}
 		Bytes tmp;
-		tmp.Reserve(_log_title.length() + ret + 2);
+		tmp.Reserve(_log_title.length() + (size_t)wrote + 2);
 		tmp.Append(_log_title.c_str(), _log_title.length());
-		tmp.Append(buff, ret);
+		tmp.Append(body.data(), (size_t)wrote);
 		tmp.Append("\n", 1);
 
 		if (lv == LOG_LEVEL::LOG_TRACE)
@@ -55,7 +65,7 @@ namespace Log
 
 		if (_logclient_init)
 		{
-			return LogClient::GetInstance().SendProtocol(RemoteLog(lv, tmp));
+			return LogClient::GetInstance().SendLog((int)lv, tmp.Data(), tmp.Size());
 		}
 
 		return false;

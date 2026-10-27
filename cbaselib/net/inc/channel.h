@@ -14,7 +14,7 @@ protected:
 	Mutex		_locker;
 public:
 	friend class Poll;
-	Channel(NetSocket s, Session* pSession) :_socket(s), _p_session(pSession), _event_mask(0), _poll_token(NULL) {}
+	Channel(NetSocket s, Session* pSession) :_event_mask(0), _poll_token(NULL), _socket(s), _p_session(pSession) {}
 	virtual ~Channel();
 
 public:

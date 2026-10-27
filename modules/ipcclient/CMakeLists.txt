@@ -4,7 +4,11 @@ cmake_minimum_required(VERSION 2.6)
 
 #设置可执行程序依赖的源文件
 set(MODULE_SRCS
-        src/main.cpp src/ipcclient.cpp
+        src/main.cpp
+        src/ipcclient.cpp
+        src/test_board.cpp
+        src/echo_mgr.cpp
+        src/log_mgr.cpp
     )
 #可执行程序
 add_executable(ipcclient ${MODULE_SRCS})

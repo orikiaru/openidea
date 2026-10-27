@@ -1,25 +1,36 @@
 #include "log_server_session.h"
-#include "log_protocol.h"
+#include "log_frame.h"
+#include "log_manager.h"
 
 void LogServerSession::OnDataIn()
 {
-	//TODO decryption
-	BytesStream os(_ibuff);
-	while (os.RemainSize())
+	const char* data = _ibuff.Begin();
+	size_t size = _ibuff.Size();
+	size_t used = 0;
+	while (size - used >= (size_t)LOG_FRAME_HEAD)
 	{
-		Protocol* p = _parser.DecodeProtocol(os);
-		if (p)
+		uint32_t payload = ReadLogFrameLen(data + used);
+		if (payload < 1 || payload > (uint32_t)LOG_FRAME_MAX)
 		{
-			PTask* p_task = new PTask(p, _p_session_mgr, _session_id);
-			ThreadPool::GetInstance()->AddTask(p_task);
-			continue;
+			PassiveClose(PARSER_ERR_PROTOCOL_SIZE);
+			return;
 		}
-		else if (_parser.GetError() == PARSER_ERR_UNFINISH)
+		if (size - used < (size_t)LOG_FRAME_HEAD + payload)
 		{
 			break;
 		}
-		PassiveClose(_parser.GetError());
-		break;
+		int level = (unsigned char)data[used + LOG_FRAME_HEAD];
+		const char* text = data + used + LOG_FRAME_HEAD + 1;
+		size_t text_len = payload - 1;
+		if (level >= 0 && level < LOG_LEVEL::LOG_LEVEL_COUNT)
+		{
+			Bytes body(text, text_len);
+			LogManager::GetInstance().WriteLog((LOG_LEVEL)level, body);
+		}
+		used += (size_t)LOG_FRAME_HEAD + payload;
 	}
-	_ibuff.Erase(0, os.GetCurPos());
+	if (used > 0)
+	{
+		_ibuff.Erase(0, used);
+	}
 }

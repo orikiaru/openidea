@@ -10,8 +10,6 @@ set(MODULE_SRCS
 		src/log_server_session.cpp
 		src/log_manager.cpp
 		src/log_file_instance.cpp
-		src/log_proto_stubs.cpp
-		src/log_protocol.cpp
     )
 #可执行程序
 add_executable(logd ${MODULE_SRCS})

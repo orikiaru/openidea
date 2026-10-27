@@ -8,6 +8,7 @@ public:
 	LogClient(){}
 	virtual ~LogClient();
 	bool Init();
+	bool SendLog(int level, const char* text, size_t text_len);
 	static LogClient& GetInstance()	{ return inst; }
 	virtual const std::string GetIDString() { return "LogClient"; }
 private:

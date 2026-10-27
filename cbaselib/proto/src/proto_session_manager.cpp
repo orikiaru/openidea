@@ -3,6 +3,23 @@
 #include "parser.h"
 #include "base_header.h"
 
+bool ProtoClientManager::SendRaw(const Bytes& data)
+{
+	sid_t sid = INVALID_SID;
+	{
+		SpinLockGuard l(_client_locker);
+		if (_conn && _ssid != INVALID_SID)
+		{
+			sid = _ssid;
+		}
+	}
+	if (sid == INVALID_SID)
+	{
+		return false;
+	}
+	return SendBytes(sid, data);
+}
+
 bool ProtoClientManager::SendProtocol(const Protocol* p)
 {
 	if (!p)

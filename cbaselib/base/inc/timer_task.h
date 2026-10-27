@@ -8,7 +8,7 @@
 class TimerTask : public BaseTimer, public Task
 {
 public:
-	TimerTask() :Task(PRIO_NORMAL) {}
+	TimerTask() :Task(PRIO_QUEUE) {}
 	virtual void Exec()
 	{
 		Handle();
@@ -29,7 +29,8 @@ public:
 	bool OnTimer()
 	{
 		F copied = _fn;
-		ThreadPool::GetInstance()->AddTask(std::move(copied));
+		// 跟时间轮同一条有序队列，紧跟这次 Update。不丢到普通队列里排队。
+		ThreadPool::GetInstance()->AddTask(std::move(copied), PRIO_QUEUE);
 		delete this;
 		return END_TIMER;
 	}

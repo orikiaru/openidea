@@ -9,6 +9,21 @@ ip = "127.0.0.1"
 port = "17981"
 type = "tcp"
 
+# 每个测试一个管理器，自己把任务拆出去。关掉就不跑。
+[Test]
+echo = true
+log = false
+
+[TestEcho]
+total = 1000000
+timeout_ms = 180000
+
+[TestLog]
+tasks = 8
+line = 65536
+bytes = 1073741824
+drain_sec = 15
+
 
 [LogClient]
 ip		= "127.0.0.1"
