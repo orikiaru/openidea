@@ -97,14 +97,78 @@ static void WorkerMain(ThreadPool::ThreadData* p_data)
 	for (;;)
 	{
 		Task* pTask = NULL;
+		std::coroutine_handle<> coro;
 		{
 			std::unique_lock<std::mutex> lock(p_data->_mutex);
-			p_data->_cond.wait(lock, [&]() { return p_data->_task_count > 0; });
-			pTask = p_data->_task_list.front();
-			p_data->_task_list.pop_front();
-			p_data->_task_count--;
+			p_data->_cond.wait(lock, [&]() {
+				return p_data->_task_count > 0 || p_data->_coro_count > 0 || ThreadPool::GetInstance()->Stopping();
+			});
+			// 停了就走。否则 poll 上的定时器会一直塞任务，join 等不到。
+			if (ThreadPool::GetInstance()->Stopping())
+			{
+				return;
+			}
+			if (p_data->_coro_count > 0)
+			{
+				coro = p_data->_coros.front();
+				p_data->_coros.pop_front();
+				p_data->_coro_count--;
+			}
+			else
+			{
+				pTask = p_data->_task_list.front();
+				p_data->_task_list.pop_front();
+				p_data->_task_count--;
+			}
 		}
-		pTask->Exec();
+		if (coro)
+		{
+			// 只 resume。跑完的根协程由 SetAfterResume 登记的函数释放。
+			coro.resume();
+			if (ThreadPool::GetInstance()->_after_resume)
+			{
+				ThreadPool::GetInstance()->_after_resume();
+			}
+		}
+		else
+		{
+			pTask->Exec();
+		}
+	}
+}
+
+void ThreadPool::PostCoroutine(std::coroutine_handle<> handle)
+{
+	if (!handle)
+	{
+		return;
+	}
+#ifndef _SINGLE_THREAD_
+	ThreadData& thread_data = _thread_data[PRIO_NORMAL];
+	{
+		std::lock_guard<std::mutex> lock(thread_data._mutex);
+		thread_data._coros.push_back(handle);
+		thread_data._coro_count++;
+	}
+	thread_data._cond.notify_one();
+#else
+	(void)handle;
+#endif
+}
+
+void ThreadPool::RequestStop(int code)
+{
+	{
+		std::lock_guard<std::mutex> lock(_stop_mu);
+		if (!_stop.exchange(true))
+		{
+			_exit_code = code;
+		}
+	}
+	_stop_cond.notify_one();
+	for (int i = PRIO_NORMAL; i < PRIO_NUM; ++i)
+	{
+		_thread_data[i]._cond.notify_all();
 	}
 }
 
@@ -152,12 +216,17 @@ void ThreadPool::SetDrain(bool (*fn)())
 	_drain = fn;
 }
 
+void ThreadPool::SetAfterResume(void (*fn)())
+{
+	_after_resume = fn;
+}
+
 void ThreadPool::SingleThreadStartWork()
 {
 	//屏蔽一些危险信号
 	InitIgnoreSig();
 
-	while (1)
+	while (!Stopping())
 	{
 		bool ran = false;
 		for (int i = PRIO_NUM - 1; i >= PRIO_NORMAL; --i)
@@ -166,12 +235,16 @@ void ThreadPool::SingleThreadStartWork()
 			Task* pTask = NULL;
 			while ((pTask = FetchTask(&thread_data)))
 			{
-				// 协程 Task 只往前走一步。co_yield 会把自己放回队尾，下一轮才轮到它。
+				// 这里只跑普通 Task。协程句柄在下面的 drain 里 resume。
 				pTask->Exec();
 				ran = true;
 			}
 		}
-		// 队列空了才挂进 poll，等 libuv 的网络事件或定时器把循环叫醒
+		// 协程句柄单独排队，不包成堆上的 Task。await 把句柄挂起后，这里才会进 poll。
+		if (_drain && _drain())
+		{
+			ran = true;
+		}
 		if (!ran)
 		{
 			Poll::GetInstance()->PollWait();
@@ -184,20 +257,30 @@ void ThreadPool::MultiThreadStartWork()
 #ifndef _SINGLE_THREAD_
 	//以上是主线程需要先忽略掉的信号
 	ThreadPool::InitIgnoreSig();
+	std::vector<std::thread> workers;
 	for (int i = PRIO_NORMAL; i < PRIO_NUM; ++i)
 	{
 		ThreadData& thread_data = _thread_data[i];
 		for (int n = 0; n < thread_data._thread_count; ++n)
 		{
-			std::thread worker(WorkerMain, &thread_data);
-			worker.detach();
+			workers.emplace_back(WorkerMain, &thread_data);
 		}
 	}
 
-	for (;;)
 	{
-		std::this_thread::sleep_for(std::chrono::hours(24));
+		std::unique_lock<std::mutex> lock(_stop_mu);
+		_stop_cond.wait(lock, [&]() { return _stop.load(); });
 	}
+	for (int i = PRIO_NORMAL; i < PRIO_NUM; ++i)
+	{
+		_thread_data[i]._cond.notify_all();
+	}
+	for (size_t i = 0; i < workers.size(); ++i)
+	{
+		workers[i].join();
+	}
+	// 工作线程已经退出，不会再往 poll 投任务。
+	Poll::GetInstance()->StopAndJoin();
 #endif
 }
 

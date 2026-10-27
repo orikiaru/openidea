@@ -1,16 +1,15 @@
-
 cmake_minimum_required(VERSION 2.6)
 
-###### ipcserver CMake??? ######
+###### ipcserver CMake文件 ######
 
-#???????г?????????????
-set(MODULE_SRCS 
-        src/main.cpp src/ipcserver.cpp 
+#设置可执行程序依赖的源文件
+set(MODULE_SRCS
+        src/main.cpp src/ipcserver.cpp
     )
-#????г???
+#可执行程序
 add_executable(ipcserver ${MODULE_SRCS})
 
-#??????
+#头文件目录
 target_include_directories(ipcserver
     PUBLIC
 		inc
@@ -20,7 +19,7 @@ target_include_directories(ipcserver
 
 set(SINGLE_THREAD FALSE)
 
-#????base,net,proto,timer,logger
+#链接base,net,proto,timer,logger
 if(MSVC)
 	if(SINGLE_THREAD)
 		target_link_libraries(ipcserver PUBLIC ${BASE_LIBS})
@@ -37,5 +36,3 @@ else()
 		target_link_libraries(ipcserver PUBLIC pthread)
 	endif()
 endif()
-
-

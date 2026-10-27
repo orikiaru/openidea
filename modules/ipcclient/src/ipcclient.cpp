@@ -11,7 +11,9 @@
 #include <cstring>
 #include <map>
 #include <mutex>
+#include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 IpcClient IpcClient::inst;
@@ -200,21 +202,36 @@ static void Report()
 	}
 	printf("\n");
 	fflush(stdout);
-	std::exit((mismatch == 0 && rpc_fail == 0 && ok == kTotal) ? 0 : 1);
+	ThreadPool::GetInstance()->RequestStop((mismatch == 0 && rpc_fail == 0 && ok == kTotal) ? 0 : 1);
 }
 
-#ifdef _SINGLE_THREAD_
-static coro::StTask RunOne(int n)
-#else
-static coro::MtTask RunOne(int n)
-#endif
+static std::string TidText()
+{
+	std::ostringstream os;
+	os << std::this_thread::get_id();
+	return os.str();
+}
+
+static coro::Task RunOne(coro::Token token, int n)
 {
 	AllEchoReq req;
 	FillAllTypes(req.data, n);
 	AllEchoRes res;
 	PoisonAllTypes(res.data);
 	res.code = -1;
-	int ret = co_await RpcCall(IpcClient::GetInstance(), g_sid, req, res);
+	const bool trace = (n == 0);
+	if (trace)
+	{
+		printf("coro await begin token=%llu tid=%s\n", (unsigned long long)token, TidText().c_str());
+		fflush(stdout);
+	}
+	int ret = co_await RpcCall(IpcClient::GetInstance(), g_sid, req, res, trace);
+	if (trace)
+	{
+		printf("coro await end token=%llu tid=%s ret=%d code=%d\n",
+			(unsigned long long)token, TidText().c_str(), ret, res.code);
+		fflush(stdout);
+	}
 	{
 		std::lock_guard<std::mutex> lock(g_mu);
 		if (!g_have_sample && n == 0)
@@ -267,12 +284,14 @@ void IpcClient::OnClientConnect(Session* pSession)
 	fflush(stdout);
 	for (int n = 0; n < kTotal; ++n)
 	{
-		RunOne(n).Start();
+		coro::StartTask([n](coro::Token token) {
+			return RunOne(token, n);
+		});
 	}
 	BaseTimerManager::GetInstance()->AddTimer([]() {
 		printf("ipc timeout done=%d ok=%d\n", g_done.load(), g_ok.load());
 		fflush(stdout);
-		std::exit(1);
+		ThreadPool::GetInstance()->RequestStop(1);
 	}, 180000);
 }
 

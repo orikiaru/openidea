@@ -28,6 +28,7 @@ bool BaseTimerManager::Init()
 	TryGetConfigNoReturn("Timer.offset_ms", offset_ms);
 	uint32_t delta_us = offset_ms *1000;
 	assert(1000000 % delta_us == 0 && "delta_us Must be divisible by 1000");
+	(void)delta_us;
 
 	uint32_t timer_lv_count = 4;
 	TryGetConfigNoReturn("Timer.timer_lv_count", timer_lv_count);
@@ -99,6 +100,7 @@ std::string BaseTimerManager::GenTraceLog()
 
 void BaseTimerManager::Update()
 {
+	MutexGuard lock(_wheel_mu);
 	_cur_time = time(NULL);
 	localtime_r(&_cur_time, &_cur_tm);
 	gettimeofday(&_cur_tv, 0);

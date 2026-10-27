@@ -17,8 +17,16 @@ else()
         -Wno-unused-but-set-variable
         -Wno-literal-suffix
         -Wno-format-security
+        -Wno-overloaded-virtual
     )
-    add_compile_options(${_CXX_OPTION_})
+    # GCC 10 的协程还要单独打开。GCC 11 起 -std=gnu++20 已默认带上。
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 11)
+        list(APPEND _CXX_OPTION_ -fcoroutines)
+    endif()
+    # 只加到 C++。这些选项进了 C 文件后，gcc 会直接拒绝编译 libuv。
+    foreach(_opt IN LISTS _CXX_OPTION_)
+        add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:${_opt}>")
+    endforeach()
 endif()
 
 function (CheckLibExist lib_name)
@@ -68,10 +76,11 @@ include_directories(
     ${MODULES_PATH}/include
 	${BASE_LIB_PATH}/3rd/cpptoml
 	${BASE_LIB_PATH}/3rd/libuv/include
+	${BASE_LIB_PATH}/port
 )
 
 if(MSVC)
-    include_directories(${BASE_LIB_PATH}/port ${BASE_LIB_PATH}/port/win)
+    include_directories(${BASE_LIB_PATH}/port/win)
     add_compile_options("/FI${BASE_LIB_PATH}/port/win/msvc_prefix.h")
 endif()
 

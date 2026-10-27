@@ -4,8 +4,8 @@
 #include "rpc_coro.h"
 #include "threadpool.h"
 #include <deque>
+#include <list>
 #include <map>
-#include <mutex>
 
 static bool DrainStCoro()
 {
@@ -17,6 +17,7 @@ static struct StDrainReg
 	StDrainReg()
 	{
 		ThreadPool::GetInstance()->SetDrain(DrainStCoro);
+		ThreadPool::GetInstance()->SetAfterResume(coro::DrainDetached);
 	}
 } g_st_drain_reg;
 
@@ -157,6 +158,7 @@ namespace
 {
 struct RpcCoroSlot
 {
+	uint64_t task_id;
 	std::coroutine_handle<> handle;
 	int* result;
 	std::function<bool(BytesStream&)> decode;
@@ -165,12 +167,39 @@ struct RpcCoroSlot
 	proto_type_t res_id;
 };
 
-std::mutex g_rpc_wait_lock;
+Mutex g_rpc_wait_lock;
 std::map<proto_type_t, std::deque<std::function<void(BytesStream&)> > > g_rpc_wait;
-std::map<proto_type_t, std::function<void(SessionManager*, sid_t, BytesStream&)> > g_rpc_handle;
-std::map<uint64_t, RpcCoroSlot> g_rpc_coro;
-std::map<proto_type_t, std::deque<uint64_t> > g_rpc_coro_q;
-uint64_t g_rpc_coro_seq = 1;
+std::map<proto_type_t, std::function<coro::Task(coro::Token, SessionManager*, sid_t, BytesStream)> > g_rpc_handle;
+// 按回包协议号排队，弹出的就是这次要唤醒的任务。任务 id 直接当键，超时用迭代器摘掉。
+std::map<proto_type_t, std::list<RpcCoroSlot> > g_rpc_coro_q;
+std::map<uint64_t, std::list<RpcCoroSlot>::iterator> g_rpc_coro;
+
+void FinishRpcSlot(RpcCoroSlot& slot, int code, BytesStream* body)
+{
+	if (body)
+	{
+		if (slot.decode)
+		{
+			slot.decode(*body);
+		}
+		if (slot.timer && BaseTimerManager::GetInstance()->RemoveTimer(slot.timer))
+		{
+			SAFE_DELETE(slot.timer);
+		}
+	}
+	else if (slot.result)
+	{
+		*slot.result = code;
+	}
+	if (slot.resume)
+	{
+		slot.resume();
+	}
+	else if (slot.handle)
+	{
+		coro::Schedule(slot.handle);
+	}
+}
 
 class RpcCoroTimer : public BaseTimer
 {
@@ -187,122 +216,81 @@ public:
 };
 }
 
-uint64_t BindRpcCall(proto_type_t res_id, std::coroutine_handle<> handle, int* result, int timeout_sec, std::function<bool(BytesStream&)> decode, std::function<void()> resume)
+uint64_t BindRpcCall(proto_type_t res_id, uint64_t task_id, std::coroutine_handle<> handle, int* result, int timeout_sec, std::function<bool(BytesStream&)> decode, std::function<void()> resume)
 {
-	std::lock_guard<std::mutex> lock(g_rpc_wait_lock);
-	uint64_t rid = g_rpc_coro_seq++;
-	if (g_rpc_coro_seq == 0)
-	{
-		g_rpc_coro_seq = 1;
-	}
+	MutexGuard lock(g_rpc_wait_lock);
 	RpcCoroTimer* timer = NULL;
 	if (timeout_sec > 0)
 	{
-		timer = new RpcCoroTimer(rid);
+		timer = new RpcCoroTimer(task_id);
 		BaseTimerManager::GetInstance()->AddTimer(timer, timeout_sec * 1000);
 	}
+	std::list<RpcCoroSlot>& q = g_rpc_coro_q[res_id];
 	RpcCoroSlot slot;
+	slot.task_id = task_id;
 	slot.handle = handle;
 	slot.result = result;
 	slot.decode = std::move(decode);
 	slot.resume = std::move(resume);
 	slot.timer = timer;
 	slot.res_id = res_id;
-	g_rpc_coro[rid] = std::move(slot);
-	g_rpc_coro_q[res_id].push_back(rid);
-	return rid;
+	q.push_back(std::move(slot));
+	g_rpc_coro[task_id] = --q.end();
+	return task_id;
 }
 
-bool WakeRpcCall(uint64_t rid, int code, BytesStream* body)
+bool WakeRpcCall(uint64_t task_id, int code, BytesStream* body)
 {
-	std::coroutine_handle<> handle;
-	int* result = NULL;
-	std::function<bool(BytesStream&)> decode;
-	std::function<void()> resume;
-	BaseTimer* timer = NULL;
+	RpcCoroSlot slot;
 	{
-		std::lock_guard<std::mutex> lock(g_rpc_wait_lock);
-		std::map<uint64_t, RpcCoroSlot>::iterator it = g_rpc_coro.find(rid);
+		MutexGuard lock(g_rpc_wait_lock);
+		std::map<uint64_t, std::list<RpcCoroSlot>::iterator>::iterator it = g_rpc_coro.find(task_id);
 		if (it == g_rpc_coro.end())
 		{
 			return false;
 		}
-		handle = it->second.handle;
-		result = it->second.result;
-		decode = std::move(it->second.decode);
-		resume = std::move(it->second.resume);
-		timer = it->second.timer;
-		if (!body)
+		std::list<RpcCoroSlot>::iterator lit = it->second;
+		std::map<proto_type_t, std::list<RpcCoroSlot> >::iterator qit = g_rpc_coro_q.find(lit->res_id);
+		slot = std::move(*lit);
+		if (qit != g_rpc_coro_q.end())
 		{
-			std::map<proto_type_t, std::deque<uint64_t> >::iterator qit = g_rpc_coro_q.find(it->second.res_id);
-			if (qit != g_rpc_coro_q.end())
+			qit->second.erase(lit);
+			if (qit->second.empty())
 			{
-				for (std::deque<uint64_t>::iterator dit = qit->second.begin(); dit != qit->second.end(); ++dit)
-				{
-					if (*dit == rid)
-					{
-						qit->second.erase(dit);
-						break;
-					}
-				}
-				if (qit->second.empty())
-				{
-					g_rpc_coro_q.erase(qit);
-				}
+				g_rpc_coro_q.erase(qit);
 			}
 		}
 		g_rpc_coro.erase(it);
 	}
-	if (body)
-	{
-		if (decode)
-		{
-			decode(*body);
-		}
-		if (timer && BaseTimerManager::GetInstance()->RemoveTimer(timer))
-		{
-			SAFE_DELETE(timer);
-		}
-	}
-	else if (result)
-	{
-		*result = code;
-	}
-	if (resume)
-	{
-		resume();
-	}
-	else if (handle)
-	{
-		coro::StScheduler::Post(handle);
-	}
+	FinishRpcSlot(slot, code, body);
 	return true;
 }
 
 void WatchRpc(proto_type_t id, std::function<void(BytesStream&)> decode)
 {
-	std::lock_guard<std::mutex> lock(g_rpc_wait_lock);
+	MutexGuard lock(g_rpc_wait_lock);
 	g_rpc_wait[id].push_back(std::move(decode));
 }
 
-void HandleRpc(proto_type_t id, std::function<void(SessionManager*, sid_t, BytesStream&)> handle)
+void BindRpcHandler(proto_type_t id, std::function<coro::Task(coro::Token, SessionManager*, sid_t, BytesStream)> handle)
 {
-	std::lock_guard<std::mutex> lock(g_rpc_wait_lock);
+	MutexGuard lock(g_rpc_wait_lock);
 	g_rpc_handle[id] = std::move(handle);
 }
 
 bool DeliverRpc(proto_type_t id, BytesStream& body, SessionManager* mgr, sid_t sid)
 {
 	std::function<void(BytesStream&)> decode;
-	std::function<void(SessionManager*, sid_t, BytesStream&)> handle;
-	uint64_t rid = 0;
+	std::function<coro::Task(coro::Token, SessionManager*, sid_t, BytesStream)> handle;
+	RpcCoroSlot slot;
 	bool have_rid = false;
 	{
-		std::lock_guard<std::mutex> lock(g_rpc_wait_lock);
-		std::map<proto_type_t, std::deque<uint64_t> >::iterator qit = g_rpc_coro_q.find(id);
+		MutexGuard lock(g_rpc_wait_lock);
+		std::map<proto_type_t, std::list<RpcCoroSlot> >::iterator qit = g_rpc_coro_q.find(id);
 		if (qit != g_rpc_coro_q.end() && !qit->second.empty())
 		{
-			rid = qit->second.front();
+			slot = std::move(qit->second.front());
+			g_rpc_coro.erase(slot.task_id);
 			qit->second.pop_front();
 			if (qit->second.empty())
 			{
@@ -312,30 +300,30 @@ bool DeliverRpc(proto_type_t id, BytesStream& body, SessionManager* mgr, sid_t s
 		}
 		else
 		{
-		std::map<proto_type_t, std::deque<std::function<void(BytesStream&)> > >::iterator it = g_rpc_wait.find(id);
-		if (it != g_rpc_wait.end() && !it->second.empty())
-		{
-			decode = std::move(it->second.front());
-			it->second.pop_front();
-			if (it->second.empty())
+			std::map<proto_type_t, std::deque<std::function<void(BytesStream&)> > >::iterator it = g_rpc_wait.find(id);
+			if (it != g_rpc_wait.end() && !it->second.empty())
 			{
-				g_rpc_wait.erase(it);
+				decode = std::move(it->second.front());
+				it->second.pop_front();
+				if (it->second.empty())
+				{
+					g_rpc_wait.erase(it);
+				}
 			}
-		}
-		else
-		{
-			std::map<proto_type_t, std::function<void(SessionManager*, sid_t, BytesStream&)> >::iterator hit = g_rpc_handle.find(id);
-			if (hit == g_rpc_handle.end())
+			else
 			{
-				return false;
+				std::map<proto_type_t, std::function<coro::Task(coro::Token, SessionManager*, sid_t, BytesStream)> >::iterator hit = g_rpc_handle.find(id);
+				if (hit == g_rpc_handle.end())
+				{
+					return false;
+				}
+				handle = hit->second;
 			}
-			handle = hit->second;
-		}
 		}
 	}
 	if (have_rid)
 	{
-		WakeRpcCall(rid, 0, &body);
+		FinishRpcSlot(slot, 0, &body);
 		return true;
 	}
 	try
@@ -346,7 +334,10 @@ bool DeliverRpc(proto_type_t id, BytesStream& body, SessionManager* mgr, sid_t s
 		}
 		else
 		{
-			handle(mgr, sid, body);
+			BytesStream owned(body);
+			coro::StartTask([handle, mgr, sid, owned](coro::Token token) {
+				return handle(token, mgr, sid, owned);
+			});
 		}
 	}
 	catch (ParserException&)

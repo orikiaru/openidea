@@ -1,16 +1,15 @@
-
 cmake_minimum_required(VERSION 2.6)
 
 ###### ipcclient CMake文件 ######
 
-#设置�?执�?�程序依赖的源文�?
-set(MODULE_SRCS 
-        src/main.cpp src/ipcclient.cpp 
+#设置可执行程序依赖的源文件
+set(MODULE_SRCS
+        src/main.cpp src/ipcclient.cpp
     )
-#�?执�?�程�?
+#可执行程序
 add_executable(ipcclient ${MODULE_SRCS})
 
-#头文件目�?
+#头文件目录
 target_include_directories(ipcclient
     PUBLIC
 		inc
@@ -37,5 +36,3 @@ else()
 		target_link_libraries(ipcclient PUBLIC pthread)
 	endif()
 endif()
-
-

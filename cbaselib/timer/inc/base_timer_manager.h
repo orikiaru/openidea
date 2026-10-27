@@ -10,6 +10,7 @@
 #include "timer_task.h"
 #include <assert.h>
 #include <string>
+#include "spin_lock.h"
 #include <type_traits>
 #include <utility>
 
@@ -58,6 +59,7 @@ public:
 
 	void AddTimer(BaseTimer* pTimer, int millisecond)
 	{
+		MutexGuard lock(_wheel_mu);
 		pTimer->InitData(this, millisecond);
 		add_timer(pTimer);
 	}
@@ -72,6 +74,7 @@ public:
 
 	bool RemoveTimer(BaseTimer* pTimer)
 	{
+		MutexGuard lock(_wheel_mu);
 		assert(pTimer->GetTimerLevel());
 		return pTimer->GetTimerLevel()->RemoveTimer(this, pTimer);
 	}
@@ -102,6 +105,7 @@ private:
 
 private:
 	friend class TimerLevel;
+	Mutex _wheel_mu;
 
 	//记录上一次触发定时器的理论tick时间,用来做tick补偿 
 	//比如某一tick事务过多,导致tick延时,那么下一个tick如果物理时间超过2tick,那么将两个tick一起执行

@@ -3,6 +3,7 @@
 #include "allechores"
 #include "parser.h"
 #include "rpc.h"
+#include "rpc_coro.h"
 #include "rpc_ids.h"
 #include <stdio.h>
 
@@ -20,16 +21,13 @@ const std::string IpcServer::GetIDString()
 
 bool IpcServer::Init()
 {
-	HandleRpc(RpcProtoId<AllEchoReq>::value, [](SessionManager* mgr, sid_t sid, BytesStream& body) {
-		AllEchoReq req;
-		req.deserialize(body);
-		AllEchoRes res;
+	HandleRpc<AllEchoReq, AllEchoRes>([](coro::Token token, SessionManager* mgr, sid_t sid, AllEchoReq& req, AllEchoRes& res) -> coro::Task {
+		(void)token;
+		(void)mgr;
+		(void)sid;
 		res.data = req.data;
 		res.code = 1;
-		BytesStream out;
-		res.serialize(out);
-		BytesStream frame = EncodePbFrame(RpcProtoId<AllEchoRes>::value, out);
-		mgr->SendBytes(sid, frame.GetMutableBuff());
+		co_return;
 	});
 	return SessionManager::Init();
 }

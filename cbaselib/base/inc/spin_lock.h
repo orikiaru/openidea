@@ -72,7 +72,7 @@ public:
 class Mutex
 {
 	friend class MutexCond;
-	std::mutex _m;
+	std::recursive_mutex _m;
 public:
 	void Lock() { _m.lock(); }
 	void UnLock() { _m.unlock(); }
@@ -94,13 +94,11 @@ public:
 
 class MutexCond
 {
-	std::condition_variable _cv;
+	std::condition_variable_any _cv;
 public:
 	void Wait(Mutex& locker)
 	{
-		std::unique_lock<std::mutex> hold(locker._m, std::adopt_lock);
-		_cv.wait(hold);
-		hold.release();
+		_cv.wait(locker._m);
 	}
 	void Signal() { _cv.notify_one(); }
 	void Broadcast() { _cv.notify_all(); }
