@@ -313,6 +313,11 @@ bool Poll::Init()
 #endif
 }
 
+struct uv_loop_s* Poll::Loop()
+{
+	return &g_loop;
+}
+
 void Poll::CallOnLoop(void (*fn)(void*), void* arg)
 {
 	if (InLoopThread())

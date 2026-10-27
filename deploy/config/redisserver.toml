@@ -1,0 +1,32 @@
+# redisserver config
+[Service]
+name = "redisserver"
+id = 1
+
+# 给 ipcclient 听的地址
+[RedisServer]
+ip = "127.0.0.1"
+port = "16379"
+type = "tcp"
+
+# 真正的 Redis。只有这个进程用 hiredis 去连。connections 是上游连接数。
+[Redis]
+ip = "127.0.0.1"
+port = "6379"
+connections = 4
+
+[LogClient]
+ip		= "127.0.0.1"
+port	= "19995"
+type   	= "tcp"
+
+[Timer]
+offset_ms = 50
+timer_lv_count = 4
+timer_lvs = [128,128,128,1]
+
+[ThreadPool]
+normal = 3
+urgent = 1
+queue = 1
+max_task_count = 100000

@@ -13,6 +13,7 @@ type = "tcp"
 [Test]
 echo = true
 log = false
+redis = false
 
 [TestEcho]
 total = 1000000
@@ -23,6 +24,18 @@ tasks = 8
 line = 65536
 bytes = 1073741824
 drain_sec = 15
+
+[TestRedis]
+tasks = 8
+seconds = 10
+timeout_ms = 25000
+
+# 连的是 redisserver，不是 Redis 本身
+[RedisClient]
+ip = "127.0.0.1"
+port = "16379"
+type = "tcp"
+timeout_ms = 25000
 
 
 [LogClient]

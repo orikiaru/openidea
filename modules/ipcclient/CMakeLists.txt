@@ -9,6 +9,7 @@ set(MODULE_SRCS
         src/test_board.cpp
         src/echo_mgr.cpp
         src/log_mgr.cpp
+        src/redis_mgr.cpp
     )
 #可执行程序
 add_executable(ipcclient ${MODULE_SRCS})

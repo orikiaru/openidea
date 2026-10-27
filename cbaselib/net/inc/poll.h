@@ -48,6 +48,8 @@ public:
 	{
 		return std::this_thread::get_id() == _loop_thread;
 	}
+	// hiredis 的 libuv 适配器挂在这条循环上。只在 poll 线程里用。
+	struct uv_loop_s* Loop();
 	// 已经在 poll 线程就直接执行，否则丢进 libuv 再执行。定时器轮子只能在这条线程上改。
 	void CallOnLoop(void (*fn)(void*), void* arg);
 

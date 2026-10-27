@@ -16,4 +16,8 @@
         <component name="IpcServer"/>
     </module>
 
+    <!--不挂协议组件。命令是 RESP，里面再调 hiredis。-->
+    <module name="RedisServer">
+    </module>
+
 </Modules>

@@ -18,3 +18,19 @@
 # 提交就是提交并推送
 
 用户说「提交」时，包含本地 `git commit` 和推送到当前分支的远程。推送用普通 `git push`，不要强推。远程拒绝或需要登录时，把验证信息交给用户。
+
+# 回声和日志要分开测
+
+测的是 `logd`、`ipcserver`、`ipcclient` 这三个进程。不要另写一个日志客户端。日志从 `ipcclient` 的 `LogMgr` 发出，回声从 `EchoMgr` 发出。开关在 `deploy/config/ipcclient.toml` 的 `[Test]`：`echo` 和 `log`。一次只开一个。
+
+产物是 Linux 程序，在 WSL 里编、在 WSL 里跑。构建目录是 `~/openidea-build-gcc13`，可执行文件在 `deploy/bin`。进程的当前目录必须是某层 `bin`，配置在同级的 `config`。`logd` 读 `../config/logd.toml`，另外两个读 `../config/<名字>.toml`。
+
+跑之前把这三份 toml 拷到临时目录再改，不要改仓库里的那份。日志目录改到 `/tmp` 下面，不要写进仓库。
+
+顺序是先 `logd`（端口 19995），再 `ipcserver`（等到输出 `ipc server listen`，端口 17981），最后 `ipcclient`。
+
+回声看客户端退出码和这一行：`ok` 等于 `[TestEcho].total`，`mismatch=0`，`rpc_fail=0`。
+
+日志看日志服落盘的文件字节，不要只看客户端打印的 `enqueue_rate`。那个数是塞进发送缓冲的速度。端到端用文件字节除以从启动客户端到文件不再增长的时间。文件总量不要超过 10GB，超过 2GB 就停。测完删掉临时日志目录，并停掉这三个进程。
+
+Redis 也单独测。开关是 `[Test] redis`，和 echo、log 一次只开一个。先起本机 Redis（`maxmemory 1536mb`），再起 `redisserver`（等到 `redis server listen`，端口 16379），最后 `ipcclient`。客户端连的是 redisserver，不是 Redis。看退出码，以及 `redis integrity ok` 和 `redis stress` 那一行里 `bad=0`。测完停掉 `redisserver`。

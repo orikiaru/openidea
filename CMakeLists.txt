@@ -53,8 +53,8 @@ endif()
 set(BASE_LIB_PATH ${CMAKE_SOURCE_DIR}/cbaselib)
 set(MODULES_PATH ${CMAKE_SOURCE_DIR}/modules)
 
-set(BASE_M_LIBS timer_m_static logger_m_static net_m_static proto_m_static base_m_static )
-set(BASE_LIBS timer_static logger_static net_static proto_static base_static)
+set(BASE_M_LIBS timer_m_static logger_m_static redis_m_static net_m_static proto_m_static base_m_static hiredis_static)
+set(BASE_LIBS timer_static logger_static redis_static net_static proto_static base_static hiredis_static)
 set(LOGD_M_LIBS timer_m_static logd_m_static net_m_static proto_m_static base_m_static )
 
 
@@ -64,6 +64,7 @@ set(DEPOLY_PATH ${CMAKE_SOURCE_DIR}/deploy)
 set(LIBUV_BUILD_SHARED OFF CACHE BOOL "" FORCE)
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 add_subdirectory(${BASE_LIB_PATH}/3rd/libuv EXCLUDE_FROM_ALL)
+add_subdirectory(${BASE_LIB_PATH}/3rd/hiredis EXCLUDE_FROM_ALL)
 
 #通用头文件目录。放在 libuv 后面，避免 proto/inc/rpc.h 盖住 Windows 的 rpc.h。
 include_directories(
@@ -72,10 +73,12 @@ include_directories(
     ${BASE_LIB_PATH}/net/inc
     ${BASE_LIB_PATH}/timer/inc
     ${BASE_LIB_PATH}/logger/inc
+    ${BASE_LIB_PATH}/redis/inc
     ${BASE_LIB_PATH}/proto/inc
     ${MODULES_PATH}/include
 	${BASE_LIB_PATH}/3rd/cpptoml
 	${BASE_LIB_PATH}/3rd/libuv/include
+	${BASE_LIB_PATH}/3rd/hiredis
 	${BASE_LIB_PATH}/port
 )
 
@@ -90,6 +93,7 @@ add_subdirectory(${BASE_LIB_PATH}/net  EXCLUDE_FROM_ALL)
 add_subdirectory(${BASE_LIB_PATH}/proto EXCLUDE_FROM_ALL)
 add_subdirectory(${BASE_LIB_PATH}/timer EXCLUDE_FROM_ALL)
 add_subdirectory(${BASE_LIB_PATH}/logger EXCLUDE_FROM_ALL)
+add_subdirectory(${BASE_LIB_PATH}/redis EXCLUDE_FROM_ALL)
 
 
 set(PROTO_TOOL_PATH ${BASE_LIB_PATH}/proto/proto_tool/main.py)
@@ -115,7 +119,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${DEPOLY_PATH}/bin)
 set(LIBRARY_OUTPUT_PATH ${DEPOLY_PATH}/path)
 
 #增加编译模块。新模块由 xml 生成到 modules/<name>/CMakeLists.txt
-foreach(_mod logd ipcclient ipcserver)
+foreach(_mod logd ipcclient ipcserver redisserver)
     if(EXISTS ${MODULES_PATH}/${_mod}/CMakeLists.txt)
         add_subdirectory(${MODULES_PATH}/${_mod})
     endif()
