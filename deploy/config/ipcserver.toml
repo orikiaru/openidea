@@ -10,6 +10,13 @@ port = "17981"
 type = "tcp"
 
 
+# 起服后发一次 GET 看 HTTP 客户端。host 不填就不发，压测时别打开。
+[HttpProbe]
+# host = "www.baidu.com"
+port = 80
+path = "/"
+timeout_ms = 5000
+
 [LogClient]
 ip		= "127.0.0.1"
 port	= "19995"

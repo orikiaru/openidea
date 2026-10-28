@@ -38,6 +38,7 @@ int main(int argc, char* argv[])
     }
     printf("ipc server listen\n");
     fflush(stdout); 
+    IpcServer::GetInstance().StartHttpProbe();
 
  
     //单线程在这里跑任务、定时器和协程，没有任务时进入 poll

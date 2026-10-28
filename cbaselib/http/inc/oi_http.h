@@ -37,7 +37,8 @@ public:
 	Response await_resume();
 };
 
-// 连一个 HTTP/1.1 服务。查询参数按百分号编码，body 按字节发送。
+// 连一个 HTTP/1.1 服务。host 可以是 IPv4 或域名，域名在 libuv 线程池里解析。
+// 查询参数按百分号编码，body 按字节发送。响应支持 Content-Length、chunked 和读到断开。
 class Client
 {
 	std::string _host;

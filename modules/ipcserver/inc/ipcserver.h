@@ -11,6 +11,8 @@ class IpcServer : public ::OI::Rpc::ProtoSessionManager
 public:
 	virtual ~IpcServer();
 	bool Init();
+	// [HttpProbe] 配了 host 才发一次 GET，打印结果。不等它，监听照常。
+	void StartHttpProbe();
 	virtual const std::string GetIDString();
 private:
 	virtual void OnAddSession(::OI::Net::Session* pSession);

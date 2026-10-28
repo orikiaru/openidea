@@ -18,20 +18,20 @@ target_include_directories(ipcserver
 
 set(SINGLE_THREAD FALSE)
 
-#链接base,net,proto,timer,logger
+#链接base,net,proto,timer,logger,http
 if(MSVC)
 	if(SINGLE_THREAD)
-		target_link_libraries(ipcserver PUBLIC ${BASE_LIBS})
+		target_link_libraries(ipcserver PUBLIC http_static ${BASE_LIBS})
 		target_compile_definitions(ipcserver PUBLIC _SINGLE_THREAD_)
 	else()
-		target_link_libraries(ipcserver PUBLIC ${BASE_M_LIBS})
+		target_link_libraries(ipcserver PUBLIC http_m_static ${BASE_M_LIBS})
 	endif()
 else()
 	if(SINGLE_THREAD)
-		target_link_libraries(ipcserver PUBLIC -Wl,--start-group ${BASE_LIBS} -Wl,--end-group)
+		target_link_libraries(ipcserver PUBLIC -Wl,--start-group http_static ${BASE_LIBS} -Wl,--end-group)
 		target_compile_definitions(ipcserver PUBLIC _SINGLE_THREAD_)
 	else()
-		target_link_libraries(ipcserver PUBLIC -Wl,--start-group ${BASE_M_LIBS} -Wl,--end-group)
+		target_link_libraries(ipcserver PUBLIC -Wl,--start-group http_m_static ${BASE_M_LIBS} -Wl,--end-group)
 		target_link_libraries(ipcserver PUBLIC pthread)
 	endif()
 endif()

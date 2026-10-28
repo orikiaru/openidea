@@ -58,7 +58,7 @@ endforeach()
 
 `deploy/config/ipcclient.toml` 的 `[Test]` 里 `echo`、`log`、`redis`、`hold` 各管一个测试，默认只开回声。一次只开一个。
 
-`log = true` 时日志服必须已经在听。`SendLog` 失败后测试会立刻再排一次发送，字节数加了又减，到不了目标，进程也不会退出。
+`log = true` 时日志服必须已经在听，`ipcserver` 也要起：`LogMgr` 是在连上 `ipcserver` 之后才开始发的，连不上就一直不发，CPU 是 0。`SendLog` 失败后测试会立刻再排一次发送，字节数加了又减，到不了目标，进程也不会退出。
 
 ## Web
 
@@ -67,3 +67,7 @@ endforeach()
 `webserver` 仍用 `cpp-httplib` 听 `WebServer.port`（默认 18080）。`GET /query` 回解码后的 query，`POST /json` 回 JSON，`POST /rpcjson` 用 `JsonAll` 的 `FromJson` / `ToJson` 走一遍全量字段并把 `gap` 加一，`POST /bin` 把 body 原样写回。这个进程自己的 listen 是阻塞的，不进协程。
 
 `webclient` 不直接调 `cpp-httplib`。它走基础库 `OI::Http::Client`：`Start` 用 `StartTask` 拉起 `Run`，四次请求都是 `co_await`。完成时 poll 线程 `Schedule` 协程句柄，不在回调里 `resume`。单线程模块链 `http_static`。退出码 0 表示四下都对上了。以后换 Go 或其他语言的 HTTP 服务时，仍用这个客户端，只改地址。
+
+`host` 可以写 IPv4 或域名。域名用 libuv 的 `uv_getaddrinfo` 在它自己的线程池里解析，回调回到 poll 线程再连，不卡 poll。响应认 `Content-Length`、`chunked` 和读到断开三种结尾。超时定时器取消不了，所以请求状态带引用计数，定时器晚到时只释放，不改已经收完的结果。
+
+`ipcserver` 也链了这个客户端，多线程模块链 `http_m_static`。`ipcserver.toml` 的 `[HttpProbe]` 填了 `host` 时，起服后 `StartTask` 发一次 GET，打印 `http probe ... status=... bytes=... title=...`。默认不填，压测时不要打开。
