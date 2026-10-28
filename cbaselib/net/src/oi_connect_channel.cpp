@@ -61,8 +61,9 @@ bool ConnectChannel::CheckTcpConnect()
 	bool finish = false;
 	if (value)
 	{
-		//没链接完毕或者被中断等下次触发?
-		//暂时先等重连吧
+		// 待改：EINPROGRESS / EINTR 应留下等下一次可写，不要 AbortSession。
+		// DataOut 在这次调用后无条件 Close，通道会被拆掉，下次也等不到。
+		// 见 docs/sequence-diagram 里 single-thread 和 multi-thread 的 connect.md。
 		if (value == EINPROGRESS || value == EINTR)
 		{
 
@@ -72,6 +73,8 @@ bool ConnectChannel::CheckTcpConnect()
 	else
 	{
 		finish = true;
+		// 待改：不要 Dup。复制失败会把无效句柄交进 AddSession，原 fd 还要在通道析构里关掉。
+		// 应把当前这只套接字交给会话。见 docs/sequence-diagram 里两边的 connect.md。
 		_p_session_mgr->AddSession(NetOs_Dup(_socket.GetSocket()));
 	}
 	//普通tcp连接无论建立成功或失败都关闭连接会话

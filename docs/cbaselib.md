@@ -28,7 +28,7 @@
 
 ## 进程里谁先起来
 
-生成出来的 `main` 按这个顺序：
+时序在 [时序图](sequence-diagram/README.md)。生成出来的 `main` 按这个顺序：
 
 1. `Config` 读 `deploy/config/<进程名>.toml`
 2. `ThreadPool::Init`
