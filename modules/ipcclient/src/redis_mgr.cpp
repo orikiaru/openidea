@@ -87,6 +87,13 @@ coro::Task RedisMgr::Pump()
 			return RedisMgr::Get().Stress(i);
 		});
 	}
+#ifdef _SINGLE_THREAD_
+	// 收包只有这一条线程。另开线程再 join，poll 被堵住，同步调用永远等不到回包。
+	for (int i = 0; i < _sync; ++i)
+	{
+		SyncStress(i);
+	}
+#else
 	std::vector<std::thread> syncs;
 	for (int i = 0; i < _sync; ++i)
 	{
@@ -96,6 +103,7 @@ coro::Task RedisMgr::Pump()
 	{
 		syncs[i].join();
 	}
+#endif
 	co_return;
 }
 

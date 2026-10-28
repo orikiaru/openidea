@@ -255,6 +255,8 @@ Poll Poll::inst;
 
 Poll::~Poll()
 {
+	// 启动失败提前 return 时，poll 线程还活着。析构不 join 会 std::terminate，把真正的错误盖掉。
+	StopAndJoin();
 }
 
 void* Poll::StartThreadPollWait(void*)

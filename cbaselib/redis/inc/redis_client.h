@@ -59,7 +59,8 @@ public:
 	virtual const std::string GetIDString() { return "RedisClient"; }
 	virtual bool Init();
 	RedisCall Call(std::vector<std::string> args, RedisResult* out);
-	// 阻塞到回执或超时。不能在 poll 线程上调。单线程版没有别的线程收包，直接按超时返回
+	// 阻塞到回执或超时。多线程不能在 poll 线程上调。
+	// 单线程没有第二个人收包，调用方就在这条线程上把 poll 和协程跑到回执为止。
 	RedisResult CallSync(std::vector<std::string> args);
 	void Feed(const char* data, size_t size);
 	// poll 线程上周期调用，把到期还没回执的调用按超时结掉

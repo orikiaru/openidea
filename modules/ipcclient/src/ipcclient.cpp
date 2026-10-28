@@ -39,7 +39,6 @@ void IpcClient::OnClientConnect(Session* pSession)
 {
 	EchoMgr::Get().Load();
 	LogMgr::Get().Load();
-	EchoMgr::Get().ArmTimeout();
 	EchoMgr::Get().Start(pSession->GetSessionID());
 	LogMgr::Get().Start();
 }

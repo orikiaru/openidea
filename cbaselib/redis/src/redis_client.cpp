@@ -171,7 +171,16 @@ RedisResult RedisClient::CallSync(std::vector<std::string> args)
 	st->args = std::move(args);
 	st->sync = true;
 	Poll::GetInstance()->CallOnLoop(Submit, st);
-#ifndef _SINGLE_THREAD_
+#ifdef _SINGLE_THREAD_
+	// 命令已经进等待队列。不把 poll 跑起来，回包没人读，这条调用还会占住队头。
+	while (!st->ready)
+	{
+		if (!coro::StScheduler::Poll())
+		{
+			Poll::GetInstance()->PollWait(1);
+		}
+	}
+#else
 	{
 		MutexGuard lock(st->mu);
 		while (!st->ready)

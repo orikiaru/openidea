@@ -224,6 +224,7 @@ void EchoMgr::Start(sid_t sid)
 	}
 	_sid = sid;
 	_start = std::chrono::steady_clock::now();
+	ArmTimeout();
 	printf("ipc client connect sid=%d mode=%s total=%d\n", _sid, kMode, _total);
 	fflush(stdout);
 	GetTestBoard().Arm();

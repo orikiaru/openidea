@@ -25,17 +25,19 @@ target_include_directories(logd
 set(SINGLE_THREAD FALSE)
 
 #链接base,net,proto,timer,logger
-if(SINGLE_THREAD)
-	target_link_libraries(logd PUBLIC -Wl,--start-group ${BASE_LIBS} -Wl,--end-group)
+if(MSVC)
+	if(SINGLE_THREAD)
+		target_link_libraries(logd PUBLIC ${BASE_LIBS})
+		target_compile_definitions(logd PUBLIC _SINGLE_THREAD_)
+	else()
+		target_link_libraries(logd PUBLIC ${BASE_M_LIBS})
+	endif()
 else()
-	target_link_libraries(logd PUBLIC -Wl,--start-group ${BASE_M_LIBS} -Wl,--end-group)
-endif()
-
-
-if(SINGLE_THREAD)
-	#test为单线程,需要设置_SINGLE_THREAD_宏
-	target_compile_definitions(logd PUBLIC _SINGLE_THREAD_)
-else()
-	#test为多线程,需要链接pthread
-	target_link_libraries(logd PUBLIC pthread)
+	if(SINGLE_THREAD)
+		target_link_libraries(logd PUBLIC -Wl,--start-group ${BASE_LIBS} -Wl,--end-group)
+		target_compile_definitions(logd PUBLIC _SINGLE_THREAD_)
+	else()
+		target_link_libraries(logd PUBLIC -Wl,--start-group ${BASE_M_LIBS} -Wl,--end-group)
+		target_link_libraries(logd PUBLIC pthread)
+	endif()
 endif()
