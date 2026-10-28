@@ -1,0 +1,18 @@
+---
+description: RPC、RpcCall、HandleRpc、回包、调用号、超时。改协议调用前先读 docs/coroutine.md 的服务端和客户端，对照 AllEcho 和 Hold。
+alwaysApply: false
+---
+
+# RPC
+
+先读 `docs/coroutine.md` 的服务端、客户端。请求和回包体都以 8 字节调用号开头。回包、超时、发送失败只有一个会把协程 `Schedule` 回来。调用号已经取走的回包丢掉，不配给下一次。
+
+超时单位是秒，默认 180，`RpcCall` 最后一个参数可改。200 毫秒扫一次队头，不走时间轮。`ret == 0` 是回包，`-2` 是超时，`-1` 是发送或解包失败。
+
+标准用例：
+
+```cpp
+int ret = co_await RpcCall(mgr, sid, req, res);
+```
+
+服务端注册用 `HandleRpc`，见 `modules/ipcserver/src/ipcserver.cpp` 的 `AllEcho`。要推迟回包用同文件的 `Hold`：`co_await coro::yield(毫秒)` 再写 `res`。

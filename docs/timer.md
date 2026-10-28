@@ -31,4 +31,6 @@ libuv 到点只调用 `OnSignal`。`OnSignal` 把 `Update` 丢进线程池，不
 
 业务侧用 `AddTimer(fn, millisecond)`，或者传入一个 `BaseTimer`。
 
-协程不等在 poll 回调里。`coro::yield(ms)` 先切到 poll 线程 `AddTimer`，到点再把协程句柄放回调度队列。
+协程不等在 poll 回调里。`coro::yield(ms)` 在 `ms > 0` 时先切到 poll 线程 `AddTimer`，到点再把协程句柄放回调度队列。`ms <= 0` 不进时间轮，只把句柄放回队列。
+
+RPC 和 Redis 的超时不走这条时间轮。它们各有一个 200 毫秒的周期定时器扫等待队列。RPC 超时的单位是秒。

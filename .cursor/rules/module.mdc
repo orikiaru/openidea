@@ -1,0 +1,14 @@
+---
+description: 协议、proto.xml、rpcdata、模块、HandleRpc、生成代码。加协议或模块前先读 docs/module.md，对照 AllEcho 和 Hold。
+alwaysApply: false
+---
+
+# 模块和协议
+
+先读 `docs/module.md`。生成输入是 `modules/xmlconfig` 的 `module.xml`、`module_component.xml`、`proto.xml`。`modules/include` 每次 cmake 重写，改了无效。
+
+加协议：`proto.xml` 写请求和回复两个 `rpcdata`，再写一条 `rpc`（`id`、`res_id`、`request`、`response`）。两边组件都挂上这条 rpc。服务端 `Init` 里 `HandleRpc`，客户端连上后 `co_await RpcCall`。新模块还要把名字加进根目录 `CMakeLists.txt` 的 `foreach`。
+
+标准用例是 `AllEcho` 和 `Hold`，都在 `modules/xmlconfig/proto.xml`。`Hold` 的服务端实现在 `modules/ipcserver/src/ipcserver.cpp`。
+
+`ipcclient` 的 `[Test]` 一次只开 `echo`、`log`、`redis`、`hold` 里的一个。`log = true` 时日志服必须已经在听，否则测试会一直重试。

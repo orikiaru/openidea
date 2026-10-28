@@ -9,7 +9,7 @@ C++20 的模块化网络进程。基础库在 `cbaselib`，业务进程从 `modu
 | `cbaselib` | 线程池、网络、协议、定时器、日志客户端 |
 | `modules/xmlconfig` | 模块、组件、协议的生成输入 |
 | `modules/include` | 每次 cmake 重写的序列化代码 |
-| `modules/<name>` | 一个进程。现有 `logd`、`ipcclient`、`ipcserver` |
+| `modules/<name>` | 一个进程。现有 `logd`、`ipcclient`、`ipcserver`、`redisserver` |
 | `deploy/bin` | 可执行文件 |
 | `deploy/config` | 与可执行文件同名的 toml |
 | `docs` | 说明 |

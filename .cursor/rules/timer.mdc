@@ -1,0 +1,14 @@
+---
+description: 定时器、时间轮、AddTimer、BaseTimer、offset_ms。改定时器前先读 docs/timer.md。yield 的挂起见协程文档。
+alwaysApply: false
+---
+
+# 定时器
+
+先读 `docs/timer.md`。业务用 `AddTimer(fn, millisecond)` 或传入 `BaseTimer`。`OnTimer` 返回 true 会按原间隔再挂，返回 false 前要销毁或先摘掉。
+
+时间轮只能在 poll 线程上改。`coro::yield(ms)` 在 `ms > 0` 时经 `Poll::CallOnLoop` 再 `AddTimer`；`ms <= 0` 不进时间轮。
+
+RPC 和 Redis 的超时不走这条轮。它们各用一个 200 毫秒的周期定时器扫等待队列。RPC 超时的单位是秒。
+
+标准用例是 `modules/ipcserver/src/ipcserver.cpp` 里 `Hold` 的 `co_await coro::yield(req.delay_ms)`。

@@ -1,0 +1,28 @@
+---
+description: 协程、Task、StartTask、co_await、yield、让出、挂起、调度。写或改协程前先读 docs/coroutine.md，对照标准用例，不要另起挂起或切栈的写法。
+alwaysApply: false
+---
+
+# 协程
+
+先读 `docs/coroutine.md`。要结果用 `co_await`，不等用 `coro::StartTask`，让时间用 `co_await coro::yield(毫秒)`。`yield(0)` 只回队列，这一轮不再跑它。
+
+`co_await` 一条还没停过的 `Task` 会在调用方栈上往下 `resume`。不要在第一次挂起前层层 `co_await` 子任务。没有 `YieldToPool`、`Park`、`Wake`。
+
+标准用例是服务端原样回包，以及客户端把下一批放进 `StartTask`：
+
+```cpp
+HandleRpc<AllEchoReq, AllEchoRes>([](coro::Token, SessionManager*, sid_t, AllEchoReq& req, AllEchoRes& res) -> coro::Task {
+    res.data = req.data;
+    res.code = 1;
+    co_return;
+});
+```
+
+```cpp
+coro::StartTask([n](coro::Token) {
+    return RunOne(n);
+});
+```
+
+服务端要等，照 `Hold`：`co_await coro::yield(req.delay_ms)` 再填回包。捕获的引用不要当协程状态用，参数才进帧。

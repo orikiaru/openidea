@@ -34,3 +34,17 @@
 日志看日志服落盘的文件字节，不要只看客户端打印的 `enqueue_rate`。那个数是塞进发送缓冲的速度。端到端用文件字节除以从启动客户端到文件不再增长的时间。文件总量不要超过 10GB，超过 2GB 就停。测完删掉临时日志目录，并停掉这三个进程。
 
 Redis 也单独测。开关是 `[Test] redis`，和 echo、log 一次只开一个。先起本机 Redis（`maxmemory 1536mb`），再起 `redisserver`（等到 `redis server listen`，端口 16379），最后 `ipcclient`。客户端连的是 redisserver，不是 Redis。看退出码，以及 `redis integrity ok` 和 `redis stress` 那一行里 `bad=0`。测完停掉 `redisserver`。
+
+# 关键词对上文档
+
+请求里出现下表的词时，先读对应文档，再按标准用例改。不要另写一套挂起、配对或绑定。
+
+| 关键词 | 文档 | 标准用例 |
+| --- | --- | --- |
+| 协程、Task、StartTask、co_await、yield、让出、挂起 | `docs/coroutine.md` | `modules/ipcserver/src/ipcserver.cpp` 的 `HandleRpc`；`modules/ipcclient/src/echo_mgr.cpp` 的 `StartTask` |
+| RPC、RpcCall、HandleRpc、回包、调用号 | `docs/coroutine.md` 的服务端和客户端 | 同上，推迟回包用同文件的 `Hold` |
+| Redis、redisserver、RESP | `docs/cbaselib.md` 的 redis 段 | `modules/ipcclient/src/redis_mgr.cpp` 的 `Check` |
+| 定时器、时间轮、AddTimer | `docs/timer.md` | `Hold` 里的 `co_await coro::yield` |
+| 协议、proto.xml、rpcdata、模块 | `docs/module.md` | `modules/xmlconfig/proto.xml` 的 `AllEcho`、`Hold` |
+| 端口、复用、bind、TIME_WAIT、监听 | `docs/cbaselib.md` 的 net 段 | `cbaselib/port/net_os.cpp` 的 `NetOs_Bind` |
+

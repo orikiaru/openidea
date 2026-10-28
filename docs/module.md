@@ -26,7 +26,7 @@ cmake 调用 `cbaselib/proto/proto_tool/main.py`，参数是这三个 xml、`mod
 根目录 `CMakeLists.txt` 里写死了要编的模块名。新模块除了写 xml，还要把名字加进这个列表，否则不会编。
 
 ```cmake
-foreach(_mod logd ipcclient ipcserver)
+foreach(_mod logd ipcclient ipcserver redisserver)
     if(EXISTS ${MODULES_PATH}/${_mod}/CMakeLists.txt)
         add_subdirectory(${MODULES_PATH}/${_mod})
     endif()
@@ -41,4 +41,10 @@ endforeach()
 
 服务端在组件 `Init` 里 `HandleRpc`，客户端在连上之后 `co_await RpcCall`。写法见 [协程](coroutine.md)。
 
-现成例子是 `AllEcho`：`ipcserver` 把请求原样放进回复，`ipcclient` 连上后按条发出去并核对回复。
+现成例子是 `AllEcho`：`ipcserver` 把请求原样放进回复，`ipcclient` 连上后按条发出去并核对回复。`Hold` 用来看超时和回包同时到：服务端 `co_await coro::yield(delay_ms)` 再回，客户端按调用号认这一次。
+
+## ipcclient 的测试开关
+
+`deploy/config/ipcclient.toml` 的 `[Test]` 里 `echo`、`log`、`redis`、`hold` 各管一个测试，默认只开回声。一次只开一个。
+
+`log = true` 时日志服必须已经在听。`SendLog` 失败后测试会立刻再排一次发送，字节数加了又减，到不了目标，进程也不会退出。
