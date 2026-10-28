@@ -38,7 +38,8 @@ public:
 	bool CreateNewFile(const char* path);
 	void OnCreateNewFile(FILE* new_file);
 	void StartWriteThread();
-	void AddLog(const Bytes& log);
+	// 会把 log 的内容移走
+	void AddLog(Bytes& log);
 	void WriteLog();
 	bool IsWorking() { return _working; }
 	void Dump();

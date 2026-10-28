@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <chrono>
 #include <csignal>
+#include <future>
 #include "base_timer_manager.h"
 #include "poll.h"
 #include "header.h"
@@ -100,9 +101,11 @@ static void WorkerMain(ThreadPool::ThreadData* p_data)
 		std::coroutine_handle<> coro;
 		{
 			std::unique_lock<std::mutex> lock(p_data->_mutex);
+			p_data->_idle++;
 			p_data->_cond.wait(lock, [&]() {
 				return p_data->_task_count > 0 || p_data->_coro_count > 0 || ThreadPool::GetInstance()->Stopping();
 			});
+			p_data->_idle--;
 			// 停了就走。否则 poll 上的定时器会一直塞任务，join 等不到。
 			if (ThreadPool::GetInstance()->Stopping())
 			{
@@ -145,12 +148,17 @@ void ThreadPool::PostCoroutine(std::coroutine_handle<> handle)
 	}
 #ifndef _SINGLE_THREAD_
 	ThreadData& thread_data = _thread_data[PRIO_NORMAL];
+	bool wake = false;
 	{
 		std::lock_guard<std::mutex> lock(thread_data._mutex);
 		thread_data._coros.push_back(handle);
 		thread_data._coro_count++;
+		wake = thread_data._idle > 0;
 	}
-	thread_data._cond.notify_one();
+	if (wake)
+	{
+		thread_data._cond.notify_one();
+	}
 #else
 	(void)handle;
 #endif
@@ -193,8 +201,15 @@ bool ThreadPool::CreateSpecThread(std::thread::id& tid, void* (*thread_handle)(v
 	InitIgnoreSig();
 	try
 	{
-		std::thread worker(thread_handle, arg);
+		// 新线程等 tid 写好再跑。线程函数里常拿自己的 id 和 tid 比。
+		std::promise<void> go;
+		std::shared_future<void> started = go.get_future().share();
+		std::thread worker([thread_handle, arg, started]() {
+			started.wait();
+			thread_handle(arg);
+		});
 		tid = worker.get_id();
+		go.set_value();
 		worker.detach();
 	}
 	catch (...)

@@ -299,14 +299,19 @@ struct RpcProtoId;
 
 void BindRpcHandler(proto_type_t id, std::function<coro::Task(coro::Token, SessionManager*, sid_t, BytesStream)> handle);
 
-// 业务任务外面这一层：解包，co_await 业务任务，再按接受顺序把回包写出去。
-template<typename Req, typename Res, typename F, typename Lane>
-coro::Task RunHandledRpc(F fn, Lane* lane, proto_type_t res_id, uint64_t seq, coro::Token token, SessionManager* mgr, sid_t sid, BytesStream body)
+// 请求和回包的包体都以 8 字节调用号开头，后面才是 Req/Res。
+// 客户端按调用号认回包，服务端处理完就回，不用按接受顺序排队。
+
+// 业务任务外面这一层：解包，co_await 业务任务，再把带调用号的回包写出去。
+template<typename Req, typename Res, typename F>
+coro::Task RunHandledRpc(F fn, proto_type_t res_id, coro::Token token, SessionManager* mgr, sid_t sid, BytesStream body)
 {
 	Req req;
 	Res res;
 	try
 	{
+		uint64_t call_id = 0;
+		body >> call_id;
 		req.deserialize(body);
 		auto child = fn(token, mgr, sid, req, res);
 		if (child.handle)
@@ -315,34 +320,13 @@ coro::Task RunHandledRpc(F fn, Lane* lane, proto_type_t res_id, uint64_t seq, co
 		}
 		co_await child;
 		BytesStream out;
+		out << call_id;
 		res.serialize(out);
 		BytesStream frame = EncodePbFrame(res_id, out);
-		{
-			MutexGuard lock(lane->mu);
-			lane->ready[seq] = std::make_pair(sid, frame.GetMutableBuff());
-			while (lane->ready.find(lane->next) != lane->ready.end())
-			{
-				std::pair<sid_t, Bytes> item = lane->ready[lane->next];
-				lane->ready.erase(lane->next);
-				lane->next++;
-				mgr->SendBytes(item.first, item.second);
-			}
-		}
+		mgr->SendBytes(sid, frame.GetMutableBuff());
 	}
 	catch (ParserException&)
 	{
-		MutexGuard lock(lane->mu);
-		lane->ready[seq] = std::make_pair(sid, Bytes());
-		while (lane->ready.find(lane->next) != lane->ready.end())
-		{
-			std::pair<sid_t, Bytes> item = lane->ready[lane->next];
-			lane->ready.erase(lane->next);
-			lane->next++;
-			if (item.second.Size() > 0)
-			{
-				mgr->SendBytes(item.first, item.second);
-			}
-		}
 	}
 	co_return;
 }
@@ -351,27 +335,16 @@ template<typename Req, typename Res, typename F>
 void HandleRpc(F fn)
 {
 	const proto_type_t res_id = RpcProtoId<Res>::value;
-	struct Lane
-	{
-		Mutex mu;
-		uint64_t accept;
-		uint64_t next;
-		std::map<uint64_t, std::pair<sid_t, Bytes> > ready;
-		Lane() : accept(1), next(1) {}
-	};
-	static Lane lane;
 	BindRpcHandler(RpcProtoId<Req>::value, [fn, res_id](coro::Token token, SessionManager* mgr, sid_t sid, BytesStream body) -> coro::Task {
-		uint64_t seq = 0;
-		{
-			MutexGuard lock(lane.mu);
-			seq = lane.accept++;
-		}
-		return RunHandledRpc<Req, Res>(fn, &lane, res_id, seq, token, mgr, sid, std::move(body));
+		return RunHandledRpc<Req, Res>(fn, res_id, token, mgr, sid, std::move(body));
 	});
 }
 
-uint64_t BindRpcCall(proto_type_t res_id, uint64_t task_id, std::coroutine_handle<> handle, int* result, int timeout_sec, std::function<bool(BytesStream&)> decode, std::function<void()> resume);
-bool WakeRpcCall(uint64_t rid, int code, BytesStream* body);
+// 登记一种回包协议号。这种包按包体开头的调用号去找等待的调用。
+void RegisterRpcRes(proto_type_t res_id);
+// 返回调用号。回包、超时或 WakeRpcCall 三者只有一个会触发 decode/resume。
+uint64_t BindRpcCall(proto_type_t res_id, std::coroutine_handle<> handle, int* result, int timeout_sec, std::function<bool(BytesStream&)> decode, std::function<void()> resume);
+bool WakeRpcCall(uint64_t call_id, int code, BytesStream* body);
 
 // 发出请求后挂起。回包或超时回调里 Schedule 回来。回包可能比挂起先到。
 template<typename Req, typename Res>
@@ -383,67 +356,81 @@ struct RpcCallAwaiter
 	Res* res;
 	int result;
 	bool trace;
+	int timeout_sec;
 	std::coroutine_handle<> handle;
-	std::atomic<int>* gate;
+	std::atomic<int> gate;
+	// 回包原样留到 await_resume 再解，解包跑在工人上，不占 IO 线程。
+	BytesStream reply;
+	bool replied;
 
 	RpcCallAwaiter()
-		: mgr(NULL), sid(0), req(NULL), res(NULL), result(-1), trace(false), handle(), gate(new std::atomic<int>(0))
+		: mgr(NULL), sid(0), req(NULL), res(NULL), result(-1), trace(false), timeout_sec(180), handle(), gate(0), replied(false)
 	{}
 	RpcCallAwaiter(const RpcCallAwaiter&) = delete;
 	RpcCallAwaiter(RpcCallAwaiter&& other) noexcept
-		: mgr(other.mgr), sid(other.sid), req(other.req), res(other.res), result(other.result), trace(other.trace), handle(other.handle), gate(other.gate)
+		: mgr(other.mgr), sid(other.sid), req(other.req), res(other.res), result(other.result), trace(other.trace),
+		  timeout_sec(other.timeout_sec), handle(other.handle), gate(other.gate.load(std::memory_order_relaxed)),
+		  replied(false)
 	{
-		other.gate = NULL;
 		other.handle = nullptr;
 	}
-	~RpcCallAwaiter() { delete gate; }
 
 	bool await_ready() const noexcept { return false; }
 	template<typename Promise>
 	bool await_suspend(std::coroutine_handle<Promise> h)
 	{
+		static const bool registered = (RegisterRpcRes(RpcProtoId<Res>::value), true);
+		(void)registered;
 		handle = h;
 		result = -1;
-		gate->store(0, std::memory_order_relaxed);
+		replied = false;
+		gate.store(0, std::memory_order_relaxed);
+		uint64_t call_id = BindRpcCall(RpcProtoId<Res>::value, h, &result, timeout_sec, [this](BytesStream& in) {
+			reply = std::move(in);
+			replied = true;
+			return true;
+		}, [this]() {
+			if (trace)
+			{
+				coro::NotePollWake();
+			}
+			int prev = gate.exchange(1, std::memory_order_acq_rel);
+			if (prev == 2)
+			{
+				coro::Schedule(handle);
+			}
+		});
 		BytesStream body;
+		body << call_id;
 		req->serialize(body);
 		BytesStream frame = EncodePbFrame(RpcProtoId<Req>::value, body);
-		static Mutex send_order;
+		if (!mgr->SendBytes(sid, frame.GetMutableBuff()))
 		{
-			MutexGuard order(send_order);
-			BindRpcCall(RpcProtoId<Res>::value, h.promise().uid, h, &result, 180, [this](BytesStream& in) {
-				try
-				{
-					res->deserialize(in);
-					result = 0;
-					return true;
-				}
-				catch (ParserException&)
-				{
-					result = -1;
-					return false;
-				}
-			}, [this]() {
-				if (trace)
-				{
-					coro::NotePollWake();
-				}
-				int prev = gate->exchange(1, std::memory_order_acq_rel);
-				if (prev == 2)
-				{
-					coro::Schedule(handle);
-				}
-			});
-			mgr->SendBytes(sid, frame.GetMutableBuff());
+			WakeRpcCall(call_id, -1, NULL);
 		}
-		int prev = gate->exchange(2, std::memory_order_acq_rel);
+		int prev = gate.exchange(2, std::memory_order_acq_rel);
 		return prev != 1;
 	}
-	int await_resume() const noexcept { return result; }
+	int await_resume()
+	{
+		if (replied)
+		{
+			try
+			{
+				res->deserialize(reply);
+				result = 0;
+			}
+			catch (ParserException&)
+			{
+				result = -1;
+			}
+		}
+		return result;
+	}
 };
 
 template<typename Req, typename Res>
-RpcCallAwaiter<Req, Res> RpcCall(SessionManager& mgr, sid_t sid, Req& req, Res& res, bool trace = false)
+RpcCallAwaiter<Req, Res> RpcCall(SessionManager& mgr, sid_t sid, Req& req, Res& res, bool trace = false, int timeout_sec = 180)
 {
 	RpcCallAwaiter<Req, Res> awaiter;
 	awaiter.mgr = &mgr;
@@ -452,6 +439,7 @@ RpcCallAwaiter<Req, Res> RpcCall(SessionManager& mgr, sid_t sid, Req& req, Res& 
 	awaiter.res = &res;
 	awaiter.result = -1;
 	awaiter.trace = trace;
+	awaiter.timeout_sec = timeout_sec;
 	awaiter.handle = {};
 	return awaiter;
 }

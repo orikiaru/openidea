@@ -29,7 +29,7 @@
 
 ## 服务端
 
-`HandleRpc` 包一层：解包，`co_await` 业务任务，再按接受顺序把回包写出去。客户端按发送顺序认回包，所以 `SendBytes` 在 lane 锁里按序号发。
+`HandleRpc` 包一层：解包，`co_await` 业务任务，再把回包写出去。请求和回包的包体都以 8 字节调用号开头，客户端按调用号认回包，所以回包不用按接受顺序排队，处理完就发。
 
 ```cpp
 HandleRpc<AllEchoReq, AllEchoRes>([](coro::Token, SessionManager*, sid_t, AllEchoReq& req, AllEchoRes& res) -> coro::Task {
@@ -43,7 +43,7 @@ HandleRpc<AllEchoReq, AllEchoRes>([](coro::Token, SessionManager*, sid_t, AllEch
 
 ## 客户端
 
-连接建立后用 `StartTask` 拉起任务，任务里 `co_await RpcCall`。等待键是协程自己的任务 id。回包或超时都把这条协程 `Schedule` 回来。
+连接建立后用 `StartTask` 拉起任务，任务里 `co_await RpcCall`。等待键是每次调用新分配的调用号，等待表按调用号分片加锁。回包、超时（默认 180 秒，`RpcCall` 最后一个参数可改）或发送失败都把这条协程 `Schedule` 回来。超时不挂时间轮，由一个周期定时器按时长分桶扫队头。
 
 ```cpp
 coro::StartTask([n](coro::Token token) {

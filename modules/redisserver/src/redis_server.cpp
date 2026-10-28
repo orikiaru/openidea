@@ -13,12 +13,6 @@
 
 namespace
 {
-struct ReplyJob
-{
-	RedisServer* server;
-	sid_t sid;
-};
-
 void AppendBulk(Bytes& out, const char* s, size_t n)
 {
 	char hdr[64];
@@ -92,8 +86,10 @@ void AppendErr(Bytes& out, const char* text)
 
 void OnReply(redisAsyncContext*, void* reply, void* priv)
 {
-	ReplyJob* job = (ReplyJob*)priv;
-	Bytes out;
+	sid_t sid = (sid_t)(intptr_t)priv;
+	// 单线程进程，回包缓冲复用一块，不必每条回执分配。
+	static Bytes out;
+	out.Clear();
 	if (!reply)
 	{
 		AppendErr(out, "ERR redis down");
@@ -103,8 +99,7 @@ void OnReply(redisAsyncContext*, void* reply, void* priv)
 		AppendReply(out, (redisReply*)reply);
 		freeReplyObject(reply);
 	}
-	job->server->SendBytes(job->sid, out);
-	delete job;
+	RedisServer::GetInstance().SendBytes(sid, out);
 }
 
 void OnConnect(redisAsyncContext* c, int status)
@@ -243,28 +238,17 @@ void RedisServer::ArmReconnect(RedisLink* link)
 	}, 2000);
 }
 
-void RedisServer::Issue(int link, sid_t sid, std::vector<std::string> args)
+void RedisServer::Issue(int link, sid_t sid, const char* cmd, size_t len)
 {
 	Bytes err;
-	if (link < 0 || link >= (int)_links.size() || !_links[(size_t)link].ac || args.empty())
+	if (link < 0 || link >= (int)_links.size() || !_links[(size_t)link].ac || len == 0)
 	{
 		AppendErr(err, "ERR redis down");
 		SendBytes(sid, err);
 		return;
 	}
-	std::vector<const char*> argv(args.size());
-	std::vector<size_t> arglen(args.size());
-	for (size_t i = 0; i < args.size(); ++i)
+	if (redisAsyncFormattedCommand(_links[(size_t)link].ac, OnReply, (void*)(intptr_t)sid, cmd, len) != REDIS_OK)
 	{
-		argv[i] = args[i].c_str();
-		arglen[i] = args[i].size();
-	}
-	ReplyJob* job = new ReplyJob();
-	job->server = this;
-	job->sid = sid;
-	if (redisAsyncCommandArgv(_links[(size_t)link].ac, OnReply, job, (int)argv.size(), argv.data(), arglen.data()) != REDIS_OK)
-	{
-		delete job;
 		AppendErr(err, "ERR redis down");
 		SendBytes(sid, err);
 	}

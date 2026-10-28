@@ -20,6 +20,29 @@ bool ProtoClientManager::SendRaw(const Bytes& data)
 	return SendBytes(sid, data);
 }
 
+bool ProtoClientManager::SendRawOrPend(const Bytes& data, size_t max_pending_bytes)
+{
+	sid_t sid = INVALID_SID;
+	{
+		SpinLockGuard l(_client_locker);
+		if (_conn && _ssid != INVALID_SID)
+		{
+			sid = _ssid;
+		}
+		else
+		{
+			if (_pending_bytes + data.Size() > max_pending_bytes)
+			{
+				return false;
+			}
+			_pending.push_back(data);
+			_pending_bytes += data.Size();
+			return true;
+		}
+	}
+	return SendBytes(sid, data);
+}
+
 bool ProtoClientManager::SendProtocol(const Protocol* p)
 {
 	if (!p)
@@ -56,6 +79,7 @@ bool ProtoClientManager::SendProtocol(const Protocol* p)
 		else
 		{
 			_pending.push_back(encoded);
+			_pending_bytes += encoded.Size();
 			if (!_connecting)
 			{
 				_connecting = true;

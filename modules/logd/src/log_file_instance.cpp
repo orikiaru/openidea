@@ -75,7 +75,7 @@ void LogFileInstance::Passive()
 }
 
 
-void LogFileInstance::AddLog(const Bytes& log)
+void LogFileInstance::AddLog(Bytes& log)
 {
 	bool notify = false;
 
@@ -85,7 +85,7 @@ void LogFileInstance::AddLog(const Bytes& log)
 		{
 			notify = true;
 		}
-		_logs.push_back(log);
+		_logs.push_back(std::move(log));
 		if (notify)
 		{
 			Active();

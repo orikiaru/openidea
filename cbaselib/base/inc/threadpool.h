@@ -24,6 +24,8 @@ public:
 		// 协程句柄运行队列。工人取到就 resume，挂起后线程立刻去拿下一个。
 		std::deque<std::coroutine_handle<> > _coros;
 		unsigned int 	_coro_count = 0;
+		// 正睡在 _cond 上的工人数。为 0 时投递不用 notify，省一次 futex。
+		int 			_idle = 0;
 		int 			_thread_count;
 		std::mutex		_mutex;
 		std::condition_variable _cond;

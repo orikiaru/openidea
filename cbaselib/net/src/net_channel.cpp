@@ -5,6 +5,7 @@
 NetChannel::NetChannel(NetSocket s, Session* pSession):Channel(s, pSession)
 {
 	NetOs_SetNonblock(_socket.GetSocket());
+	NetOs_SetNoDelay(_socket.GetSocket());
 }
 
 NetChannel::~NetChannel()

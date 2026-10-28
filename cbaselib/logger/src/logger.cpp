@@ -33,34 +33,37 @@ namespace Log
 
 	bool Log(LOG_LEVEL lv, const char* format, ...)
 	{
+		// 先格式化到栈上，放得下就只格式化一次；放不下再按实际长度格式化进 tmp。
+		char stack[2048];
 		va_list vl;
 		va_start(vl, format);
-		va_list measure;
-		va_copy(measure, vl);
-		int need = vsnprintf(NULL, 0, format, measure);
-		va_end(measure);
+		va_list again;
+		va_copy(again, vl);
+		int need = vsnprintf(stack, sizeof(stack), format, vl);
+		va_end(vl);
 		if (need < 0)
 		{
-			va_end(vl);
-			return false;
-		}
-		std::string body((size_t)need + 1, '\0');
-		int wrote = vsnprintf(&body[0], body.size(), format, vl);
-		va_end(vl);
-		if (wrote < 0)
-		{
+			va_end(again);
 			return false;
 		}
 		Bytes tmp;
-		tmp.Reserve(_log_title.length() + (size_t)wrote + 2);
+		tmp.Reserve(_log_title.length() + (size_t)need + 2);
 		tmp.Append(_log_title.c_str(), _log_title.length());
-		tmp.Append(body.data(), (size_t)wrote);
+		if ((size_t)need < sizeof(stack))
+		{
+			tmp.Append(stack, (size_t)need);
+		}
+		else
+		{
+			vsnprintf(tmp.End(), (size_t)need + 1, format, again);
+			tmp.Commit((size_t)need);
+		}
+		va_end(again);
 		tmp.Append("\n", 1);
 
 		if (lv == LOG_LEVEL::LOG_TRACE)
 		{
-			tmp.Append("", 1);
-			printf("%s", tmp.Begin());
+			fwrite(tmp.Data(), 1, tmp.Size(), stdout);
 		}
 
 		if (_logclient_init)

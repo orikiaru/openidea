@@ -1,13 +1,11 @@
 #pragma once
 #include "net_session.h"
 
-struct redisReader;
 class RedisServer;
 
 class RedisServerSession : public NetSession
 {
 	RedisServer* _owner;
-	redisReader* _reader;
 	int _link;
 public:
 	RedisServerSession(RedisServer* owner);

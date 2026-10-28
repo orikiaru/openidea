@@ -40,9 +40,10 @@ class ProtoClientManager : public ProtoSessionManager
 	bool		_connecting;
 	CLIENT_CONNECT_MODE _connect_mode;
 	std::deque<Bytes> _pending;
+	size_t		_pending_bytes;
 	SpinLock	_client_locker;
 public:
-	ProtoClientManager():_ssid(INVALID_SID),_conn(false),_connecting(false),_connect_mode(CLIENT_CONNECT_DIRECT) {}
+	ProtoClientManager():_ssid(INVALID_SID),_conn(false),_connecting(false),_connect_mode(CLIENT_CONNECT_DIRECT),_pending_bytes(0) {}
 	void SetConnectMode(CLIENT_CONNECT_MODE mode) { _connect_mode = mode; }
 	CLIENT_CONNECT_MODE GetConnectMode() const { return _connect_mode; }
 	virtual void OnClientConnect(Session* pSession) = 0;
@@ -61,6 +62,7 @@ public:
 			_ssid = pSession->GetSessionID();
 			sid = _ssid;
 			pending.swap(_pending);
+			_pending_bytes = 0;
 		}
 		for (std::deque<Bytes>::iterator it = pending.begin(); it != pending.end(); ++it)
 		{
@@ -86,6 +88,8 @@ public:
 	bool SendProtocol(const Protocol& p) { return SendProtocol(&p); }
 	bool SendProtocol(const Protocol* p);
 	bool SendRaw(const Bytes& data);
+	// 没连上先存着，连上时按顺序补发。存满 max_pending_bytes 再来的丢掉，返回 false
+	bool SendRawOrPend(const Bytes& data, size_t max_pending_bytes);
 	void Reconnect(int delay_ms = 2000);
 
 };

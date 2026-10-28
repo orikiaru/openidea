@@ -188,12 +188,18 @@ static void ApplyOp(const IoOp& op)
 	}
 	if (op.type == IO_OP_MOD)
 	{
-		if (op.watch->poll.data == NULL)
+		Channel* channel = (Channel*)op.watch->poll.data;
+		if (channel == NULL)
 		{
 			return;
 		}
-		op.watch->mask = op.mask;
-		uv_poll_start(&op.watch->poll, MaskToUv(op.mask), OnPoll);
+		// 排队期间 poll 线程可能已经直接改过。按 channel 当前的掩码来，旧操作不会盖掉新状态。
+		int mask = channel->_event_mask;
+		if (op.watch->mask != mask)
+		{
+			op.watch->mask = mask;
+			uv_poll_start(&op.watch->poll, MaskToUv(mask), OnPoll);
+		}
 		return;
 	}
 	uv_poll_stop(&op.watch->poll);
@@ -362,6 +368,15 @@ void Poll::IOEventMod(Channel* p, int new_mask)
 	IoWatch* watch = (IoWatch*)p->_poll_token;
 	if (!watch || watch == POLL_PENDING || watch == POLL_DROPPED)
 	{
+		return;
+	}
+	if (InLoopThread())
+	{
+		if (watch->poll.data != NULL && watch->mask != new_mask)
+		{
+			watch->mask = new_mask;
+			uv_poll_start(&watch->poll, MaskToUv(new_mask), OnPoll);
+		}
 		return;
 	}
 	IoOp op;

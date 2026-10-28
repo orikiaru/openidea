@@ -37,6 +37,7 @@ public:
 	bool Init();
 	static LogManager& GetInstance() { return inst;  }
 
+	// b 的内容会被移进写盘队列
 	void WriteLog(LOG_LEVEL lv, Bytes& b);
 
 private:

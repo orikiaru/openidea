@@ -50,6 +50,8 @@ class RedisClient : public ProtoClientManager
 	int _timeout_ms;
 	Mutex _wait_mu;
 	std::deque<RedisCall::State*> _wait;
+	// _wait 前面这么多条已经判过超时
+	size_t _swept;
 public:
 	RedisClient();
 	virtual ~RedisClient();
@@ -57,15 +59,17 @@ public:
 	virtual const std::string GetIDString() { return "RedisClient"; }
 	virtual bool Init();
 	RedisCall Call(std::vector<std::string> args, RedisResult* out);
+	// 阻塞到回执或超时。不能在 poll 线程上调。单线程版没有别的线程收包，直接按超时返回
 	RedisResult CallSync(std::vector<std::string> args);
 	void Feed(const char* data, size_t size);
+	// poll 线程上周期调用，把到期还没回执的调用按超时结掉
+	static void SweepTimeout(void*);
 private:
 	virtual Session* CloneSession();
 	virtual void OnClientConnect(Session* pSession);
 	virtual void OnClientDisconnect(const Session* pSession);
 	virtual void OnAbortSession();
 	static void Submit(void* state);
-	static void FireTimeout(void* state);
 	void Enqueue(RedisCall::State* st);
 	void FailAll();
 	void Settle(RedisCall::State* st, std::shared_ptr<redisReply> reply, bool timeout);

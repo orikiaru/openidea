@@ -4,14 +4,24 @@
 
 void TCP_Channel::DataIn()
 {
-	Bytes tmp_bytes;
-	tmp_bytes.Reserve(8192);
+	// 水平触发。一轮读够上限就先交给会话，剩下的下一轮再进来。
+	const size_t kRoundMax = 4 * 1024 * 1024;
+	size_t round = 0;
 	for (;;)
 	{
-		int read_num = NetOs_Recv(_socket.GetSocket(), tmp_bytes.Begin(), tmp_bytes.Captity());
+		if (round >= kRoundMax)
+		{
+			goto read_finish;
+		}
+		if (_ibuff.Captity() - _ibuff.Size() < 16 * 1024)
+		{
+			_ibuff.Reserve(_ibuff.Size() + 64 * 1024);
+		}
+		int read_num = NetOs_Recv(_socket.GetSocket(), _ibuff.End(), _ibuff.Captity() - _ibuff.Size());
 		if (read_num > 0)
 		{
-			_ibuff.Append(tmp_bytes.Begin(), read_num);
+			_ibuff.Commit((size_t)read_num);
+			round += (size_t)read_num;
 			continue;
 		}
 		else if (read_num == -1 && errno == EAGAIN)
@@ -67,7 +77,7 @@ void TCP_Channel::DataOut()
 write_finish:
 	if (_obuff.Size() == 0)
 	{
-		ForbidSend();	//no data unregister writeevent;
+		_p_session->SendDrained();
 	}
 	return;
 write_fault:

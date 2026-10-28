@@ -1,17 +1,10 @@
 #pragma once
 
-#include <deque>
-#include <list>
-
 #include "net_session.h"
 #include "parser.h"
 class ProtoSession : public NetSession
 {
 	ProtocolParser _parser;
-
-	typedef std::deque<Bytes> MSG_QUEUE;
-	Mutex		_queue_locker;
-	MSG_QUEUE	_msg_queue;
 public:
 	ProtoSession(SessionManager* pMgr) :NetSession(pMgr) {}
 	virtual void Send(const Bytes& bytes);

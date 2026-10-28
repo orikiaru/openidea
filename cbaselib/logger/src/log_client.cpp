@@ -43,5 +43,7 @@ bool LogClient::SendLog(int level, const char* text, size_t text_len)
 	}
 	Bytes frame;
 	AppendLogFrame(frame, level, text, text_len);
-	return SendRaw(frame);
+	// 进程刚起、日志服还没连上时的日志先攒着，别丢。
+	const size_t kMaxPending = 4 * 1024 * 1024;
+	return SendRawOrPend(frame, kMaxPending);
 }

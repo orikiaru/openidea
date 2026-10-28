@@ -28,7 +28,8 @@ public:
 	static RedisServer& GetInstance() { return inst; }
 	virtual const std::string GetIDString() { return "RedisServer"; }
 	virtual bool Init();
-	void Issue(int link, sid_t sid, std::vector<std::string> args);
+	// cmd 是一条完整的 RESP 命令，原样转给上游
+	void Issue(int link, sid_t sid, const char* cmd, size_t len);
 	void Open(RedisLink* link);
 	void ArmReconnect(RedisLink* link);
 private:

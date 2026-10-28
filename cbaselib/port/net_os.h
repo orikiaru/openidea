@@ -14,6 +14,7 @@ typedef intptr_t net_socket_t;
 #else
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -26,6 +27,8 @@ typedef int net_socket_t;
 void NetOs_Startup();
 net_socket_t NetOs_CreateTcp(bool nonblock);
 int NetOs_SetNonblock(net_socket_t fd);
+// 关掉 Nagle。小包一来一回的请求不等凑包
+int NetOs_SetNoDelay(net_socket_t fd);
 int NetOs_Close(net_socket_t fd);
 int NetOs_Recv(net_socket_t fd, void* buf, size_t len);
 int NetOs_Send(net_socket_t fd, const void* buf, size_t len);

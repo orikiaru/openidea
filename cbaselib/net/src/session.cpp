@@ -14,7 +14,14 @@
 void Session::SwapInBuff(Bytes& inBuff)
 {
 	//ibuff处理在io线程,无需加锁.
-	_ibuff.Append(inBuff);
+	if (_ibuff.Size() == 0)
+	{
+		_ibuff.Swap(inBuff);
+	}
+	else
+	{
+		_ibuff.Append(inBuff);
+	}
 	inBuff.Clear();
 	OnDataIn();
 }
@@ -23,8 +30,26 @@ void Session::SwapOutBuff(Bytes& outBuff)
 {
 	MutexGuard l(_locker);
 	OnDataOut();
-	outBuff.Append(_obuff);
+	if (outBuff.Size() == 0)
+	{
+		outBuff.Swap(_obuff);
+	}
+	else
+	{
+		outBuff.Append(_obuff);
+	}
 	_obuff.Clear();
+}
+
+void Session::SendDrained()
+{
+	// 和 Send 用同一把锁：要么看到刚追加的数据，要么关写之后 Send 再把写打开。
+	MutexGuard l(_locker);
+	OnDataOut();
+	if (_obuff.Size() == 0)
+	{
+		ForbidSend();
+	}
 }
 
 bool Session::IsClosed()

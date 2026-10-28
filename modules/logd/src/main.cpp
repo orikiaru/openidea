@@ -8,7 +8,7 @@
 int main(int argc, char* argv[])
 {
     //加载模块配置
-    if (!Config::GlobalMutableConfig().Parse("..//config/logd.toml"))
+    if (!Config::GlobalMutableConfig().Parse("../config/logd.toml"))
 	{
 		printf("ParseConfigError\n");
 		return -2;

@@ -40,6 +40,8 @@ public: //提供给Channel的调用
 	virtual void SwapInBuff(Bytes& inBuff);
 	//将会话输出数据处理后追加到outBuff
 	virtual void SwapOutBuff(Bytes& outBuff);
+	//Channel写空了。会话这边也没有待发数据才关写事件
+	void SendDrained();
 	//会话是否已经失效关闭
 	virtual bool IsClosed();
 	//IO线程被动关闭调用,会回调Mgr->CloseSession

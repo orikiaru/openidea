@@ -94,6 +94,21 @@ int NetOs_SetNonblock(net_socket_t fd)
 #endif
 }
 
+int NetOs_SetNoDelay(net_socket_t fd)
+{
+	int on = 1;
+#ifdef _WIN32
+	if (setsockopt((SOCKET)fd, IPPROTO_TCP, TCP_NODELAY, (const char*)&on, sizeof(on)) != 0)
+	{
+		NetOs_MapError(WSAGetLastError());
+		return -1;
+	}
+	return 0;
+#else
+	return setsockopt((int)fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
+#endif
+}
+
 int NetOs_Close(net_socket_t fd)
 {
 	if (fd == INVALID_SOCKET_ID)

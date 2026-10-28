@@ -6,7 +6,9 @@
 #include "config.h"
 #include "logger.h"
 #include <atomic>
+#include <chrono>
 #include <deque>
+#include <mutex>
 #include <utility>
 
 namespace
@@ -20,6 +22,24 @@ struct ReplyFree
 };
 
 sid_t g_sid = INVALID_SID;
+std::once_flag g_sweep_once;
+const int kSweepMs = 200;
+
+int64_t NowMs()
+{
+	return std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+class RedisSweepTimer : public BaseTimer
+{
+public:
+	bool OnTimer()
+	{
+		Poll::GetInstance()->CallOnLoop(RedisClient::SweepTimeout, NULL);
+		return true;
+	}
+};
 }
 
 struct RedisCall::State
@@ -31,17 +51,18 @@ struct RedisCall::State
 	bool sync;
 	RedisResult* out;
 	std::coroutine_handle<> handle;
+	int64_t deadline_ms;
 	std::atomic<int> gate;
 	std::atomic<int> won;
 	std::atomic<int> refs;
 	Mutex mu;
 	MutexCond cv;
-	State() : timeout(false), ready(false), sync(false), out(NULL), gate(0), won(0), refs(1) {}
+	State() : timeout(false), ready(false), sync(false), out(NULL), deadline_ms(0), gate(0), won(0), refs(1) {}
 };
 
 RedisClient RedisClient::inst;
 
-RedisClient::RedisClient() : _reader(NULL), _timeout_ms(25000)
+RedisClient::RedisClient() : _reader(NULL), _timeout_ms(25000), _swept(0)
 {
 }
 
@@ -171,11 +192,30 @@ void RedisClient::Submit(void* state)
 	GetInstance().Enqueue((RedisCall::State*)state);
 }
 
-void RedisClient::FireTimeout(void* state)
+void RedisClient::SweepTimeout(void*)
 {
-	RedisCall::State* st = (RedisCall::State*)state;
-	GetInstance().Settle(st, std::shared_ptr<redisReply>(), true);
-	Release(st);
+	RedisClient& self = GetInstance();
+	int64_t now = NowMs();
+	std::vector<RedisCall::State*> expired;
+	{
+		// 超时时长固定，又按发送顺序入队，所以 _wait 按截止时间有序。
+		// 超时的仍留在队里认领它那条回执，_swept 记着已经判过的前缀，不重复扫。
+		MutexGuard lock(self._wait_mu);
+		while (self._swept < self._wait.size())
+		{
+			RedisCall::State* st = self._wait[self._swept];
+			if (st->deadline_ms > now)
+			{
+				break;
+			}
+			expired.push_back(st);
+			++self._swept;
+		}
+	}
+	for (size_t i = 0; i < expired.size(); ++i)
+	{
+		self.Settle(expired[i], std::shared_ptr<redisReply>(), true);
+	}
 }
 
 void RedisClient::Settle(RedisCall::State* st, std::shared_ptr<redisReply> reply, bool timeout)
@@ -230,6 +270,10 @@ void RedisClient::Enqueue(RedisCall::State* st)
 	Bytes frame;
 	frame.Append(cmd, (size_t)n);
 	redisFreeCommand(cmd);
+	std::call_once(g_sweep_once, []() {
+		BaseTimerManager::GetInstance()->AddTimer(new RedisSweepTimer(), kSweepMs);
+	});
+	st->deadline_ms = NowMs() + _timeout_ms;
 	st->refs.fetch_add(1, std::memory_order_relaxed);
 	{
 		MutexGuard lock(_wait_mu);
@@ -238,11 +282,15 @@ void RedisClient::Enqueue(RedisCall::State* st)
 	if (!SendRaw(frame))
 	{
 		MutexGuard lock(_wait_mu);
-		for (std::deque<RedisCall::State*>::iterator it = _wait.begin(); it != _wait.end(); ++it)
+		for (size_t i = 0; i < _wait.size(); ++i)
 		{
-			if (*it == st)
+			if (_wait[i] == st)
 			{
-				_wait.erase(it);
+				_wait.erase(_wait.begin() + (std::ptrdiff_t)i);
+				if (i < _swept)
+				{
+					--_swept;
+				}
 				break;
 			}
 		}
@@ -250,11 +298,6 @@ void RedisClient::Enqueue(RedisCall::State* st)
 		Release(st);
 		return;
 	}
-	st->refs.fetch_add(1, std::memory_order_relaxed);
-	int wait_ms = _timeout_ms;
-	BaseTimerManager::GetInstance()->AddTimer([st]() {
-		Poll::GetInstance()->CallOnLoop(RedisClient::FireTimeout, st);
-	}, wait_ms);
 }
 
 void RedisClient::FailAll()
@@ -263,6 +306,7 @@ void RedisClient::FailAll()
 	{
 		MutexGuard lock(_wait_mu);
 		left.swap(_wait);
+		_swept = 0;
 	}
 	for (size_t i = 0; i < left.size(); ++i)
 	{
@@ -315,6 +359,10 @@ void RedisClient::Feed(const char* data, size_t size)
 			}
 			st = _wait.front();
 			_wait.pop_front();
+			if (_swept > 0)
+			{
+				--_swept;
+			}
 		}
 		if (st->won.load(std::memory_order_acquire) == 0)
 		{

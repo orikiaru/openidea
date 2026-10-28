@@ -1,11 +1,18 @@
 #include "rpc.h"
 #include "base_timer_manager.h"
+#include "poll.h"
 #include "proto_stub_manager.h"
 #include "rpc_coro.h"
 #include "threadpool.h"
+#include <atomic>
+#include <chrono>
 #include <deque>
 #include <list>
 #include <map>
+#include <mutex>
+#include <set>
+#include <unordered_map>
+#include <vector>
 
 static bool DrainStCoro()
 {
@@ -156,23 +163,53 @@ BytesStream& Rpc::deserialize(BytesStream& os)
 
 namespace
 {
+typedef std::function<coro::Task(coro::Token, SessionManager*, sid_t, BytesStream)> RpcHandleFn;
+
 struct RpcCoroSlot
 {
-	uint64_t task_id;
 	std::coroutine_handle<> handle;
 	int* result;
 	std::function<bool(BytesStream&)> decode;
 	std::function<void()> resume;
-	BaseTimer* timer;
 	proto_type_t res_id;
 };
 
+struct RpcExpire
+{
+	int64_t deadline_ms;
+	uint64_t call_id;
+};
+
+// 等回包的调用按调用号分片，发请求的工人之间不抢同一把锁。
+// 超时按时长分桶，同一桶里先登记的先到期，扫的时候只看队头。
+struct RpcCallShard
+{
+	Mutex mu;
+	std::unordered_map<uint64_t, RpcCoroSlot> slots;
+	std::map<int, std::deque<RpcExpire> > expire;
+};
+
+const uint64_t kCallShards = 64;
+const int kSweepMs = 200;
+RpcCallShard g_call_shards[kCallShards];
+std::atomic<uint64_t> g_call_seq(1);
+std::once_flag g_sweep_once;
+
 Mutex g_rpc_wait_lock;
 std::map<proto_type_t, std::deque<std::function<void(BytesStream&)> > > g_rpc_wait;
-std::map<proto_type_t, std::function<coro::Task(coro::Token, SessionManager*, sid_t, BytesStream)> > g_rpc_handle;
-// 按回包协议号排队，弹出的就是这次要唤醒的任务。任务 id 直接当键，超时用迭代器摘掉。
-std::map<proto_type_t, std::list<RpcCoroSlot> > g_rpc_coro_q;
-std::map<uint64_t, std::list<RpcCoroSlot>::iterator> g_rpc_coro;
+std::map<proto_type_t, RpcHandleFn> g_rpc_handle;
+std::set<proto_type_t> g_rpc_res;
+
+int64_t NowMs()
+{
+	return std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+RpcCallShard& ShardOf(uint64_t call_id)
+{
+	return g_call_shards[call_id % kCallShards];
+}
 
 void FinishRpcSlot(RpcCoroSlot& slot, int code, BytesStream* body)
 {
@@ -181,10 +218,6 @@ void FinishRpcSlot(RpcCoroSlot& slot, int code, BytesStream* body)
 		if (slot.decode)
 		{
 			slot.decode(*body);
-		}
-		if (slot.timer && BaseTimerManager::GetInstance()->RemoveTimer(slot.timer))
-		{
-			SAFE_DELETE(slot.timer);
 		}
 	}
 	else if (slot.result)
@@ -201,66 +234,108 @@ void FinishRpcSlot(RpcCoroSlot& slot, int code, BytesStream* body)
 	}
 }
 
-class RpcCoroTimer : public BaseTimer
+bool TakeRpcSlot(uint64_t call_id, RpcCoroSlot& out)
 {
-	uint64_t _rid;
-public:
-	explicit RpcCoroTimer(uint64_t rid) : _rid(rid) {}
-	bool OnTimer()
+	RpcCallShard& shard = ShardOf(call_id);
+	MutexGuard lock(shard.mu);
+	std::unordered_map<uint64_t, RpcCoroSlot>::iterator it = shard.slots.find(call_id);
+	if (it == shard.slots.end())
 	{
-		WakeRpcCall(_rid, -2, NULL);
-		RpcCoroTimer* self = this;
-		SAFE_DELETE(self);
 		return false;
 	}
-};
+	out = std::move(it->second);
+	shard.slots.erase(it);
+	return true;
 }
 
-uint64_t BindRpcCall(proto_type_t res_id, uint64_t task_id, std::coroutine_handle<> handle, int* result, int timeout_sec, std::function<bool(BytesStream&)> decode, std::function<void()> resume)
+void SweepRpcCalls()
+{
+	int64_t now = NowMs();
+	std::vector<RpcCoroSlot> fired;
+	for (uint64_t i = 0; i < kCallShards; ++i)
+	{
+		RpcCallShard& shard = g_call_shards[i];
+		MutexGuard lock(shard.mu);
+		for (std::map<int, std::deque<RpcExpire> >::iterator bit = shard.expire.begin(); bit != shard.expire.end(); ++bit)
+		{
+			std::deque<RpcExpire>& q = bit->second;
+			while (!q.empty())
+			{
+				std::unordered_map<uint64_t, RpcCoroSlot>::iterator it = shard.slots.find(q.front().call_id);
+				if (it == shard.slots.end())
+				{
+					q.pop_front();
+					continue;
+				}
+				if (q.front().deadline_ms > now)
+				{
+					break;
+				}
+				fired.push_back(std::move(it->second));
+				shard.slots.erase(it);
+				q.pop_front();
+			}
+		}
+	}
+	for (size_t i = 0; i < fired.size(); ++i)
+	{
+		FinishRpcSlot(fired[i], -2, NULL);
+	}
+}
+
+class RpcSweepTimer : public BaseTimer
+{
+public:
+	bool OnTimer()
+	{
+		SweepRpcCalls();
+		return true;
+	}
+};
+
+void ArmRpcSweep(void*)
+{
+	BaseTimerManager::GetInstance()->AddTimer(new RpcSweepTimer(), kSweepMs);
+}
+}
+
+void RegisterRpcRes(proto_type_t res_id)
 {
 	MutexGuard lock(g_rpc_wait_lock);
-	RpcCoroTimer* timer = NULL;
-	if (timeout_sec > 0)
-	{
-		timer = new RpcCoroTimer(task_id);
-		BaseTimerManager::GetInstance()->AddTimer(timer, timeout_sec * 1000);
-	}
-	std::list<RpcCoroSlot>& q = g_rpc_coro_q[res_id];
+	g_rpc_res.insert(res_id);
+}
+
+uint64_t BindRpcCall(proto_type_t res_id, std::coroutine_handle<> handle, int* result, int timeout_sec, std::function<bool(BytesStream&)> decode, std::function<void()> resume)
+{
+	std::call_once(g_sweep_once, []() {
+		Poll::GetInstance()->CallOnLoop(ArmRpcSweep, NULL);
+	});
+	uint64_t call_id = g_call_seq.fetch_add(1, std::memory_order_relaxed);
 	RpcCoroSlot slot;
-	slot.task_id = task_id;
 	slot.handle = handle;
 	slot.result = result;
 	slot.decode = std::move(decode);
 	slot.resume = std::move(resume);
-	slot.timer = timer;
 	slot.res_id = res_id;
-	q.push_back(std::move(slot));
-	g_rpc_coro[task_id] = --q.end();
-	return task_id;
+	RpcCallShard& shard = ShardOf(call_id);
+	MutexGuard lock(shard.mu);
+	shard.slots.emplace(call_id, std::move(slot));
+	if (timeout_sec > 0)
+	{
+		RpcExpire e;
+		e.deadline_ms = NowMs() + (int64_t)timeout_sec * 1000;
+		e.call_id = call_id;
+		shard.expire[timeout_sec].push_back(e);
+	}
+	return call_id;
 }
 
-bool WakeRpcCall(uint64_t task_id, int code, BytesStream* body)
+bool WakeRpcCall(uint64_t call_id, int code, BytesStream* body)
 {
 	RpcCoroSlot slot;
+	if (!TakeRpcSlot(call_id, slot))
 	{
-		MutexGuard lock(g_rpc_wait_lock);
-		std::map<uint64_t, std::list<RpcCoroSlot>::iterator>::iterator it = g_rpc_coro.find(task_id);
-		if (it == g_rpc_coro.end())
-		{
-			return false;
-		}
-		std::list<RpcCoroSlot>::iterator lit = it->second;
-		std::map<proto_type_t, std::list<RpcCoroSlot> >::iterator qit = g_rpc_coro_q.find(lit->res_id);
-		slot = std::move(*lit);
-		if (qit != g_rpc_coro_q.end())
-		{
-			qit->second.erase(lit);
-			if (qit->second.empty())
-			{
-				g_rpc_coro_q.erase(qit);
-			}
-		}
-		g_rpc_coro.erase(it);
+		return false;
 	}
 	FinishRpcSlot(slot, code, body);
 	return true;
@@ -272,7 +347,7 @@ void WatchRpc(proto_type_t id, std::function<void(BytesStream&)> decode)
 	g_rpc_wait[id].push_back(std::move(decode));
 }
 
-void BindRpcHandler(proto_type_t id, std::function<coro::Task(coro::Token, SessionManager*, sid_t, BytesStream)> handle)
+void BindRpcHandler(proto_type_t id, RpcHandleFn handle)
 {
 	MutexGuard lock(g_rpc_wait_lock);
 	g_rpc_handle[id] = std::move(handle);
@@ -281,22 +356,13 @@ void BindRpcHandler(proto_type_t id, std::function<coro::Task(coro::Token, Sessi
 bool DeliverRpc(proto_type_t id, BytesStream& body, SessionManager* mgr, sid_t sid)
 {
 	std::function<void(BytesStream&)> decode;
-	std::function<coro::Task(coro::Token, SessionManager*, sid_t, BytesStream)> handle;
-	RpcCoroSlot slot;
-	bool have_rid = false;
+	const RpcHandleFn* handle = NULL;
+	bool is_res = false;
 	{
 		MutexGuard lock(g_rpc_wait_lock);
-		std::map<proto_type_t, std::list<RpcCoroSlot> >::iterator qit = g_rpc_coro_q.find(id);
-		if (qit != g_rpc_coro_q.end() && !qit->second.empty())
+		if (g_rpc_res.find(id) != g_rpc_res.end())
 		{
-			slot = std::move(qit->second.front());
-			g_rpc_coro.erase(slot.task_id);
-			qit->second.pop_front();
-			if (qit->second.empty())
-			{
-				g_rpc_coro_q.erase(qit);
-			}
-			have_rid = true;
+			is_res = true;
 		}
 		else
 		{
@@ -312,31 +378,42 @@ bool DeliverRpc(proto_type_t id, BytesStream& body, SessionManager* mgr, sid_t s
 			}
 			else
 			{
-				std::map<proto_type_t, std::function<coro::Task(coro::Token, SessionManager*, sid_t, BytesStream)> >::iterator hit = g_rpc_handle.find(id);
+				std::map<proto_type_t, RpcHandleFn>::iterator hit = g_rpc_handle.find(id);
 				if (hit == g_rpc_handle.end())
 				{
 					return false;
 				}
-				handle = hit->second;
+				// 处理函数只在启动时注册，map 节点不会再动，出锁后用指针调用。
+				handle = &hit->second;
 			}
 		}
 	}
-	if (have_rid)
-	{
-		FinishRpcSlot(slot, 0, &body);
-		return true;
-	}
 	try
 	{
-		if (decode)
+		if (is_res)
+		{
+			uint64_t call_id = 0;
+			body >> call_id;
+			RpcCoroSlot slot;
+			if (!TakeRpcSlot(call_id, slot))
+			{
+				return true;
+			}
+			if (slot.res_id != id)
+			{
+				FinishRpcSlot(slot, -1, NULL);
+				return true;
+			}
+			FinishRpcSlot(slot, 0, &body);
+		}
+		else if (decode)
 		{
 			decode(body);
 		}
 		else
 		{
-			BytesStream owned(body);
-			coro::StartTask([handle, mgr, sid, owned](coro::Token token) {
-				return handle(token, mgr, sid, owned);
+			coro::StartTask([handle, mgr, sid, &body](coro::Token token) {
+				return (*handle)(token, mgr, sid, std::move(body));
 			});
 		}
 	}
@@ -371,4 +448,3 @@ void ArmRpcTimeout(uint64_t rid, int seconds)
 	BaseTimerManager::GetInstance()->AddTimer(new CoroRpcTimer(rid), seconds * 1000);
 }
 }
-
