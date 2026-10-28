@@ -20,4 +20,11 @@
     <module name="RedisServer">
     </module>
 
+    <!--HTTP，不走 proto。query、JSON、二进制 body 交给 cpp-httplib 和 nlohmann。-->
+    <module name="WebServer">
+    </module>
+
+    <module name="WebClient">
+    </module>
+
 </Modules>

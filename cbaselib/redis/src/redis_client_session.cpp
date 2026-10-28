@@ -1,9 +1,9 @@
 #include "redis_client_session.h"
 #include "redis_client.h"
 
-void RedisClientSession::Send(const Bytes& bytes)
+void RedisClientSession::Send(const OI::Base::Bytes& bytes)
 {
-	MutexGuard lock(_locker);
+	OI::Thread::MutexGuard lock(_locker);
 	_obuff.Append(bytes);
 	AllowSend();
 }

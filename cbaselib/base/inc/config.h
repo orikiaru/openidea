@@ -1,8 +1,9 @@
 #ifndef  __config_h_j__
 #define  __config_h_j__	
-#include <memory>
-#include <assert.h>
 #include "cpptoml.h"
+#include "singleton.h"
+#include <assert.h>
+#include <memory>
 //配置文件实例
 namespace cpptoml
 { 
@@ -10,11 +11,13 @@ namespace cpptoml
 }
 
 //暂时先将Config设计成全局Config并且配置文件为单个toml文件
+namespace OI { namespace Base {
 class Config
 {
+	DECLARE_SINGLETON(Config)
+	Config();
 	std::shared_ptr<cpptoml::table> _toml_config;
 public:
-	Config();
 	bool Parse(const std::string& conf_file_name);
 	
 	template<class T>
@@ -43,15 +46,16 @@ public:
 		return true;
 	}
 
-	static const Config& GlobalConfig();
-	static Config& GlobalMutableConfig();
+	static const Config& GlobalConfig() { return GetInstance(); }
+	static Config& GlobalMutableConfig() { return GetInstance(); }
 };
+}}
 
-#define GetConfigAndAssert(KEY, VALUE)			{ assert(Config::GlobalConfig().GetAs(KEY, VALUE));}
-#define TryGetConfigNoReturn(KEY, VALUE)		{ Config::GlobalConfig().GetAs(KEY, VALUE);}
-#define TryGetConfigAndReturnFalse(KEY, VALUE)	{ if(!Config::GlobalConfig().GetAs(KEY, VALUE)) return false; }
+#define GetConfigAndAssert(KEY, VALUE)			{ assert(::OI::Base::Config::GlobalConfig().GetAs(KEY, VALUE));}
+#define TryGetConfigNoReturn(KEY, VALUE)		{ ::OI::Base::Config::GlobalConfig().GetAs(KEY, VALUE);}
+#define TryGetConfigAndReturnFalse(KEY, VALUE)	{ if(!::OI::Base::Config::GlobalConfig().GetAs(KEY, VALUE)) return false; }
 //可以拿取返回值
-#define TryGetConfig(KEY, VALUE)				Config::GlobalConfig().GetAs(KEY, VALUE)
-#define ParseConfig(PATH)						Config::GlobalMutableConfig().Parse(PATH)
+#define TryGetConfig(KEY, VALUE)				::OI::Base::Config::GlobalConfig().GetAs(KEY, VALUE)
+#define ParseConfig(PATH)						::OI::Base::Config::GlobalMutableConfig().Parse(PATH)
 
 #endif // ! __config_h_j__

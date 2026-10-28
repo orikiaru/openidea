@@ -5,6 +5,7 @@
 #include <new>
 #include <utility>
 
+namespace OI { namespace Base {
 char Bytes::_empty = 0;
 
 Bytes::Bytes() : _mem(NULL), _cap(0), _head(0), _size(0) {}
@@ -275,3 +276,4 @@ size_t Bytes::Replace(size_t offset, const void* data, size_t len)
 	memcpy(Mutable() + offset, data, len);
 	return len;
 }
+}}

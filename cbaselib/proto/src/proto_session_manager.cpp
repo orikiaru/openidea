@@ -1,13 +1,12 @@
 #include "proto_session_manager.h"
-#include "timer_task.h"
 #include "parser.h"
 #include "base_header.h"
 
-bool ProtoClientManager::SendRaw(const Bytes& data)
+bool ProtoClientManager::SendRaw(const OI::Base::Bytes& data)
 {
 	sid_t sid = INVALID_SID;
 	{
-		SpinLockGuard l(_client_locker);
+		OI::Thread::SpinLockGuard l(_client_locker);
 		if (_conn && _ssid != INVALID_SID)
 		{
 			sid = _ssid;
@@ -20,11 +19,11 @@ bool ProtoClientManager::SendRaw(const Bytes& data)
 	return SendBytes(sid, data);
 }
 
-bool ProtoClientManager::SendRawOrPend(const Bytes& data, size_t max_pending_bytes)
+bool ProtoClientManager::SendRawOrPend(const OI::Base::Bytes& data, size_t max_pending_bytes)
 {
 	sid_t sid = INVALID_SID;
 	{
-		SpinLockGuard l(_client_locker);
+		OI::Thread::SpinLockGuard l(_client_locker);
 		if (_conn && _ssid != INVALID_SID)
 		{
 			sid = _ssid;
@@ -52,7 +51,7 @@ bool ProtoClientManager::SendProtocol(const Protocol* p)
 
 	sid_t sid = INVALID_SID;
 	{
-		SpinLockGuard l(_client_locker);
+		OI::Thread::SpinLockGuard l(_client_locker);
 		if (_conn && _ssid != INVALID_SID)
 		{
 			sid = _ssid;
@@ -68,10 +67,10 @@ bool ProtoClientManager::SendProtocol(const Protocol* p)
 	}
 
 	ProtocolParser parser;
-	BytesStream encoded = parser.EncodeProtocol(p);
+	OI::Base::BytesStream encoded = parser.EncodeProtocol(p);
 	bool need_connect = false;
 	{
-		SpinLockGuard l(_client_locker);
+		OI::Thread::SpinLockGuard l(_client_locker);
 		if (_conn && _ssid != INVALID_SID)
 		{
 			sid = _ssid;
@@ -93,7 +92,7 @@ bool ProtoClientManager::SendProtocol(const Protocol* p)
 	}
 	if (need_connect && !StartClient())
 	{
-		SpinLockGuard l(_client_locker);
+		OI::Thread::SpinLockGuard l(_client_locker);
 		_connecting = false;
 		return false;
 	}
@@ -102,16 +101,5 @@ bool ProtoClientManager::SendProtocol(const Protocol* p)
 
 void ProtoClientManager::Reconnect(int millisecond)
 {
-	class ReconnTask : public TimerTask
-	{
-	public:
-		ProtoClientManager* p_mgr;
-		ReconnTask(ProtoClientManager* pMgr) :p_mgr(pMgr) {}
-		virtual void Handle()
-		{
-			p_mgr->StartClient();
-		}
-	};
-
-	BaseTimerManager::GetInstance()->AddTimer(new ReconnTask(this), millisecond);
+	BaseTimerManager::GetInstance().AddTimer([this]() { StartClient(); }, millisecond);
 }

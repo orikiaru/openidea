@@ -3,19 +3,12 @@
 #include "log_client.h"
 #include "test_board.h"
 #include <cstdio>
-#include <thread>
 #include <vector>
 
 LogMgr::LogMgr()
 	: _on(false), _tasks(8), _line(64 * 1024), _bytes(1024LL * 1024 * 1024),
 	  _drain_sec(15), _sent(0), _done(0)
 {
-}
-
-LogMgr& LogMgr::Get()
-{
-	static LogMgr inst;
-	return inst;
 }
 
 void LogMgr::Load()
@@ -34,11 +27,11 @@ void LogMgr::Start()
 		return;
 	}
 	_start = std::chrono::steady_clock::now();
-	GetTestBoard().Arm();
+	TestBoard::GetInstance().Arm();
 	for (int i = 0; i < _tasks; ++i)
 	{
 		coro::StartTask([](coro::Token) {
-			return LogMgr::Get().Pump();
+			return LogMgr::GetInstance().Pump();
 		});
 	}
 }
@@ -59,7 +52,7 @@ coro::Task LogMgr::Pump()
 		}
 		// 下一条不等这条写完。单线程先 poll 把缓冲发出去，再跑新挂上的。
 		coro::StartTask([](coro::Token) {
-			return LogMgr::Get().Pump();
+			return LogMgr::GetInstance().Pump();
 		});
 		co_return;
 	}
@@ -77,9 +70,10 @@ coro::Task LogMgr::Pump()
 		fflush(stdout);
 		if (_drain_sec > 0)
 		{
-			std::this_thread::sleep_for(std::chrono::seconds(_drain_sec));
+			// 单线程只有这一条线程。sleep 会把 poll 冻住，套接字里的日志发不出去。
+			co_await coro::yield(_drain_sec * 1000);
 		}
-		GetTestBoard().Done(0);
+		TestBoard::GetInstance().Done(0);
 	}
 	co_return;
 }

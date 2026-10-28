@@ -2,14 +2,13 @@
 #define __j_protocol_h__
 
 #include "serialize.h"
-#include "threadpool.h"
 #include "proto_session.h"
 #include "session_manager.h"
 
 
 class SessionManager;
 
-class Protocol: public Serialize
+class Protocol: public OI::Rpc::Serialize
 {
 protected:
 	proto_type_t	_id;
@@ -26,31 +25,4 @@ public:
 	virtual void Handle(SessionManager* mgr, sid_t sid) = 0;
 };
 
-
-
-
-
-
-
-class PTask : public Task
-{
-	Protocol*		_p;
-	SessionManager* _p_mgr;
-	sid_t			_sid;
-public:
-	PTask(Protocol* p, SessionManager* mgr, sid_t sid) :_p(p), _p_mgr(mgr), _sid(sid) {}
-	virtual void Exec() 
-	{
-		_p->Handle(_p_mgr, _sid);
-		delete this; 
-	}
-	~PTask() 
-	{ 
-		SAFE_DELETE(_p); 
-	}
-};
-
-
-
 #endif
-

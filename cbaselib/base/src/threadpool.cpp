@@ -9,6 +9,7 @@
 #include "header.h"
 #include "threadpool.h"
 
+namespace OI { namespace Thread {
 static std::string GetPrioConfigString(PRIO_ENUM prio)
 {
 	switch (prio)
@@ -103,11 +104,11 @@ static void WorkerMain(ThreadPool::ThreadData* p_data)
 			std::unique_lock<std::mutex> lock(p_data->_mutex);
 			p_data->_idle++;
 			p_data->_cond.wait(lock, [&]() {
-				return p_data->_task_count > 0 || p_data->_coro_count > 0 || ThreadPool::GetInstance()->Stopping();
+				return p_data->_task_count > 0 || p_data->_coro_count > 0 || ThreadPool::GetInstance().Stopping();
 			});
 			p_data->_idle--;
 			// 停了就走。否则 poll 上的定时器会一直塞任务，join 等不到。
-			if (ThreadPool::GetInstance()->Stopping())
+			if (ThreadPool::GetInstance().Stopping())
 			{
 				return;
 			}
@@ -128,9 +129,9 @@ static void WorkerMain(ThreadPool::ThreadData* p_data)
 		{
 			// 只 resume。跑完的根协程由 SetAfterResume 登记的函数释放。
 			coro.resume();
-			if (ThreadPool::GetInstance()->_after_resume)
+			if (ThreadPool::GetInstance()._after_resume)
 			{
-				ThreadPool::GetInstance()->_after_resume();
+				ThreadPool::GetInstance()._after_resume();
 			}
 		}
 		else
@@ -182,7 +183,7 @@ void ThreadPool::RequestStop(int code)
 
 void sig_handle(int sig_num)
 {
-	ThreadPool::GetInstance()->OnSignal(sig_num);
+	ThreadPool::GetInstance().OnSignal(sig_num);
 }
 
 void ThreadPool::OnSignal(int sig_num)
@@ -280,7 +281,7 @@ void ThreadPool::SingleThreadStartWork()
 			}
 		}
 		// 队列里还有下一轮，就只试一次网络；谁都不跑了才堵住等。
-		Poll::GetInstance()->PollWait(pending ? 0 : 1000);
+		Poll::GetInstance().PollWait(pending ? 0 : 1000);
 	}
 }
 
@@ -312,7 +313,7 @@ void ThreadPool::MultiThreadStartWork()
 		workers[i].join();
 	}
 	// 工作线程已经退出，不会再往 poll 投任务。
-	Poll::GetInstance()->StopAndJoin();
+	Poll::GetInstance().StopAndJoin();
 #endif
 }
 
@@ -393,3 +394,4 @@ void ThreadPool::InitUnIgnoreSig(int sig)
 
 
 
+}}

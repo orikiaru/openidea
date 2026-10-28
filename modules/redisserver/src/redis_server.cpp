@@ -13,7 +13,7 @@
 
 namespace
 {
-void AppendBulk(Bytes& out, const char* s, size_t n)
+void AppendBulk(OI::Base::Bytes& out, const char* s, size_t n)
 {
 	char hdr[64];
 	int hn = snprintf(hdr, sizeof(hdr), "$%zu\r\n", n);
@@ -25,7 +25,7 @@ void AppendBulk(Bytes& out, const char* s, size_t n)
 	out.Append("\r\n", 2);
 }
 
-void AppendReply(Bytes& out, const redisReply* reply)
+void AppendReply(OI::Base::Bytes& out, const redisReply* reply)
 {
 	if (!reply)
 	{
@@ -77,7 +77,7 @@ void AppendReply(Bytes& out, const redisReply* reply)
 	}
 }
 
-void AppendErr(Bytes& out, const char* text)
+void AppendErr(OI::Base::Bytes& out, const char* text)
 {
 	out.Append("-", 1);
 	out.Append(text, strlen(text));
@@ -88,7 +88,7 @@ void OnReply(redisAsyncContext*, void* reply, void* priv)
 {
 	sid_t sid = (sid_t)(intptr_t)priv;
 	// 单线程进程，回包缓冲复用一块，不必每条回执分配。
-	static Bytes out;
+	static OI::Base::Bytes out;
 	out.Clear();
 	if (!reply)
 	{
@@ -124,8 +124,6 @@ void OnDisconnect(const redisAsyncContext* c, int status)
 	RedisServer::GetInstance().ArmReconnect(link);
 }
 }
-
-RedisServer RedisServer::inst;
 
 RedisServer::RedisServer() : _connections(1), _next(0)
 {
@@ -213,7 +211,7 @@ void RedisServer::Open(RedisLink* link)
 		ArmReconnect(link);
 		return;
 	}
-	if (redisLibuvAttach(ac, (uv_loop_t*)Poll::GetInstance()->Loop()) != REDIS_OK)
+	if (redisLibuvAttach(ac, (uv_loop_t*)Poll::GetInstance().Loop()) != REDIS_OK)
 	{
 		LOG_ERROR("RedisServer hiredis attach");
 		redisAsyncFree(ac);
@@ -232,7 +230,7 @@ void RedisServer::ArmReconnect(RedisLink* link)
 		return;
 	}
 	link->dialing = true;
-	BaseTimerManager::GetInstance()->AddTimer([link]() {
+	BaseTimerManager::GetInstance().AddTimer([link]() {
 		link->dialing = false;
 		RedisServer::GetInstance().Open(link);
 	}, 2000);
@@ -240,7 +238,7 @@ void RedisServer::ArmReconnect(RedisLink* link)
 
 void RedisServer::Issue(int link, sid_t sid, const char* cmd, size_t len)
 {
-	Bytes err;
+	OI::Base::Bytes err;
 	if (link < 0 || link >= (int)_links.size() || !_links[(size_t)link].ac || len == 0)
 	{
 		AppendErr(err, "ERR redis down");

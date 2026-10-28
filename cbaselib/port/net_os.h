@@ -7,6 +7,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <errno.h>
+#include <string.h>
 typedef intptr_t net_socket_t;
 #ifndef EINPROGRESS
 #define EINPROGRESS 112
@@ -19,6 +20,7 @@ typedef intptr_t net_socket_t;
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <string.h>
 typedef int net_socket_t;
 #endif
 
@@ -38,3 +40,28 @@ int NetOs_Bind(net_socket_t fd, const sockaddr* addr, int len);
 int NetOs_Listen(net_socket_t fd, int backlog);
 int NetOs_Connect(net_socket_t fd, const sockaddr* addr, int len);
 int NetOs_GetSocketError(net_socket_t fd);
+
+inline const char* NetOs_StrError(int err)
+{
+	static thread_local char buf[128];
+#ifdef _WIN32
+	if (strerror_s(buf, sizeof(buf), err) != 0)
+	{
+		buf[0] = '\0';
+	}
+#else
+	const char* text = strerror(err);
+	if (!text)
+	{
+		text = "";
+	}
+	size_t n = 0;
+	while (text[n] && n + 1 < sizeof(buf))
+	{
+		buf[n] = text[n];
+		n++;
+	}
+	buf[n] = '\0';
+#endif
+	return buf;
+}

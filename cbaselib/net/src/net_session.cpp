@@ -1,16 +1,17 @@
 #include "net_session.h"
 #include "session_manager.h"
 #include "logger.h"
+#include "net_os.h"
 void NetSession::PassiveClose(int err)
 {
 	{
-		MutexGuard l(_locker);
+		OI::Thread::MutexGuard l(_locker);
 		Close(err);
 	}
 	//输出日志不能持有会话锁,否则会死锁的.
 	if (err && err < NET_PARSER_ERR_BEGIN)
 	{
-		LOG_TRACE("NetSession::PassiveClose sid=%d, system_err=%s", GetSessionID(), strerror(err));
+		LOG_TRACE("NetSession::PassiveClose sid=%d, system_err=%s", GetSessionID(), NetOs_StrError(err));
 		return;
 	}
 	LOG_TRACE("NetSession::PassiveClose sid=%d, errno=%d", GetSessionID(), err);
@@ -23,7 +24,7 @@ void NetSession::PassiveClose(int err)
 
 void NetSession::ActiveClose()
 {
-	MutexGuard l(_locker);
+	OI::Thread::MutexGuard l(_locker);
 	Close(SESSION_MANAGER_NORMAL_CLOSE);
 }
 

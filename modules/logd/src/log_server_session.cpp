@@ -24,7 +24,7 @@ void LogServerSession::OnDataIn()
 		size_t text_len = payload - 1;
 		if (level >= 0 && level < LOG_LEVEL::LOG_LEVEL_COUNT)
 		{
-			Bytes body(text, text_len);
+			OI::Base::Bytes body(text, text_len);
 			LogManager::GetInstance().WriteLog((LOG_LEVEL)level, body);
 		}
 		used += (size_t)LOG_FRAME_HEAD + payload;

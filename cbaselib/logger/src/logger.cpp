@@ -46,7 +46,7 @@ namespace Log
 			va_end(again);
 			return false;
 		}
-		Bytes tmp;
+		OI::Base::Bytes tmp;
 		tmp.Reserve(_log_title.length() + (size_t)need + 2);
 		tmp.Append(_log_title.c_str(), _log_title.length());
 		if ((size_t)need < sizeof(stack))

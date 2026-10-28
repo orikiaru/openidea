@@ -212,14 +212,14 @@ net_socket_t NetOs_Accept(net_socket_t fd)
 net_socket_t NetOs_Dup(net_socket_t fd)
 {
 #ifdef _WIN32
-	WSAPROTOCOL_INFOA info;
+	WSAPROTOCOL_INFOW info;
 	memset(&info, 0, sizeof(info));
-	if (WSADuplicateSocketA((SOCKET)fd, GetCurrentProcessId(), &info) != 0)
+	if (WSADuplicateSocketW((SOCKET)fd, GetCurrentProcessId(), &info) != 0)
 	{
 		NetOs_MapError(WSAGetLastError());
 		return INVALID_SOCKET_ID;
 	}
-	SOCKET dup_fd = WSASocketA(info.iAddressFamily, info.iSocketType, info.iProtocol, &info, 0, WSA_FLAG_OVERLAPPED);
+	SOCKET dup_fd = WSASocketW(info.iAddressFamily, info.iSocketType, info.iProtocol, &info, 0, WSA_FLAG_OVERLAPPED);
 	if (dup_fd == INVALID_SOCKET)
 	{
 		NetOs_MapError(WSAGetLastError());

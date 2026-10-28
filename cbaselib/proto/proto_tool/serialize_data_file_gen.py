@@ -1,7 +1,9 @@
 from serialize_data_parse import SerializeData
 from serialize_data_parse import SerializeDataType
+import re
 
-common_include = '#pragma once\n#include "net_header.h"' + '\n' 
+def QualType(t):
+    return re.sub(r'\bBytes\b', '::OI::Base::Bytes', t)
 
 class SerializeDataFileGen:
     def __init__(self, data: SerializeData):
@@ -29,7 +31,7 @@ class SerializeDataFileGen:
                 if(m.value):
                     str += r' = __VALUE__'
                 str += r', '
-                str = str.replace(r'__TYPE__',m.type)
+                str = str.replace(r'__TYPE__', QualType(m.type))
                 str = str.replace(r'__NAME__',m.name)
                 if(m.value):
                     str = str.replace(r'__VALUE__',m.value)
@@ -75,7 +77,7 @@ class SerializeDataFileGen:
         if(self.member_declare_list == ""):
             for m in self.data.members:
                 #" m.type m.name "
-                self.member_declare_list += m.type + r' ' + m.name + r';' + '\n    ' 
+                self.member_declare_list += QualType(m.type) + r' ' + m.name + r';' + '\n    ' 
         return self.member_declare_list        
              
     def DoReplace(self, file_data:str):
@@ -107,78 +109,18 @@ class SerializeDataFileGen:
         
         return file_data
         
-    def GenHeaderFile(self):
-        if(self.data.GetType() == SerializeDataType.PROTOCOL):
-            return self.GenProtocolHeaderFile()
-        if(self.data.GetType() == SerializeDataType.RPC):
-            return self.GenRpcHeaderFile()
-        return ""
     def GenDataFile(self):
-        if(self.data.GetType() == SerializeDataType.PROTOCOL):
-            return self.GenProtocolDataFile()
-        if(self.data.GetType() == SerializeDataType.RPC_DATA):
-            return self.GenRpcDataFile()
-        if(self.data.GetType() == SerializeDataType.RPC):
-            return self.GenRpcIncludeDataFile()
-        return ""   
+        # rpc 的请求和回复已经各是一个 rpcdata。不再另写一层类，也不把函数体 #include 进类里。
+        if(self.data.GetType() != SerializeDataType.RPC_DATA):
+            return ""
+        return self.GenRpcDataFile()
 
-    def GenRpcHeaderFile(self):
-        assert(self.data.GetType() == SerializeDataType.RPC)
-        file_data = ""
-        file_data += common_include
-        file_data += '''
-#include "rpc.h"
-#include "__req_data_type__"
-#include "__res_data_type__"     
-class __CLASS_NAME__ : public Rpc
-{
-public:
-    #include "__DATA_FILE_NAME__"
-    void DoRequest(SessionManager* mgr, sid_t sid)
-    {
-        //__REQ_TYPE__ * req = dynamic_cast<__REQ_TYPE__*>(_req);
-        //__RES_TYPE__ * res = dynamic_cast<__RES_TYPE__*>(_res);
-    }
-    void DoResponse(SessionManager* mgr, sid_t sid)
-    {
-        //__REQ_TYPE__ * req = dynamic_cast<__REQ_TYPE__*>(_req);
-        //__RES_TYPE__ * res = dynamic_cast<__RES_TYPE__*>(_res);
-    }
-    void OnTimeOut()
-    {
-        //__REQ_TYPE__ * req = dynamic_cast<__REQ_TYPE__*>(_req);
-    }
-};
-'''   
-        file_data = self.DoReplace(file_data)
-        return file_data
-
-    def GenRpcIncludeDataFile(self):
-        #TODO
-        assert(self.data.GetType() == SerializeDataType.RPC)
-        file_data = '''
-    __CLASS_NAME__ (RpcData* req, RpcData* res): Rpc( __PROTO_TYPE__ , req, res){}
-    __CLASS_NAME__ (const __CLASS_NAME__& that): Rpc(that){}
-    enum { __PROTO_TYPE__ = __PROTO_ID__, };
-    static proto_type_t RpcType() { return __PROTO_TYPE__; }
-    int TimeOut() { return __TIME_OUT__; }
-    virtual void SetReq(RpcData* req)
-    {
-        SAFE_DELETE(_req);
-        __REQ_TYPE__* t_req = dynamic_cast<__REQ_TYPE__*>(req->Clone());
-        assert(_req = t_req);
-    }   
-    Protocol* Clone() { return new __CLASS_NAME__(*this); }        
-'''
-
-        file_data = self.DoReplace(file_data)
-        return file_data
-           
     def GenRpcDataFile(self):
         assert(self.data.GetType() == SerializeDataType.RPC_DATA)
         file_data = ""
         file_data += '#pragma once\n#include "serialize.h"\n'
         file_data += '''
+namespace OI { namespace Rpc {
 class __CLASS_NAME__ : public RpcData
 {
 public:
@@ -188,59 +130,20 @@ public:
     {
         __MEMBER_INIT_LIST__
     }
-    virtual BytesStream& serialize(BytesStream& os) const
+    virtual ::OI::Base::BytesStream& serialize(::OI::Base::BytesStream& os) const
     {
 __PB_SERIALIZE__        return os;
     }
-    virtual BytesStream& deserialize(BytesStream& os)
+    virtual ::OI::Base::BytesStream& deserialize(::OI::Base::BytesStream& os)
     {
 __PB_DESERIALIZE__    }
     virtual RpcData* Clone() { return new __CLASS_NAME__(*this); }
 };
+}}
 '''        
         file_data = self.DoReplace(file_data)
         return file_data
 
-    def GenProtocolHeaderFile(self):
-        assert(self.data.GetType() == SerializeDataType.PROTOCOL)
-        file_data = common_include
-        file_data += '''
-class __CLASS_NAME__ : public Protocol
-{
-public:
-    #include "__DATA_FILE_NAME__"
-    virtual void Handle( SessionManager* mgr, sid_t sid)
-    {
-        //TODO Handle
-    }
-};
-'''
-
-    
-        file_data = self.DoReplace(file_data)
-        return file_data
-
-    def GenProtocolDataFile(self):
-        file_data = '''
-    __MEMBER_DECLARE__ 
-    explicit __CLASS_NAME__ (): Protocol( __PROTO_TYPE__ ){}
-    __CLASS_NAME__ ( __MEMBER_INIT_PARAM_LIST__ ) : Protocol( __PROTO_TYPE__ )
-    { 
-        __MEMBER_INIT_LIST__ 
-    } 
-    enum { __PROTO_TYPE__ = __PROTO_ID__, };
-    virtual BytesStream& serialize(BytesStream& os) const 
-    { 
-__PB_SERIALIZE__        return os; 
-    } 
-    virtual BytesStream& deserialize(BytesStream& os) 
-    { 
-__PB_DESERIALIZE__    } 
-    virtual Protocol* Clone()	{  return new __CLASS_NAME__(*this);  }
-'''
-        file_data = self.DoReplace(file_data)
-        return file_data    
-    
     def GenStubFile(self):
         file_data = ""
         if(self.data.GetType() == SerializeDataType.PROTOCOL):

@@ -13,14 +13,14 @@ class LogFileInstance
 	LOG_LEVEL	_lv;
 
 	//文件锁
-	Mutex		_file_locker;
+	OI::Thread::Mutex		_file_locker;
 	//日志文件handle
 	FILE*		_fp[2];
 
-	typedef std::list<Bytes> LogCacheList;
+	typedef std::list<OI::Base::Bytes> LogCacheList;
 	//缓存锁
-	Mutex			_cache_locker;
-	MutexCond		_cache_cond;
+	OI::Thread::Mutex			_cache_locker;
+	OI::Thread::MutexCond		_cache_cond;
 
 	//当前lv的日志缓存
 	LogCacheList	_logs;
@@ -39,7 +39,7 @@ public:
 	void OnCreateNewFile(FILE* new_file);
 	void StartWriteThread();
 	// 会把 log 的内容移走
-	void AddLog(Bytes& log);
+	void AddLog(OI::Base::Bytes& log);
 	void WriteLog();
 	bool IsWorking() { return _working; }
 	void Dump();

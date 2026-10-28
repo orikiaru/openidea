@@ -78,7 +78,7 @@ bool AcceptChannel::StartTcpAccept(SessionManager* pMgr, bool async)
 	if (s.IsAsync())
 	{
 		AcceptChannel* pChannel = new AcceptChannel(s, pMgr);
-		Poll::GetInstance()->IOEventRegister(pChannel, true, true);
+		Poll::GetInstance().IOEventRegister(pChannel, true, true);
 	}
 	else
 	{

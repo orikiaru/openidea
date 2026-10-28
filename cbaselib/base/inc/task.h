@@ -2,6 +2,7 @@
 
 #include <list>
 #include <utility>
+namespace OI { namespace Thread {
 enum PRIO_ENUM
 {
 	PRIO_NORMAL,	//正常排队,无序,复数线程池取到就处理,先取可能后处理,多线程处理时序无法保证
@@ -34,3 +35,4 @@ public:
 };
 
 typedef std::list<Task*> TASK_LIST;
+}}

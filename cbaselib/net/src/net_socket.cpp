@@ -27,7 +27,8 @@ bool NetAddr::Init(SessionManager* pMgr)
 			sockaddr_in addr;
 			addr.sin_family = AF_INET;
 			addr.sin_port = htons(atoi(port.c_str()));
-			addr.sin_addr.s_addr = inet_addr(ip.c_str());
+			addr.sin_addr.s_addr = INADDR_NONE;
+			inet_pton(AF_INET, ip.c_str(), &addr.sin_addr);
 			_addr_data.Append(&addr, sizeof(addr));
 		}break;
 		//TODO AF_INET6

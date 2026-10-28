@@ -16,7 +16,7 @@ bool NetChannel::TryClose()
 {
 	if (_p_session->IsClosed())
 	{
-		Poll::GetInstance()->IOEventUnRegister(this);
+		Poll::GetInstance().IOEventUnRegister(this);
 		Destory();
 		return true;
 	}

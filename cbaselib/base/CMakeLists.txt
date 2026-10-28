@@ -10,8 +10,7 @@ set(LIBSRC
 	src/threadpool.cpp 
 	src/bytes_stream.cpp
 	src/config.cpp
-	src/timer_task.cpp
-	src/file_helper.cpp
+	src/file_path.cpp
 	)
 
 add_library(${LIBRARY} STATIC ${LIBSRC})

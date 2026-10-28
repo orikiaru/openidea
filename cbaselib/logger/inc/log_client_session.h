@@ -7,7 +7,7 @@ class LogClientSession : public NetSession
 public:
 	LogClientSession(SessionManager* pMgr) :NetSession(pMgr) {}
 	virtual ~LogClientSession() {}
-	virtual void Send(const Bytes& bytes);
+	virtual void Send(const OI::Base::Bytes& bytes);
 	virtual void SendProtocol(const Protocol* proto)
 	{
 		(void)proto;

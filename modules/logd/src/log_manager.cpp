@@ -1,12 +1,10 @@
 #include "log_manager.h"
 #include <string.h>
 #include "base_timer_helper.h"
-#include "file_helper.h"
+#include "file_path.h"
 #include "log_file_instance.h"
 #include "config.h"
 
-
-LogManager LogManager::inst;
 bool LogManager::Init()
 {
 	_log_title_index = 0;
@@ -33,7 +31,7 @@ bool LogManager::Init()
 	StartLogInstanceWork();
 
 	//每秒触发一定定时器
-	BaseTimerManager::GetInstance()->AddTimer(this, 1000);
+	BaseTimerManager::GetInstance().AddTimer(this, 1000);
 
 
 
@@ -57,7 +55,7 @@ bool LogManager::OnTimer()
 	int next_index = (this->_log_title_index + 1) / LOG_TITLE_LEVEL_SIZE;
 	char* log_title_str = GetLogTitle(next_index);
 	//只需要时分秒.
-	int len = strftime(log_title_str, LOG_TITLE_LEVEL_SIZE - 1, "%T ", &_now_tm);
+	size_t len = strftime(log_title_str, LOG_TITLE_LEVEL_SIZE - 1, "%T ", &_now_tm);
 	assert(len < LOG_TITLE_LEVEL_SIZE - 1);
 	log_title_str[len] = '\0';	//字符串结尾
 	_log_title_index = next_index;
@@ -159,10 +157,10 @@ bool LogManager::CheckAndCreateRootPath()
 	assert(len < sizeof(cur_path) - 1);
 	(void)len;
 	_cur_log_path = _log_root_path + "/" + cur_path;
-	return FileHelper::MakeDir(_cur_log_path);
+	return OI::File::MakeDirs(_cur_log_path);
 }
 
-void LogManager::WriteLog(LOG_LEVEL lv, Bytes& b)
+void LogManager::WriteLog(LOG_LEVEL lv, OI::Base::Bytes& b)
 {
 	_log_file_map[lv]->AddLog(b);
 }

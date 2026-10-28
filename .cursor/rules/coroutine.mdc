@@ -1,11 +1,13 @@
 ---
-description: 协程、Task、StartTask、co_await、yield、让出、挂起、调度。写或改协程前先读 docs/coroutine.md，对照标准用例，不要另起挂起或切栈的写法。
+description: 协程、Task、StartTask、co_await、yield、让出、挂起、调度、睡眠、sleep、sleep_for。写或改协程前先读 docs/coroutine.md，对照标准用例，不要另起挂起或切栈的写法。空等先对上 log_mgr 的 Pump，不要用 sleep。
 alwaysApply: false
 ---
 
 # 协程
 
 先读 `docs/coroutine.md`。要结果用 `co_await`，不等用 `coro::StartTask`，让时间用 `co_await coro::yield(毫秒)`。`yield(0)` 只回队列，这一轮不再跑它。
+
+应用层空等必须先对上 `modules/ipcclient/src/log_mgr.cpp` 的 `Pump`：`co_await coro::yield(毫秒)`。对上了再写。不要用 `sleep`、`sleep_for`、`Sleep`、`usleep`。单线程睡下去，poll 停转。
 
 `co_await` 一条还没停过的 `Task` 会在调用方栈上往下 `resume`。不要在第一次挂起前层层 `co_await` 子任务。没有 `YieldToPool`、`Park`、`Wake`。
 

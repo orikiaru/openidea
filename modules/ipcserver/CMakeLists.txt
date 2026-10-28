@@ -13,7 +13,6 @@ add_executable(ipcserver ${MODULE_SRCS})
 target_include_directories(ipcserver
     PUBLIC
 		inc
-		protocol
 		${CMAKE_SOURCE_DIR}/modules/include
 )
 

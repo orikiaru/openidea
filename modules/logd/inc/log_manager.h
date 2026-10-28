@@ -1,11 +1,14 @@
 #pragma once
 #include <map>
 #include "base_header.h"
+#include "singleton.h"
 
 class LogFileInstance;
 
 class LogManager : public BaseTimer
 {
+	DECLARE_SINGLETON(LogManager)
+	LogManager() = default;
 	//root_path + year_month_day
 	//12:09:08 service_type-service_id:
 	enum
@@ -29,16 +32,12 @@ class LogManager : public BaseTimer
 	std::string _log_root_path;		//日志根目录
 	std::string _cur_log_path;		//当天的日志目录 _log_root_path/year_month_day
 
-	//单例对象
-	static LogManager inst;
 public:
-	LogManager() {}
 	~LogManager() {}
 	bool Init();
-	static LogManager& GetInstance() { return inst;  }
 
 	// b 的内容会被移进写盘队列
-	void WriteLog(LOG_LEVEL lv, Bytes& b);
+	void WriteLog(LOG_LEVEL lv, OI::Base::Bytes& b);
 
 private:
 	friend class LogFileInstance;

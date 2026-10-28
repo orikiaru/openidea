@@ -1,5 +1,6 @@
 #pragma once
 #include "session_manager.h"
+#include "singleton.h"
 #include <string>
 #include <vector>
 
@@ -16,16 +17,15 @@ struct RedisLink
 // 单线程进程。上游 hiredis 连接数走 Redis.connections。一条客户端会话固定绑一条，回包顺序才不会乱。
 class RedisServer : public SessionManager
 {
-	static RedisServer inst;
+	DECLARE_SINGLETON(RedisServer)
+	RedisServer();
 	std::string _redis_ip;
 	std::string _redis_port;
 	int _connections;
 	int _next;
 	std::vector<RedisLink> _links;
 public:
-	RedisServer();
 	virtual ~RedisServer();
-	static RedisServer& GetInstance() { return inst; }
 	virtual const std::string GetIDString() { return "RedisServer"; }
 	virtual bool Init();
 	// cmd 是一条完整的 RESP 命令，原样转给上游

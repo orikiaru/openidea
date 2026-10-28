@@ -3,6 +3,7 @@
 #include <string.h>
 #include "serialize.h"
 
+namespace OI { namespace Base {
 //暂不处理大小端问题，默认小端
 /*
 	glibc 2.9
@@ -65,13 +66,13 @@ BytesStream& BytesStream::operator<< (const BytesStream& a)
 	return *this;
 }
 
-BytesStream& BytesStream::operator<< (const Serialize& a)
+BytesStream& BytesStream::operator<< (const ::OI::Rpc::Serialize& a)
 {
 	a.serialize(*this);
 	return *this;
 }
 
-BytesStream& BytesStream::operator>> (Serialize& a)
+BytesStream& BytesStream::operator>> (::OI::Rpc::Serialize& a)
 {
 	a.deserialize(*this);
 	return *this;
@@ -158,7 +159,7 @@ BytesStream& BytesStream::WritePb(uint32_t seq, const Bytes& value)
 	return WritePbRaw(seq, data, size);
 }
 
-BytesStream& BytesStream::WritePb(uint32_t seq, const Serialize& value)
+BytesStream& BytesStream::WritePb(uint32_t seq, const ::OI::Rpc::Serialize& value)
 {
 	BytesStream inner;
 	value.serialize(inner);
@@ -206,7 +207,7 @@ void BytesStream::ReadPb(uint32_t size, Bytes& value)
 	_cur_pos += size;
 }
 
-void BytesStream::ReadPb(uint32_t size, Serialize& value)
+void BytesStream::ReadPb(uint32_t size, ::OI::Rpc::Serialize& value)
 {
 	if (RemainSize() < size)
 	{
@@ -224,3 +225,4 @@ void BytesStream::ReadPb(uint32_t size, Serialize& value)
 	}
 	_cur_pos += size;
 }
+}}

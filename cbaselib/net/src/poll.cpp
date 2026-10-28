@@ -17,7 +17,6 @@
 #include <uv.h>
 #include "poll.h"
 #include "channel.h"
-#include "task.h"
 #include "threadpool.h"
 #include "header.h"
 #include "net_os.h"
@@ -55,7 +54,7 @@ struct IoOp
 static uv_loop_t g_loop;
 static uv_async_t g_async;
 static uv_timer_t g_tick_timer;
-static Mutex g_op_lock;
+static OI::Thread::Mutex g_op_lock;
 static std::deque<IoOp> g_ops;
 static bool g_loop_ready = false;
 static std::atomic<bool> g_poll_stop(false);
@@ -81,24 +80,6 @@ static void StartTickOnLoop()
 	uv_timer_start(&g_tick_timer, OnUvTick, g_tick_ms, g_tick_ms);
 	g_tick_armed = true;
 }
-
-class PollInnerTask
-{
-	Task* _p_task;
-	bool  _once;
-public:
-	PollInnerTask(Task* pTask, bool Once) :_p_task(pTask), _once(Once) {}
-	bool Exec()
-	{
-		assert(_p_task);
-		_p_task->Exec();
-		return _once;
-	}
-	~PollInnerTask()
-	{
-		SAFE_DELETE(_p_task);
-	}
-};
 
 static int MaskToUv(int mask)
 {
@@ -212,7 +193,7 @@ static void DrainOps()
 	{
 		IoOp op;
 		{
-			MutexGuard guard(g_op_lock);
+			OI::Thread::MutexGuard guard(g_op_lock);
 			if (g_ops.empty())
 			{
 				return;
@@ -231,7 +212,7 @@ static void OnAsync(uv_async_t*)
 
 static void PostOp(const IoOp& op)
 {
-	MutexGuard guard(g_op_lock);
+	OI::Thread::MutexGuard guard(g_op_lock);
 	g_ops.push_back(op);
 	if (g_loop_ready)
 	{
@@ -244,14 +225,12 @@ static void PrepareLoop()
 	uv_loop_init(&g_loop);
 	uv_async_init(&g_loop, &g_async, OnAsync);
 	{
-		MutexGuard guard(g_op_lock);
+		OI::Thread::MutexGuard guard(g_op_lock);
 		g_loop_ready = true;
 	}
 	DrainOps();
 	StartTickOnLoop();
 }
-
-Poll Poll::inst;
 
 Poll::~Poll()
 {
@@ -261,15 +240,13 @@ Poll::~Poll()
 
 void* Poll::StartThreadPollWait(void*)
 {
-	GetInstance()->_loop_thread = std::this_thread::get_id();
-	ThreadPool::InitIgnoreSig();
+	GetInstance()._loop_thread = std::this_thread::get_id();
+	OI::Thread::ThreadPool::InitIgnoreSig();
 	NetOs_Startup();
 	PrepareLoop();
 	while (!g_poll_stop.load())
 	{
-		Poll::GetInstance()->BeforePoll();
 		uv_run(&g_loop, UV_RUN_ONCE);
-		Poll::GetInstance()->AfterPoll();
 	}
 	return NULL;
 }
@@ -308,7 +285,7 @@ bool Poll::Init()
 	{
 		bool ready = false;
 		{
-			MutexGuard guard(g_op_lock);
+			OI::Thread::MutexGuard guard(g_op_lock);
 			ready = g_loop_ready;
 		}
 		if (ready)
@@ -444,56 +421,10 @@ void Poll::IOEventUnRegister(Channel* p)
 	PostOp(op);
 }
 
-void Poll::AddPollTask(Task* pTask, PollTaskPosEnum pos, bool once)
-{
-	if (pos == PollTaskPosEnum::POLL_AFTER_TASK)
-	{
-		_before_tasks.emplace_back(new PollInnerTask(pTask, once));
-	}
-	else
-	{
-		_after_tasks.emplace_back(new PollInnerTask(pTask, once));
-	}
-}
-
-void Poll::BeforePoll()
-{
-	for (PollTaskList::iterator it = _before_tasks.begin(); it != _before_tasks.end();)
-	{
-		bool once = (*it)->Exec();
-		if (once)
-		{
-			it = _before_tasks.erase(it);
-		}
-		else
-		{
-			++it;
-		}
-	}
-}
-
-void Poll::AfterPoll()
-{
-	for (PollTaskList::iterator it = _after_tasks.begin(); it != _after_tasks.end();)
-	{
-		bool once = (*it)->Exec();
-		if (once)
-		{
-			it = _after_tasks.erase(it);
-		}
-		else
-		{
-			++it;
-		}
-	}
-}
-
 void Poll::PollWait(int wait_ms)
 {
 #ifdef _SINGLE_THREAD_
-	BeforePoll();
 	uv_run(&g_loop, wait_ms == 0 ? UV_RUN_NOWAIT : UV_RUN_ONCE);
-	AfterPoll();
 #else
 	(void)wait_ms;
 #endif

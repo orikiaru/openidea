@@ -2,15 +2,15 @@
 #include "protocol.h"
 #include "rpc.h"
 #include "net_header.h"
+#include "singleton.h"
 
 class IpcServer : public ProtoSessionManager
 {
-	static IpcServer inst;
+	DECLARE_SINGLETON(IpcServer)
+	IpcServer() {}
 public:
-	IpcServer(){}
 	virtual ~IpcServer();
 	bool Init();
-	static IpcServer& GetInstance() { return inst; }
 	virtual const std::string GetIDString();
 private:
 	virtual void OnAddSession(Session* pSession);

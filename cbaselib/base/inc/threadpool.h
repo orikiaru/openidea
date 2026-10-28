@@ -11,11 +11,15 @@
 #include <type_traits>
 #include <utility>
 #include "config.h"
+#include "singleton.h"
 #include "task.h"
 
+namespace OI { namespace Thread {
 typedef std::map<int, Task*> SIG_HANDLE_MAP;
 class ThreadPool
 {
+	DECLARE_SINGLETON(ThreadPool)
+	ThreadPool() = default;
 public:
 	struct ThreadData
 	{
@@ -42,9 +46,7 @@ public:
 	std::mutex _stop_mu;
 	std::condition_variable _stop_cond;
 public:
-	static ThreadPool* GetInstance() { static ThreadPool inst; return &inst;	}
 	bool Init();
-	bool AddTask(Task* pTask);
 	// 多线程把协程句柄放进运行队列并叫醒一个工人。不分配 CoroTask。
 	void PostCoroutine(std::coroutine_handle<> handle);
 	template<typename F>
@@ -59,7 +61,6 @@ public:
 	void RequestStop(int code);
 	bool Stopping() const { return _stop.load(); }
 	int ExitCode() const { return _exit_code; }
-	void AddSigHandleTask(int sig, Task* pTask);
 	void OnSignal(int sig);
 	void SetDrain(bool (*fn)());
 	// 单线程这一轮没跑到、但已经挂进协程队列的。yield(0) 靠它留到下一轮。
@@ -71,10 +72,11 @@ public:
 	static void InitIgnoreSig();
 	static void InitUnIgnoreSig(int sig);
 private:
+	bool AddTask(Task* pTask);
+	void AddSigHandleTask(int sig, Task* pTask);
 	void SingleThreadStartWork();
 	void MultiThreadStartWork();
 };
-
-
+}}
 
 #endif

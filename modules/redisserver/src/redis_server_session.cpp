@@ -114,9 +114,9 @@ RedisServerSession::~RedisServerSession()
 {
 }
 
-void RedisServerSession::Send(const Bytes& bytes)
+void RedisServerSession::Send(const OI::Base::Bytes& bytes)
 {
-	MutexGuard lock(_locker);
+	OI::Thread::MutexGuard lock(_locker);
 	_obuff.Append(bytes);
 	AllowSend();
 }

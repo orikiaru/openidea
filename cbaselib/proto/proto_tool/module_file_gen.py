@@ -239,7 +239,6 @@ add_executable(__MODULE_NAME_LOWER__ ${MODULE_SRCS})
 target_include_directories(__MODULE_NAME_LOWER__
     PUBLIC
 		inc
-		protocol
 )
 
 set(SINGLE_THREAD TRUE)

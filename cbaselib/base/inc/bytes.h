@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <string>
 
+namespace OI { namespace Base {
 // 连续字节缓冲。
 // 容量和有效长度分开：Begin() 在 [0, Captity()) 内可写，Size() 才是有效数据。
 // 这样 read/aio 可以先 Reserve，再往 Begin() 里写，写完 Commit。
@@ -67,3 +68,4 @@ public:
 	void Swap(Bytes& other);
 	void Clear();
 };
+}}

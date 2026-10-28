@@ -18,12 +18,6 @@ HoldMgr::HoldMgr()
 {
 }
 
-HoldMgr& HoldMgr::Get()
-{
-	static HoldMgr inst;
-	return inst;
-}
-
 void HoldMgr::Load()
 {
 	TryGetConfig("Test.hold", _on);
@@ -37,9 +31,9 @@ void HoldMgr::Start(sid_t sid)
 		return;
 	}
 	_sid = sid;
-	GetTestBoard().Arm();
+	TestBoard::GetInstance().Arm();
 	coro::StartTask([](coro::Token) {
-		return HoldMgr::Get().Pump();
+		return HoldMgr::GetInstance().Pump();
 	});
 }
 
@@ -82,8 +76,8 @@ struct RaceBox
 
 static coro::Task RaceOne(sid_t sid, int index, int mark, int delay, int* rets, int* marks, std::atomic<int>* finished)
 {
-	HoldReq one;
-	HoldRes back;
+	OI::Rpc::HoldReq one;
+	OI::Rpc::HoldRes back;
 	one.delay_ms = delay;
 	one.mark = mark;
 	int code = co_await RpcCall(IpcClient::GetInstance(), sid, one, back, 10);
@@ -96,8 +90,8 @@ static coro::Task RaceOne(sid_t sid, int index, int mark, int delay, int* rets, 
 coro::Task HoldMgr::Pump()
 {
 	int bad = 0;
-	HoldReq req;
-	HoldRes res;
+	OI::Rpc::HoldReq req;
+	OI::Rpc::HoldRes res;
 
 	req.delay_ms = 0;
 	req.mark = 1;
@@ -193,7 +187,7 @@ coro::Task HoldMgr::Pump()
 			bad += 1;
 			printf("hold done bad=%d\n", bad);
 			fflush(stdout);
-			GetTestBoard().Done(1);
+			TestBoard::GetInstance().Done(1);
 			co_return;
 		}
 		co_await coro::yield(50);
@@ -271,6 +265,6 @@ coro::Task HoldMgr::Pump()
 
 	printf("hold done bad=%d\n", bad);
 	fflush(stdout);
-	GetTestBoard().Done(bad == 0 ? 0 : 1);
+	TestBoard::GetInstance().Done(bad == 0 ? 0 : 1);
 	co_return;
 }

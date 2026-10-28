@@ -21,7 +21,9 @@
 
 # 回声和日志要分开测
 
-测的是 `logd`、`ipcserver`、`ipcclient` 这三个进程。不要另写一个日志客户端。日志从 `ipcclient` 的 `LogMgr` 发出，回声从 `EchoMgr` 发出。开关在 `deploy/config/ipcclient.toml` 的 `[Test]`：`echo` 和 `log`。一次只开一个。
+`ipcclient` 里四个 Mgr 都要跑到：`EchoMgr`、`LogMgr`、`RedisMgr`、`HoldMgr`。开关在 `deploy/config/ipcclient.toml` 的 `[Test]`：`echo`、`log`、`redis`、`hold`。一次只开一个。单线程和多线程各跑一遍，缺一套不算测完。单线程和多线程指 `ipcclient` 和 `ipcserver`。`logd` 只能多线程。`redisserver` 按它自己的编译选项是单线程。
+
+测的是 `logd`、`ipcserver`、`ipcclient` 这三个进程。不要另写一个日志客户端。日志从 `LogMgr` 发出，回声从 `EchoMgr` 发出。
 
 产物是 Linux 程序，在 WSL 里编、在 WSL 里跑。构建目录是 `~/openidea-build-gcc13`，可执行文件在 `deploy/bin`。进程的当前目录必须是某层 `bin`，配置在同级的 `config`。`logd` 读 `../config/logd.toml`，另外两个读 `../config/<名字>.toml`。
 
@@ -33,7 +35,26 @@
 
 日志看日志服落盘的文件字节，不要只看客户端打印的 `enqueue_rate`。那个数是塞进发送缓冲的速度。端到端用文件字节除以从启动客户端到文件不再增长的时间。文件总量不要超过 10GB，超过 2GB 就停。测完删掉临时日志目录，并停掉这三个进程。
 
-Redis 也单独测。开关是 `[Test] redis`，和 echo、log 一次只开一个。先起本机 Redis（`maxmemory 1536mb`），再起 `redisserver`（等到 `redis server listen`，端口 16379），最后 `ipcclient`。客户端连的是 redisserver，不是 Redis。看退出码，以及 `redis integrity ok` 和 `redis stress` 那一行里 `bad=0`。测完停掉 `redisserver`。
+Redis 也单独测。开关是 `[Test] redis`。先起本机 Redis（`maxmemory 1536mb`），再起 `redisserver`（等到 `redis server listen`，端口 16379），最后 `ipcclient`。客户端连的是 redisserver，不是 Redis。看退出码，以及 `redis integrity ok` 和 `redis stress` 那一行里 `bad=0`。测完停掉 `redisserver`。
+
+`HoldMgr` 的开关是 `[Test] hold`。要同时起 `ipcserver` 和 `redisserver`。看退出码，以及 `hold done bad=0`。
+
+# 名字空间
+
+框架代码按功能放进 `OI`，不按目录名堆在一起。模块里的业务类先不放进去。
+
+| 名字空间 | 放什么 |
+| --- | --- |
+| `OI::Base` | 字节缓冲、配置、单例 |
+| `OI::File` | 路径 |
+| `OI::Thread` | 线程池、任务、锁 |
+| `OI::Rpc` | 序列化基类，以及生成出来的 rpcdata |
+
+头文件名也要跟着功能走，写成 `oi_rpc.h`、`oi_file.h`、`oi_thread.h` 这种。现在还是旧文件名，改名字空间时不要漏掉这一步。
+
+# 应用层不要睡线程
+
+应用层要空等，先打开 `docs/coroutine.md` 和 `modules/ipcclient/src/log_mgr.cpp` 的 `Pump`，确认写法是 `co_await coro::yield(毫秒)`，对上了再写。不要换成 `sleep`、`sleep_for`、`Sleep`、`usleep`。单线程只有一条线程，睡下去 poll 停转。
 
 # 关键词对上文档
 
@@ -41,10 +62,11 @@ Redis 也单独测。开关是 `[Test] redis`，和 echo、log 一次只开一�
 
 | 关键词 | 文档 | 标准用例 |
 | --- | --- | --- |
-| 协程、Task、StartTask、co_await、yield、让出、挂起 | `docs/coroutine.md` | `modules/ipcserver/src/ipcserver.cpp` 的 `HandleRpc`；`modules/ipcclient/src/echo_mgr.cpp` 的 `StartTask` |
+| 协程、Task、StartTask、co_await、yield、让出、挂起、睡眠、sleep、sleep_for | `docs/coroutine.md` | `modules/ipcserver/src/ipcserver.cpp` 的 `HandleRpc`；`modules/ipcclient/src/echo_mgr.cpp` 的 `StartTask`；空等用 `modules/ipcclient/src/log_mgr.cpp` 的 `Pump` 里 `co_await coro::yield` |
 | RPC、RpcCall、HandleRpc、回包、调用号 | `docs/coroutine.md` 的服务端和客户端 | 同上，推迟回包用同文件的 `Hold` |
 | Redis、redisserver、RESP | `docs/cbaselib.md` 的 redis 段 | `modules/ipcclient/src/redis_mgr.cpp` 的 `Check` |
 | 定时器、时间轮、AddTimer | `docs/timer.md` | `Hold` 里的 `co_await coro::yield` |
 | 协议、proto.xml、rpcdata、模块 | `docs/module.md` | `modules/xmlconfig/proto.xml` 的 `AllEcho`、`Hold` |
 | 端口、复用、bind、TIME_WAIT、监听 | `docs/cbaselib.md` 的 net 段 | `cbaselib/port/net_os.cpp` 的 `NetOs_Bind` |
+| Web、HTTP、JSON、urlencode、二进制 body | `docs/module.md` 的 Web 段 | `modules/webserver` 的三个路径；`modules/webclient` 的 `Run` |
 

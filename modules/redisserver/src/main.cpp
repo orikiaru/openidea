@@ -7,15 +7,15 @@ int main(int argc, char* argv[])
 {
 	(void)argc;
 	(void)argv;
-	if (!Config::GlobalMutableConfig().Parse("../config/redisserver.toml"))
+	if (!OI::Base::Config::GlobalMutableConfig().Parse("../config/redisserver.toml"))
 	{
 		printf("ParseConfigError\n");
 		return -2;
 	}
 
-	ThreadPool::GetInstance()->Init();
-	BaseTimerManager::GetInstance()->Init();
-	Poll::GetInstance()->Init();
+	OI::Thread::ThreadPool::GetInstance().Init();
+	BaseTimerManager::GetInstance().Init();
+	Poll::GetInstance().Init();
 	Log::Init();
 
 	if (!RedisServer::GetInstance().Init())
@@ -31,6 +31,6 @@ int main(int argc, char* argv[])
 	printf("redis server listen\n");
 	fflush(stdout);
 
-	ThreadPool::GetInstance()->StartWork();
+	OI::Thread::ThreadPool::GetInstance().StartWork();
 	return 0;
 }

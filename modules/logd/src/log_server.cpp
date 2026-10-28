@@ -1,8 +1,6 @@
 #include "log_server.h"
 #include "logger.h"
 
-LogServer LogServer::inst;
-
 LogServer::~LogServer()
 {
 

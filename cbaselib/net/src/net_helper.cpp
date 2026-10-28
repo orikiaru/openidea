@@ -11,6 +11,7 @@
 #include "logger.h"
 #include "net_socket.h"
 #include "connect_channel.h"
+#include "net_os.h"
 
 
 bool NetHelper::CreateSocket(NetSocket& net_socket, SessionManager* pMgr, bool async)
@@ -19,7 +20,7 @@ bool NetHelper::CreateSocket(NetSocket& net_socket, SessionManager* pMgr, bool a
 	net_socket_t sfd = NetOs_CreateTcp(async);
 	if (sfd == INVALID_SOCKET_ID)
 	{
-		LOG_ERROR("NetHelper::CreateSocket id=%s, err=%s", pMgr->GetIDString().c_str(), strerror(errno));
+		LOG_ERROR("NetHelper::CreateSocket id=%s, err=%s", pMgr->GetIDString().c_str(), NetOs_StrError(errno));
 		return false;
 	}
 	if (!net_socket.Init(sfd, pMgr))
@@ -45,7 +46,7 @@ bool NetHelper::SocketBind(NetSocket& sid, SessionManager* pMgr)
 	int ret = NetOs_Bind(sid.GetSocket(), sid.GetAddr().NetAttrPtr(), sid.GetAddr().NetAttrLen());
 	if (ret != 0)
 	{
-		LOG_TRACE("NetHelper::SocketBind error=%s, SessionManager=%s", strerror(errno), pMgr->GetIDString().c_str());
+		LOG_TRACE("NetHelper::SocketBind error=%s, SessionManager=%s", NetOs_StrError(errno), pMgr->GetIDString().c_str());
 		return false;
 	}
 	sid.SetBind();
@@ -59,11 +60,11 @@ bool NetHelper::SocketListen(NetSocket& sid, SessionManager* pMgr)
 		return false;
 	}
 	int listen_count = 10;
-	//TODO Config
+	//TODO OI::Base::Config
 	int ret = NetOs_Listen(sid.GetSocket(), listen_count);
 	if (ret != 0)
 	{
-		LOG_TRACE("NetHelper::SocketListen error=%s, SessionManager=%s", strerror(errno), pMgr->GetIDString().c_str());
+		LOG_TRACE("NetHelper::SocketListen error=%s, SessionManager=%s", NetOs_StrError(errno), pMgr->GetIDString().c_str());
 		return false;
 	}
 	sid.SetListen();
@@ -100,7 +101,7 @@ bool NetHelper::SocketConnect(NetSocket& sid, SessionManager* pMgr)
 	if (ret == -1 && errno == EINPROGRESS)
 	{
 		ConnectChannel* pChannel = new ConnectChannel(sid, pMgr);
-		Poll::GetInstance()->IOEventRegister(pChannel, false, true);
+		Poll::GetInstance().IOEventRegister(pChannel, false, true);
 		succ = true;
 	}
 	else if (ret == 0)
@@ -111,7 +112,7 @@ bool NetHelper::SocketConnect(NetSocket& sid, SessionManager* pMgr)
 
 	if (!succ)
 	{
-		LOG_ERROR("NetHelper::SocketConnect id=%s, err=%s", pMgr->GetIDString().c_str(), strerror(errno));
+		LOG_ERROR("NetHelper::SocketConnect id=%s, err=%s", pMgr->GetIDString().c_str(), NetOs_StrError(errno));
 		return false;
 	}
 
@@ -153,7 +154,7 @@ int NetHelper::SocketAcceptOne(NetSocket& sid, SessionManager* pMgr)
 		{
 			continue;
 		}
-		LOG_ERROR("NetHelper::SocketAccept error id=%s, error=%s", pMgr->GetIDString().c_str(), strerror(errno));
+		LOG_ERROR("NetHelper::SocketAccept error id=%s, error=%s", pMgr->GetIDString().c_str(), NetOs_StrError(errno));
 		accpet_count = -1;
 		break;
 	}

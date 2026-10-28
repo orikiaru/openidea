@@ -2,7 +2,6 @@
 #include "config.h"
 #include "log_frame.h"
 #include "string.h"
-LogClient LogClient::inst;
 
 LogClient::~LogClient()
 {
@@ -41,7 +40,7 @@ bool LogClient::SendLog(int level, const char* text, size_t text_len)
 	{
 		return false;
 	}
-	Bytes frame;
+	OI::Base::Bytes frame;
 	AppendLogFrame(frame, level, text, text_len);
 	// 进程刚起、日志服还没连上时的日志先攒着，别丢。
 	const size_t kMaxPending = 4 * 1024 * 1024;

@@ -5,6 +5,6 @@ class LogProtocol;
 class LogProtocolParser : public Parser<LogProtocol>
 {
 public:
-	virtual LogProtocol* DecodeProtocol(BytesStream& os);
-	virtual BytesStream EncodeProtocol(const LogProtocol* proto);
+	virtual LogProtocol* DecodeProtocol(OI::Base::BytesStream& os);
+	virtual OI::Base::BytesStream EncodeProtocol(const LogProtocol* proto);
 };

@@ -50,7 +50,7 @@ bool ConnectChannel::TryClose()
 {
 	if (IsClosed())
 	{
-		Poll::GetInstance()->IOEventUnRegister(this);
+		Poll::GetInstance().IOEventUnRegister(this);
 		delete this;
 		return true;
 	}
@@ -196,7 +196,7 @@ bool ConnectChannel::StartSslConnect(SessionManager* pMgr, bool async)
 		int err = SSL_get_error(ssl, ret);
 		if (err == SSL_ERROR_WANT_WRITE || err == SSL_ERROR_WANT_READ)
 		{
-			Poll::GetInstance()->IOEventRegister(new ConnectChannel(s, pMgr), true, true);
+			Poll::GetInstance().IOEventRegister(new ConnectChannel(s, pMgr), true, true);
 			return true;
 		}
 		else

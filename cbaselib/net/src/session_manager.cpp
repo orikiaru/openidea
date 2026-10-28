@@ -43,7 +43,7 @@ SESSION_TYPE SessionManager::GetSessionTypeByString(const std::string& type)
 
 SessionManager::~SessionManager()
 {
-	MutexGuard l(_locker);
+	OI::Thread::MutexGuard l(_locker);
 	for (SessionMap::iterator it = _session_map.begin(); it != _session_map.end(); ++it)
 	{
 		Session* pSession = it->second;
@@ -59,7 +59,7 @@ const std::string SessionManager::GetIDString()
 
 bool SessionManager::Send(sid_t sid, const Protocol* p)
 {
-	MutexGuard l(_locker);
+	OI::Thread::MutexGuard l(_locker);
 	SessionMap::iterator it = _session_map.find(sid);
 	if (it != _session_map.end())
 	{
@@ -69,9 +69,9 @@ bool SessionManager::Send(sid_t sid, const Protocol* p)
 	return false;
 }
 
-bool SessionManager::SendBytes(sid_t sid, const Bytes& data)
+bool SessionManager::SendBytes(sid_t sid, const OI::Base::Bytes& data)
 {
-	MutexGuard l(_locker);
+	OI::Thread::MutexGuard l(_locker);
 	SessionMap::iterator it = _session_map.find(sid);
 	if (it != _session_map.end())
 	{
@@ -83,13 +83,13 @@ bool SessionManager::SendBytes(sid_t sid, const Bytes& data)
 
 int SessionManager::BroadCast(const Protocol* p)
 {
-	MutexGuard l(_locker);
+	OI::Thread::MutexGuard l(_locker);
 	SessionMap::iterator it = _session_map.begin();
 	for (; it != _session_map.end(); ++it)
 	{
 		it->second->SendProtocol(p);
 	}
-	return _session_map.size();
+	return (int)_session_map.size();
 }
 
 void SessionManager::AddSession(Session* pSession)
@@ -97,7 +97,7 @@ void SessionManager::AddSession(Session* pSession)
 	int sid = 0;
 	{
 		{
-			MutexGuard l(_locker);
+			OI::Thread::MutexGuard l(_locker);
 			sid = ++_cur_session_id;
 			_session_map[sid] = pSession;
 			pSession->SetSessionID(sid);
@@ -126,7 +126,7 @@ void SessionManager::AddSession(net_socket_t new_fd)
 	if (pChannel)
 	{
 		pSession->SetChannel(pChannel);
-		Poll::GetInstance()->IOEventRegister(pChannel, true, false);
+		Poll::GetInstance().IOEventRegister(pChannel, true, false);
 		AddSession(pSession);
 	}
 	else
@@ -137,7 +137,7 @@ void SessionManager::AddSession(net_socket_t new_fd)
 
 void SessionManager::AbortSession()
 {
-	MutexGuard l(_locker);
+	OI::Thread::MutexGuard l(_locker);
 	++_cur_session_id;
 	OnConnectFailed();
 	OnAbortSession();
@@ -145,7 +145,7 @@ void SessionManager::AbortSession()
 
 void SessionManager::CloseSession(sid_t sid)
 {
-	MutexGuard l(_locker);
+	OI::Thread::MutexGuard l(_locker);
 	SessionMap::iterator it = _session_map.find(sid);
 	if (it != _session_map.end())
 	{
@@ -158,7 +158,7 @@ void SessionManager::CloseSession(sid_t sid)
 void SessionManager::DelSession(const Session* pSession)
 {
 	{
-		MutexGuard l(_locker);
+		OI::Thread::MutexGuard l(_locker);
 		SessionMap::iterator it = _session_map.find(pSession->GetSessionID());
 		assert(it == _session_map.end());
 	}

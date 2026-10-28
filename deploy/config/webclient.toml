@@ -1,0 +1,9 @@
+# webclient config
+[Service]
+name = "webclient"
+id = 1
+
+# 连的是 webserver，只走 HTTP。
+[WebClient]
+ip = "127.0.0.1"
+port = 18080

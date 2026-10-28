@@ -7,7 +7,7 @@ void TimerLevel::RunTick(BaseTimerManager* pMgr, bool run_timer)
 	assert(_offset >= 0 && _offset < _max_tick);
 	TimerList cur_list;
 	{
-		MutexGuard l(_locker);
+		OI::Thread::MutexGuard l(_locker);
 
 		cur_list.swap(_timer_tick_datas[_offset]);
 

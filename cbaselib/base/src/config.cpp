@@ -2,6 +2,7 @@
 #include "config.h"
 #include <iostream>
 
+namespace OI { namespace Base {
 Config::Config()
 {
 	_toml_config = cpptoml::make_table();
@@ -29,14 +30,4 @@ bool Config::Parse(const std::string& conf_file_name)
 	}
 	return true;
 }
-
-const Config& Config::GlobalConfig()
-{
-	return GlobalMutableConfig();
-}
-
-Config& Config::GlobalMutableConfig()
-{
-	static Config inst;
-	return inst;
-}
+}}

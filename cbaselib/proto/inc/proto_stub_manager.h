@@ -1,6 +1,7 @@
 #pragma once
 #include <map>
 #include <header.h>
+#include "singleton.h"
 
 class Protocol;
 class ProtoStubManager
@@ -22,11 +23,8 @@ public:
 //应用层自定义协议的存根管理器
 class ProtocolStubs : public ProtoStubManager
 {
+	DECLARE_SINGLETON(ProtocolStubs)
+	ProtocolStubs() {}
 public:
-	static ProtocolStubs& GetInstance()
-	{
-		//这里必须如此声明,因为构建存根的时候需要保证构造ProtocolStubs在前
-		static ProtocolStubs inst;
-		return inst;
-	}
+	// 第一次取实例时才构造，保证比静态注册存根更早。
 };

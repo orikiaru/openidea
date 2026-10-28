@@ -8,20 +8,20 @@
 int main(int argc, char* argv[])
 {
     //加载模块配置
-    if (!Config::GlobalMutableConfig().Parse("../config/logd.toml"))
+    if (!OI::Base::Config::GlobalMutableConfig().Parse("../config/logd.toml"))
 	{
 		printf("ParseConfigError\n");
 		return -2;
 	}
  
     //初始化线程池
-    ThreadPool::GetInstance()->Init();
+    OI::Thread::ThreadPool::GetInstance().Init();
     
     //初始化定时器
-    BaseTimerManager::GetInstance()->Init();
+    BaseTimerManager::GetInstance().Init();
     
     //初始化IO复用
-	Poll::GetInstance()->Init();
+	Poll::GetInstance().Init();
 
     //初始化日志服务
     Log::Init();
@@ -48,7 +48,7 @@ int main(int argc, char* argv[])
     
  
     //启动线程池,驱动进程逻辑
-    ThreadPool::GetInstance()->StartWork();
+    OI::Thread::ThreadPool::GetInstance().StartWork();
     
     //此处是走不到的.
     return 0;

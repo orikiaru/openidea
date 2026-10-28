@@ -5,6 +5,9 @@ set(CMAKE_VERBOSE_MAKEFILE ON)
 
 project(CPP_DEV)
 
+# 给 clangd 用。Ninja 配置后会在构建目录写出 compile_commands.json。
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON CACHE BOOL "Write compile_commands.json for clangd" FORCE)
+
 if(MSVC)
     add_compile_options(/W3)
     add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/std:c++20>)
@@ -65,6 +68,9 @@ set(LIBUV_BUILD_SHARED OFF CACHE BOOL "" FORCE)
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 add_subdirectory(${BASE_LIB_PATH}/3rd/libuv EXCLUDE_FROM_ALL)
 add_subdirectory(${BASE_LIB_PATH}/3rd/hiredis EXCLUDE_FROM_ALL)
+if(MSVC AND TARGET uv_a)
+	target_compile_options(uv_a PRIVATE /W0)
+endif()
 
 #通用头文件目录。放在 libuv 后面，避免 proto/inc/rpc.h 盖住 Windows 的 rpc.h。
 include_directories(
@@ -75,16 +81,20 @@ include_directories(
     ${BASE_LIB_PATH}/logger/inc
     ${BASE_LIB_PATH}/redis/inc
     ${BASE_LIB_PATH}/proto/inc
-    ${MODULES_PATH}/include
+	${MODULES_PATH}/include
+	${BASE_LIB_PATH}/port
+)
+include_directories(SYSTEM
 	${BASE_LIB_PATH}/3rd/cpptoml
 	${BASE_LIB_PATH}/3rd/libuv/include
 	${BASE_LIB_PATH}/3rd/hiredis
-	${BASE_LIB_PATH}/port
 )
 
 if(MSVC)
     include_directories(${BASE_LIB_PATH}/port/win)
     add_compile_options("/FI${BASE_LIB_PATH}/port/win/msvc_prefix.h")
+    # 三方头走 SYSTEM 目录，按外部头处理，不再报它们自己的警告。
+    add_compile_options(/external:W0)
 endif()
 
 #标准库依赖目录
@@ -119,7 +129,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${DEPOLY_PATH}/bin)
 set(LIBRARY_OUTPUT_PATH ${DEPOLY_PATH}/path)
 
 #增加编译模块。新模块由 xml 生成到 modules/<name>/CMakeLists.txt
-foreach(_mod logd ipcclient ipcserver redisserver)
+foreach(_mod logd ipcclient ipcserver redisserver webserver webclient)
     if(EXISTS ${MODULES_PATH}/${_mod}/CMakeLists.txt)
         add_subdirectory(${MODULES_PATH}/${_mod})
     endif()

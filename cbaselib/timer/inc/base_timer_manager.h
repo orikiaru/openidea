@@ -7,25 +7,38 @@
 #include <vector>
 #include <time.h>
 #include "base_timer_level.h"
-#include "timer_task.h"
+#include "threadpool.h"
 #include <assert.h>
 #include <string>
+#include "singleton.h"
 #include "spin_lock.h"
 #include <type_traits>
 #include <utility>
 
 typedef std::deque<TimerLevel> TimerLevelVector;
 
+// 到点后把 lambda 拷贝进线程池。lambda 是 ()，要用的数据自己捕获。
+template<typename F>
+class FnTimer : public BaseTimer
+{
+	F _fn;
+public:
+	explicit FnTimer(F fn) : _fn(std::move(fn)) {}
+	bool OnTimer()
+	{
+		F copied = _fn;
+		// 跟时间轮同一条有序队列，紧跟这次 Update。不丢到普通队列里排队。
+		OI::Thread::ThreadPool::GetInstance().AddTask(std::move(copied), OI::Thread::PRIO_QUEUE);
+		delete this;
+		return END_TIMER;
+	}
+};
+
 class BaseTimerManager
 {
-
-public:
+	DECLARE_SINGLETON(BaseTimerManager)
 	BaseTimerManager();
-	static BaseTimerManager* GetInstance()
-	{
-		static BaseTimerManager instance;
-		return &instance;
-	}
+public:
 	bool Init();
 	// libuv 定时器到点。只把 Update 丢进任务队列，不在 poll 回调里跑时间轮
 	void OnSignal();
@@ -58,7 +71,7 @@ public:
 
 	bool RemoveTimer(BaseTimer* pTimer)
 	{
-		MutexGuard lock(_wheel_mu);
+		OI::Thread::MutexGuard lock(_wheel_mu);
 		assert(pTimer->GetTimerLevel());
 		return pTimer->GetTimerLevel()->RemoveTimer(this, pTimer);
 	}
@@ -90,7 +103,7 @@ private:
 
 private:
 	friend class TimerLevel;
-	Mutex _wheel_mu;
+	OI::Thread::Mutex _wheel_mu;
 
 	// 已经执行完的最后一个 tick 的逻辑时间。不满一跳的毫秒留在和墙上时间的差里，下次补齐。
 	struct timeval		_last_tick_tv;

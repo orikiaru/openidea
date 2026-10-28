@@ -70,16 +70,18 @@ class GenFile:
         lines.append("#pragma once")
         lines.append("#include \"header.h\"")
         lines.append("template<typename T> struct RpcProtoId;")
+        lines.append("namespace OI { namespace Rpc {")
         for p in self.proto_parse.serialize_datas:
             if(p.GetType() != SerializeDataType.RPC):
                 continue
             lines.append("class %s;" % p.GetReq())
             lines.append("class %s;" % p.GetRes())
+        lines.append("}}")
         for p in self.proto_parse.serialize_datas:
             if(p.GetType() != SerializeDataType.RPC):
                 continue
-            lines.append("template<> struct RpcProtoId<%s> { static const proto_type_t value = %s; };" % (p.GetReq(), p.GetID()))
-            lines.append("template<> struct RpcProtoId<%s> { static const proto_type_t value = %s; };" % (p.GetRes(), p.GetResID()))
+            lines.append("template<> struct RpcProtoId<::OI::Rpc::%s> { static const proto_type_t value = %s; };" % (p.GetReq(), p.GetID()))
+            lines.append("template<> struct RpcProtoId<::OI::Rpc::%s> { static const proto_type_t value = %s; };" % (p.GetRes(), p.GetResID()))
         lines.append("")
         write_utf8(os.path.join(write_path, "rpc_ids.h"), "\n".join(lines) + "\n")
         return True

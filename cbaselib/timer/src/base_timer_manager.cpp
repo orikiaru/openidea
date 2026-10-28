@@ -9,13 +9,13 @@ static std::atomic<bool> g_tick_queued(false);
 static void AddMs(timeval& tv, int64_t ms)
 {
 	int64_t us = (int64_t)tv.tv_sec * 1000000 + (int64_t)tv.tv_usec + ms * 1000;
-	tv.tv_sec = (time_t)(us / 1000000);
-	tv.tv_usec = (suseconds_t)(us % 1000000);
+	tv.tv_sec = (decltype(tv.tv_sec))(us / 1000000);
+	tv.tv_usec = (decltype(tv.tv_usec))(us % 1000000);
 }
 
 static void OnLoopTick()
 {
-	BaseTimerManager::GetInstance()->OnSignal();
+	BaseTimerManager::GetInstance().OnSignal();
 }
 
 BaseTimerManager::BaseTimerManager()
@@ -43,7 +43,7 @@ bool BaseTimerManager::Init()
 	assert(timer_lv_count > 2 && "timer_lv_count Must be bigger than 2");
 
 	std::vector<int64_t> timer_lvs;
-	if (!Config::GlobalConfig().GetArrayAs("Timer.timer_lvs", timer_lvs))
+	if (!OI::Base::Config::GlobalConfig().GetArrayAs("Timer.timer_lvs", timer_lvs))
 	{
 		//没有就给一组默认数据,影响不大.
 		std::vector<int64_t> tmp;
@@ -58,12 +58,13 @@ bool BaseTimerManager::Init()
 	assert(timer_lvs[_timer_lv_count - 1] == 1 && "定时器最后一级一定是1");
 	assert(timer_lvs.size() == _timer_lv_count && "配置跟总数一定要对齐");
 
-	int lv_tick = 1;
+	uint32_t lv_tick = 1;
 	for (size_t i = 0; i < _timer_lv_count; ++i)
 	{
 		_timer_levels.emplace_back();
-		_timer_levels[i].Init(timer_lvs[i], lv_tick);
-		lv_tick *= timer_lvs[i];
+		uint32_t slots = (uint32_t)timer_lvs[i];
+		_timer_levels[i].Init(slots, lv_tick);
+		lv_tick *= slots;
 	}
 
 	_tick_offset_ms = offset_ms;
@@ -72,7 +73,7 @@ bool BaseTimerManager::Init()
 	_cur_time = time(NULL);
 	localtime_r(&_cur_time, &_cur_tm);
 	// Windows / Linux 都用 poll 循环上的 libuv timer 叫醒
-	Poll::GetInstance()->ArmTick(_tick_offset_ms, OnLoopTick);
+	Poll::GetInstance().ArmTick(_tick_offset_ms, OnLoopTick);
 	return true;
 }
 
@@ -83,20 +84,20 @@ void BaseTimerManager::OnSignal()
 	{
 		return;
 	}
-	ThreadPool::GetInstance()->AddTask([]() {
-		BaseTimerManager::GetInstance()->Update();
+	OI::Thread::ThreadPool::GetInstance().AddTask([]() {
+		BaseTimerManager::GetInstance().Update();
 		g_tick_queued.store(false);
-	}, PRIO_ENUM::PRIO_QUEUE);
+	}, OI::Thread::PRIO_ENUM::PRIO_QUEUE);
 }
 
 std::string BaseTimerManager::GenTraceLog()
 {
 	char buff[1024];
 	snprintf(buff, sizeof(buff) - 1, 
-		"BaseTimerManager::Update l_tick=[%8ld,%8ld] c_tick=[%8ld,%8ld] tick_num=[%8ld] offset=[%4d|%4d,%4d|%4d,%4d|%4d,%4d|%4d]",
-		_last_tick_tv.tv_sec, _last_tick_tv.tv_usec,
-		_cur_tv.tv_sec, _cur_tv.tv_usec,
-		_cur_tick,
+		"BaseTimerManager::Update l_tick=[%8lld,%8lld] c_tick=[%8lld,%8lld] tick_num=[%8lld] offset=[%4u|%4u,%4u|%4u,%4u|%4u,%4u|%4u]",
+		(long long)_last_tick_tv.tv_sec, (long long)_last_tick_tv.tv_usec,
+		(long long)_cur_tv.tv_sec, (long long)_cur_tv.tv_usec,
+		(long long)_cur_tick,
 		_timer_levels[0]._offset, _timer_levels[0]._max_tick,
 		_timer_levels[1]._offset, _timer_levels[1]._max_tick,
 		_timer_levels[2]._offset, _timer_levels[2]._max_tick,
@@ -107,7 +108,7 @@ std::string BaseTimerManager::GenTraceLog()
 
 void BaseTimerManager::Update()
 {
-	MutexGuard lock(_wheel_mu);
+	OI::Thread::MutexGuard lock(_wheel_mu);
 	gettimeofday(&_cur_tv, 0);
 
 	int64_t delta_us = (int64_t)_cur_tv.tv_sec - (int64_t)_last_tick_tv.tv_sec;
@@ -135,7 +136,7 @@ void BaseTimerManager::Update()
 
 void BaseTimerManager::AddTimer(BaseTimer* pTimer, int millisecond)
 {
-	MutexGuard lock(_wheel_mu);
+	OI::Thread::MutexGuard lock(_wheel_mu);
 	pTimer->InitData(this, millisecond, TicksFromWall(millisecond));
 	add_timer(pTimer);
 }

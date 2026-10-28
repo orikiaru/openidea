@@ -14,7 +14,7 @@ cmake 调用 `cbaselib/proto/proto_tool/main.py`，参数是这三个 xml、`mod
 
 ## 什么会重写
 
-`modules/include` 里的序列化头和 `rpc_ids.h` 每次 cmake 都重写。改这些文件无效。
+`modules/include` 里的序列化头和 `rpc_ids.h` 每次 cmake 都重写。改这些文件无效。这些 rpcdata 在 `OI::Rpc` 里。`rpc` 不再另生成一层类，也不把函数体 `#include` 进类里。
 
 下面这些只在文件不存在时生成，已有文件会留下：
 
@@ -26,7 +26,7 @@ cmake 调用 `cbaselib/proto/proto_tool/main.py`，参数是这三个 xml、`mod
 根目录 `CMakeLists.txt` 里写死了要编的模块名。新模块除了写 xml，还要把名字加进这个列表，否则不会编。
 
 ```cmake
-foreach(_mod logd ipcclient ipcserver redisserver)
+foreach(_mod logd ipcclient ipcserver redisserver webserver webclient)
     if(EXISTS ${MODULES_PATH}/${_mod}/CMakeLists.txt)
         add_subdirectory(${MODULES_PATH}/${_mod})
     endif()
@@ -48,3 +48,9 @@ endforeach()
 `deploy/config/ipcclient.toml` 的 `[Test]` 里 `echo`、`log`、`redis`、`hold` 各管一个测试，默认只开回声。一次只开一个。
 
 `log = true` 时日志服必须已经在听。`SendLog` 失败后测试会立刻再排一次发送，字节数加了又减，到不了目标，进程也不会退出。
+
+## Web
+
+`webserver` 和 `webclient` 是两个独立进程，只走 HTTP，不进 proto，也不开 HTTPS。query、JSON 和二进制 body 交给 `cbaselib/3rd/cpp-httplib` 与 `cbaselib/3rd/nlohmann`。
+
+`webserver` 听 `WebServer.port`（默认 18080）。`GET /query` 回解码后的 query，`POST /json` 回 JSON，`POST /bin` 把 body 原样写回。`webclient` 连上后打这三下，退出码 0 表示都对上了。

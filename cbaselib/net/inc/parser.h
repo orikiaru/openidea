@@ -13,37 +13,37 @@ protected:
 public:
 	Parser():_parser_err(PARSER_ERR_SUCCESS){}
 	int	GetError()	{	return _parser_err;	}
-	virtual PROTOCOL* DecodeProtocol(BytesStream& os) = 0;
-	virtual BytesStream EncodeProtocol(const PROTOCOL* proto) = 0;
-	virtual BytesStream EncodeProtocol(const PROTOCOL& proto) {return EncodeProtocol(&proto);}
+	virtual PROTOCOL* DecodeProtocol(OI::Base::BytesStream& os) = 0;
+	virtual OI::Base::BytesStream EncodeProtocol(const PROTOCOL* proto) = 0;
+	virtual OI::Base::BytesStream EncodeProtocol(const PROTOCOL& proto) {return EncodeProtocol(&proto);}
 };
 
 // 整包：协议id + totalsize + (seqid + size + data) 重复。seqid 允许缺号。
-Protocol* DecodePbFrame(BytesStream& os, int& parser_err, Protocol* (*get_stub)(proto_type_t));
-BytesStream EncodePbFrame(proto_type_t id, BytesStream& body);
+Protocol* DecodePbFrame(OI::Base::BytesStream& os, int& parser_err, Protocol* (*get_stub)(proto_type_t));
+OI::Base::BytesStream EncodePbFrame(proto_type_t id, OI::Base::BytesStream& body);
 
 //现有协议结构解码器
 class ProtocolParser: public Parser<Protocol>
 {
 public:
-	virtual Protocol* DecodeProtocol(BytesStream& os);
-	virtual BytesStream EncodeProtocol(const Protocol* proto);
+	virtual Protocol* DecodeProtocol(OI::Base::BytesStream& os);
+	virtual OI::Base::BytesStream EncodeProtocol(const Protocol* proto);
 };
  
 //测试用
-class JBytesParser: public Parser<Bytes>
+class JBytesParser: public Parser<OI::Base::Bytes>
 {
 public:
-	virtual Bytes* DecodeProtocol(BytesStream& obuff) 
+	virtual OI::Base::Bytes* DecodeProtocol(OI::Base::BytesStream& obuff) 
 	{
-		Bytes* p = new Bytes();
-		BytesStream os(*p);
+		OI::Base::Bytes* p = new OI::Base::Bytes();
+		OI::Base::BytesStream os(*p);
 		os << obuff;
 		return p;
 	}
-	virtual BytesStream EncodeProtocol(const Bytes* proto)
+	virtual OI::Base::BytesStream EncodeProtocol(const OI::Base::Bytes* proto)
 	{
-		return Bytes(*proto);
+		return OI::Base::Bytes(*proto);
 	}
 };
 #endif

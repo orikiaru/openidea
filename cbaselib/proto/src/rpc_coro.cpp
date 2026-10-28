@@ -21,7 +21,7 @@ void PostTask(std::coroutine_handle<> handle)
 	coro::StScheduler::Post(handle);
 #else
 	// 多线程把句柄丢给工人。协程一挂起，resume 就返回，工人接着拿下一个。
-	ThreadPool::GetInstance()->PostCoroutine(handle);
+	OI::Thread::ThreadPool::GetInstance().PostCoroutine(handle);
 #endif
 }
 
@@ -83,7 +83,7 @@ static void ArmWakeLater(void* arg)
 	std::coroutine_handle<> handle = later->handle;
 	int ms = later->ms;
 	delete later;
-	BaseTimerManager::GetInstance()->AddTimer([handle]() {
+	BaseTimerManager::GetInstance().AddTimer([handle]() {
 		PostTask(handle);
 	}, ms);
 }
@@ -99,12 +99,12 @@ void SleepMs::await_suspend(std::coroutine_handle<> handle) const noexcept
 	WakeLater* later = new WakeLater;
 	later->handle = handle;
 	later->ms = ms;
-	Poll::GetInstance()->CallOnLoop(ArmWakeLater, later);
+	Poll::GetInstance().CallOnLoop(ArmWakeLater, later);
 }
 
 namespace
 {
-Mutex g_st_lock;
+OI::Thread::Mutex g_st_lock;
 std::deque<std::coroutine_handle<> > g_st_queue;
 }
 
@@ -115,7 +115,7 @@ void StScheduler::Post(std::coroutine_handle<> handle)
 	{
 		return;
 	}
-	MutexGuard lock(g_st_lock);
+	OI::Thread::MutexGuard lock(g_st_lock);
 	g_st_queue.push_back(handle);
 #else
 	PostTask(handle);
@@ -127,7 +127,7 @@ bool StScheduler::Poll()
 	// 把进来时的队列整批拿走。resume 里 yield(0)、StartTask 进的是原队列，这次循环碰不到。
 	std::deque<std::coroutine_handle<> > batch;
 	{
-		MutexGuard lock(g_st_lock);
+		OI::Thread::MutexGuard lock(g_st_lock);
 		batch.swap(g_st_queue);
 	}
 	bool ran = false;
@@ -146,7 +146,7 @@ bool StScheduler::Poll()
 
 bool StScheduler::Queued()
 {
-	MutexGuard lock(g_st_lock);
+	OI::Thread::MutexGuard lock(g_st_lock);
 	return !g_st_queue.empty();
 }
 }

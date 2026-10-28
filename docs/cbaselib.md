@@ -6,7 +6,7 @@
 
 ## 目录
 
-`base` 是进程里的公共件。`Bytes` 是二进制缓冲，`BytesStream` 做序列化。`Config` 读 toml。`ThreadPool` 跑普通任务和协程句柄。`Task` 是线程池任务基类。
+`base` 是进程里的公共件。`Bytes` 是二进制缓冲，`BytesStream` 做序列化。`Config` 读 toml。`ThreadPool` 跑普通任务和协程句柄。应用侧用 `AddTask(lambda)` 或协程，不要自己继承 `Task` 再 `new`/`delete`。`Task` 的分配留在线程池里。`DECLARE_SINGLETON(T)` 提供 `T::GetInstance()`，返回唯一实例的引用，不进入继承链。`FilePath` 检查路径在不在，并补齐中间目录。
 
 `net` 是网络。`Poll` 包 libuv 的事件循环。`NetSocket`、`AcceptChannel`、`ConnectChannel`、`TcpChannel` 负责监听、连接和收发。`Session` 和 `SessionManager` 管一类连接，组件配置里的 ip、port、type 从这里读。监听口在 `bind` 之前打开 `SO_REUSEADDR`。进程退出后旧连接还会在 `TIME_WAIT` 里待一会儿，但不再挡住下一次监听。客户端连出去不走 `bind`。
 
@@ -20,7 +20,7 @@
 
 `port` 是套接字的平台差异。`port/win` 给 MSVC 补头文件。
 
-`3rd` 放进来一起编的第三方代码：`cpptoml`、`libuv`、`wepoll`、`hiredis`。
+`3rd` 放进来一起编的第三方代码：`cpptoml`、`libuv`、`wepoll`、`hiredis`。HTTP 的 query、JSON 和二进制 body 用 header-only 的 `cpp-httplib` 和 `nlohmann`，不编进上面的静态库。
 
 `include` 是给业务包含的汇总头：`header.h`、`base_header.h`、`net_header.h`。
 

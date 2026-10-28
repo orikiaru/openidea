@@ -1,6 +1,7 @@
 #pragma once
 #include "hiredis.h"
 #include "proto_session_manager.h"
+#include "singleton.h"
 #include <coroutine>
 #include <deque>
 #include <memory>
@@ -45,17 +46,16 @@ private:
 class RedisClient : public ProtoClientManager
 {
 	friend class RedisCall;
-	static RedisClient inst;
+	DECLARE_SINGLETON(RedisClient)
+	RedisClient();
 	redisReader* _reader;
 	int _timeout_ms;
-	Mutex _wait_mu;
+	OI::Thread::Mutex _wait_mu;
 	std::deque<RedisCall::State*> _wait;
 	// _wait 前面这么多条已经判过超时
 	size_t _swept;
 public:
-	RedisClient();
 	virtual ~RedisClient();
-	static RedisClient& GetInstance() { return inst; }
 	virtual const std::string GetIDString() { return "RedisClient"; }
 	virtual bool Init();
 	RedisCall Call(std::vector<std::string> args, RedisResult* out);

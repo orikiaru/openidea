@@ -6,7 +6,7 @@ static Protocol* GetLogStub(proto_type_t id)
 	return LogProtoStubs::GetInstance().GetStub(id);
 }
 
-LogProtocol* LogProtocolParser::DecodeProtocol(BytesStream& os)
+LogProtocol* LogProtocolParser::DecodeProtocol(OI::Base::BytesStream& os)
 {
 	Protocol* pProtocol = DecodePbFrame(os, _parser_err, GetLogStub);
 	LogProtocol* log_proto = dynamic_cast<LogProtocol*>(pProtocol);
@@ -17,9 +17,9 @@ LogProtocol* LogProtocolParser::DecodeProtocol(BytesStream& os)
 	return log_proto;
 }
 
-BytesStream LogProtocolParser::EncodeProtocol(const LogProtocol* proto)
+OI::Base::BytesStream LogProtocolParser::EncodeProtocol(const LogProtocol* proto)
 {
-	BytesStream body;
+	OI::Base::BytesStream body;
 	proto->Encode(body);
 	return EncodePbFrame(proto->GetID(), body);
 }

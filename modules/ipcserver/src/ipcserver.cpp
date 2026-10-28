@@ -9,8 +9,6 @@
 #include "rpc_ids.h"
 #include <stdio.h>
 
-IpcServer IpcServer::inst;
-
 IpcServer::~IpcServer()
 {
 
@@ -23,7 +21,7 @@ const std::string IpcServer::GetIDString()
 
 bool IpcServer::Init()
 {
-	HandleRpc<AllEchoReq, AllEchoRes>([](coro::Token token, SessionManager* mgr, sid_t sid, AllEchoReq& req, AllEchoRes& res) -> coro::Task {
+	HandleRpc<OI::Rpc::AllEchoReq, OI::Rpc::AllEchoRes>([](coro::Token token, SessionManager* mgr, sid_t sid, OI::Rpc::AllEchoReq& req, OI::Rpc::AllEchoRes& res) -> coro::Task {
 		(void)token;
 		(void)mgr;
 		(void)sid;
@@ -31,7 +29,7 @@ bool IpcServer::Init()
 		res.code = 1;
 		co_return;
 	});
-	HandleRpc<HoldReq, HoldRes>([](coro::Token token, SessionManager* mgr, sid_t sid, HoldReq& req, HoldRes& res) -> coro::Task {
+	HandleRpc<OI::Rpc::HoldReq, OI::Rpc::HoldRes>([](coro::Token token, SessionManager* mgr, sid_t sid, OI::Rpc::HoldReq& req, OI::Rpc::HoldRes& res) -> coro::Task {
 		(void)token;
 		(void)mgr;
 		(void)sid;

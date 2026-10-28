@@ -7,6 +7,7 @@
 #include <ctime>
 #include <assert.h>
 
+namespace OI { namespace Thread {
 #ifdef _SINGLE_THREAD_
 
 class SpinLock
@@ -117,4 +118,5 @@ public:
 
 typedef LockGuard<SpinLock> SpinLockGuard;
 typedef LockGuard<Mutex> MutexGuard;
+}}
 #endif

@@ -1,10 +1,13 @@
 #pragma once
 #include "rpc_coro.h"
+#include "singleton.h"
 #include <atomic>
 #include <chrono>
 
 class RedisMgr
 {
+	DECLARE_SINGLETON(RedisMgr)
+	RedisMgr();
 	bool _on;
 	int _tasks;
 	int _sync;
@@ -16,8 +19,6 @@ class RedisMgr
 	std::atomic<int> _bad;
 	std::chrono::steady_clock::time_point _start;
 public:
-	RedisMgr();
-	static RedisMgr& Get();
 	void Load();
 	bool Enabled() const { return _on; }
 	void Start();

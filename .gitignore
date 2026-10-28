@@ -7,3 +7,4 @@
 /deploy/bin
 /*.obj
 /build-win
+/compile_commands.json

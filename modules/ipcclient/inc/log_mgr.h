@@ -1,11 +1,14 @@
 #pragma once
 #include "rpc_coro.h"
+#include "singleton.h"
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 
 class LogMgr
 {
+	DECLARE_SINGLETON(LogMgr)
+	LogMgr();
 	bool _on;
 	int _tasks;
 	int _line;
@@ -15,8 +18,6 @@ class LogMgr
 	std::atomic<int> _done;
 	std::chrono::steady_clock::time_point _start;
 public:
-	LogMgr();
-	static LogMgr& Get();
 	void Load();
 	void Start();
 	coro::Task Pump();

@@ -12,12 +12,6 @@ RedisMgr::RedisMgr()
 {
 }
 
-RedisMgr& RedisMgr::Get()
-{
-	static RedisMgr inst;
-	return inst;
-}
-
 void RedisMgr::Load()
 {
 	TryGetConfig("Test.redis", _on);
@@ -33,9 +27,9 @@ void RedisMgr::Start()
 		return;
 	}
 	_start = std::chrono::steady_clock::now();
-	GetTestBoard().Arm();
+	TestBoard::GetInstance().Arm();
 	coro::StartTask([](coro::Token) {
-		return RedisMgr::Get().Pump();
+		return RedisMgr::GetInstance().Pump();
 	});
 }
 
@@ -58,7 +52,7 @@ coro::Task RedisMgr::Pump()
 		if (spins++ >= limit)
 		{
 			LOG_TRACE("redis connect timeout");
-			GetTestBoard().Done(1);
+			TestBoard::GetInstance().Done(1);
 			co_return;
 		}
 		co_await coro::yield(50);
@@ -69,21 +63,21 @@ coro::Task RedisMgr::Pump()
 	if (_failed)
 	{
 		LOG_TRACE("redis integrity failed=%d", _failed);
-		GetTestBoard().Done(1);
+		TestBoard::GetInstance().Done(1);
 		co_return;
 	}
 	LOG_TRACE("redis integrity ok");
 	_start = std::chrono::steady_clock::now();
 	if (_tasks <= 0 || _seconds <= 0)
 	{
-		GetTestBoard().Done(0);
+		TestBoard::GetInstance().Done(0);
 		co_return;
 	}
 	_done.store(0);
 	for (int i = 0; i < _tasks; ++i)
 	{
 		coro::StartTask([i](coro::Token) {
-			return RedisMgr::Get().Stress(i);
+			return RedisMgr::GetInstance().Stress(i);
 		});
 	}
 #ifdef _SINGLE_THREAD_
@@ -279,7 +273,7 @@ void RedisMgr::NoteDone()
 	int bad = _bad.load();
 	LOG_TRACE("redis stress tasks=%d sync=%d ops=%lld ms=%lld rate=%lld/s bad=%d",
 		_tasks, _sync, ops, ms, ops * 1000 / ms, bad);
-	GetTestBoard().Done(bad == 0 ? 0 : 1);
+	TestBoard::GetInstance().Done(bad == 0 ? 0 : 1);
 }
 
 void RedisMgr::SyncStress(int id)

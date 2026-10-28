@@ -27,7 +27,7 @@ protected:
 	typedef std::map<sid_t, Session*> SessionMap;
 	SessionMap 	_session_map;
 	sid_t	   	_cur_session_id;
-	Mutex   	_locker;
+	OI::Thread::Mutex   	_locker;
 	std::string 	_sip;
 	std::string 	_sport;
 	SESSION_TYPE	_session_type;		//会话管理器管理的会话类型,TCP,UDP,UNIX,FIFO
@@ -49,7 +49,7 @@ public:
 		return Send(sid, &p);
 	}
 	bool Send(sid_t sid, const Protocol* p);
-	bool SendBytes(sid_t sid, const Bytes& data);
+	bool SendBytes(sid_t sid, const OI::Base::Bytes& data);
 
 	int BroadCast(const Protocol& p)
 	{

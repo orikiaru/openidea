@@ -23,11 +23,19 @@ LogFileInstance::~LogFileInstance()
 
 bool LogFileInstance::CreateNewFile(const char* path)
 {
+#ifdef _WIN32
+	FILE* fp = NULL;
+	if (fopen_s(&fp, path, "a+") != 0 || !fp)
+	{
+		return false;
+	}
+#else
 	FILE* fp = fopen(path, "a+");
 	if (!fp)
 	{
 		return false;
 	}
+#endif
 	// 交给写线程按块刷。这里只把 stdio 缓冲放大，避免每条日志一次系统调用。
 	setvbuf(fp, NULL, _IOFBF, 1024 * 1024);
 	OnCreateNewFile(fp);
@@ -37,7 +45,7 @@ bool LogFileInstance::CreateNewFile(const char* path)
 void LogFileInstance::OnCreateNewFile(FILE* new_file)
 {
 	{
-		MutexGuard _l(_file_locker);
+		OI::Thread::MutexGuard _l(_file_locker);
 		assert(_fp[1] == NULL);
 		_fp[1] = new_file;
 	}
@@ -46,12 +54,12 @@ void LogFileInstance::OnCreateNewFile(FILE* new_file)
 
 void LogFileInstance::StartWriteThread()
 {
-	ThreadPool::CreateSpecThread(_pid, LogFileInstance::WriteLogThreadHandle, this);
+	OI::Thread::ThreadPool::CreateSpecThread(_pid, LogFileInstance::WriteLogThreadHandle, this);
 }
 
 FILE* LogFileInstance::GetActiveFile()
 {
-	MutexGuard _l(_file_locker);
+	OI::Thread::MutexGuard _l(_file_locker);
 	if (_fp[1])
 	{
 		if (_fp[0])
@@ -75,12 +83,12 @@ void LogFileInstance::Passive()
 }
 
 
-void LogFileInstance::AddLog(Bytes& log)
+void LogFileInstance::AddLog(OI::Base::Bytes& log)
 {
 	bool notify = false;
 
 	{
-		MutexGuard l(_cache_locker);
+		OI::Thread::MutexGuard l(_cache_locker);
 		if (_logs.empty())
 		{
 			notify = true;
@@ -132,7 +140,7 @@ void LogFileInstance::WriteLog()
 
 	// 攒到一块再写。压力上来时大约 8MB 刷一次，队列空了把尾巴刷掉。
 	const size_t kChunk = 8 * 1024 * 1024;
-	Bytes tmp;
+	OI::Base::Bytes tmp;
 	tmp.Reserve(kChunk);
 	int64_t unflushed = 0;
 	for(;;)

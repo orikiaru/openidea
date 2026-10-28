@@ -18,7 +18,6 @@ add_executable(logd ${MODULE_SRCS})
 target_include_directories(logd
     PUBLIC
 		inc
-		protocol
 )
 
 #logd只能是多线程,受限于logmanager逻辑

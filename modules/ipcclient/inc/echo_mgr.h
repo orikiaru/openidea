@@ -2,6 +2,7 @@
 #include "allechoreq"
 #include "allechores"
 #include "rpc_coro.h"
+#include "singleton.h"
 #include <atomic>
 #include <chrono>
 #include <map>
@@ -10,6 +11,8 @@
 
 class EchoMgr
 {
+	DECLARE_SINGLETON(EchoMgr)
+	EchoMgr();
 	bool _on;
 	int _total;
 	int _timeout_ms;
@@ -27,8 +30,6 @@ class EchoMgr
 	bool _have_sample;
 	std::map<std::string, int> _fields;
 public:
-	EchoMgr();
-	static EchoMgr& Get();
 	void Load();
 	void ArmTimeout();
 	void Start(sid_t sid);
@@ -37,6 +38,6 @@ public:
 	int Ok() const { return _ok.load(); }
 	void Note(const char* name);
 	int* GapDiffer() { return &_gap_differ; }
-	void OnResult(int n, const AllEchoReq& req, const AllEchoRes& res, int ret, bool same);
+	void OnResult(int n, const OI::Rpc::AllEchoReq& req, const OI::Rpc::AllEchoRes& res, int ret, bool same);
 	coro::Task Pump(int index);
 };

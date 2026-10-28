@@ -123,17 +123,17 @@ bool CrossOf(time_t old_ts, time_t now_ts, int64_t offset_sec, SlotOf slot_of)
 
 time_t GetTime()
 {
-	return BaseTimerManager::GetInstance()->GetTime();
+	return BaseTimerManager::GetInstance().GetTime();
 }
 
 tm GetLocalTime()
 {
-	return BaseTimerManager::GetInstance()->GetTm();
+	return BaseTimerManager::GetInstance().GetTm();
 }
 
 timeval GetCurTickTime()
 {
-	return BaseTimerManager::GetInstance()->GetCurTickTime();
+	return BaseTimerManager::GetInstance().GetCurTickTime();
 }
 
 time_t Shift(time_t ts, int64_t offset_sec)

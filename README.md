@@ -25,7 +25,7 @@ cmake ..
 make
 ```
 
-cmake 会先跑 `cbaselib/proto/proto_tool/main.py`，再编库和模块。可执行文件在 `deploy/bin`。
+cmake 会先跑 `cbaselib/proto/proto_tool/main.py`，再编库和模块。可执行文件在 `deploy/bin`。Ninja 构建目录里会生成 `compile_commands.json`，仓库根的 `.clangd` 指向 `build-win`，给 clangd 做跳转。
 
 模块默认多线程，链接 `*_m_static`。要单线程时，把该模块 `CMakeLists.txt` 里的 `SINGLE_THREAD` 改成 `TRUE`，会改链 `*_static` 并定义 `_SINGLE_THREAD_`。`logd` 受 logmanager 限制，只能多线程。
 

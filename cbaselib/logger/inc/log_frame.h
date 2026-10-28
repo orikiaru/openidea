@@ -12,7 +12,7 @@ enum
 	LOG_FRAME_MAX = 8 * 1024 * 1024
 };
 
-inline void AppendLogFrame(Bytes& out, int level, const char* text, size_t text_len)
+inline void AppendLogFrame(OI::Base::Bytes& out, int level, const char* text, size_t text_len)
 {
 	uint32_t payload = (uint32_t)(1 + text_len);
 	unsigned char hdr[5];

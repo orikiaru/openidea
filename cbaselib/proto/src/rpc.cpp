@@ -28,15 +28,15 @@ static struct StDrainReg
 {
 	StDrainReg()
 	{
-		ThreadPool::GetInstance()->SetDrain(DrainStCoro);
-		ThreadPool::GetInstance()->SetPending(PendingStCoro);
-		ThreadPool::GetInstance()->SetAfterResume(coro::DrainDetached);
+		OI::Thread::ThreadPool::GetInstance().SetDrain(DrainStCoro);
+		OI::Thread::ThreadPool::GetInstance().SetPending(PendingStCoro);
+		OI::Thread::ThreadPool::GetInstance().SetAfterResume(coro::DrainDetached);
 	}
 } g_st_drain_reg;
 
 rpc_id_t RpcKeeper::GetRpcID()
 {
-	SpinLockGuard l(_rid_locker);
+	OI::Thread::SpinLockGuard l(_rid_locker);
 	//assert(s_rpc_id < RPC_REQ_MASK);
 	return s_rpc_id++ | RPC_REQ_MASK;
 }
@@ -45,23 +45,23 @@ void RpcKeeper::AddStub(Rpc* pRpc)
 {
 	rpc_id_t rid = (pRpc->GetRID() & ~RPC_REQ_MASK);
 	assert(pRpc && !FindStub(rid));
-	MutexGuard l(_locker);
+	OI::Thread::MutexGuard l(_locker);
 	s_rpc_map[rid] = pRpc;
 	BaseTimer* pTimer = new RpcTimeoutTimer(rid);
 	s_rpc_timer_map[rid] = pTimer;
-	BaseTimerManager::GetInstance()->AddTimer(pTimer, pRpc->TimeOut() * 1000);
+	BaseTimerManager::GetInstance().AddTimer(pTimer, pRpc->TimeOut() * 1000);
 }
 
 Rpc* RpcKeeper::FindStub(rpc_id_t rid)
 {
-	MutexGuard l(_locker);
+	OI::Thread::MutexGuard l(_locker);
 	RpcMap::iterator it = s_rpc_map.find(rid);	
 	return it != s_rpc_map.end() ? it->second: NULL;
 }
 
 Rpc* RpcKeeper::FindAndRemoveStub(rpc_id_t rid)
 {
-	MutexGuard l(_locker);
+	OI::Thread::MutexGuard l(_locker);
 	RpcMap::iterator it = s_rpc_map.find(rid);	
 	Rpc* pRPC = NULL;
 	if(it != s_rpc_map.end())
@@ -75,7 +75,7 @@ Rpc* RpcKeeper::FindAndRemoveStub(rpc_id_t rid)
 		//如果正在触发,则等Timer自行销毁
 		//这里取巧了,因为Timer触发会走到这里,锁互斥,内存无法回收销毁
 		//所以对于Timer来说,要么从这删除,要么已经移除timer队列,其他情况的定时器不推荐这么写
-		if (BaseTimerManager::GetInstance()->RemoveTimer(tit->second))
+		if (BaseTimerManager::GetInstance().RemoveTimer(tit->second))
 		{
 			SAFE_DELETE(tit->second);
 		}
@@ -88,7 +88,7 @@ void RpcKeeper::DestoryStub(rpc_id_t rid)
 {
 	Rpc* pRpc = NULL;
 	{
-		MutexGuard l(_locker);
+		OI::Thread::MutexGuard l(_locker);
 		RpcMap::iterator it = s_rpc_map.find(rid);	
 		if(it != s_rpc_map.end())
 		{
@@ -115,7 +115,7 @@ Rpc::Rpc(const Rpc& that):
 	_res(that._res->Clone()) 
 {}
 
-Rpc* Rpc::Call(proto_type_t id, RpcData* p_data)
+Rpc* Rpc::Call(proto_type_t id, OI::Rpc::RpcData* p_data)
 {
 	Rpc* pRpc = RpcKeeper::GetInstance().CreateRpc(id);
 	if (!pRpc)
@@ -149,7 +149,7 @@ void Rpc::Handle(SessionManager* mgr, sid_t sid)
 	}
 }
 
-BytesStream& Rpc::serialize(BytesStream& os) const
+OI::Base::BytesStream& Rpc::serialize(OI::Base::BytesStream& os) const
 {
 	if (IsReq())
 	{
@@ -158,7 +158,7 @@ BytesStream& Rpc::serialize(BytesStream& os) const
 	return serialize_res(os);
 }
 
-BytesStream& Rpc::deserialize(BytesStream& os)
+OI::Base::BytesStream& Rpc::deserialize(OI::Base::BytesStream& os)
 {
 	if (IsReq())
 	{
@@ -169,13 +169,13 @@ BytesStream& Rpc::deserialize(BytesStream& os)
 
 namespace
 {
-typedef std::function<coro::Task(coro::Token, SessionManager*, sid_t, BytesStream)> RpcHandleFn;
+typedef std::function<coro::Task(coro::Token, SessionManager*, sid_t, OI::Base::BytesStream)> RpcHandleFn;
 
 struct RpcCoroSlot
 {
 	std::coroutine_handle<> handle;
 	int* result;
-	std::function<bool(BytesStream&)> decode;
+	std::function<bool(OI::Base::BytesStream&)> decode;
 	std::function<void()> resume;
 	proto_type_t res_id;
 };
@@ -190,7 +190,7 @@ struct RpcExpire
 // 超时按时长分桶，同一桶里先登记的先到期，扫的时候只看队头。
 struct RpcCallShard
 {
-	Mutex mu;
+	OI::Thread::Mutex mu;
 	std::unordered_map<uint64_t, RpcCoroSlot> slots;
 	std::map<int, std::deque<RpcExpire> > expire;
 };
@@ -201,8 +201,8 @@ RpcCallShard g_call_shards[kCallShards];
 std::atomic<uint64_t> g_call_seq(1);
 std::once_flag g_sweep_once;
 
-Mutex g_rpc_wait_lock;
-std::map<proto_type_t, std::deque<std::function<void(BytesStream&)> > > g_rpc_wait;
+OI::Thread::Mutex g_rpc_wait_lock;
+std::map<proto_type_t, std::deque<std::function<void(OI::Base::BytesStream&)> > > g_rpc_wait;
 std::map<proto_type_t, RpcHandleFn> g_rpc_handle;
 std::set<proto_type_t> g_rpc_res;
 
@@ -217,7 +217,7 @@ RpcCallShard& ShardOf(uint64_t call_id)
 	return g_call_shards[call_id % kCallShards];
 }
 
-void FinishRpcSlot(RpcCoroSlot& slot, int code, BytesStream* body)
+void FinishRpcSlot(RpcCoroSlot& slot, int code, OI::Base::BytesStream* body)
 {
 	if (body)
 	{
@@ -243,7 +243,7 @@ void FinishRpcSlot(RpcCoroSlot& slot, int code, BytesStream* body)
 bool TakeRpcSlot(uint64_t call_id, RpcCoroSlot& out)
 {
 	RpcCallShard& shard = ShardOf(call_id);
-	MutexGuard lock(shard.mu);
+	OI::Thread::MutexGuard lock(shard.mu);
 	std::unordered_map<uint64_t, RpcCoroSlot>::iterator it = shard.slots.find(call_id);
 	if (it == shard.slots.end())
 	{
@@ -261,7 +261,7 @@ void SweepRpcCalls()
 	for (uint64_t i = 0; i < kCallShards; ++i)
 	{
 		RpcCallShard& shard = g_call_shards[i];
-		MutexGuard lock(shard.mu);
+		OI::Thread::MutexGuard lock(shard.mu);
 		for (std::map<int, std::deque<RpcExpire> >::iterator bit = shard.expire.begin(); bit != shard.expire.end(); ++bit)
 		{
 			std::deque<RpcExpire>& q = bit->second;
@@ -301,20 +301,20 @@ public:
 
 void ArmRpcSweep(void*)
 {
-	BaseTimerManager::GetInstance()->AddTimer(new RpcSweepTimer(), kSweepMs);
+	BaseTimerManager::GetInstance().AddTimer(new RpcSweepTimer(), kSweepMs);
 }
 }
 
 void RegisterRpcRes(proto_type_t res_id)
 {
-	MutexGuard lock(g_rpc_wait_lock);
+	OI::Thread::MutexGuard lock(g_rpc_wait_lock);
 	g_rpc_res.insert(res_id);
 }
 
-uint64_t BindRpcCall(proto_type_t res_id, std::coroutine_handle<> handle, int* result, int timeout_sec, std::function<bool(BytesStream&)> decode, std::function<void()> resume)
+uint64_t BindRpcCall(proto_type_t res_id, std::coroutine_handle<> handle, int* result, int timeout_sec, std::function<bool(OI::Base::BytesStream&)> decode, std::function<void()> resume)
 {
 	std::call_once(g_sweep_once, []() {
-		Poll::GetInstance()->CallOnLoop(ArmRpcSweep, NULL);
+		Poll::GetInstance().CallOnLoop(ArmRpcSweep, NULL);
 	});
 	uint64_t call_id = g_call_seq.fetch_add(1, std::memory_order_relaxed);
 	RpcCoroSlot slot;
@@ -324,7 +324,7 @@ uint64_t BindRpcCall(proto_type_t res_id, std::coroutine_handle<> handle, int* r
 	slot.resume = std::move(resume);
 	slot.res_id = res_id;
 	RpcCallShard& shard = ShardOf(call_id);
-	MutexGuard lock(shard.mu);
+	OI::Thread::MutexGuard lock(shard.mu);
 	shard.slots.emplace(call_id, std::move(slot));
 	if (timeout_sec > 0)
 	{
@@ -336,7 +336,7 @@ uint64_t BindRpcCall(proto_type_t res_id, std::coroutine_handle<> handle, int* r
 	return call_id;
 }
 
-bool WakeRpcCall(uint64_t call_id, int code, BytesStream* body)
+bool WakeRpcCall(uint64_t call_id, int code, OI::Base::BytesStream* body)
 {
 	RpcCoroSlot slot;
 	if (!TakeRpcSlot(call_id, slot))
@@ -347,32 +347,32 @@ bool WakeRpcCall(uint64_t call_id, int code, BytesStream* body)
 	return true;
 }
 
-void WatchRpc(proto_type_t id, std::function<void(BytesStream&)> decode)
+void WatchRpc(proto_type_t id, std::function<void(OI::Base::BytesStream&)> decode)
 {
-	MutexGuard lock(g_rpc_wait_lock);
+	OI::Thread::MutexGuard lock(g_rpc_wait_lock);
 	g_rpc_wait[id].push_back(std::move(decode));
 }
 
 void BindRpcHandler(proto_type_t id, RpcHandleFn handle)
 {
-	MutexGuard lock(g_rpc_wait_lock);
+	OI::Thread::MutexGuard lock(g_rpc_wait_lock);
 	g_rpc_handle[id] = std::move(handle);
 }
 
-bool DeliverRpc(proto_type_t id, BytesStream& body, SessionManager* mgr, sid_t sid)
+bool DeliverRpc(proto_type_t id, OI::Base::BytesStream& body, SessionManager* mgr, sid_t sid)
 {
-	std::function<void(BytesStream&)> decode;
+	std::function<void(OI::Base::BytesStream&)> decode;
 	const RpcHandleFn* handle = NULL;
 	bool is_res = false;
 	{
-		MutexGuard lock(g_rpc_wait_lock);
+		OI::Thread::MutexGuard lock(g_rpc_wait_lock);
 		if (g_rpc_res.find(id) != g_rpc_res.end())
 		{
 			is_res = true;
 		}
 		else
 		{
-			std::map<proto_type_t, std::deque<std::function<void(BytesStream&)> > >::iterator it = g_rpc_wait.find(id);
+			std::map<proto_type_t, std::deque<std::function<void(OI::Base::BytesStream&)> > >::iterator it = g_rpc_wait.find(id);
 			if (it != g_rpc_wait.end() && !it->second.empty())
 			{
 				decode = std::move(it->second.front());
@@ -423,7 +423,7 @@ bool DeliverRpc(proto_type_t id, BytesStream& body, SessionManager* mgr, sid_t s
 			});
 		}
 	}
-	catch (ParserException&)
+	catch (OI::Base::ParserException&)
 	{
 	}
 	return true;

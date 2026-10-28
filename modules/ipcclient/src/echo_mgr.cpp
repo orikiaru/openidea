@@ -14,7 +14,7 @@ static const char* kMode = "st";
 static const char* kMode = "mt";
 #endif
 
-static bool SameBytes(const Bytes& a, const Bytes& b)
+static bool SameBytes(const OI::Base::Bytes& a, const OI::Base::Bytes& b)
 {
 	if (a.Size() != b.Size())
 	{
@@ -27,12 +27,12 @@ static bool SameBytes(const Bytes& a, const Bytes& b)
 	return memcmp(a.Data(), b.Data(), a.Size()) == 0;
 }
 
-static bool SameInner(const Inner& a, const Inner& b)
+static bool SameInner(const OI::Rpc::Inner& a, const OI::Rpc::Inner& b)
 {
 	return a.n == b.n && a.s == b.s;
 }
 
-static void FillAllTypes(AllTypesData& data, int n)
+static void FillAllTypes(OI::Rpc::AllTypesData& data, int n)
 {
 	data.c = (char)(n & 0x7f);
 	data.s = (short)(1000 + n);
@@ -56,7 +56,7 @@ static void FillAllTypes(AllTypesData& data, int n)
 	data.child.s = "child";
 	data.children.clear();
 	data.children.push_back(data.child);
-	Inner kin;
+	OI::Rpc::Inner kin;
 	kin.n = n + 7;
 	kin.s = "kin";
 	data.children.push_back(kin);
@@ -69,7 +69,7 @@ static void FillAllTypes(AllTypesData& data, int n)
 	data.gap = 20 + n;
 }
 
-static void PoisonAllTypes(AllTypesData& data)
+static void PoisonAllTypes(OI::Rpc::AllTypesData& data)
 {
 	data.c = 0x5a;
 	data.s = -1;
@@ -90,24 +90,24 @@ static void PoisonAllTypes(AllTypesData& data)
 	data.gap = -12345;
 }
 
-static bool DiffAllTypes(const AllTypesData& sent, const AllTypesData& recv)
+static bool DiffAllTypes(const OI::Rpc::AllTypesData& sent, const OI::Rpc::AllTypesData& recv)
 {
 	bool same = true;
-	if (sent.c != recv.c) { EchoMgr::Get().Note("c"); same = false; }
-	if (sent.s != recv.s) { EchoMgr::Get().Note("s"); same = false; }
-	if (sent.i != recv.i) { EchoMgr::Get().Note("i"); same = false; }
-	if (sent.l != recv.l) { EchoMgr::Get().Note("l"); same = false; }
-	if (sent.i64 != recv.i64) { EchoMgr::Get().Note("i64"); same = false; }
-	if (sent.f != recv.f) { EchoMgr::Get().Note("f"); same = false; }
-	if (sent.d != recv.d) { EchoMgr::Get().Note("d"); same = false; }
-	if (!SameBytes(sent.raw, recv.raw)) { EchoMgr::Get().Note("raw"); same = false; }
-	if (sent.msg != recv.msg) { EchoMgr::Get().Note("msg"); same = false; }
-	if (sent.nums != recv.nums) { EchoMgr::Get().Note("nums"); same = false; }
-	if (sent.words != recv.words) { EchoMgr::Get().Note("words"); same = false; }
-	if (!SameInner(sent.child, recv.child)) { EchoMgr::Get().Note("child"); same = false; }
+	if (sent.c != recv.c) { EchoMgr::GetInstance().Note("c"); same = false; }
+	if (sent.s != recv.s) { EchoMgr::GetInstance().Note("s"); same = false; }
+	if (sent.i != recv.i) { EchoMgr::GetInstance().Note("i"); same = false; }
+	if (sent.l != recv.l) { EchoMgr::GetInstance().Note("l"); same = false; }
+	if (sent.i64 != recv.i64) { EchoMgr::GetInstance().Note("i64"); same = false; }
+	if (sent.f != recv.f) { EchoMgr::GetInstance().Note("f"); same = false; }
+	if (sent.d != recv.d) { EchoMgr::GetInstance().Note("d"); same = false; }
+	if (!SameBytes(sent.raw, recv.raw)) { EchoMgr::GetInstance().Note("raw"); same = false; }
+	if (sent.msg != recv.msg) { EchoMgr::GetInstance().Note("msg"); same = false; }
+	if (sent.nums != recv.nums) { EchoMgr::GetInstance().Note("nums"); same = false; }
+	if (sent.words != recv.words) { EchoMgr::GetInstance().Note("words"); same = false; }
+	if (!SameInner(sent.child, recv.child)) { EchoMgr::GetInstance().Note("child"); same = false; }
 	if (sent.children.size() != recv.children.size())
 	{
-		EchoMgr::Get().Note("children");
+		EchoMgr::GetInstance().Note("children");
 		same = false;
 	}
 	else
@@ -116,26 +116,26 @@ static bool DiffAllTypes(const AllTypesData& sent, const AllTypesData& recv)
 		{
 			if (!SameInner(sent.children[i], recv.children[i]))
 			{
-				EchoMgr::Get().Note("children");
+				EchoMgr::GetInstance().Note("children");
 				same = false;
 				break;
 			}
 		}
 	}
-	if (sent.table != recv.table) { EchoMgr::Get().Note("table"); same = false; }
+	if (sent.table != recv.table) { EchoMgr::GetInstance().Note("table"); same = false; }
 	if (sent.named.size() != recv.named.size())
 	{
-		EchoMgr::Get().Note("named");
+		EchoMgr::GetInstance().Note("named");
 		same = false;
 	}
 	else
 	{
-		for (std::map<std::string, Inner>::const_iterator it = sent.named.begin(); it != sent.named.end(); ++it)
+		for (std::map<std::string, OI::Rpc::Inner>::const_iterator it = sent.named.begin(); it != sent.named.end(); ++it)
 		{
-			std::map<std::string, Inner>::const_iterator jt = recv.named.find(it->first);
+			std::map<std::string, OI::Rpc::Inner>::const_iterator jt = recv.named.find(it->first);
 			if (jt == recv.named.end() || !SameInner(it->second, jt->second))
 			{
-				EchoMgr::Get().Note("named");
+				EchoMgr::GetInstance().Note("named");
 				same = false;
 				break;
 			}
@@ -143,8 +143,8 @@ static bool DiffAllTypes(const AllTypesData& sent, const AllTypesData& recv)
 	}
 	if (sent.gap != recv.gap)
 	{
-		EchoMgr::Get().Note("gap");
-		*EchoMgr::Get().GapDiffer() += 1;
+		EchoMgr::GetInstance().Note("gap");
+		*EchoMgr::GetInstance().GapDiffer() += 1;
 		same = false;
 	}
 	return same;
@@ -152,13 +152,13 @@ static bool DiffAllTypes(const AllTypesData& sent, const AllTypesData& recv)
 
 static coro::Task RunOne(int n)
 {
-	AllEchoReq req;
+	OI::Rpc::AllEchoReq req;
 	FillAllTypes(req.data, n);
-	AllEchoRes res;
+	OI::Rpc::AllEchoRes res;
 	PoisonAllTypes(res.data);
 	res.code = -1;
-	int ret = co_await RpcCall(IpcClient::GetInstance(), EchoMgr::Get().Sid(), req, res);
-	EchoMgr::Get().OnResult(n, req, res, ret, DiffAllTypes(req.data, res.data));
+	int ret = co_await RpcCall(IpcClient::GetInstance(), EchoMgr::GetInstance().Sid(), req, res);
+	EchoMgr::GetInstance().OnResult(n, req, res, ret, DiffAllTypes(req.data, res.data));
 }
 
 EchoMgr::EchoMgr()
@@ -166,12 +166,6 @@ EchoMgr::EchoMgr()
 	  _done(0), _ok(0), _rpc_fail(0), _mismatch(0), _gap_differ(0),
 	  _sample_sent(0), _sample_recv(0), _sample_code(0), _have_sample(false)
 {
-}
-
-EchoMgr& EchoMgr::Get()
-{
-	static EchoMgr inst;
-	return inst;
 }
 
 void EchoMgr::Load()
@@ -188,10 +182,10 @@ void EchoMgr::Note(const char* name)
 
 void EchoMgr::ArmTimeout()
 {
-	BaseTimerManager::GetInstance()->AddTimer([]() {
-		printf("ipc timeout done=%d ok=%d\n", EchoMgr::Get().Done(), EchoMgr::Get().Ok());
+	BaseTimerManager::GetInstance().AddTimer([]() {
+		printf("ipc timeout done=%d ok=%d\n", EchoMgr::GetInstance().Done(), EchoMgr::GetInstance().Ok());
 		fflush(stdout);
-		ThreadPool::GetInstance()->RequestStop(1);
+		OI::Thread::ThreadPool::GetInstance().RequestStop(1);
 	}, _timeout_ms);
 }
 
@@ -206,9 +200,9 @@ void EchoMgr::Start(sid_t sid)
 	ArmTimeout();
 	printf("ipc client connect sid=%d mode=%s total=%d\n", _sid, kMode, _total);
 	fflush(stdout);
-	GetTestBoard().Arm();
+	TestBoard::GetInstance().Arm();
 	coro::StartTask([](coro::Token) {
-		return EchoMgr::Get().Pump(0);
+		return EchoMgr::GetInstance().Pump(0);
 	});
 }
 
@@ -234,13 +228,13 @@ coro::Task EchoMgr::Pump(int index)
 	if (end < _total)
 	{
 		coro::StartTask([end](coro::Token) {
-			return EchoMgr::Get().Pump(end);
+			return EchoMgr::GetInstance().Pump(end);
 		});
 	}
 	co_return;
 }
 
-void EchoMgr::OnResult(int n, const AllEchoReq& req, const AllEchoRes& res, int ret, bool same)
+void EchoMgr::OnResult(int n, const OI::Rpc::AllEchoReq& req, const OI::Rpc::AllEchoRes& res, int ret, bool same)
 {
 	std::lock_guard<std::mutex> lock(_mu);
 	if (!_have_sample && n == 0)
@@ -285,5 +279,5 @@ void EchoMgr::OnResult(int n, const AllEchoReq& req, const AllEchoRes& res, int 
 	}
 	printf("\n");
 	fflush(stdout);
-	GetTestBoard().Done((_mismatch == 0 && rpc_fail == 0 && ok == _total) ? 0 : 1);
+	TestBoard::GetInstance().Done((_mismatch == 0 && rpc_fail == 0 && ok == _total) ? 0 : 1);
 }

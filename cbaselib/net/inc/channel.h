@@ -11,7 +11,7 @@ public:
 protected:
 	NetSocket	_socket;
 	Session*	_p_session;
-	Mutex		_locker;
+	OI::Thread::Mutex		_locker;
 public:
 	friend class Poll;
 	Channel(NetSocket s, Session* pSession) :_event_mask(0), _poll_token(NULL), _socket(s), _p_session(pSession) {}

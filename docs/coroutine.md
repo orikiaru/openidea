@@ -8,6 +8,7 @@
 
 - `yield(ms)` 在 `ms > 0` 时进时间轮，到点再跑，等待期间不占 CPU
 - `ms <= 0` 只把句柄放回队列，这一轮不再碰它。主循环会先去 poll，再跑新挂上的
+- 应用层要空等一段时间，只用 `co_await coro::yield(毫秒)`。不要 `sleep`、`sleep_for`、`Sleep`、`usleep`。单线程就这一条线程，睡下去 poll 停转，套接字里的数据发不出去
 
 `co_await` 一条 `Task` 会在调用方的栈上把子协程 `resume` 到它自己挂起为止。子协程当场跑完，调用方不挂起。子协程自己停住（等回包或定时）时，把调用方记在 `continuation` 上，子协程结束再 `Schedule` 调用方。
 

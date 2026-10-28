@@ -6,7 +6,7 @@ class SessionManager;
 class NetAddr
 {
 	int		_proto_type;
-	Bytes	_addr_data;
+	OI::Base::Bytes	_addr_data;
 public:
 	NetAddr();
 	bool		Init(SessionManager* pMgr);

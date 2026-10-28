@@ -20,10 +20,10 @@ class RemoteLog : public LogProtocol
 {
 public:
 	int			_lv;
-	Bytes		_log_content;
+	OI::Base::Bytes		_log_content;
 public:
 	explicit RemoteLog() : LogProtocol(LPT_REMOTE_LOG) {}
-	RemoteLog(LOG_LEVEL lv, const Bytes& log) :
+	RemoteLog(LOG_LEVEL lv, const OI::Base::Bytes& log) :
 		LogProtocol(LPT_REMOTE_LOG), _lv(lv), _log_content(log) {}
 	virtual void Handle(SessionManager* mgr, sid_t sid);
 	virtual Protocol* Clone()
@@ -35,13 +35,13 @@ public:
 		PB_LV = 0,
 		PB_CONTENT = 1,
 	};
-	virtual BytesStream& serialize(BytesStream& os)const
+	virtual OI::Base::BytesStream& serialize(OI::Base::BytesStream& os)const
 	{
 		os.WritePb(PB_LV, _lv);
 		os.WritePb(PB_CONTENT, _log_content);
 		return os;
 	}
-	virtual BytesStream& deserialize(BytesStream& os)
+	virtual OI::Base::BytesStream& deserialize(OI::Base::BytesStream& os)
 	{
 		while (os.RemainSize() > 0)
 		{

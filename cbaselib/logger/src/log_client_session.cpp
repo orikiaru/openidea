@@ -1,8 +1,8 @@
 #include "log_client_session.h"
 
-void LogClientSession::Send(const Bytes& bytes)
+void LogClientSession::Send(const OI::Base::Bytes& bytes)
 {
-	MutexGuard l(_locker);
+	OI::Thread::MutexGuard l(_locker);
 	_obuff.Append(bytes);
 	AllowSend();
 }

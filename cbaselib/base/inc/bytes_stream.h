@@ -7,6 +7,8 @@
 #include <string.h>
 #include <type_traits>
 
+namespace OI { namespace Rpc { class Serialize; } }
+namespace OI { namespace Base {
 struct ParserException
 {
 	const char* what() const throw()
@@ -29,7 +31,6 @@ struct PbFixedTrait
 	static const bool value = std::is_arithmetic<T>::value || std::is_enum<T>::value;
 };
 
-class Serialize;
 class BytesStream :public Bytes
 {
 	size_t 	_cur_pos;	//反序列化时使用
@@ -78,12 +79,12 @@ public:
 	BytesStream& operator<< (const Bytes& a);
 	BytesStream& operator<< (const BytesStream& a);	//全量写入，内容本身已经是序列化结果
 
-	BytesStream& operator<< (const Serialize& a);
+	BytesStream& operator<< (const ::OI::Rpc::Serialize& a);
 
 	BytesStream& operator>> (std::string& a);
 	BytesStream& operator>> (Bytes& a);
 
-	BytesStream& operator>> (Serialize& a);
+	BytesStream& operator>> (::OI::Rpc::Serialize& a);
 
 	template<typename T>
 	BytesStream& operator>> (std::vector<T>& t)
@@ -127,7 +128,7 @@ public:
 	}
 	BytesStream& WritePb(uint32_t seq, const std::string& value);
 	BytesStream& WritePb(uint32_t seq, const Bytes& value);
-	BytesStream& WritePb(uint32_t seq, const Serialize& value);
+	BytesStream& WritePb(uint32_t seq, const ::OI::Rpc::Serialize& value);
 	template<typename T>
 	BytesStream& WritePb(uint32_t seq, const std::vector<T>& value)
 	{
@@ -151,7 +152,7 @@ public:
 	}
 	void ReadPb(uint32_t size, std::string& value);
 	void ReadPb(uint32_t size, Bytes& value);
-	void ReadPb(uint32_t size, Serialize& value);
+	void ReadPb(uint32_t size, ::OI::Rpc::Serialize& value);
 	template<typename T>
 	void ReadPb(uint32_t size, std::vector<T>& value)
 	{
@@ -249,3 +250,4 @@ public:
 
 
 };
+}}

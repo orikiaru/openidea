@@ -23,9 +23,9 @@ protected:
 	int 	_status;
 	int		_errcode;
 
-	Bytes		_obuff;
-	Bytes		_ibuff;
-	Mutex		_locker;
+	OI::Base::Bytes		_obuff;
+	OI::Base::Bytes		_ibuff;
+	OI::Thread::Mutex		_locker;
 
 	sid_t		_session_id;
 	Channel*	_p_channel;
@@ -37,9 +37,9 @@ public:
 public: //提供给Channel的调用
 	void SetChannel(Channel* pChannel) { _p_channel = pChannel; }
 	//从Channel的inBuff提取数据到_ibuff
-	virtual void SwapInBuff(Bytes& inBuff);
+	virtual void SwapInBuff(OI::Base::Bytes& inBuff);
 	//将会话输出数据处理后追加到outBuff
-	virtual void SwapOutBuff(Bytes& outBuff);
+	virtual void SwapOutBuff(OI::Base::Bytes& outBuff);
 	//Channel写空了。会话这边也没有待发数据才关写事件
 	void SendDrained();
 	//会话是否已经失效关闭
@@ -58,7 +58,7 @@ public:
 	inline void SetSessionID(int sid) 	{ _session_id = sid;	}
 	inline int  GetSessionID() const	{ return _session_id;	}
 
-	virtual void Send(const Bytes& bytes)	{ assert(false); };
+	virtual void Send(const OI::Base::Bytes& bytes)	{ assert(false); };
 	virtual void SendProtocol(const Protocol& proto){ SendProtocol(&proto); }
 	virtual void SendProtocol(const Protocol* proto) = 0;
 	virtual void ActiveClose() = 0;			//外部Mgr主动关闭调用,有锁,不会回调Mgr->CloseSession

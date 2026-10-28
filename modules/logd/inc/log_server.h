@@ -1,14 +1,14 @@
 #pragma once
 #include "proto_session_manager.h"
 #include "log_server_session.h"
+#include "singleton.h"
 class LogServer : public ProtoSessionManager
 {
-	static LogServer inst;
+	DECLARE_SINGLETON(LogServer)
+	LogServer() {}
 public:
-	LogServer(){}
 	virtual ~LogServer();
 	bool Init();
-	static LogServer& GetInstance() { return inst; }
 	virtual const std::string GetIDString() { return "LogServer"; }
 private:
 	virtual void OnAddSession(Session* pSession);

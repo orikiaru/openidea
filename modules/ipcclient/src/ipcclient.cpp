@@ -5,8 +5,6 @@
 #include "redis_mgr.h"
 #include "redis_client.h"
 
-IpcClient IpcClient::inst;
-
 IpcClient::~IpcClient()
 {
 }
@@ -17,9 +15,9 @@ bool IpcClient::Init()
 	{
 		return false;
 	}
-	RedisMgr::Get().Load();
-	HoldMgr::Get().Load();
-	if (!RedisMgr::Get().Enabled() && !HoldMgr::Get().Enabled())
+	RedisMgr::GetInstance().Load();
+	HoldMgr::GetInstance().Load();
+	if (!RedisMgr::GetInstance().Enabled() && !HoldMgr::GetInstance().Enabled())
 	{
 		return true;
 	}
@@ -28,9 +26,9 @@ bool IpcClient::Init()
 		return false;
 	}
 	RedisClient::GetInstance().StartClient();
-	if (RedisMgr::Get().Enabled())
+	if (RedisMgr::GetInstance().Enabled())
 	{
-		RedisMgr::Get().Start();
+		RedisMgr::GetInstance().Start();
 	}
 	return true;
 }
@@ -42,11 +40,11 @@ const std::string IpcClient::GetIDString()
 
 void IpcClient::OnClientConnect(Session* pSession)
 {
-	EchoMgr::Get().Load();
-	LogMgr::Get().Load();
-	EchoMgr::Get().Start(pSession->GetSessionID());
-	LogMgr::Get().Start();
-	HoldMgr::Get().Start(pSession->GetSessionID());
+	EchoMgr::GetInstance().Load();
+	LogMgr::GetInstance().Load();
+	EchoMgr::GetInstance().Start(pSession->GetSessionID());
+	LogMgr::GetInstance().Start();
+	HoldMgr::GetInstance().Start(pSession->GetSessionID());
 }
 
 void IpcClient::OnClientDisconnect(const Session* pSession)

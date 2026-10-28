@@ -11,9 +11,10 @@ add_library(hiredis_static STATIC
 	sockcompat.c
 )
 
-target_include_directories(hiredis_static PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(hiredis_static SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 if(WIN32)
 	target_compile_definitions(hiredis_static PRIVATE _CRT_SECURE_NO_WARNINGS WIN32_LEAN_AND_MEAN)
+	target_compile_options(hiredis_static PRIVATE /W0)
 	target_link_libraries(hiredis_static PUBLIC ws2_32)
 endif()
