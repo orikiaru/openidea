@@ -10,6 +10,7 @@
 #include <deque>
 #include <mutex>
 #include <utility>
+namespace OI { namespace Redis {
 
 namespace
 {
@@ -31,12 +32,12 @@ int64_t NowMs()
 		std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-class RedisSweepTimer : public BaseTimer
+class RedisSweepTimer : public ::OI::Timer::BaseTimer
 {
 public:
 	bool OnTimer()
 	{
-		Poll::GetInstance().CallOnLoop(RedisClient::SweepTimeout, NULL);
+		::OI::Net::Poll::GetInstance().CallOnLoop(RedisClient::SweepTimeout, NULL);
 		return true;
 	}
 };
@@ -55,8 +56,8 @@ struct RedisCall::State
 	std::atomic<int32_t> gate;
 	std::atomic<int32_t> won;
 	std::atomic<int32_t> refs;
-	OI::Thread::Mutex mu;
-	OI::Thread::MutexCond cv;
+	::OI::Thread::Mutex mu;
+	::OI::Thread::MutexCond cv;
 	State() : timeout(false), ready(false), sync(false), out(NULL), deadline_ms(0), gate(0), won(0), refs(1) {}
 };
 
@@ -80,15 +81,15 @@ bool RedisClient::Init()
 	{
 		_timeout_ms = 25000;
 	}
-	return ProtoClientManager::Init();
+	return ::OI::Rpc::ProtoClientManager::Init();
 }
 
-Session* RedisClient::CloneSession()
+::OI::Net::Session* RedisClient::CloneSession()
 {
 	return new RedisClientSession(this);
 }
 
-void RedisClient::OnClientConnect(Session* pSession)
+void RedisClient::OnClientConnect(::OI::Net::Session* pSession)
 {
 	g_sid = pSession->GetSessionID();
 	if (_reader)
@@ -99,7 +100,7 @@ void RedisClient::OnClientConnect(Session* pSession)
 	LOG_TRACE("RedisClient::OnClientConnect sid=%d", g_sid);
 }
 
-void RedisClient::OnClientDisconnect(const Session* pSession)
+void RedisClient::OnClientDisconnect(const ::OI::Net::Session* pSession)
 {
 	LOG_TRACE("RedisClient::OnClientDisconnect sid=%d", pSession->GetSessionID());
 	g_sid = INVALID_SID;
@@ -153,7 +154,7 @@ void RedisCall::await_resume()
 bool RedisCall::Suspend(std::coroutine_handle<> h)
 {
 	_state->handle = h;
-	Poll::GetInstance().CallOnLoop(RedisClient::Submit, _state);
+	::OI::Net::Poll::GetInstance().CallOnLoop(RedisClient::Submit, _state);
 	int prev = _state->gate.exchange(2, std::memory_order_acq_rel);
 	return prev != 1;
 }
@@ -168,7 +169,7 @@ RedisResult RedisClient::CallSync(std::vector<std::string> args)
 	RedisCall::State* st = new RedisCall::State();
 	st->args = std::move(args);
 	st->sync = true;
-	Poll::GetInstance().CallOnLoop(Submit, st);
+	::OI::Net::Poll::GetInstance().CallOnLoop(Submit, st);
 #ifdef _SINGLE_THREAD_
 	// 同步等回包。先把已经挂上的协程跑一轮，再 poll；没有别人在等就堵住。
 	while (!st->ready)
@@ -178,11 +179,11 @@ RedisResult RedisClient::CallSync(std::vector<std::string> args)
 		{
 			break;
 		}
-		Poll::GetInstance().PollWait(coro::StScheduler::Queued() ? 0 : 1);
+		::OI::Net::Poll::GetInstance().PollWait(coro::StScheduler::Queued() ? 0 : 1);
 	}
 #else
 	{
-		OI::Thread::MutexGuard lock(st->mu);
+		::OI::Thread::MutexGuard lock(st->mu);
 		while (!st->ready)
 		{
 			st->cv.Wait(st->mu);
@@ -209,7 +210,7 @@ void RedisClient::SweepTimeout(void*)
 	{
 		// 超时时长固定，又按发送顺序入队，所以 _wait 按截止时间有序。
 		// 超时的仍留在队里认领它那条回执，_swept 记着已经判过的前缀，不重复扫。
-		OI::Thread::MutexGuard lock(self._wait_mu);
+		::OI::Thread::MutexGuard lock(self._wait_mu);
 		while (self._swept < self._wait.size())
 		{
 			RedisCall::State* st = self._wait[self._swept];
@@ -235,7 +236,7 @@ void RedisClient::Settle(RedisCall::State* st, std::shared_ptr<redisReply> reply
 		return;
 	}
 	{
-		OI::Thread::MutexGuard lock(st->mu);
+		::OI::Thread::MutexGuard lock(st->mu);
 		st->reply = std::move(reply);
 		st->timeout = timeout;
 		st->ready = true;
@@ -276,21 +277,21 @@ void RedisClient::Enqueue(RedisCall::State* st)
 		Settle(st, std::shared_ptr<redisReply>(), true);
 		return;
 	}
-	OI::Base::Bytes frame;
+	::OI::Base::Bytes frame;
 	frame.Append(cmd, (size_t)n);
 	redisFreeCommand(cmd);
 	std::call_once(g_sweep_once, []() {
-		BaseTimerManager::GetInstance().AddTimer(new RedisSweepTimer(), kSweepMs);
+		::OI::Timer::BaseTimerManager::GetInstance().AddTimer(new RedisSweepTimer(), kSweepMs);
 	});
 	st->deadline_ms = NowMs() + _timeout_ms;
 	st->refs.fetch_add(1, std::memory_order_relaxed);
 	{
-		OI::Thread::MutexGuard lock(_wait_mu);
+		::OI::Thread::MutexGuard lock(_wait_mu);
 		_wait.push_back(st);
 	}
 	if (!SendRaw(frame))
 	{
-		OI::Thread::MutexGuard lock(_wait_mu);
+		::OI::Thread::MutexGuard lock(_wait_mu);
 		for (size_t i = 0; i < _wait.size(); ++i)
 		{
 			if (_wait[i] == st)
@@ -313,7 +314,7 @@ void RedisClient::FailAll()
 {
 	std::deque<RedisCall::State*> left;
 	{
-		OI::Thread::MutexGuard lock(_wait_mu);
+		::OI::Thread::MutexGuard lock(_wait_mu);
 		left.swap(_wait);
 		_swept = 0;
 	}
@@ -361,7 +362,7 @@ void RedisClient::Feed(const char* data, size_t size)
 		std::shared_ptr<redisReply> held((redisReply*)raw, ReplyFree());
 		RedisCall::State* st = NULL;
 		{
-			OI::Thread::MutexGuard lock(_wait_mu);
+			::OI::Thread::MutexGuard lock(_wait_mu);
 			if (_wait.empty())
 			{
 				continue;
@@ -380,3 +381,4 @@ void RedisClient::Feed(const char* data, size_t size)
 		Release(st);
 	}
 }
+}}

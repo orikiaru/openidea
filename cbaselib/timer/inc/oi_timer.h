@@ -6,6 +6,7 @@
 #include <vector>
 #include <time.h>
 #include "oi_header.h"
+namespace OI { namespace Timer {
 
 class BaseTimer;
 class BaseTimerManager;
@@ -68,6 +69,7 @@ public:
 	virtual ~BaseTimer() {}
 	virtual bool OnTimer() = 0;
 };
+}}
 
 
 

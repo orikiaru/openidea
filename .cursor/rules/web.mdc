@@ -1,17 +1,19 @@
 ---
-description: Web、HTTP、webserver、webclient、JSON、urlencode、二进制 body。改 HTTP 前先读 docs/module.md 的 Web 段，对照 webserver 的三个路径和 webclient 的 Run。
+description: Web、HTTP、webserver、webclient、JSON、urlencode、二进制 body。改 HTTP 前先读 docs/module.md 的 Web 段，对照 webserver 的四个路径和 webclient 的 Run。
 alwaysApply: false
 ---
 
 # Web
 
-先读 `docs/module.md` 的 Web 段。`webserver` 和 `webclient` 是两个进程，只走 HTTP，不进 proto，不开 HTTPS。
+先读 `docs/module.md` 的 Web 段。`webserver` 和 `webclient` 是两个进程，只走 HTTP，不开 HTTPS。
 
-query、JSON、二进制 body 用 `cpp-httplib` 和 JsonCpp，不要手写编解码，也不要再引入第二套 JSON 库。
+JSON 只用 JsonCpp。`rpcdata` 的 body 用它自己的 `FromJson` / `ToJson`。
 
-- `GET /query`：`Params` 编码，服务端 `get_param_value` 解码后放进 JSON
+服务端仍是 `cpp-httplib` 的阻塞 listen，不进协程。客户端用基础库 `OI::Http::Client`，`co_await` 后由 poll 线程收完再 `Schedule`，不要在回调里 `resume`，也不要 `sleep`。单线程链 `http_static`，多线程链 `http_m_static`。查询参数的百分号编码跟 `cpp-httplib` 的 `encode_query_param` 同一套字符。
+
+- `GET /query`：百分号编码，服务端 `get_param_value` 解码后放进 JSON
 - `POST /json`：JsonCpp 解析，改完再写回
 - `POST /rpcjson`：body 是 `JsonAll` 的 `ToJson`，服务端 `FromJson` 后把 `gap` 加一再 `ToJson`
-- `POST /bin`：body 按字节原样返回，可以含 `\\0`
+- `POST /bin`：body 按字节原样返回，可以含 `\0`
 
 标准用例是 `modules/webserver/src/web_server.cpp` 和 `modules/webclient/src/web_client.cpp` 的 `Run`。

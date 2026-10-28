@@ -114,7 +114,7 @@ type = ""
 #include "oi_rpc_call.h"
 #include "oi_net.h"
 
-class __COMPONENT_NAME__ : public ProtoSessionManager
+class __COMPONENT_NAME__ : public OI::Rpc::ProtoSessionManager
 {
 	static __COMPONENT_NAME__ inst;
 public:
@@ -124,8 +124,8 @@ public:
 	static __COMPONENT_NAME__& GetInstance() { return inst; }
 	virtual const std::string GetIDString();
 private:
-	virtual void OnAddSession(Session* pSession);
-	virtual void OnDelSession(const Session* pSession);
+	virtual void OnAddSession(OI::Net::Session* pSession);
+	virtual void OnDelSession(const OI::Net::Session* pSession);
 };        
 '''
         file_data = self.DoReplace(file_data)
@@ -137,7 +137,7 @@ private:
 #include "oi_rpc_call.h"
 #include "oi_net.h"
 
-class __COMPONENT_NAME__ : public ProtoClientManager
+class __COMPONENT_NAME__ : public OI::Rpc::ProtoClientManager
 {
 	static __COMPONENT_NAME__ inst;
 public:
@@ -147,8 +147,8 @@ public:
 	static __COMPONENT_NAME__& GetInstance()  { return inst; }
 	virtual const std::string GetIDString();
 private:
-	virtual void OnClientConnect(Session* pSession);
-	virtual void OnClientDisconnect(const Session* pSession);
+	virtual void OnClientConnect(OI::Net::Session* pSession);
+	virtual void OnClientDisconnect(const OI::Net::Session* pSession);
 	virtual void OnAbortSession();
 };
 '''
@@ -167,7 +167,7 @@ __COMPONENT_NAME__::~__COMPONENT_NAME__()
 
 bool __COMPONENT_NAME__::Init()
 {
-	return SessionManager::Init();
+	return OI::Net::SessionManager::Init();
 }
 
 const std::string __COMPONENT_NAME__::GetIDString()
@@ -176,12 +176,12 @@ const std::string __COMPONENT_NAME__::GetIDString()
 }
 
 
-void __COMPONENT_NAME__::OnClientConnect(Session* pSession)
+void __COMPONENT_NAME__::OnClientConnect(OI::Net::Session* pSession)
 {
     
 }
 
-void __COMPONENT_NAME__::OnClientDisconnect(const Session* pSession)
+void __COMPONENT_NAME__::OnClientDisconnect(const OI::Net::Session* pSession)
 {
 
 }
@@ -211,15 +211,15 @@ const std::string __COMPONENT_NAME__::GetIDString()
 
 bool __COMPONENT_NAME__::Init()
 {
-	return SessionManager::Init();
+	return OI::Net::SessionManager::Init();
 }
 
-void __COMPONENT_NAME__::OnAddSession(Session* pSession)
+void __COMPONENT_NAME__::OnAddSession(OI::Net::Session* pSession)
 {
     
 }
 
-void __COMPONENT_NAME__::OnDelSession(const Session* pSession)
+void __COMPONENT_NAME__::OnDelSession(const OI::Net::Session* pSession)
 {
 
 }
@@ -248,13 +248,13 @@ void __COMPONENT_NAME__::OnDelSession(const Session* pSession)
         file_data = ""
         if(self.component.GetType() == ComponentType.Client):
             file_data += """
-    bool SendProtocol(Protocol& p)  {   return SendProtocol(&p);    }  
-    bool SendProtocol(Protocol* p);
+    bool SendProtocol(OI::Rpc::Protocol& p)  {   return SendProtocol(&p);    }  
+    bool SendProtocol(OI::Rpc::Protocol* p);
 """
         elif(self.component.GetType() == ComponentType.Server):
             file_data += """
-    bool DispatchProtocol(Protocol& p)  {   return SendProtocol(&p);    }  
-    bool SendProtocol(Protocol* p);              
+    bool DispatchProtocol(OI::Rpc::Protocol& p)  {   return SendProtocol(&p);    }  
+    bool SendProtocol(OI::Rpc::Protocol* p);              
 """        
         return file_data
 

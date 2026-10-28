@@ -6,23 +6,23 @@
 int main(int argc, char* argv[])
 {
     //加载模块配置
-    if (!OI::Base::Config::GlobalMutableConfig().Parse("../config/ipcserver.toml"))
+    if (!::OI::Base::Config::GlobalMutableConfig().Parse("../config/ipcserver.toml"))
 	{
 		printf("ParseConfigError\n");
 		return -2;
 	}
  
     //初始化线程池
-    OI::Thread::ThreadPool::GetInstance().Init();
+    ::OI::Thread::ThreadPool::GetInstance().Init();
     
     //初始化定时器
-    BaseTimerManager::GetInstance().Init();
+    ::OI::Timer::BaseTimerManager::GetInstance().Init();
     
     //初始化IO复用
-	Poll::GetInstance().Init();
+	::OI::Net::Poll::GetInstance().Init();
 
     //初始化日志服务
-    Log::Init();
+    ::OI::Log::Init();
  
     //添加组件逻辑,如网络组件,自定义单例对象等初始化逻辑
     
@@ -41,7 +41,7 @@ int main(int argc, char* argv[])
 
  
     //单线程在这里跑任务、定时器和协程，没有任务时进入 poll
-    OI::Thread::ThreadPool::GetInstance().StartWork();
+    ::OI::Thread::ThreadPool::GetInstance().StartWork();
     
     //此处是走不到的.
     return 0;

@@ -33,7 +33,7 @@ void RedisMgr::Start()
 	});
 }
 
-static bool StatusIs(const RedisResult& result, const char* text)
+static bool StatusIs(const ::OI::Redis::RedisResult& result, const char* text)
 {
 	return !result.timeout && result.reply && result.reply->type == REDIS_REPLY_STATUS
 		&& result.reply->str && std::strcmp(result.reply->str, text) == 0;
@@ -47,7 +47,7 @@ coro::Task RedisMgr::Pump()
 	{
 		limit = 1;
 	}
-	while (!RedisClient::GetInstance().IsConnect())
+	while (!::OI::Redis::RedisClient::GetInstance().IsConnect())
 	{
 		if (spins++ >= limit)
 		{
@@ -100,12 +100,12 @@ coro::Task RedisMgr::Pump()
 	co_return;
 }
 
-static bool IntIs(const RedisResult& result, long long n)
+static bool IntIs(const ::OI::Redis::RedisResult& result, long long n)
 {
 	return !result.timeout && result.reply && result.reply->type == REDIS_REPLY_INTEGER && result.reply->integer == n;
 }
 
-static bool BulkIs(const RedisResult& result, const char* text, size_t n)
+static bool BulkIs(const ::OI::Redis::RedisResult& result, const char* text, size_t n)
 {
 	return !result.timeout && result.reply && result.reply->type == REDIS_REPLY_STRING
 		&& result.reply->len == n && result.reply->str && std::memcmp(result.reply->str, text, n) == 0;
@@ -113,23 +113,23 @@ static bool BulkIs(const RedisResult& result, const char* text, size_t n)
 
 coro::Task RedisMgr::Check()
 {
-	RedisResult synced = RedisPingSync();
+	::OI::Redis::RedisResult synced = ::OI::Redis::RedisPingSync();
 	if (!StatusIs(synced, "PONG"))
 	{
 		++_failed;
 	}
-	RedisResult set;
+	::OI::Redis::RedisResult set;
 	{
-		RedisCall call = RedisSet("rk", "hello", set);
+		::OI::Redis::RedisCall call = ::OI::Redis::RedisSet("rk", "hello", set);
 		co_await call;
 	}
 	if (!StatusIs(set, "OK"))
 	{
 		++_failed;
 	}
-	RedisResult get;
+	::OI::Redis::RedisResult get;
 	{
-		RedisCall call = RedisGet("rk", get);
+		::OI::Redis::RedisCall call = ::OI::Redis::RedisGet("rk", get);
 		co_await call;
 	}
 	if (!BulkIs(get, "hello", 5))
@@ -137,101 +137,101 @@ coro::Task RedisMgr::Check()
 		++_failed;
 	}
 	std::string bin("a\0b", 3);
-	RedisResult setb;
+	::OI::Redis::RedisResult setb;
 	{
-		RedisCall call = RedisSet("rbin", bin, setb);
+		::OI::Redis::RedisCall call = ::OI::Redis::RedisSet("rbin", bin, setb);
 		co_await call;
 	}
 	if (!StatusIs(setb, "OK"))
 	{
 		++_failed;
 	}
-	RedisResult getb;
+	::OI::Redis::RedisResult getb;
 	{
-		RedisCall call = RedisGet("rbin", getb);
+		::OI::Redis::RedisCall call = ::OI::Redis::RedisGet("rbin", getb);
 		co_await call;
 	}
 	if (!BulkIs(getb, bin.data(), 3))
 	{
 		++_failed;
 	}
-	RedisResult miss;
+	::OI::Redis::RedisResult miss;
 	{
-		RedisCall call = RedisGet("rk-missing", miss);
+		::OI::Redis::RedisCall call = ::OI::Redis::RedisGet("rk-missing", miss);
 		co_await call;
 	}
 	if (miss.timeout || !miss.reply || miss.reply->type != REDIS_REPLY_NIL)
 	{
 		++_failed;
 	}
-	RedisResult gone;
+	::OI::Redis::RedisResult gone;
 	{
-		RedisCall call = RedisDel("rk", gone);
+		::OI::Redis::RedisCall call = ::OI::Redis::RedisDel("rk", gone);
 		co_await call;
 	}
 	if (!IntIs(gone, 1))
 	{
 		++_failed;
 	}
-	RedisResult exp;
+	::OI::Redis::RedisResult exp;
 	{
-		RedisCall call = RedisSet("rk-exp", "1", exp);
+		::OI::Redis::RedisCall call = ::OI::Redis::RedisSet("rk-exp", "1", exp);
 		co_await call;
 	}
-	RedisResult ttl;
+	::OI::Redis::RedisResult ttl;
 	{
-		RedisCall call = RedisExpire("rk-exp", "60", ttl);
+		::OI::Redis::RedisCall call = ::OI::Redis::RedisExpire("rk-exp", "60", ttl);
 		co_await call;
 	}
 	if (!IntIs(ttl, 1))
 	{
 		++_failed;
 	}
-	RedisResult hset;
+	::OI::Redis::RedisResult hset;
 	{
-		RedisCall call = RedisHSet("rh", "f", "v", hset);
+		::OI::Redis::RedisCall call = ::OI::Redis::RedisHSet("rh", "f", "v", hset);
 		co_await call;
 	}
 	if (!IntIs(hset, 1))
 	{
 		++_failed;
 	}
-	RedisResult hget;
+	::OI::Redis::RedisResult hget;
 	{
-		RedisCall call = RedisHGet("rh", "f", hget);
+		::OI::Redis::RedisCall call = ::OI::Redis::RedisHGet("rh", "f", hget);
 		co_await call;
 	}
 	if (!BulkIs(hget, "v", 1))
 	{
 		++_failed;
 	}
-	RedisResult lpush;
+	::OI::Redis::RedisResult lpush;
 	{
-		RedisCall call = RedisLPush("rl", "a", lpush);
+		::OI::Redis::RedisCall call = ::OI::Redis::RedisLPush("rl", "a", lpush);
 		co_await call;
 	}
-	RedisResult lpush2;
+	::OI::Redis::RedisResult lpush2;
 	{
-		RedisCall call = RedisLPush("rl", "b", lpush2);
+		::OI::Redis::RedisCall call = ::OI::Redis::RedisLPush("rl", "b", lpush2);
 		co_await call;
 	}
-	RedisResult lrange;
+	::OI::Redis::RedisResult lrange;
 	{
-		RedisCall call = RedisLRange("rl", "0", "1", lrange);
+		::OI::Redis::RedisCall call = ::OI::Redis::RedisLRange("rl", "0", "1", lrange);
 		co_await call;
 	}
 	if (lrange.timeout || !lrange.reply || lrange.reply->type != REDIS_REPLY_ARRAY || lrange.reply->elements != 2)
 	{
 		++_failed;
 	}
-	RedisResult sadd;
+	::OI::Redis::RedisResult sadd;
 	{
-		RedisCall call = RedisSAdd("rs", "m", sadd);
+		::OI::Redis::RedisCall call = ::OI::Redis::RedisSAdd("rs", "m", sadd);
 		co_await call;
 	}
-	RedisResult sismember;
+	::OI::Redis::RedisResult sismember;
 	{
-		RedisCall call = RedisSIsMember("rs", "m", sismember);
+		::OI::Redis::RedisCall call = ::OI::Redis::RedisSIsMember("rs", "m", sismember);
 		co_await call;
 	}
 	if (!IntIs(sismember, 1))
@@ -240,8 +240,8 @@ coro::Task RedisMgr::Check()
 	}
 	for (int i = 1; i <= 20; ++i)
 	{
-		RedisResult n;
-		RedisCall call = RedisIncr("rk-count", n);
+		::OI::Redis::RedisResult n;
+		::OI::Redis::RedisCall call = ::OI::Redis::RedisIncr("rk-count", n);
 		co_await call;
 		if (!IntIs(n, i))
 		{
@@ -282,8 +282,8 @@ void RedisMgr::SyncStress(int id)
 	auto end = _start + std::chrono::seconds(_seconds);
 	while (std::chrono::steady_clock::now() < end)
 	{
-		RedisResult put = RedisSetSync(key, "s");
-		RedisResult got = RedisGetSync(key);
+		::OI::Redis::RedisResult put = ::OI::Redis::RedisSetSync(key, "s");
+		::OI::Redis::RedisResult got = ::OI::Redis::RedisGetSync(key);
 		if (!StatusIs(put, "OK") || !BulkIs(got, "s", 1))
 		{
 			_bad.fetch_add(1);
@@ -309,29 +309,29 @@ coro::Task RedisMgr::Stress(int id)
 		std::string key = "k:" + std::to_string(id) + ":" + std::to_string(seq % 256);
 		std::string member = std::to_string(seq % 32);
 		++seq;
-		RedisResult result;
+		::OI::Redis::RedisResult result;
 		bool ok = false;
 		if (kind == 0)
 		{
-			RedisCall call = RedisSet(key, value, result);
+			::OI::Redis::RedisCall call = ::OI::Redis::RedisSet(key, value, result);
 			co_await call;
 			ok = StatusIs(result, "OK");
 		}
 		else if (kind == 1)
 		{
-			RedisCall call = RedisHSet(hash, member, value, result);
+			::OI::Redis::RedisCall call = ::OI::Redis::RedisHSet(hash, member, value, result);
 			co_await call;
 			ok = IntIs(result, 0) || IntIs(result, 1);
 		}
 		else if (kind == 2)
 		{
-			RedisCall call = RedisLPush(list, member, result);
+			::OI::Redis::RedisCall call = ::OI::Redis::RedisLPush(list, member, result);
 			co_await call;
 			ok = !result.timeout && result.reply && result.reply->type == REDIS_REPLY_INTEGER;
 			if (ok && (seq % 16) == 0)
 			{
-				RedisResult trim;
-				RedisCall trim_call = RedisLTrim(list, "0", "15", trim);
+				::OI::Redis::RedisResult trim;
+				::OI::Redis::RedisCall trim_call = ::OI::Redis::RedisLTrim(list, "0", "15", trim);
 				co_await trim_call;
 				if (!StatusIs(trim, "OK"))
 				{
@@ -341,7 +341,7 @@ coro::Task RedisMgr::Stress(int id)
 		}
 		else
 		{
-			RedisCall call = RedisIncr(key, result);
+			::OI::Redis::RedisCall call = ::OI::Redis::RedisIncr(key, result);
 			co_await call;
 			ok = !result.timeout && result.reply && result.reply->type == REDIS_REPLY_INTEGER;
 		}

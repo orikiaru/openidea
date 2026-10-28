@@ -12,15 +12,15 @@ bool LogServer::Init()
 	//会话的基础数据如 buff大小后续也会接入到基础管理器
 
 	//应用层自己设计的配置,需在此处读取
-	return SessionManager::Init();
+	return ::OI::Net::SessionManager::Init();
 }
 
-void LogServer::OnAddSession(Session* pSession)
+void LogServer::OnAddSession(::OI::Net::Session* pSession)
 {
 	LOG_TRACE("LogServer::OnAddSession sid=%d\n", pSession->GetSessionID());
 }
 
-void LogServer::OnDelSession(const Session* pSession)
+void LogServer::OnDelSession(const ::OI::Net::Session* pSession)
 {
 	LOG_TRACE("LogServer::OnDelSession sid=%d\n", pSession->GetSessionID());
 }

@@ -15,7 +15,7 @@ struct RedisLink
 };
 
 // 单线程进程。上游 hiredis 连接数走 Redis.connections。一条客户端会话固定绑一条，回包顺序才不会乱。
-class RedisServer : public SessionManager
+class RedisServer : public ::OI::Net::SessionManager
 {
 	DECLARE_SINGLETON(RedisServer)
 	RedisServer();
@@ -33,7 +33,7 @@ public:
 	void Open(RedisLink* link);
 	void ArmReconnect(RedisLink* link);
 private:
-	virtual Session* CloneSession();
-	virtual void OnAddSession(Session* pSession);
-	virtual void OnDelSession(const Session* pSession);
+	virtual ::OI::Net::Session* CloneSession();
+	virtual void OnAddSession(::OI::Net::Session* pSession);
+	virtual void OnDelSession(const ::OI::Net::Session* pSession);
 };

@@ -3,6 +3,7 @@
 #include "oi_timer_manager.h"
 #include "oi_thread.h"
 #include "oi_poll.h"
+namespace OI { namespace Timer {
 
 static std::atomic<bool> g_tick_queued(false);
 
@@ -43,7 +44,7 @@ bool BaseTimerManager::Init()
 	assert(timer_lv_count > 2 && "timer_lv_count Must be bigger than 2");
 
 	std::vector<int64_t> timer_lvs;
-	if (!OI::Base::Config::GlobalConfig().GetArrayAs("Timer.timer_lvs", timer_lvs))
+	if (!::OI::Base::Config::GlobalConfig().GetArrayAs("Timer.timer_lvs", timer_lvs))
 	{
 		//没有就给一组默认数据,影响不大.
 		std::vector<int64_t> tmp;
@@ -73,7 +74,7 @@ bool BaseTimerManager::Init()
 	_cur_time = time(NULL);
 	localtime_r(&_cur_time, &_cur_tm);
 	// Windows / Linux 都用 poll 循环上的 libuv timer 叫醒
-	Poll::GetInstance().ArmTick(_tick_offset_ms, OnLoopTick);
+	::OI::Net::Poll::GetInstance().ArmTick(_tick_offset_ms, OnLoopTick);
 	return true;
 }
 
@@ -84,10 +85,10 @@ void BaseTimerManager::OnSignal()
 	{
 		return;
 	}
-	OI::Thread::ThreadPool::GetInstance().AddTask([]() {
+	::OI::Thread::ThreadPool::GetInstance().AddTask([]() {
 		BaseTimerManager::GetInstance().Update();
 		g_tick_queued.store(false);
-	}, OI::Thread::PRIO_ENUM::PRIO_QUEUE);
+	}, ::OI::Thread::PRIO_ENUM::PRIO_QUEUE);
 }
 
 std::string BaseTimerManager::GenTraceLog()
@@ -108,7 +109,7 @@ std::string BaseTimerManager::GenTraceLog()
 
 void BaseTimerManager::Update()
 {
-	OI::Thread::MutexGuard lock(_wheel_mu);
+	::OI::Thread::MutexGuard lock(_wheel_mu);
 	gettimeofday(&_cur_tv, 0);
 
 	int64_t delta_us = (int64_t)_cur_tv.tv_sec - (int64_t)_last_tick_tv.tv_sec;
@@ -136,7 +137,7 @@ void BaseTimerManager::Update()
 
 void BaseTimerManager::AddTimer(BaseTimer* pTimer, int millisecond)
 {
-	OI::Thread::MutexGuard lock(_wheel_mu);
+	::OI::Thread::MutexGuard lock(_wheel_mu);
 	pTimer->InitData(this, millisecond, TicksFromWall(millisecond));
 	add_timer(pTimer);
 }
@@ -244,3 +245,4 @@ void BaseTimerManager::run_tick()
 		try_uniform();
 	}
 }
+}}

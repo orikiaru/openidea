@@ -14,6 +14,7 @@
 #include "oi_lock.h"
 #include <type_traits>
 #include <utility>
+namespace OI { namespace Timer {
 
 typedef std::deque<TimerLevel> TimerLevelVector;
 
@@ -28,7 +29,7 @@ public:
 	{
 		F copied = _fn;
 		// 跟时间轮同一条有序队列，紧跟这次 Update。不丢到普通队列里排队。
-		OI::Thread::ThreadPool::GetInstance().AddTask(std::move(copied), OI::Thread::PRIO_QUEUE);
+		::OI::Thread::ThreadPool::GetInstance().AddTask(std::move(copied), ::OI::Thread::PRIO_QUEUE);
 		delete this;
 		return END_TIMER;
 	}
@@ -71,7 +72,7 @@ public:
 
 	bool RemoveTimer(BaseTimer* pTimer)
 	{
-		OI::Thread::MutexGuard lock(_wheel_mu);
+		::OI::Thread::MutexGuard lock(_wheel_mu);
 		assert(pTimer->GetTimerLevel());
 		return pTimer->GetTimerLevel()->RemoveTimer(this, pTimer);
 	}
@@ -103,7 +104,7 @@ private:
 
 private:
 	friend class TimerLevel;
-	OI::Thread::Mutex _wheel_mu;
+	::OI::Thread::Mutex _wheel_mu;
 
 	// 已经执行完的最后一个 tick 的逻辑时间。不满一跳的毫秒留在和墙上时间的差里，下次补齐。
 	struct timeval		_last_tick_tv;
@@ -124,3 +125,4 @@ private:
 	time_t				_cur_time;
 	struct tm			_cur_tm;
 };
+}}

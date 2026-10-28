@@ -1,5 +1,6 @@
 #pragma once
 #include "oi_net_channel.h"
+namespace OI { namespace Net {
 
 class TCP_Channel : public NetChannel
 {
@@ -10,3 +11,4 @@ public:
 	virtual void DataOut();
 	//virtual bool TryClose();	//使用基类实现
 };
+}}

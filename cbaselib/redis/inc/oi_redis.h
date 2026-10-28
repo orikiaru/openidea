@@ -7,8 +7,7 @@
 #include <memory>
 #include <string>
 #include <vector>
-
-struct redisReader;
+namespace OI { namespace Redis {
 
 // reply 非空是回执，timeout 为真是超时。先到的那个算数。
 struct RedisResult
@@ -43,14 +42,14 @@ private:
 };
 
 // 跟日志一样走自己的连接，字节是 RESP，不进 proto。
-class RedisClient : public ProtoClientManager
+class RedisClient : public ::OI::Rpc::ProtoClientManager
 {
 	friend class RedisCall;
 	DECLARE_SINGLETON(RedisClient)
 	RedisClient();
 	redisReader* _reader;
 	int32_t _timeout_ms;
-	OI::Thread::Mutex _wait_mu;
+	::OI::Thread::Mutex _wait_mu;
 	std::deque<RedisCall::State*> _wait;
 	// _wait 前面这么多条已经判过超时
 	size_t _swept;
@@ -66,9 +65,9 @@ public:
 	// poll 线程上周期调用，把到期还没回执的调用按超时结掉
 	static void SweepTimeout(void*);
 private:
-	virtual Session* CloneSession();
-	virtual void OnClientConnect(Session* pSession);
-	virtual void OnClientDisconnect(const Session* pSession);
+	virtual ::OI::Net::Session* CloneSession();
+	virtual void OnClientConnect(::OI::Net::Session* pSession);
+	virtual void OnClientDisconnect(const ::OI::Net::Session* pSession);
 	virtual void OnAbortSession();
 	static void Submit(void* state);
 	void Enqueue(RedisCall::State* st);
@@ -87,4 +86,5 @@ inline RedisResult CallRedisSync(std::vector<std::string> args)
 	return RedisClient::GetInstance().CallSync(std::move(args));
 }
 
+}}
 #include "oi_redis_cmd.h"

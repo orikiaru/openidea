@@ -3,7 +3,7 @@
 #include "log_server.h"
 #include "log_manager.h"
 
-void RemoteLog::Handle(SessionManager* mgr, sid_t sid)
+void ::OI::Log::RemoteLog::Handle(::OI::Net::SessionManager* mgr, sid_t sid)
 {
 	if (&LogServer::GetInstance() != mgr)
 	{

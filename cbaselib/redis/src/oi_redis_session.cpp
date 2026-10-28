@@ -1,14 +1,15 @@
 #include "oi_redis_session.h"
 #include "oi_redis.h"
+namespace OI { namespace Redis {
 
-void RedisClientSession::Send(const OI::Base::Bytes& bytes)
+void RedisClientSession::Send(const ::OI::Base::Bytes& bytes)
 {
-	OI::Thread::MutexGuard lock(_locker);
+	::OI::Thread::MutexGuard lock(_locker);
 	_obuff.Append(bytes);
 	AllowSend();
 }
 
-void RedisClientSession::SendProtocol(const Protocol* proto)
+void RedisClientSession::SendProtocol(const ::OI::Rpc::Protocol* proto)
 {
 	(void)proto;
 	assert(false && "redis client sends RESP");
@@ -27,3 +28,4 @@ void RedisClientSession::OnDataIn()
 void RedisClientSession::OnDataOut()
 {
 }
+}}

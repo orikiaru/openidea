@@ -2,10 +2,11 @@
 #include "oi_session_manager.h"
 #include "oi_log.h"
 #include "oi_net_os.h"
+namespace OI { namespace Net {
 void NetSession::PassiveClose(int err)
 {
 	{
-		OI::Thread::MutexGuard l(_locker);
+		::OI::Thread::MutexGuard l(_locker);
 		Close(err);
 	}
 	//输出日志不能持有会话锁,否则会死锁的.
@@ -24,7 +25,7 @@ void NetSession::PassiveClose(int err)
 
 void NetSession::ActiveClose()
 {
-	OI::Thread::MutexGuard l(_locker);
+	::OI::Thread::MutexGuard l(_locker);
 	Close(SESSION_MANAGER_NORMAL_CLOSE);
 }
 
@@ -52,3 +53,4 @@ void NetSession::OnClose()
 		_p_session_mgr->DelSession(this);
 	}
 }
+}}

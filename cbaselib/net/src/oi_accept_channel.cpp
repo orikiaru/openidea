@@ -6,17 +6,10 @@
 #include <unistd.h>
 #include <fcntl.h>
 
-#ifndef __UNUSE_OPENSSL__
-#include <openssl/err.h>
-#include <openssl/evp.h>
-#include <openssl/ssl.h>
-#include <openssl/x509v3.h>
-#endif
-
-
 #include "oi_accept_channel.h"
 #include "oi_session_manager.h"
 #include "oi_log.h"
+namespace OI { namespace Net {
 
 void AcceptChannel::DataIn()
 {
@@ -52,8 +45,6 @@ bool AcceptChannel::StartAccept(SessionManager* pMgr, bool async)
 	{
 	case SESSION_TYPE_TCP:
 		return StartTcpAccept(pMgr, async);
-	case SESSION_TYPE_SSL:
-		return StartSslAccept(pMgr, async);
 	default:
 		printf("SessionManager::StartServer not support session_type=%d\n", session_type);
 		return false;
@@ -95,51 +86,5 @@ bool AcceptChannel::StartTcpAccept(SessionManager* pMgr, bool async)
 	}
 	return true;
 }
-
-bool AcceptChannel::StartSslAccept(SessionManager* pMgr, bool async)
-{
-#ifndef __UNUSE_OPENSSL__
-	const char* cert_path = "";
-	const char* private_key_path = "";
-	const char* client_ca_cert_file_path = "";
-	const char* client_ca_cert_dir_path = "";
-	const char* private_key_password = "";
-	SSL_CTX* ctx_ = SSL_CTX_new(TLS_server_method());
-
-	if (!ctx_)
-	{
-		return false;
-	}
-
-	SSL_CTX_set_options(ctx_, SSL_OP_NO_COMPRESSION | SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION);
-
-	SSL_CTX_set_min_proto_version(ctx_, TLS1_1_VERSION);
-
-	// add default password callback before opening encrypted private key
-	if (private_key_password != nullptr && (strlen(private_key_password) > 0))
-	{
-		SSL_CTX_set_default_passwd_cb_userdata(ctx_,
-			(char*)private_key_password);
-	}
-
-	if (SSL_CTX_use_certificate_chain_file(ctx_, cert_path) != 1)
-	{
-		SSL_CTX_free(ctx_);
-		return false;
-	}
-	if (SSL_CTX_use_PrivateKey_file(ctx_, private_key_path, SSL_FILETYPE_PEM) !=1)
-	{
-		SSL_CTX_free(ctx_);
-		return false;
-	}
-	if (client_ca_cert_file_path || client_ca_cert_dir_path)
-	{
-		SSL_CTX_load_verify_locations(ctx_, client_ca_cert_file_path, client_ca_cert_dir_path);
-		SSL_CTX_set_verify(ctx_, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT, nullptr);
-	}
-#else
-	assert(!"UseOpenSSL Must Modify CMakeLists.txt _USE_SSL_ == true to link libssl.so");
-#endif
-	return false;
-}
+}}
 

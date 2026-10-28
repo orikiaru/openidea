@@ -2,8 +2,9 @@
 #include "oi_protocol.h"
 #include <map>
 #include <assert.h>
+namespace OI { namespace Rpc {
 
-Protocol* DecodePbFrame(OI::Base::BytesStream& os, int32_t& parser_err, Protocol* (*get_stub)(proto_type_t))
+Protocol* DecodePbFrame(::OI::Base::BytesStream& os, int32_t& parser_err, Protocol* (*get_stub)(proto_type_t))
 {
 	Protocol* pProtocol = NULL;
 	os.StartTransaction();
@@ -11,13 +12,13 @@ Protocol* DecodePbFrame(OI::Base::BytesStream& os, int32_t& parser_err, Protocol
 	{
 		uint32_t seq = 0;
 		uint32_t size = 0;
-		OI::Base::PbHeaderState st = os.PreparePbHeader(seq, size);
-		if (st == OI::Base::PB_HEADER_NEED_MORE)
+		::OI::Base::PbHeaderState st = os.PreparePbHeader(seq, size);
+		if (st == ::OI::Base::PB_HEADER_NEED_MORE)
 		{
 			parser_err = PARSER_ERR_UNFINISH;
 			break;
 		}
-		if (st != OI::Base::PB_HEADER_OK)
+		if (st != ::OI::Base::PB_HEADER_OK)
 		{
 			parser_err = PARSER_ERR_OTHER;
 			break;
@@ -25,7 +26,7 @@ Protocol* DecodePbFrame(OI::Base::BytesStream& os, int32_t& parser_err, Protocol
 
 		try
 		{
-			OI::Base::BytesStream op;
+			::OI::Base::BytesStream op;
 			if (size > 0)
 			{
 				op.Append(os.GetCurPtr(), size);
@@ -47,7 +48,7 @@ Protocol* DecodePbFrame(OI::Base::BytesStream& os, int32_t& parser_err, Protocol
 				break;
 			}
 		}
-		catch (OI::Base::ParserException&)
+		catch (::OI::Base::ParserException&)
 		{
 			parser_err = PARSER_ERR_OTHER;
 			SAFE_DELETE(pProtocol);
@@ -62,13 +63,13 @@ Protocol* DecodePbFrame(OI::Base::BytesStream& os, int32_t& parser_err, Protocol
 	return pProtocol;
 }
 
-OI::Base::BytesStream EncodePbFrame(proto_type_t id, OI::Base::BytesStream& body)
+::OI::Base::BytesStream EncodePbFrame(proto_type_t id, ::OI::Base::BytesStream& body)
 {
 	if (body.Size() > (size_t)0x7FFFFFFF)
 	{
-		throw OI::Base::ParserException();
+		throw ::OI::Base::ParserException();
 	}
-	OI::Base::BytesStream os;
+	::OI::Base::BytesStream os;
 	uint32_t size = (uint32_t)body.Size();
 	const void* data = NULL;
 	if (size > 0)
@@ -79,17 +80,18 @@ OI::Base::BytesStream EncodePbFrame(proto_type_t id, OI::Base::BytesStream& body
 	return os;
 }
 
-Protocol* ProtocolParser::DecodeProtocol(OI::Base::BytesStream& os)
+Protocol* ProtocolParser::DecodeProtocol(::OI::Base::BytesStream& os)
 {
 	(void)os;
 	_parser_err = PARSER_ERR_PROTOCOL_TYPE;
 	return NULL;
 }
 
-OI::Base::BytesStream ProtocolParser::EncodeProtocol(const Protocol* proto)
+::OI::Base::BytesStream ProtocolParser::EncodeProtocol(const Protocol* proto)
 {
-	OI::Base::BytesStream body;
+	::OI::Base::BytesStream body;
 	proto->Encode(body);
 	return EncodePbFrame(proto->GetID(), body);
 }
+}}
 

@@ -7,6 +7,7 @@
 #include "oi_lock.h"
 #include "oi_timer.h"
 #include <assert.h>
+namespace OI { namespace Timer {
 class TimerLevel;
 typedef std::list<BaseTimer*>	TimerList;
 typedef std::vector<TimerList>	TimerListVector;
@@ -19,7 +20,7 @@ class TimerLevel
 	uint32_t		_lv_offset_tick;			//当前等级基础偏移tick数,第一级就是1，第二集就是1*lv[0]._max_tick =====
 	uint32_t		_offset;					//当前数组偏移量
 	TimerListVector _timer_tick_datas;			//定时器队列
-	OI::Thread::Mutex		_locker;
+	::OI::Thread::Mutex		_locker;
 public:
 	TimerLevel():_max_tick(0),_offset(0) {}
 	TimerLevel(const TimerLevel&) = delete;
@@ -44,7 +45,7 @@ private:
 	{
 		assert(level_offset >= 0 && level_offset < _max_tick);
 
-		OI::Thread::MutexGuard l(_locker);
+		::OI::Thread::MutexGuard l(_locker);
 		//在此定时器层级,则进入适当索引的定时器列表中
 		int offset = (level_offset + _offset) % _max_tick;
 		_timer_tick_datas[offset].push_back(pTimer);
@@ -58,7 +59,7 @@ private:
 	{
 		assert(pTimer->GetLevelOffset() >= 0 && pTimer->GetLevelOffset() < _max_tick);
 
-		OI::Thread::MutexGuard l(_locker);
+		::OI::Thread::MutexGuard l(_locker);
 		TimerList& timer_list = _timer_tick_datas[pTimer->GetLevelOffset()];
 		TimerList::iterator it = std::find(timer_list.begin(), timer_list.end(), pTimer);
 		if (it != timer_list.end())
@@ -75,3 +76,4 @@ private:
 		return _offset == 0;
 	}
 };
+}}

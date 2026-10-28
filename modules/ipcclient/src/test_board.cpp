@@ -18,6 +18,6 @@ void TestBoard::Done(int code)
 	}
 	if (_left.fetch_sub(1) == 1)
 	{
-		OI::Thread::ThreadPool::GetInstance().RequestStop(_code.load());
+		::OI::Thread::ThreadPool::GetInstance().RequestStop(_code.load());
 	}
 }

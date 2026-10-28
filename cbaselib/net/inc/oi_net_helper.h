@@ -1,6 +1,7 @@
 #pragma once
 
 #include "oi_socket.h"
+namespace OI { namespace Net {
 
 class SessionManager;
 
@@ -17,3 +18,4 @@ public:
 	static int SocketAcceptOne(NetSocket& sid, SessionManager* pMgr);
 	static NetAddr GetNetAddr(SessionManager* pMgr);
 };
+}}

@@ -1,6 +1,7 @@
 #include "oi_tcp_channel.h"
 #include "oi_session.h"
 #include "oi_net_os.h"
+namespace OI { namespace Net {
 
 void TCP_Channel::DataIn()
 {
@@ -84,3 +85,4 @@ write_fault:
 	_p_session->PassiveClose(errno);
 	return;
 }
+}}

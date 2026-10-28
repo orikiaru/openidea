@@ -1,12 +1,13 @@
 #pragma once
 #include "oi_bytes.h"
 #include "oi_net_os.h"
+namespace OI { namespace Net {
 class SessionManager;
 
 class NetAddr
 {
 	int32_t	_proto_type;
-	OI::Base::Bytes	_addr_data;
+	::OI::Base::Bytes	_addr_data;
 public:
 	NetAddr();
 	bool		Init(SessionManager* pMgr);
@@ -50,7 +51,9 @@ public:
 	NetAddr GetNetAddr(SessionManager* pMgr);
 public:
 	net_socket_t GetSocket() const	{ return _sid; }
+	void Attach(net_socket_t sid) { _sid = sid; }
 	void Detach() { _sid = INVALID_SOCKET_ID; }
 	bool IsValidAttr() const		{ return _addr.IsValidAttr(); }
 	NetAddr& GetAddr()				{ return _addr; }
 };
+}}

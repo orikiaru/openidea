@@ -145,17 +145,18 @@ Token StartTask(F&& fn)
 
 }
 
+namespace OI { namespace Rpc {
 template<typename T>
 struct RpcProtoId;
 
-void BindRpcHandler(proto_type_t id, std::function<coro::Task(coro::Token, SessionManager*, sid_t, OI::Base::BytesStream)> handle);
+void BindRpcHandler(proto_type_t id, std::function<coro::Task(coro::Token, ::OI::Net::SessionManager*, sid_t, ::OI::Base::BytesStream)> handle);
 
 // 请求和回包的包体都以 8 字节调用号开头，后面才是 Req/Res。
 // 客户端按调用号认回包，服务端处理完就回，不用按接受顺序排队。
 
 // 业务任务外面这一层：解包，co_await 业务任务，再把带调用号的回包写出去。
 template<typename Req, typename Res, typename F>
-coro::Task RunHandledRpc(F fn, proto_type_t res_id, coro::Token token, SessionManager* mgr, sid_t sid, OI::Base::BytesStream body)
+coro::Task RunHandledRpc(F fn, proto_type_t res_id, coro::Token token, ::OI::Net::SessionManager* mgr, sid_t sid, ::OI::Base::BytesStream body)
 {
 	Req req;
 	Res res;
@@ -170,13 +171,13 @@ coro::Task RunHandledRpc(F fn, proto_type_t res_id, coro::Token token, SessionMa
 			child.handle.promise().uid = token;
 		}
 		co_await child;
-		OI::Base::BytesStream out;
+		::OI::Base::BytesStream out;
 		out << call_id;
 		res.serialize(out);
-		OI::Base::BytesStream frame = EncodePbFrame(res_id, out);
+		::OI::Base::BytesStream frame = EncodePbFrame(res_id, out);
 		mgr->SendBytes(sid, frame.GetMutableBuff());
 	}
-	catch (OI::Base::ParserException&)
+	catch (::OI::Base::ParserException&)
 	{
 	}
 	co_return;
@@ -186,7 +187,7 @@ template<typename Req, typename Res, typename F>
 void HandleRpc(F fn)
 {
 	const proto_type_t res_id = RpcProtoId<Res>::value;
-	BindRpcHandler(RpcProtoId<Req>::value, [fn, res_id](coro::Token token, SessionManager* mgr, sid_t sid, OI::Base::BytesStream body) -> coro::Task {
+	BindRpcHandler(RpcProtoId<Req>::value, [fn, res_id](coro::Token token, ::OI::Net::SessionManager* mgr, sid_t sid, ::OI::Base::BytesStream body) -> coro::Task {
 		return RunHandledRpc<Req, Res>(fn, res_id, token, mgr, sid, std::move(body));
 	});
 }
@@ -194,14 +195,14 @@ void HandleRpc(F fn)
 // 登记一种回包协议号。这种包按包体开头的调用号去找等待的调用。
 void RegisterRpcRes(proto_type_t res_id);
 // 返回调用号。回包、超时或 WakeRpcCall 三者只有一个会触发 decode/resume。
-uint64_t BindRpcCall(proto_type_t res_id, std::coroutine_handle<> handle, int32_t* result, int32_t timeout_sec, std::function<bool(OI::Base::BytesStream&)> decode, std::function<void()> resume);
-bool WakeRpcCall(uint64_t call_id, int32_t code, OI::Base::BytesStream* body);
+uint64_t BindRpcCall(proto_type_t res_id, std::coroutine_handle<> handle, int32_t* result, int32_t timeout_sec, std::function<bool(::OI::Base::BytesStream&)> decode, std::function<void()> resume);
+bool WakeRpcCall(uint64_t call_id, int32_t code, ::OI::Base::BytesStream* body);
 
 // 发出请求后挂起。回包或超时回调里 Schedule 回来。回包可能比挂起先到。
 template<typename Req, typename Res>
 struct RpcCallAwaiter
 {
-	SessionManager* mgr;
+	::OI::Net::SessionManager* mgr;
 	sid_t sid;
 	Req* req;
 	Res* res;
@@ -210,7 +211,7 @@ struct RpcCallAwaiter
 	std::coroutine_handle<> handle;
 	std::atomic<int32_t> gate;
 	// 回包原样留到 await_resume 再解，解包跑在工人上，不占 IO 线程。
-	OI::Base::BytesStream reply;
+	::OI::Base::BytesStream reply;
 	bool replied;
 
 	RpcCallAwaiter()
@@ -235,7 +236,7 @@ struct RpcCallAwaiter
 		result = -1;
 		replied = false;
 		gate.store(0, std::memory_order_relaxed);
-		uint64_t call_id = BindRpcCall(RpcProtoId<Res>::value, h, &result, timeout_sec, [this](OI::Base::BytesStream& in) {
+		uint64_t call_id = BindRpcCall(RpcProtoId<Res>::value, h, &result, timeout_sec, [this](::OI::Base::BytesStream& in) {
 			reply = std::move(in);
 			replied = true;
 			return true;
@@ -246,10 +247,10 @@ struct RpcCallAwaiter
 				coro::Schedule(handle);
 			}
 		});
-		OI::Base::BytesStream body;
+		::OI::Base::BytesStream body;
 		body << call_id;
 		req->serialize(body);
-		OI::Base::BytesStream frame = EncodePbFrame(RpcProtoId<Req>::value, body);
+		::OI::Base::BytesStream frame = EncodePbFrame(RpcProtoId<Req>::value, body);
 		if (!mgr->SendBytes(sid, frame.GetMutableBuff()))
 		{
 			WakeRpcCall(call_id, -1, NULL);
@@ -266,7 +267,7 @@ struct RpcCallAwaiter
 				res->deserialize(reply);
 				result = 0;
 			}
-			catch (OI::Base::ParserException&)
+			catch (::OI::Base::ParserException&)
 			{
 				result = -1;
 			}
@@ -276,7 +277,7 @@ struct RpcCallAwaiter
 };
 
 template<typename Req, typename Res>
-RpcCallAwaiter<Req, Res> RpcCall(SessionManager& mgr, sid_t sid, Req& req, Res& res, int32_t timeout_sec = 180)
+RpcCallAwaiter<Req, Res> RpcCall(::OI::Net::SessionManager& mgr, sid_t sid, Req& req, Res& res, int32_t timeout_sec = 180)
 {
 	RpcCallAwaiter<Req, Res> awaiter;
 	awaiter.mgr = &mgr;
@@ -288,3 +289,4 @@ RpcCallAwaiter<Req, Res> RpcCall(SessionManager& mgr, sid_t sid, Req& req, Res& 
 	awaiter.handle = {};
 	return awaiter;
 }
+}}

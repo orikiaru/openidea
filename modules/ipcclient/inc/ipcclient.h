@@ -4,7 +4,7 @@
 #include "oi_net.h"
 #include "oi_singleton.h"
 
-class IpcClient : public ProtoClientManager
+class IpcClient : public ::OI::Rpc::ProtoClientManager
 {
 	DECLARE_SINGLETON(IpcClient)
 	IpcClient() {}
@@ -13,7 +13,7 @@ public:
 	bool Init();
 	virtual const std::string GetIDString();
 private:
-	virtual void OnClientConnect(Session* pSession);
-	virtual void OnClientDisconnect(const Session* pSession);
+	virtual void OnClientConnect(::OI::Net::Session* pSession);
+	virtual void OnClientDisconnect(const ::OI::Net::Session* pSession);
 	virtual void OnAbortSession();
 };

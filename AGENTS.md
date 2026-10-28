@@ -48,7 +48,12 @@ Redis 也单独测。开关是 `[Test] redis`。先起本机 Redis（`maxmemory 
 | `OI::Base` | 字节缓冲、配置、单例 |
 | `OI::File` | 路径 |
 | `OI::Thread` | 线程池、任务、锁 |
-| `OI::Rpc` | 序列化基类 |
+| `OI::Net` | poll、套接字、通道、会话 |
+| `OI::Timer` | 时间轮、时间辅助 |
+| `OI::Log` | 日志客户端 |
+| `OI::Redis` | Redis 客户端 |
+| `OI::Http` | HTTP 客户端 |
+| `OI::Rpc` | 序列化基类、协议和调用 |
 | `OI::RpcData` | 生成出来的 rpcdata |
 
 头文件名跟着功能走，框架头和对应的 cpp 都用 `oi_` 前缀，例如 `oi_rpc.h`、`oi_file.h`、`oi_thread.h`。三方库和 `port/win` 里的系统兼容头不用这个前缀。
@@ -69,5 +74,5 @@ Redis 也单独测。开关是 `[Test] redis`。先起本机 Redis（`maxmemory 
 | 定时器、时间轮、AddTimer | `docs/timer.md` | `Hold` 里的 `co_await coro::yield` |
 | 协议、proto.xml、rpcdata、模块 | `docs/module.md` | `modules/xmlconfig/proto.xml` 的 `AllEcho`、`Hold` |
 | 端口、复用、bind、TIME_WAIT、监听 | `docs/cbaselib.md` 的 net 段 | `cbaselib/port/oi_net_os.cpp` 的 `NetOs_Bind` |
-| Web、HTTP、JSON、urlencode、二进制 body | `docs/module.md` 的 Web 段 | `modules/webserver` 的三个路径；`modules/webclient` 的 `Run` |
+| Web、HTTP、JSON、urlencode、二进制 body | `docs/module.md` 的 Web 段 | `modules/webserver` 的四个路径；`modules/webclient` 的 `Run` |
 

@@ -1,5 +1,6 @@
 #pragma once
 #include "oi_channel.h"
+namespace OI { namespace Net {
 class SessionManager;
 class ConnectChannel : public Channel
 {
@@ -14,10 +15,9 @@ private:
 	void Close()	{ _close = true; }
 	bool IsClosed() { return _close;	 }
 	bool CheckTcpConnect();
-	bool CheckSslConnect();
 public:
 	static bool StartConnect(SessionManager* pMgr, bool async);
 private:
 	static bool StartTcpConnect(SessionManager* pMgr, bool async);
-	static bool StartSslConnect(SessionManager* pMgr, bool async);
 };
+}}

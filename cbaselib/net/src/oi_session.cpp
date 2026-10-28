@@ -10,8 +10,9 @@
 #include "oi_protocol.h"
 #include "oi_session_manager.h"
 #include "oi_channel.h"
+namespace OI { namespace Net {
 
-void Session::SwapInBuff(OI::Base::Bytes& inBuff)
+void Session::SwapInBuff(::OI::Base::Bytes& inBuff)
 {
 	//ibuff处理在io线程,无需加锁.
 	if (_ibuff.Size() == 0)
@@ -26,9 +27,9 @@ void Session::SwapInBuff(OI::Base::Bytes& inBuff)
 	OnDataIn();
 }
 
-void Session::SwapOutBuff(OI::Base::Bytes& outBuff)
+void Session::SwapOutBuff(::OI::Base::Bytes& outBuff)
 {
-	OI::Thread::MutexGuard l(_locker);
+	::OI::Thread::MutexGuard l(_locker);
 	OnDataOut();
 	if (outBuff.Size() == 0)
 	{
@@ -44,7 +45,7 @@ void Session::SwapOutBuff(OI::Base::Bytes& outBuff)
 void Session::SendDrained()
 {
 	// 和 Send 用同一把锁：要么看到刚追加的数据，要么关写之后 Send 再把写打开。
-	OI::Thread::MutexGuard l(_locker);
+	::OI::Thread::MutexGuard l(_locker);
 	OnDataOut();
 	if (_obuff.Size() == 0)
 	{
@@ -101,5 +102,6 @@ Session::Session(SessionManager* pMgr):_status(IO_ST_CONNECTED)
 Session::~Session()
 {
 }
+}}
 
 

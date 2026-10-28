@@ -1,5 +1,6 @@
 #pragma once
 #include "oi_channel.h"
+namespace OI { namespace Net {
 
 class SessionManager;
 class AcceptChannel : public Channel
@@ -14,5 +15,5 @@ public:
 	static bool StartAccept(SessionManager* pMgr, bool async);
 private:
 	static bool StartTcpAccept(SessionManager* pMgr, bool async);
-	static bool StartSslAccept(SessionManager* pMgr, bool async);
 };
+}}

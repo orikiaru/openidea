@@ -2,6 +2,7 @@
 #include "oi_bytes.h"
 #include <stdint.h>
 #include <string.h>
+namespace OI { namespace Log {
 
 // 进程间日志帧，小端：
 // uint32 payload_len | uint8 level | payload_len-1 字节正文
@@ -12,7 +13,7 @@ enum
 	LOG_FRAME_MAX = 8 * 1024 * 1024
 };
 
-inline void AppendLogFrame(OI::Base::Bytes& out, int level, const char* text, size_t text_len)
+inline void AppendLogFrame(::OI::Base::Bytes& out, int level, const char* text, size_t text_len)
 {
 	uint32_t payload = (uint32_t)(1 + text_len);
 	uint8_t hdr[5];
@@ -33,3 +34,4 @@ inline uint32_t ReadLogFrameLen(const char* p)
 	const uint8_t* u = (const uint8_t*)p;
 	return (uint32_t)u[0] | ((uint32_t)u[1] << 8) | ((uint32_t)u[2] << 16) | ((uint32_t)u[3] << 24);
 }
+}}

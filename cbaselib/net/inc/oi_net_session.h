@@ -1,5 +1,6 @@
 #pragma once
 #include "oi_session.h"
+namespace OI { namespace Net {
 //use for connected net_fd
 class NetSession : public Session
 {
@@ -11,3 +12,4 @@ public:
 	virtual void PassiveClose(int err);	//IO线程被动关闭调用,会回调Mgr->CloseSession
 	virtual void OnClose();
 };
+}}

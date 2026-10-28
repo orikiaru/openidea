@@ -6,7 +6,7 @@
 #include "oi_accept_channel.h"
 #include "oi_connect_channel.h"
 #include "oi_tcp_channel.h"
-#include "oi_ssl_channel.h"
+namespace OI { namespace Net {
 
 bool SessionManager::Init()
 {
@@ -43,7 +43,7 @@ SESSION_TYPE SessionManager::GetSessionTypeByString(const std::string& type)
 
 SessionManager::~SessionManager()
 {
-	OI::Thread::MutexGuard l(_locker);
+	::OI::Thread::MutexGuard l(_locker);
 	for (SessionMap::iterator it = _session_map.begin(); it != _session_map.end(); ++it)
 	{
 		Session* pSession = it->second;
@@ -57,9 +57,9 @@ const std::string SessionManager::GetIDString()
 	return "SessionManager"; 
 }
 
-bool SessionManager::Send(sid_t sid, const Protocol* p)
+bool SessionManager::Send(sid_t sid, const ::OI::Rpc::Protocol* p)
 {
-	OI::Thread::MutexGuard l(_locker);
+	::OI::Thread::MutexGuard l(_locker);
 	SessionMap::iterator it = _session_map.find(sid);
 	if (it != _session_map.end())
 	{
@@ -69,9 +69,9 @@ bool SessionManager::Send(sid_t sid, const Protocol* p)
 	return false;
 }
 
-bool SessionManager::SendBytes(sid_t sid, const OI::Base::Bytes& data)
+bool SessionManager::SendBytes(sid_t sid, const ::OI::Base::Bytes& data)
 {
-	OI::Thread::MutexGuard l(_locker);
+	::OI::Thread::MutexGuard l(_locker);
 	SessionMap::iterator it = _session_map.find(sid);
 	if (it != _session_map.end())
 	{
@@ -81,9 +81,9 @@ bool SessionManager::SendBytes(sid_t sid, const OI::Base::Bytes& data)
 	return false;
 }
 
-int SessionManager::BroadCast(const Protocol* p)
+int SessionManager::BroadCast(const ::OI::Rpc::Protocol* p)
 {
-	OI::Thread::MutexGuard l(_locker);
+	::OI::Thread::MutexGuard l(_locker);
 	SessionMap::iterator it = _session_map.begin();
 	for (; it != _session_map.end(); ++it)
 	{
@@ -97,7 +97,7 @@ void SessionManager::AddSession(Session* pSession)
 	int sid = 0;
 	{
 		{
-			OI::Thread::MutexGuard l(_locker);
+			::OI::Thread::MutexGuard l(_locker);
 			sid = ++_cur_session_id;
 			_session_map[sid] = pSession;
 			pSession->SetSessionID(sid);
@@ -116,13 +116,7 @@ void SessionManager::AddSession(net_socket_t new_fd)
 		s.Init(new_fd, this);
 		pChannel = new TCP_Channel(s, pSession);
 	}
-	else if (GetSessionType() == SESSION_TYPE_SSL)
-	{
-		NetSocket s;
-		s.Init(new_fd, this);
-		pChannel = new SSL_Channel(s, pSession);
-	}
-	
+
 	if (pChannel)
 	{
 		pSession->SetChannel(pChannel);
@@ -137,7 +131,7 @@ void SessionManager::AddSession(net_socket_t new_fd)
 
 void SessionManager::AbortSession()
 {
-	OI::Thread::MutexGuard l(_locker);
+	::OI::Thread::MutexGuard l(_locker);
 	++_cur_session_id;
 	OnConnectFailed();
 	OnAbortSession();
@@ -145,7 +139,7 @@ void SessionManager::AbortSession()
 
 void SessionManager::CloseSession(sid_t sid)
 {
-	OI::Thread::MutexGuard l(_locker);
+	::OI::Thread::MutexGuard l(_locker);
 	SessionMap::iterator it = _session_map.find(sid);
 	if (it != _session_map.end())
 	{
@@ -158,10 +152,11 @@ void SessionManager::CloseSession(sid_t sid)
 void SessionManager::DelSession(const Session* pSession)
 {
 	{
-		OI::Thread::MutexGuard l(_locker);
+		::OI::Thread::MutexGuard l(_locker);
 		SessionMap::iterator it = _session_map.find(pSession->GetSessionID());
 		assert(it == _session_map.end());
 	}
 	//已经解绑,此时有Session锁
 	OnDelSession(pSession);
 }
+}}

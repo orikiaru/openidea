@@ -10,6 +10,7 @@
 #include "oi_socket.h"
 #include "oi_session_manager.h"
 #include "oi_net_helper.h"
+namespace OI { namespace Net {
 
 NetAddr::NetAddr():_proto_type(AF_UNSPEC)
 {
@@ -176,3 +177,4 @@ NetAddr NetSocket::GetNetAddr(SessionManager* pMgr)
 {
 	return NetHelper::GetNetAddr(pMgr);
 }
+}}

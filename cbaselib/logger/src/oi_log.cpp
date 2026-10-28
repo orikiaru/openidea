@@ -6,7 +6,7 @@
 #include "oi_log_client.h"
 #include "oi_config.h"
 #include "oi_base.h"
-namespace Log
+namespace OI { namespace Log
 {
 	static std::string _log_title;
 	static bool	_logclient_init = false;
@@ -46,7 +46,7 @@ namespace Log
 			va_end(again);
 			return false;
 		}
-		OI::Base::Bytes tmp;
+		::OI::Base::Bytes tmp;
 		tmp.Reserve(_log_title.length() + (size_t)need + 2);
 		tmp.Append(_log_title.c_str(), _log_title.length());
 		if ((size_t)need < sizeof(stack))
@@ -73,4 +73,4 @@ namespace Log
 
 		return false;
 	}
-}
+}}

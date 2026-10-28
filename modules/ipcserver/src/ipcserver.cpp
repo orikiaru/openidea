@@ -21,7 +21,7 @@ const std::string IpcServer::GetIDString()
 
 bool IpcServer::Init()
 {
-	HandleRpc<OI::RpcData::AllEchoReq, OI::RpcData::AllEchoRes>([](coro::Token token, SessionManager* mgr, sid_t sid, OI::RpcData::AllEchoReq& req, OI::RpcData::AllEchoRes& res) -> coro::Task {
+	::OI::Rpc::HandleRpc<::OI::RpcData::AllEchoReq, ::OI::RpcData::AllEchoRes>([](coro::Token token, ::OI::Net::SessionManager* mgr, sid_t sid, ::OI::RpcData::AllEchoReq& req, ::OI::RpcData::AllEchoRes& res) -> coro::Task {
 		(void)token;
 		(void)mgr;
 		(void)sid;
@@ -29,7 +29,7 @@ bool IpcServer::Init()
 		res.code = 1;
 		co_return;
 	});
-	HandleRpc<OI::RpcData::HoldReq, OI::RpcData::HoldRes>([](coro::Token token, SessionManager* mgr, sid_t sid, OI::RpcData::HoldReq& req, OI::RpcData::HoldRes& res) -> coro::Task {
+	::OI::Rpc::HandleRpc<::OI::RpcData::HoldReq, ::OI::RpcData::HoldRes>([](coro::Token token, ::OI::Net::SessionManager* mgr, sid_t sid, ::OI::RpcData::HoldReq& req, ::OI::RpcData::HoldRes& res) -> coro::Task {
 		(void)token;
 		(void)mgr;
 		(void)sid;
@@ -40,16 +40,16 @@ bool IpcServer::Init()
 		res.mark = req.mark;
 		co_return;
 	});
-	return SessionManager::Init();
+	return ::OI::Net::SessionManager::Init();
 }
 
-void IpcServer::OnAddSession(Session* pSession)
+void IpcServer::OnAddSession(::OI::Net::Session* pSession)
 {
 	printf("ipc server session %d\n", pSession->GetSessionID());
 	fflush(stdout);
 }
 
-void IpcServer::OnDelSession(const Session* pSession)
+void IpcServer::OnDelSession(const ::OI::Net::Session* pSession)
 {
 	(void)pSession;
 }

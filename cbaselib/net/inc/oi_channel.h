@@ -1,6 +1,7 @@
 #pragma once
 #include "oi_lock.h"
 #include "oi_socket.h"
+namespace OI { namespace Net {
 
 class Session;
 class Channel
@@ -11,7 +12,7 @@ public:
 protected:
 	NetSocket	_socket;
 	Session*	_p_session;
-	OI::Thread::Mutex		_locker;
+	::OI::Thread::Mutex		_locker;
 public:
 	friend class Poll;
 	Channel(NetSocket s, Session* pSession) :_event_mask(0), _poll_token(NULL), _socket(s), _p_session(pSession) {}
@@ -28,3 +29,4 @@ public:
 	void AllowRead();
 	void ForbidRead();
 };
+}}

@@ -1,17 +1,18 @@
 #include "oi_rpc_session.h"
 #include "oi_protocol.h"
 #include "oi_rpc_call.h"
+namespace OI { namespace Rpc {
 
-void ProtoSession::Send(const OI::Base::Bytes& bytes)
+void ProtoSession::Send(const ::OI::Base::Bytes& bytes)
 {
-	OI::Thread::MutexGuard l(_locker);
+	::OI::Thread::MutexGuard l(_locker);
 	_obuff.Append(bytes);
 	AllowSend();
 }
 
 void ProtoSession::SendProtocol(const Protocol* proto)
 {
-	OI::Base::BytesStream os = _parser.EncodeProtocol(proto);
+	::OI::Base::BytesStream os = _parser.EncodeProtocol(proto);
 	Send(os.GetUnMutableBuff());
 }
 
@@ -19,25 +20,25 @@ void ProtoSession::OnDataIn()
 {
 	// 一包就是 协议id + 总大小 + 序列化结构。对不上或者解析失败，丢掉这一包。
 	// 借 _ibuff 的内存原地解析，不整块拷一份。
-	OI::Base::BytesStream os;
+	::OI::Base::BytesStream os;
 	os.Swap(_ibuff);
 	while (os.RemainSize())
 	{
 		os.StartTransaction();
 		uint32_t id = 0;
 		uint32_t size = 0;
-		OI::Base::PbHeaderState st = os.PreparePbHeader(id, size);
-		if (st == OI::Base::PB_HEADER_NEED_MORE)
+		::OI::Base::PbHeaderState st = os.PreparePbHeader(id, size);
+		if (st == ::OI::Base::PB_HEADER_NEED_MORE)
 		{
 			os.RollBack();
 			break;
 		}
-		if (st != OI::Base::PB_HEADER_OK)
+		if (st != ::OI::Base::PB_HEADER_OK)
 		{
 			PassiveClose(PARSER_ERR_OTHER);
 			break;
 		}
-		OI::Base::BytesStream body;
+		::OI::Base::BytesStream body;
 		if (size > 0)
 		{
 			body.Append(os.GetCurPtr(), size);
@@ -52,3 +53,4 @@ void ProtoSession::OnDataIn()
 void ProtoSession::OnDataOut()
 {
 }
+}}

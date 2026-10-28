@@ -7,11 +7,7 @@
 #include "oi_session_manager.h"
 #include "oi_log.h"
 #include "oi_net_os.h"
-
-#ifndef __UNUSE_OPENSSL__
-#include <openssl/ssl.h>
-#include <openssl/err.h>
-#endif
+namespace OI { namespace Net {
 
 void ConnectChannel::DataIn()
 {
@@ -36,9 +32,6 @@ void ConnectChannel::DataOut()
 		case SESSION_TYPE_TCP:
 			CheckTcpConnect();
 			Close();
-			break;
-		case SESSION_TYPE_SSL:
-			CheckSslConnect();
 			break;
 		default:
 			assert(false);
@@ -85,13 +78,6 @@ bool ConnectChannel::CheckTcpConnect()
 	return finish;
 }
 
-bool ConnectChannel::CheckSslConnect()
-{
-	bool finish = false;
-
-	return finish;
-}
-
 bool ConnectChannel::StartConnect(SessionManager* pMgr, bool async)
 {
 	SESSION_TYPE s_type = pMgr->GetSessionType();
@@ -99,8 +85,6 @@ bool ConnectChannel::StartConnect(SessionManager* pMgr, bool async)
 	{
 	case SESSION_TYPE_TCP:
 		return StartTcpConnect(pMgr, async);
-	case SESSION_TYPE_SSL:
-		return StartSslConnect(pMgr, async);
 	default:
 		printf("ConnectChannel::StartConnect not support session_type=%d\n", s_type);
 		assert(false);
@@ -119,99 +103,4 @@ bool ConnectChannel::StartTcpConnect(SessionManager* pMgr, bool async)
 
 	return s.SocketConnect(pMgr);
 }
-
-bool ConnectChannel::StartSslConnect(SessionManager* pMgr, bool async)
-{
-#ifndef __UNUSE_OPENSSL__
-	//初始化
-	SSL_library_init();
-	OpenSSL_add_all_algorithms();
-	SSL_load_error_strings();
-
-	bool verify_peer = false;
-	std::string client_ca_path = "";
-	std::string client_cert_path = "";
-	std::string client_key_path = "";
-
-	SSL_CTX* ctx = SSL_CTX_new(TLS_client_method());
-	if (!ctx)
-	{
-		ERR_print_errors_fp(stderr);
-		return false;
-	}
-
-	if (!verify_peer)
-	{
-		SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL);
-	}
-	else
- 	{
-		SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT, NULL);
-		//加载cafile
-		if (SSL_CTX_load_verify_locations(ctx, client_ca_path.c_str(), NULL) != 1)
-		{
-			ERR_print_errors_fp(stderr);
-			SSL_CTX_free(ctx);
-			return false;
-		}
-		//SSL_CTX_use_certificate_chain_file
-		if (SSL_CTX_use_certificate_chain_file(ctx, client_cert_path.c_str()) != 1)
-		{
-			ERR_print_errors_fp(stderr);
-			SSL_CTX_free(ctx);
-			return false;
-		}
-		if (SSL_CTX_use_PrivateKey_file(ctx, client_key_path.c_str(), SSL_FILETYPE_PEM) != 1)
-		{
-			ERR_print_errors_fp(stderr);
-			SSL_CTX_free(ctx);
-			return false;
-		}
-		if (!SSL_CTX_check_private_key(ctx))
-		{
-			ERR_print_errors_fp(stderr);
-			SSL_CTX_free(ctx);
-			return false;
-		}
-	}
-
-	NetSocket s;
-	if (!s.CreateSocket(pMgr, async))
-	{
-		return false;
-	}
-
-	SSL* ssl = SSL_new(ctx);
-	int ret = SSL_set_fd(ssl, s.GetSocket());
-	if (ret != 1)
-	{
-		LOG_ERROR("SSL_set_fd error %s", ERR_lib_error_string(ERR_get_error()));
-	}
-
-	SSL_set_connect_state(ssl);
-
-	ret = SSL_do_handshake(ssl);
-	if (ret != 1)
-	{
-		int err = SSL_get_error(ssl, ret);
-		if (err == SSL_ERROR_WANT_WRITE || err == SSL_ERROR_WANT_READ)
-		{
-			Poll::GetInstance().IOEventRegister(new ConnectChannel(s, pMgr), true, true);
-			return true;
-		}
-		else
-		{
-			ERR_print_errors_fp(stderr);
-			SSL_CTX_free(ctx);
-			return false;
-		}
-	}
-	else
-	{
-		pMgr->AddSession(NetOs_Dup(s.GetSocket()));
-	}
-#else
-	assert(!"UseOpenSSL Must Modify CMakeLists.txt _USE_SSL_ == true to link libssl.so");
-#endif
-	return false;
-}
+}}

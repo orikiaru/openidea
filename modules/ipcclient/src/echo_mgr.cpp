@@ -14,7 +14,7 @@ static const char* kMode = "st";
 static const char* kMode = "mt";
 #endif
 
-static bool SameBytes(const OI::Base::Bytes& a, const OI::Base::Bytes& b)
+static bool SameBytes(const ::OI::Base::Bytes& a, const ::OI::Base::Bytes& b)
 {
 	if (a.Size() != b.Size())
 	{
@@ -27,12 +27,12 @@ static bool SameBytes(const OI::Base::Bytes& a, const OI::Base::Bytes& b)
 	return memcmp(a.Data(), b.Data(), a.Size()) == 0;
 }
 
-static bool SameInner(const OI::RpcData::Inner& a, const OI::RpcData::Inner& b)
+static bool SameInner(const ::OI::RpcData::Inner& a, const ::OI::RpcData::Inner& b)
 {
 	return a.n == b.n && a.s == b.s;
 }
 
-static void FillAllTypes(OI::RpcData::AllTypesData& data, int n)
+static void FillAllTypes(::OI::RpcData::AllTypesData& data, int n)
 {
 	data.c = (int8_t)(n & 0x7f);
 	data.s = (int16_t)(1000 + n);
@@ -56,7 +56,7 @@ static void FillAllTypes(OI::RpcData::AllTypesData& data, int n)
 	data.child.s = "child";
 	data.children.clear();
 	data.children.push_back(data.child);
-	OI::RpcData::Inner kin;
+	::OI::RpcData::Inner kin;
 	kin.n = n + 7;
 	kin.s = "kin";
 	data.children.push_back(kin);
@@ -79,7 +79,7 @@ static void FillAllTypes(OI::RpcData::AllTypesData& data, int n)
 	data.ubig.clear();
 	data.ubig[data.u64] = "b";
 	data.keyed.clear();
-	OI::RpcData::EchoKey key;
+	::OI::RpcData::EchoKey key;
 	key.part.n = n;
 	key.name = "k";
 	data.keyed[key] = "v";
@@ -88,7 +88,7 @@ static void FillAllTypes(OI::RpcData::AllTypesData& data, int n)
 	data.keyed[key] = "w";
 }
 
-static void PoisonAllTypes(OI::RpcData::AllTypesData& data)
+static void PoisonAllTypes(::OI::RpcData::AllTypesData& data)
 {
 	data.c = 0x5a;
 	data.s = -1;
@@ -117,7 +117,7 @@ static void PoisonAllTypes(OI::RpcData::AllTypesData& data)
 	data.keyed.clear();
 }
 
-static bool DiffAllTypes(const OI::RpcData::AllTypesData& sent, const OI::RpcData::AllTypesData& recv)
+static bool DiffAllTypes(const ::OI::RpcData::AllTypesData& sent, const ::OI::RpcData::AllTypesData& recv)
 {
 	bool same = true;
 	if (sent.c != recv.c) { EchoMgr::GetInstance().Note("c"); same = false; }
@@ -157,9 +157,9 @@ static bool DiffAllTypes(const OI::RpcData::AllTypesData& sent, const OI::RpcDat
 	}
 	else
 	{
-		for (std::map<std::string, OI::RpcData::Inner>::const_iterator it = sent.named.begin(); it != sent.named.end(); ++it)
+		for (std::map<std::string, ::OI::RpcData::Inner>::const_iterator it = sent.named.begin(); it != sent.named.end(); ++it)
 		{
-			std::map<std::string, OI::RpcData::Inner>::const_iterator jt = recv.named.find(it->first);
+			std::map<std::string, ::OI::RpcData::Inner>::const_iterator jt = recv.named.find(it->first);
 			if (jt == recv.named.end() || !SameInner(it->second, jt->second))
 			{
 				EchoMgr::GetInstance().Note("named");
@@ -182,9 +182,9 @@ static bool DiffAllTypes(const OI::RpcData::AllTypesData& sent, const OI::RpcDat
 	}
 	else
 	{
-		for (std::map<OI::RpcData::EchoKey, std::string>::const_iterator it = sent.keyed.begin(); it != sent.keyed.end(); ++it)
+		for (std::map<::OI::RpcData::EchoKey, std::string>::const_iterator it = sent.keyed.begin(); it != sent.keyed.end(); ++it)
 		{
-			std::map<OI::RpcData::EchoKey, std::string>::const_iterator jt = recv.keyed.find(it->first);
+			std::map<::OI::RpcData::EchoKey, std::string>::const_iterator jt = recv.keyed.find(it->first);
 			if (jt == recv.keyed.end() || jt->second != it->second)
 			{
 				EchoMgr::GetInstance().Note("keyed");
@@ -204,12 +204,12 @@ static bool DiffAllTypes(const OI::RpcData::AllTypesData& sent, const OI::RpcDat
 
 static coro::Task RunOne(int n)
 {
-	OI::RpcData::AllEchoReq req;
+	::OI::RpcData::AllEchoReq req;
 	FillAllTypes(req.data, n);
-	OI::RpcData::AllEchoRes res;
+	::OI::RpcData::AllEchoRes res;
 	PoisonAllTypes(res.data);
 	res.code = -1;
-	int ret = co_await RpcCall(IpcClient::GetInstance(), EchoMgr::GetInstance().Sid(), req, res);
+	int ret = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), EchoMgr::GetInstance().Sid(), req, res);
 	EchoMgr::GetInstance().OnResult(n, req, res, ret, DiffAllTypes(req.data, res.data));
 }
 
@@ -234,10 +234,10 @@ void EchoMgr::Note(const char* name)
 
 void EchoMgr::ArmTimeout()
 {
-	BaseTimerManager::GetInstance().AddTimer([]() {
+	::OI::Timer::BaseTimerManager::GetInstance().AddTimer([]() {
 		printf("ipc timeout done=%d ok=%d\n", EchoMgr::GetInstance().Done(), EchoMgr::GetInstance().Ok());
 		fflush(stdout);
-		OI::Thread::ThreadPool::GetInstance().RequestStop(1);
+		::OI::Thread::ThreadPool::GetInstance().RequestStop(1);
 	}, _timeout_ms);
 }
 
@@ -286,7 +286,7 @@ coro::Task EchoMgr::Pump(int index)
 	co_return;
 }
 
-void EchoMgr::OnResult(int n, const OI::RpcData::AllEchoReq& req, const OI::RpcData::AllEchoRes& res, int ret, bool same)
+void EchoMgr::OnResult(int n, const ::OI::RpcData::AllEchoReq& req, const ::OI::RpcData::AllEchoRes& res, int ret, bool same)
 {
 	std::lock_guard<std::mutex> lock(_mu);
 	if (!_have_sample && n == 0)

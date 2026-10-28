@@ -38,6 +38,6 @@ public:
 	int32_t Ok() const { return _ok.load(); }
 	void Note(const char* name);
 	int32_t* GapDiffer() { return &_gap_differ; }
-	void OnResult(int n, const OI::RpcData::AllEchoReq& req, const OI::RpcData::AllEchoRes& res, int ret, bool same);
+	void OnResult(int n, const ::OI::RpcData::AllEchoReq& req, const ::OI::RpcData::AllEchoRes& res, int ret, bool same);
 	coro::Task Pump(int index);
 };

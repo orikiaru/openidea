@@ -4,7 +4,7 @@
 #include "oi_net.h"
 #include "oi_singleton.h"
 
-class IpcServer : public ProtoSessionManager
+class IpcServer : public ::OI::Rpc::ProtoSessionManager
 {
 	DECLARE_SINGLETON(IpcServer)
 	IpcServer() {}
@@ -13,6 +13,6 @@ public:
 	bool Init();
 	virtual const std::string GetIDString();
 private:
-	virtual void OnAddSession(Session* pSession);
-	virtual void OnDelSession(const Session* pSession);
+	virtual void OnAddSession(::OI::Net::Session* pSession);
+	virtual void OnDelSession(const ::OI::Net::Session* pSession);
 };        

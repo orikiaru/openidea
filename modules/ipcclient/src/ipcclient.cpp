@@ -11,7 +11,7 @@ IpcClient::~IpcClient()
 
 bool IpcClient::Init()
 {
-	if (!SessionManager::Init())
+	if (!::OI::Net::SessionManager::Init())
 	{
 		return false;
 	}
@@ -21,11 +21,11 @@ bool IpcClient::Init()
 	{
 		return true;
 	}
-	if (!RedisClient::GetInstance().Init())
+	if (!::OI::Redis::RedisClient::GetInstance().Init())
 	{
 		return false;
 	}
-	RedisClient::GetInstance().StartClient();
+	::OI::Redis::RedisClient::GetInstance().StartClient();
 	if (RedisMgr::GetInstance().Enabled())
 	{
 		RedisMgr::GetInstance().Start();
@@ -38,7 +38,7 @@ const std::string IpcClient::GetIDString()
 	return "IpcClient";
 }
 
-void IpcClient::OnClientConnect(Session* pSession)
+void IpcClient::OnClientConnect(::OI::Net::Session* pSession)
 {
 	EchoMgr::GetInstance().Load();
 	LogMgr::GetInstance().Load();
@@ -47,7 +47,7 @@ void IpcClient::OnClientConnect(Session* pSession)
 	HoldMgr::GetInstance().Start(pSession->GetSessionID());
 }
 
-void IpcClient::OnClientDisconnect(const Session* pSession)
+void IpcClient::OnClientDisconnect(const ::OI::Net::Session* pSession)
 {
 	(void)pSession;
 }

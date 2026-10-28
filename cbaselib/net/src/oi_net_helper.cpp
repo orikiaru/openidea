@@ -12,6 +12,7 @@
 #include "oi_socket.h"
 #include "oi_connect_channel.h"
 #include "oi_net_os.h"
+namespace OI { namespace Net {
 
 
 bool NetHelper::CreateSocket(NetSocket& net_socket, SessionManager* pMgr, bool async)
@@ -60,7 +61,7 @@ bool NetHelper::SocketListen(NetSocket& sid, SessionManager* pMgr)
 		return false;
 	}
 	int listen_count = 10;
-	//TODO OI::Base::Config
+	//TODO ::OI::Base::Config
 	int ret = NetOs_Listen(sid.GetSocket(), listen_count);
 	if (ret != 0)
 	{
@@ -169,3 +170,4 @@ NetAddr NetHelper::GetNetAddr(SessionManager* pMgr)
 	addr.Init(pMgr);
 	return addr;
 }
+}}

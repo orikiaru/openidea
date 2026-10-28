@@ -5,13 +5,13 @@
 #include "oi_session.h"
 #include <map>
 #include <string>
+namespace OI { namespace Net {
 
 class Session;
 enum SESSION_TYPE
 {
 	SESSION_TYPE_INVALID,
 	SESSION_TYPE_TCP,
-	SESSION_TYPE_SSL,
 	//目前只提供TCP
 	/*
 	SESSION_TYPE_UDP,
@@ -27,7 +27,7 @@ protected:
 	typedef std::map<sid_t, Session*> SessionMap;
 	SessionMap 	_session_map;
 	sid_t	   	_cur_session_id;
-	OI::Thread::Mutex   	_locker;
+	::OI::Thread::Mutex   	_locker;
 	std::string 	_sip;
 	std::string 	_sport;
 	SESSION_TYPE	_session_type;		//会话管理器管理的会话类型,TCP,UDP,UNIX,FIFO
@@ -44,20 +44,20 @@ public:
 	bool StartClient(bool async = true);	//同步起Client返回值有意义
 	bool StartServer(bool async = true);	//目前不支持同步操作
 
-	bool Send(sid_t sid, const Protocol& p)
+	bool Send(sid_t sid, const ::OI::Rpc::Protocol& p)
 	{
 		return Send(sid, &p);
 	}
-	bool Send(sid_t sid, const Protocol* p);
-	bool SendBytes(sid_t sid, const OI::Base::Bytes& data);
+	bool Send(sid_t sid, const ::OI::Rpc::Protocol* p);
+	bool SendBytes(sid_t sid, const ::OI::Base::Bytes& data);
 
-	int BroadCast(const Protocol& p)
+	int BroadCast(const ::OI::Rpc::Protocol& p)
 	{
 		return BroadCast(&p);
 	}
 
 	//@return BroadCount
-	int BroadCast(const Protocol* p);
+	int BroadCast(const ::OI::Rpc::Protocol* p);
 
 	static SESSION_TYPE GetSessionTypeByString(const std::string& type);
 
@@ -89,4 +89,5 @@ protected:
 	virtual void OnAbortSession() {}
 	virtual void OnConnectFailed() {}
 };
+}}
 

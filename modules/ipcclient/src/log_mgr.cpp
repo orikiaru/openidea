@@ -46,7 +46,7 @@ coro::Task LogMgr::Pump()
 	int64_t prev = _sent.fetch_add(_line);
 	if (prev < _bytes)
 	{
-		if (!LogClient::GetInstance().SendLog(LOG_INFO, payload.data(), payload.size()))
+		if (!::OI::Log::LogClient::GetInstance().SendLog(LOG_INFO, payload.data(), payload.size()))
 		{
 			_sent.fetch_sub(_line);
 		}

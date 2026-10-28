@@ -13,7 +13,6 @@ if(MSVC)
     add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/std:c++20>)
     add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/EHsc>)
     add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/utf-8>)
-    add_compile_definitions(__UNUSE_OPENSSL__)
 else()
     set(_CXX_OPTION_ -ggdb -g -Wall -std=gnu++20
         -Werror -Wno-unused-function
@@ -30,26 +29,6 @@ else()
     foreach(_opt IN LISTS _CXX_OPTION_)
         add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:${_opt}>")
     endforeach()
-endif()
-
-function (CheckLibExist lib_name)
-    message(STATUS "CheckLibExist lib_name=" ${lib_name})
-    find_library(LIBVAR ${lib_name})
-    if(${LIBVAR} STREQUAL "LIBVAR-NOTFOUND")
-        message(FATAL_ERROR "CheckLibExist not find lib_name=" ${lib_name})
-    else()
-        message(STATUS "CheckLibExist find lib_name=" ${LIBVAR})
-    endif()
-endfunction()
-
-#是否使用openssl
-set(_USE_SSL_ false)
-if (_USE_SSL_)
-    CheckLibExist(ssl)
-    # debian系可以通过  sudo apt update && sudo apt-get install openssl && sudo apt-get install libssl-dev 来获取库环境
-else()
-    message(STATUS "AddDefine  __UNUSE_OPENSSL__")
-    add_compile_definitions(__UNUSE_OPENSSL__)
 endif()
 
 #一些通用路径变量
@@ -81,6 +60,7 @@ include_directories(
     ${BASE_LIB_PATH}/timer/inc
     ${BASE_LIB_PATH}/logger/inc
     ${BASE_LIB_PATH}/redis/inc
+    ${BASE_LIB_PATH}/http/inc
     ${BASE_LIB_PATH}/proto/inc
 	${MODULES_PATH}/include
 	${BASE_LIB_PATH}/port
@@ -106,6 +86,7 @@ add_subdirectory(${BASE_LIB_PATH}/proto EXCLUDE_FROM_ALL)
 add_subdirectory(${BASE_LIB_PATH}/timer EXCLUDE_FROM_ALL)
 add_subdirectory(${BASE_LIB_PATH}/logger EXCLUDE_FROM_ALL)
 add_subdirectory(${BASE_LIB_PATH}/redis EXCLUDE_FROM_ALL)
+add_subdirectory(${BASE_LIB_PATH}/http EXCLUDE_FROM_ALL)
 
 
 set(PROTO_TOOL_PATH ${BASE_LIB_PATH}/proto/proto_tool/main.py)

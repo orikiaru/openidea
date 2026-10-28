@@ -1,6 +1,7 @@
 #include "oi_net_channel.h"
 #include "oi_session.h"
 #include "oi_net_os.h"
+namespace OI { namespace Net {
 
 NetChannel::NetChannel(NetSocket s, Session* pSession):Channel(s, pSession)
 {
@@ -31,3 +32,4 @@ void NetChannel::Destory()
 	}
 	delete this;
 }
+}}

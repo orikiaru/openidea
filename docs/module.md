@@ -62,6 +62,8 @@ endforeach()
 
 ## Web
 
-`webserver` 和 `webclient` 是两个独立进程，只走 HTTP，不进 proto，也不开 HTTPS。query、JSON 和二进制 body 交给 `cpp-httplib` 与 JsonCpp。body 若是 `rpcdata`，用它自己的 `FromJson` / `ToJson`。
+`webserver` 和 `webclient` 是两个独立进程，只走 HTTP，不开 HTTPS。JSON 用 JsonCpp。body 若是 `rpcdata`，用它自己的 `FromJson` / `ToJson`。
 
-`webserver` 听 `WebServer.port`（默认 18080）。`GET /query` 回解码后的 query，`POST /json` 回 JSON，`POST /rpcjson` 用 `JsonAll` 的 `FromJson` / `ToJson` 走一遍全量字段并把 `gap` 加一，`POST /bin` 把 body 原样写回。`webclient` 连上后打这四下，退出码 0 表示都对上了。
+`webserver` 仍用 `cpp-httplib` 听 `WebServer.port`（默认 18080）。`GET /query` 回解码后的 query，`POST /json` 回 JSON，`POST /rpcjson` 用 `JsonAll` 的 `FromJson` / `ToJson` 走一遍全量字段并把 `gap` 加一，`POST /bin` 把 body 原样写回。这个进程自己的 listen 是阻塞的，不进协程。
+
+`webclient` 不直接调 `cpp-httplib`。它走基础库 `OI::Http::Client`：`Start` 用 `StartTask` 拉起 `Run`，四次请求都是 `co_await`。完成时 poll 线程 `Schedule` 协程句柄，不在回调里 `resume`。单线程模块链 `http_static`。退出码 0 表示四下都对上了。以后换 Go 或其他语言的 HTTP 服务时，仍用这个客户端，只改地址。

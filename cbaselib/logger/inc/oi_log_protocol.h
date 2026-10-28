@@ -1,13 +1,14 @@
 #pragma once
 #include "oi_protocol.h"
+namespace OI { namespace Log {
 
 //走向日志服的协议不是正常Protocol,是需要特殊会话和特殊解码器处理的
-class LogProtocol :public Protocol
+class LogProtocol :public ::OI::Rpc::Protocol
 {
 public:
 	LogProtocol(proto_type_t id) :Protocol(id) {}
-	virtual Protocol* Clone() = 0;
-	virtual void Handle(SessionManager* mgr, sid_t sid) = 0;
+	virtual ::OI::Rpc::Protocol* Clone() = 0;
+	virtual void Handle(::OI::Net::SessionManager* mgr, sid_t sid) = 0;
 };
 
 enum LOG_PROTO_TYPE
@@ -20,13 +21,13 @@ class RemoteLog : public LogProtocol
 {
 public:
 	int32_t		_lv;
-	OI::Base::Bytes		_log_content;
+	::OI::Base::Bytes		_log_content;
 public:
 	explicit RemoteLog() : LogProtocol(LPT_REMOTE_LOG) {}
-	RemoteLog(LOG_LEVEL lv, const OI::Base::Bytes& log) :
+	RemoteLog(LOG_LEVEL lv, const ::OI::Base::Bytes& log) :
 		LogProtocol(LPT_REMOTE_LOG), _lv(lv), _log_content(log) {}
-	virtual void Handle(SessionManager* mgr, sid_t sid);
-	virtual Protocol* Clone()
+	virtual void Handle(::OI::Net::SessionManager* mgr, sid_t sid);
+	virtual ::OI::Rpc::Protocol* Clone()
 	{
 		return new RemoteLog(*this);
 	}
@@ -35,13 +36,13 @@ public:
 		PB_LV = 0,
 		PB_CONTENT = 1,
 	};
-	virtual OI::Base::BytesStream& serialize(OI::Base::BytesStream& os)const
+	virtual ::OI::Base::BytesStream& serialize(::OI::Base::BytesStream& os)const
 	{
 		os.WritePb(PB_LV, _lv);
 		os.WritePb(PB_CONTENT, _log_content);
 		return os;
 	}
-	virtual OI::Base::BytesStream& deserialize(OI::Base::BytesStream& os)
+	virtual ::OI::Base::BytesStream& deserialize(::OI::Base::BytesStream& os)
 	{
 		while (os.RemainSize() > 0)
 		{
@@ -58,3 +59,4 @@ public:
 		return os;
 	}
 };
+}}

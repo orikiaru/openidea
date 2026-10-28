@@ -4,11 +4,11 @@
 #include "oi_rpc.h"
 #include "oi_rpc_session.h"
 #include "oi_session_manager.h"
+namespace OI { namespace Rpc {
 
 
-class SessionManager;
 
-class Protocol: public OI::Rpc::Serialize
+class Protocol: public ::OI::Rpc::Serialize
 {
 protected:
 	proto_type_t	_id;
@@ -22,7 +22,8 @@ public:
 	virtual ~Protocol(){}
 	proto_type_t GetID()	const{	return _id; 	}
 	virtual Protocol* Clone() = 0;
-	virtual void Handle(SessionManager* mgr, sid_t sid) = 0;
+	virtual void Handle(::OI::Net::SessionManager* mgr, sid_t sid) = 0;
 };
 
+}}
 #endif

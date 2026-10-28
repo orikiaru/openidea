@@ -106,7 +106,7 @@ size_t ScanCommand(const char* begin, const char* end, int64_t& argc, bool& bad)
 }
 
 RedisServerSession::RedisServerSession(RedisServer* owner)
-	: NetSession(owner), _owner(owner), _link(0)
+	: ::OI::Net::NetSession(owner), _owner(owner), _link(0)
 {
 }
 
@@ -114,14 +114,14 @@ RedisServerSession::~RedisServerSession()
 {
 }
 
-void RedisServerSession::Send(const OI::Base::Bytes& bytes)
+void RedisServerSession::Send(const ::OI::Base::Bytes& bytes)
 {
-	OI::Thread::MutexGuard lock(_locker);
+	::OI::Thread::MutexGuard lock(_locker);
 	_obuff.Append(bytes);
 	AllowSend();
 }
 
-void RedisServerSession::SendProtocol(const Protocol* proto)
+void RedisServerSession::SendProtocol(const ::OI::Rpc::Protocol* proto)
 {
 	(void)proto;
 	assert(false && "redis server speaks RESP");

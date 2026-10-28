@@ -1,18 +1,17 @@
 #include "web_client.h"
 #include "oi_config.h"
+#include "oi_http.h"
+#include "oi_rpc_coro.h"
 #include "oi_rpcdata_jsonall.h"
-#include "httplib.h"
+#include "oi_thread.h"
 #include "json/json.h"
 #include <cstdio>
 #include <cstring>
 #include <map>
 #include <memory>
 #include <string>
-
-static bool OkStatus(const httplib::Result& res)
-{
-	return res && res->status == 200;
-}
+#include <utility>
+#include <vector>
 
 static std::string DumpJson(const Json::Value& value)
 {
@@ -30,30 +29,34 @@ static bool ParseJson(const std::string& text, Json::Value& out)
 	return reader->parse(begin, begin + text.size(), &out, &errs);
 }
 
-int WebClient::Run()
+static bool OkStatus(const ::OI::Http::Response& res)
+{
+	return !res.fail && res.status == 200;
+}
+
+static coro::Task Run()
 {
 	std::string ip = "127.0.0.1";
-	int port = 18080;
+	int32_t port = 18080;
 	TryGetConfig("WebClient.ip", ip);
 	TryGetConfig("WebClient.port", port);
 
-	httplib::Client cli(ip, port);
-	cli.set_connection_timeout(2, 0);
-	cli.set_read_timeout(5, 0);
-
+	::OI::Http::Client cli(ip, port);
 	int bad = 0;
 
 	const std::string text = "a b+";
-	httplib::Result query = cli.Get("/query", httplib::Params{{"text", text}}, httplib::Headers{});
+	std::vector<std::pair<std::string, std::string>> query;
+	query.push_back(std::make_pair(std::string("text"), text));
+	::OI::Http::Response got = co_await cli.Get("/query", query);
 	std::string got_text;
-	if (!OkStatus(query))
+	if (!OkStatus(got))
 	{
 		bad += 1;
 	}
 	else
 	{
 		Json::Value body;
-		if (!ParseJson(query->body, body) || !body.isMember("text") || !body["text"].isString())
+		if (!ParseJson(got.body, body) || !body.isMember("text") || !body["text"].isString())
 		{
 			bad += 1;
 		}
@@ -70,7 +73,7 @@ int WebClient::Run()
 	Json::Value req(Json::objectValue);
 	req["n"] = 1;
 	req["s"] = "hi";
-	httplib::Result js = cli.Post("/json", DumpJson(req), "application/json");
+	::OI::Http::Response js = co_await cli.Post("/json", DumpJson(req), "application/json");
 	int got_n = 0;
 	bool got_ok = false;
 	std::string got_s;
@@ -81,7 +84,7 @@ int WebClient::Run()
 	else
 	{
 		Json::Value body;
-		if (!ParseJson(js->body, body) || !body.isMember("n") || !body.isMember("s") || !body.isMember("ok"))
+		if (!ParseJson(js.body, body) || !body.isMember("n") || !body.isMember("s") || !body.isMember("ok"))
 		{
 			bad += 1;
 		}
@@ -97,7 +100,7 @@ int WebClient::Run()
 		}
 	}
 
-	OI::RpcData::JsonAll sent;
+	::OI::RpcData::JsonAll sent;
 	sent.c = 7;
 	sent.s = 1001;
 	sent.i = 42;
@@ -113,7 +116,7 @@ int WebClient::Run()
 	sent.words.push_back("ord");
 	sent.child.n = 3;
 	sent.child.s = "child";
-	OI::RpcData::Inner kin;
+	::OI::RpcData::Inner kin;
 	kin.n = 9;
 	kin.s = "kin";
 	sent.children.push_back(sent.child);
@@ -131,7 +134,7 @@ int WebClient::Run()
 	sent.gap = 20;
 	sent.utable[sent.u32] = "u";
 	sent.ubig[sent.u64] = "b";
-	httplib::Result rpc = cli.Post("/rpcjson", sent.ToJson(), "application/json");
+	::OI::Http::Response rpc = co_await cli.Post("/rpcjson", sent.ToJson(), "application/json");
 	int rpc_ok = 0;
 	if (!OkStatus(rpc))
 	{
@@ -139,8 +142,8 @@ int WebClient::Run()
 	}
 	else
 	{
-		OI::RpcData::JsonAll back;
-		bool same = back.FromJson(rpc->body)
+		::OI::RpcData::JsonAll back;
+		bool same = back.FromJson(rpc.body)
 			&& back.c == sent.c && back.s == sent.s && back.i == sent.i
 			&& back.l == sent.l && back.i64 == sent.i64
 			&& back.f == sent.f && back.d == sent.d
@@ -166,9 +169,9 @@ int WebClient::Run()
 		}
 		if (same)
 		{
-			for (std::map<std::string, OI::RpcData::Inner>::const_iterator it = sent.named.begin(); it != sent.named.end(); ++it)
+			for (std::map<std::string, ::OI::RpcData::Inner>::const_iterator it = sent.named.begin(); it != sent.named.end(); ++it)
 			{
-				std::map<std::string, OI::RpcData::Inner>::const_iterator jt = back.named.find(it->first);
+				std::map<std::string, ::OI::RpcData::Inner>::const_iterator jt = back.named.find(it->first);
 				if (jt == back.named.end() || jt->second.n != it->second.n || jt->second.s != it->second.s)
 				{
 					same = false;
@@ -187,9 +190,9 @@ int WebClient::Run()
 	}
 
 	std::string bin("\x00\x01\xff", 3);
-	httplib::Result raw = cli.Post("/bin", bin.data(), bin.size(), "application/octet-stream");
+	::OI::Http::Response raw = co_await cli.Post("/bin", bin, "application/octet-stream");
 	int bin_ok = 0;
-	if (OkStatus(raw) && raw->body.size() == bin.size() && std::memcmp(raw->body.data(), bin.data(), bin.size()) == 0)
+	if (OkStatus(raw) && raw.body.size() == bin.size() && std::memcmp(raw.body.data(), bin.data(), bin.size()) == 0)
 	{
 		bin_ok = 1;
 	}
@@ -200,6 +203,18 @@ int WebClient::Run()
 
 	printf("web query=%d text=%s json_n=%d json_s=%s json_ok=%d rpc=%d bin=%d bad=%d\n",
 		got_text == text ? 1 : 0, got_text.c_str(), got_n, got_s.c_str(), got_ok ? 1 : 0, rpc_ok, bin_ok, bad);
+	if (bad != 0)
+	{
+		printf("web err query=%s json=%s rpc=%s bin=%s\n",
+			got.error.c_str(), js.error.c_str(), rpc.error.c_str(), raw.error.c_str());
+	}
 	fflush(stdout);
-	return bad == 0 ? 0 : 1;
+	::OI::Thread::ThreadPool::GetInstance().RequestStop(bad == 0 ? 0 : 1);
+}
+
+void WebClient::Start()
+{
+	coro::StartTask([](coro::Token) {
+		return Run();
+	});
 }

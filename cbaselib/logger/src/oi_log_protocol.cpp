@@ -1,6 +1,8 @@
 #include "oi_log_protocol.h"
 #include <assert.h>
-void RemoteLog::Handle(SessionManager* mgr, sid_t sid)
+namespace OI { namespace Log {
+void RemoteLog::Handle(::OI::Net::SessionManager* mgr, sid_t sid)
 {
 	assert(false);
 }
+}}

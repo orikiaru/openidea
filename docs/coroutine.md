@@ -20,7 +20,7 @@
 
 挂起只把句柄放回队列，不在回调里直接 `resume`。RPC 回包和超时也是 `Schedule`。
 
-时间轮只能在 poll 线程上改。`yield` 经 `Poll::CallOnLoop` 到 poll 线程再 `AddTimer`，到点把句柄放回队列。
+时间轮只能在 poll 线程上改。`yield` 经 `OI::Net::Poll::CallOnLoop` 到 poll 线程再 `AddTimer`，到点把句柄放回队列。
 
 ## 单线程和多线程
 

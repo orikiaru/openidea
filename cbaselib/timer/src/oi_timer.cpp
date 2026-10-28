@@ -1,5 +1,6 @@
 #include "oi_timer.h"
 #include "oi_timer_manager.h"
+namespace OI { namespace Timer {
 
 void BaseTimer::InitData(BaseTimerManager* pMgr, int millsec, int64_t ticks)
 {
@@ -14,3 +15,4 @@ void BaseTimer::InitData(BaseTimerManager* pMgr, int millsec, int64_t ticks)
 	_data._trigger_ts.tv_sec = (decltype(_data._trigger_ts.tv_sec))(us / 1000000);
 	_data._trigger_ts.tv_usec = (decltype(_data._trigger_ts.tv_usec))(us % 1000000);
 }
+}}

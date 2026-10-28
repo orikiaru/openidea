@@ -1,13 +1,14 @@
 #include "oi_timer_level.h"
 #include "oi_timer_manager.h"
 #include "oi_lock.h"
+namespace OI { namespace Timer {
 
 void TimerLevel::RunTick(BaseTimerManager* pMgr, bool run_timer)
 {
 	assert(_offset >= 0 && _offset < _max_tick);
 	TimerList cur_list;
 	{
-		OI::Thread::MutexGuard l(_locker);
+		::OI::Thread::MutexGuard l(_locker);
 
 		cur_list.swap(_timer_tick_datas[_offset]);
 
@@ -38,3 +39,4 @@ void TimerLevel::RunTick(BaseTimerManager* pMgr, bool run_timer)
 	}
 #endif
 }
+}}

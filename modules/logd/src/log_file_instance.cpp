@@ -45,7 +45,7 @@ bool LogFileInstance::CreateNewFile(const char* path)
 void LogFileInstance::OnCreateNewFile(FILE* new_file)
 {
 	{
-		OI::Thread::MutexGuard _l(_file_locker);
+		::OI::Thread::MutexGuard _l(_file_locker);
 		assert(_fp[1] == NULL);
 		_fp[1] = new_file;
 	}
@@ -54,12 +54,12 @@ void LogFileInstance::OnCreateNewFile(FILE* new_file)
 
 void LogFileInstance::StartWriteThread()
 {
-	OI::Thread::ThreadPool::CreateSpecThread(_pid, LogFileInstance::WriteLogThreadHandle, this);
+	::OI::Thread::ThreadPool::CreateSpecThread(_pid, LogFileInstance::WriteLogThreadHandle, this);
 }
 
 FILE* LogFileInstance::GetActiveFile()
 {
-	OI::Thread::MutexGuard _l(_file_locker);
+	::OI::Thread::MutexGuard _l(_file_locker);
 	if (_fp[1])
 	{
 		if (_fp[0])
@@ -83,12 +83,12 @@ void LogFileInstance::Passive()
 }
 
 
-void LogFileInstance::AddLog(OI::Base::Bytes& log)
+void LogFileInstance::AddLog(::OI::Base::Bytes& log)
 {
 	bool notify = false;
 
 	{
-		OI::Thread::MutexGuard l(_cache_locker);
+		::OI::Thread::MutexGuard l(_cache_locker);
 		if (_logs.empty())
 		{
 			notify = true;
@@ -140,7 +140,7 @@ void LogFileInstance::WriteLog()
 
 	// 攒到一块再写。压力上来时大约 8MB 刷一次，队列空了把尾巴刷掉。
 	const size_t kChunk = 8 * 1024 * 1024;
-	OI::Base::Bytes tmp;
+	::OI::Base::Bytes tmp;
 	tmp.Reserve(kChunk);
 	int64_t unflushed = 0;
 	for(;;)

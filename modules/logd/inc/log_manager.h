@@ -5,7 +5,7 @@
 
 class LogFileInstance;
 
-class LogManager : public BaseTimer
+class LogManager : public ::OI::Timer::BaseTimer
 {
 	DECLARE_SINGLETON(LogManager)
 	LogManager() = default;
@@ -37,7 +37,7 @@ public:
 	bool Init();
 
 	// b 的内容会被移进写盘队列
-	void WriteLog(LOG_LEVEL lv, OI::Base::Bytes& b);
+	void WriteLog(LOG_LEVEL lv, ::OI::Base::Bytes& b);
 
 private:
 	friend class LogFileInstance;

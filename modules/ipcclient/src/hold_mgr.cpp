@@ -53,7 +53,7 @@ static long long WallMs(std::chrono::steady_clock::time_point begin)
 		std::chrono::steady_clock::now() - begin).count();
 }
 
-static bool Pong(const RedisResult& result)
+static bool Pong(const ::OI::Redis::RedisResult& result)
 {
 	return !result.timeout && result.reply && result.reply->type == REDIS_REPLY_STATUS
 		&& result.reply->str && std::strcmp(result.reply->str, "PONG") == 0;
@@ -76,11 +76,11 @@ struct RaceBox
 
 static coro::Task RaceOne(sid_t sid, int32_t index, int32_t mark, int32_t delay, int32_t* rets, int32_t* marks, std::atomic<int32_t>* finished)
 {
-	OI::RpcData::HoldReq one;
-	OI::RpcData::HoldRes back;
+	::OI::RpcData::HoldReq one;
+	::OI::RpcData::HoldRes back;
 	one.delay_ms = delay;
 	one.mark = mark;
-	int code = co_await RpcCall(IpcClient::GetInstance(), sid, one, back, 10);
+	int code = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), sid, one, back, 10);
 	rets[index] = code;
 	marks[index] = back.mark;
 	finished->fetch_add(1, std::memory_order_release);
@@ -90,12 +90,12 @@ static coro::Task RaceOne(sid_t sid, int32_t index, int32_t mark, int32_t delay,
 coro::Task HoldMgr::Pump()
 {
 	int bad = 0;
-	OI::RpcData::HoldReq req;
-	OI::RpcData::HoldRes res;
+	::OI::RpcData::HoldReq req;
+	::OI::RpcData::HoldRes res;
 
 	req.delay_ms = 0;
 	req.mark = 1;
-	int ret = co_await RpcCall(IpcClient::GetInstance(), _sid, req, res, 10);
+	int ret = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), _sid, req, res, 10);
 	printf("hold rpc early ret=%d mark=%d\n", ret, res.mark);
 	fflush(stdout);
 	if (ret != 0 || res.mark != 1)
@@ -108,7 +108,7 @@ coro::Task HoldMgr::Pump()
 	req.delay_ms = 10000;
 	req.mark = 2;
 	res.mark = 0;
-	ret = co_await RpcCall(IpcClient::GetInstance(), _sid, req, res, 2);
+	ret = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), _sid, req, res, 2);
 	printf("hold rpc timeout ret=%d\n", ret);
 	fflush(stdout);
 	if (ret != -2)
@@ -124,7 +124,7 @@ coro::Task HoldMgr::Pump()
 	req.delay_ms = 0;
 	req.mark = 3;
 	res.mark = 0;
-	ret = co_await RpcCall(IpcClient::GetInstance(), _sid, req, res, 10);
+	ret = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), _sid, req, res, 10);
 	printf("hold rpc follow ret=%d mark=%d\n", ret, res.mark);
 	fflush(stdout);
 	if (ret != 0 || res.mark != 3)
@@ -178,7 +178,7 @@ coro::Task HoldMgr::Pump()
 	{
 		limit = 1;
 	}
-	while (!RedisClient::GetInstance().IsConnect())
+	while (!::OI::Redis::RedisClient::GetInstance().IsConnect())
 	{
 		if (spins++ >= limit)
 		{
@@ -193,9 +193,9 @@ coro::Task HoldMgr::Pump()
 		co_await coro::yield(50);
 	}
 
-	RedisResult ping;
+	::OI::Redis::RedisResult ping;
 	{
-		RedisCall call = CallRedis({"PING"}, ping);
+		::OI::Redis::RedisCall call = ::OI::Redis::CallRedis({"PING"}, ping);
 		co_await call;
 	}
 	printf("hold redis ping ok=%d\n", Pong(ping) ? 1 : 0);
@@ -212,9 +212,9 @@ coro::Task HoldMgr::Pump()
 	}
 	cpu_begin = std::clock();
 	wall_begin = std::chrono::steady_clock::now();
-	RedisResult late;
+	::OI::Redis::RedisResult late;
 	{
-		RedisCall call = CallRedis({"BLPOP", "hold-late", std::to_string(sec + 5)}, late);
+		::OI::Redis::RedisCall call = ::OI::Redis::CallRedis({"BLPOP", "hold-late", std::to_string(sec + 5)}, late);
 		co_await call;
 	}
 	printf("hold redis late timeout=%d cpu_ms=%lld wall_ms=%lld\n",
@@ -224,9 +224,9 @@ coro::Task HoldMgr::Pump()
 	{
 		bad += 1;
 	}
-	RedisResult ping_after_late;
+	::OI::Redis::RedisResult ping_after_late;
 	{
-		RedisCall call = CallRedis({"PING"}, ping_after_late);
+		::OI::Redis::RedisCall call = ::OI::Redis::CallRedis({"PING"}, ping_after_late);
 		co_await call;
 	}
 	printf("hold redis late ping ok=%d\n", Pong(ping_after_late) ? 1 : 0);
@@ -238,9 +238,9 @@ coro::Task HoldMgr::Pump()
 
 	cpu_begin = std::clock();
 	wall_begin = std::chrono::steady_clock::now();
-	RedisResult race;
+	::OI::Redis::RedisResult race;
 	{
-		RedisCall call = CallRedis({"BLPOP", "hold-race", std::to_string(sec)}, race);
+		::OI::Redis::RedisCall call = ::OI::Redis::CallRedis({"BLPOP", "hold-race", std::to_string(sec)}, race);
 		co_await call;
 	}
 	int nil = race.reply && race.reply->type == REDIS_REPLY_NIL ? 1 : 0;
@@ -251,9 +251,9 @@ coro::Task HoldMgr::Pump()
 	{
 		bad += 1;
 	}
-	RedisResult ping_after_race;
+	::OI::Redis::RedisResult ping_after_race;
 	{
-		RedisCall call = CallRedis({"PING"}, ping_after_race);
+		::OI::Redis::RedisCall call = ::OI::Redis::CallRedis({"PING"}, ping_after_race);
 		co_await call;
 	}
 	printf("hold redis race ping ok=%d\n", Pong(ping_after_race) ? 1 : 0);

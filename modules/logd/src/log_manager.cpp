@@ -9,8 +9,8 @@ bool LogManager::Init()
 {
 	_log_title_index = 0;
 	memset(_log_title_data, 0, sizeof(_log_title_data));
-	_last_ts = TimerHelper::GetTime();
-	_last_tm = TimerHelper::GetLocalTime();
+	_last_ts = ::OI::Timer::GetTime();
+	_last_tm = ::OI::Timer::GetLocalTime();
 
 	std::string log_root_path = "./";
 	TryGetConfig("Log.root_path", log_root_path);
@@ -31,7 +31,7 @@ bool LogManager::Init()
 	StartLogInstanceWork();
 
 	//每秒触发一定定时器
-	BaseTimerManager::GetInstance().AddTimer(this, 1000);
+	::OI::Timer::BaseTimerManager::GetInstance().AddTimer(this, 1000);
 
 
 
@@ -40,10 +40,10 @@ bool LogManager::Init()
 
 bool LogManager::OnTimer()
 {
-	tm	_now_tm = TimerHelper::GetLocalTime();
-	time_t _now_ts = TimerHelper::GetTime();
+	tm	_now_tm = ::OI::Timer::GetLocalTime();
+	time_t _now_ts = ::OI::Timer::GetTime();
 
-	bool is_cross_day = TimerHelper::CrossDay(_last_ts, _now_ts);
+	bool is_cross_day = ::OI::Timer::CrossDay(_last_ts, _now_ts);
 	_last_tm = _now_tm;
 	_last_ts = _now_ts;
 
@@ -157,10 +157,10 @@ bool LogManager::CheckAndCreateRootPath()
 	assert(len < sizeof(cur_path) - 1);
 	(void)len;
 	_cur_log_path = _log_root_path + "/" + cur_path;
-	return OI::File::MakeDirs(_cur_log_path);
+	return ::OI::File::MakeDirs(_cur_log_path);
 }
 
-void LogManager::WriteLog(LOG_LEVEL lv, OI::Base::Bytes& b)
+void LogManager::WriteLog(LOG_LEVEL lv, ::OI::Base::Bytes& b)
 {
 	_log_file_map[lv]->AddLog(b);
 }

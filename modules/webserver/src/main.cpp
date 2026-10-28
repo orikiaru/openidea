@@ -6,7 +6,7 @@ int main(int argc, char* argv[])
 {
 	(void)argc;
 	(void)argv;
-	if (!OI::Base::Config::GlobalMutableConfig().Parse("../config/webserver.toml"))
+	if (!::OI::Base::Config::GlobalMutableConfig().Parse("../config/webserver.toml"))
 	{
 		printf("ParseConfigError\n");
 		return -2;

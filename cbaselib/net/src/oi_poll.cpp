@@ -20,6 +20,7 @@
 #include "oi_thread.h"
 #include "oi_header.h"
 #include "oi_net_os.h"
+namespace OI { namespace Net {
 
 static const void* POLL_PENDING = (void*)1;
 static const void* POLL_DROPPED = (void*)2;
@@ -54,7 +55,7 @@ struct IoOp
 static uv_loop_t g_loop;
 static uv_async_t g_async;
 static uv_timer_t g_tick_timer;
-static OI::Thread::Mutex g_op_lock;
+static ::OI::Thread::Mutex g_op_lock;
 static std::deque<IoOp> g_ops;
 static bool g_loop_ready = false;
 static std::atomic<bool> g_poll_stop(false);
@@ -179,7 +180,14 @@ static void ApplyOp(const IoOp& op)
 		if (op.watch->mask != mask)
 		{
 			op.watch->mask = mask;
-			uv_poll_start(&op.watch->poll, MaskToUv(mask), OnPoll);
+			if (mask == 0)
+			{
+				uv_poll_stop(&op.watch->poll);
+			}
+			else
+			{
+				uv_poll_start(&op.watch->poll, MaskToUv(mask), OnPoll);
+			}
 		}
 		return;
 	}
@@ -193,7 +201,7 @@ static void DrainOps()
 	{
 		IoOp op;
 		{
-			OI::Thread::MutexGuard guard(g_op_lock);
+			::OI::Thread::MutexGuard guard(g_op_lock);
 			if (g_ops.empty())
 			{
 				return;
@@ -212,7 +220,7 @@ static void OnAsync(uv_async_t*)
 
 static void PostOp(const IoOp& op)
 {
-	OI::Thread::MutexGuard guard(g_op_lock);
+	::OI::Thread::MutexGuard guard(g_op_lock);
 	g_ops.push_back(op);
 	if (g_loop_ready)
 	{
@@ -225,7 +233,7 @@ static void PrepareLoop()
 	uv_loop_init(&g_loop);
 	uv_async_init(&g_loop, &g_async, OnAsync);
 	{
-		OI::Thread::MutexGuard guard(g_op_lock);
+		::OI::Thread::MutexGuard guard(g_op_lock);
 		g_loop_ready = true;
 	}
 	DrainOps();
@@ -241,7 +249,7 @@ Poll::~Poll()
 void* Poll::StartThreadPollWait(void*)
 {
 	GetInstance()._loop_thread = std::this_thread::get_id();
-	OI::Thread::ThreadPool::InitIgnoreSig();
+	::OI::Thread::ThreadPool::InitIgnoreSig();
 	NetOs_Startup();
 	PrepareLoop();
 	while (!g_poll_stop.load())
@@ -285,7 +293,7 @@ bool Poll::Init()
 	{
 		bool ready = false;
 		{
-			OI::Thread::MutexGuard guard(g_op_lock);
+			::OI::Thread::MutexGuard guard(g_op_lock);
 			ready = g_loop_ready;
 		}
 		if (ready)
@@ -298,7 +306,7 @@ bool Poll::Init()
 #endif
 }
 
-struct uv_loop_s* Poll::Loop()
+::uv_loop_s* Poll::Loop()
 {
 	return &g_loop;
 }
@@ -351,11 +359,17 @@ void Poll::IOEventMod(Channel* p, int new_mask)
 	}
 	if (InLoopThread())
 	{
-		if (watch->poll.data != NULL && watch->mask != new_mask)
+		if (watch->poll.data == NULL)
 		{
-			watch->mask = new_mask;
-			uv_poll_start(&watch->poll, MaskToUv(new_mask), OnPoll);
+			return;
 		}
+		watch->mask = new_mask;
+		if (new_mask == 0)
+		{
+			uv_poll_stop(&watch->poll);
+			return;
+		}
+		uv_poll_start(&watch->poll, MaskToUv(new_mask), OnPoll);
 		return;
 	}
 	IoOp op;
@@ -379,17 +393,24 @@ void Poll::IOEventRegister(Channel* p, bool allow_read, bool allow_write)
 		new_mask |= IO_EV_WRITE;
 	}
 	p->_event_mask = new_mask;
-	p->_poll_token = (void*)POLL_PENDING;
 	IoOp op;
 	op.type = IO_OP_ADD;
 	op.channel = p;
 	op.watch = NULL;
 	op.fd = p->_socket.GetSocket();
 	op.mask = new_mask;
+	// 已经在 poll 线程就当场挂上。排队的话，同一次调用里接着改掩码会赶不上这次 ADD。
+	if (InLoopThread() && g_loop_ready)
+	{
+		p->_poll_token = NULL;
+		ApplyOp(op);
+		return;
+	}
+	p->_poll_token = (void*)POLL_PENDING;
 	PostOp(op);
 }
 
-void Poll::IOEventUnRegister(Channel* p)
+void Poll::IOEventUnRegister(Channel* p, bool close_fd)
 {
 	void* token = p->_poll_token;
 	if (token == NULL || token == POLL_DROPPED)
@@ -405,6 +426,10 @@ void Poll::IOEventUnRegister(Channel* p)
 	IoWatch* watch = (IoWatch*)token;
 	p->_poll_token = NULL;
 	p->_socket.Detach();
+	if (!close_fd)
+	{
+		watch->fd = INVALID_SOCKET_ID;
+	}
 	// 就在 poll 线程上。epoll 是水平触发，把 stop 推迟到下一轮的话，
 	// 回调返回后同一条连接还会再进一次，channel 已经 delete 了。
 	if (std::this_thread::get_id() == _loop_thread)
@@ -429,3 +454,4 @@ void Poll::PollWait(int wait_ms)
 	(void)wait_ms;
 #endif
 }
+}}

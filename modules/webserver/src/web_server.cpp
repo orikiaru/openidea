@@ -61,7 +61,7 @@ bool WebServer::Run()
 		res.set_content(DumpJson(body), "application/json");
 	});
 	svr.Post("/rpcjson", [](const httplib::Request& req, httplib::Response& res) {
-		OI::RpcData::JsonAll data;
+		::OI::RpcData::JsonAll data;
 		if (!data.FromJson(req.body))
 		{
 			res.status = 400;

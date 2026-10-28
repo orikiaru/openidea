@@ -2,6 +2,7 @@
 #include "oi_session.h"
 #include "oi_poll.h"
 #include "oi_net_os.h"
+namespace OI { namespace Net {
 
 Channel::~Channel()
 {
@@ -15,7 +16,7 @@ Channel::~Channel()
 
 void Channel::AllowSend()
 {
-	OI::Thread::MutexGuard l(_locker);
+	::OI::Thread::MutexGuard l(_locker);
 	if (_p_session && !_p_session->IsClosed() && (0 == (_event_mask & IO_EV_WRITE)))
 	{
 		_event_mask |= IO_EV_WRITE;
@@ -25,7 +26,7 @@ void Channel::AllowSend()
 
 void Channel::ForbidSend()
 {
-	OI::Thread::MutexGuard l(_locker);
+	::OI::Thread::MutexGuard l(_locker);
 	if (_p_session && !_p_session->IsClosed() && (_event_mask & IO_EV_WRITE))
 	{
 		_event_mask &= ~IO_EV_WRITE;
@@ -35,7 +36,7 @@ void Channel::ForbidSend()
 
 void Channel::AllowRead()
 {
-	OI::Thread::MutexGuard l(_locker);
+	::OI::Thread::MutexGuard l(_locker);
 	if (_p_session && !_p_session->IsClosed() && (0 == (_event_mask & IO_EV_READ)))
 	{
 		_event_mask |= IO_EV_READ;
@@ -45,10 +46,11 @@ void Channel::AllowRead()
 
 void Channel::ForbidRead()
 {
-	OI::Thread::MutexGuard l(_locker);
+	::OI::Thread::MutexGuard l(_locker);
 	if (_p_session && !_p_session->IsClosed() && (_event_mask & IO_EV_READ))
 	{
 		_event_mask &= ~IO_EV_READ;
 		Poll::GetInstance().IOEventMod(this, _event_mask);
 	}
 }
+}}

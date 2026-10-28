@@ -3,7 +3,7 @@
 #include <stdint.h>
 #include <sys/time.h>
 
-namespace TimerHelper
+namespace OI { namespace Timer
 {
 	// 存盘用。ts 是当时的时间，offset_sec 是切点偏移。
 	// offset_sec 改成 86400 就是整段再偏一天，已存的 ts 不用改。
@@ -59,4 +59,4 @@ namespace TimerHelper
 	bool CrossWeekday(const TimeMark& saved, time_t now_ts, int weekday);
 	bool CrossMonth(const TimeMark& saved, time_t now_ts);
 	bool CrossYear(const TimeMark& saved, time_t now_ts);
-}
+}}

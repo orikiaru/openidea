@@ -164,13 +164,13 @@ int main(int argc, char* argv[])
     ThreadPool::GetInstance()->Init();
     
     //初始化定时器
-    BaseTimerManager::GetInstance()->Init();
+    OI::Timer::BaseTimerManager::GetInstance()->Init();
     
     //初始化IO复用
-	Poll::GetInstance()->Init();
+	OI::Net::Poll::GetInstance()->Init();
 
     //初始化日志服务
-    Log::Init();
+    OI::Log::Init();
  
     //添加组件逻辑,如网络组件,自定义单例对象等初始化逻辑
     __MODULE_COMPONENTS_INIT__

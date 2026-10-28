@@ -281,7 +281,7 @@ void ThreadPool::SingleThreadStartWork()
 			}
 		}
 		// 队列里还有下一轮，就只试一次网络；谁都不跑了才堵住等。
-		Poll::GetInstance().PollWait(pending ? 0 : 1000);
+		::OI::Net::Poll::GetInstance().PollWait(pending ? 0 : 1000);
 	}
 }
 
@@ -313,7 +313,7 @@ void ThreadPool::MultiThreadStartWork()
 		workers[i].join();
 	}
 	// 工作线程已经退出，不会再往 poll 投任务。
-	Poll::GetInstance().StopAndJoin();
+	::OI::Net::Poll::GetInstance().StopAndJoin();
 #endif
 }
 

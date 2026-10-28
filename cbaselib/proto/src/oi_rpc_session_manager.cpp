@@ -1,12 +1,13 @@
 #include "oi_rpc_session_manager.h"
 #include "oi_parser.h"
 #include "oi_base.h"
+namespace OI { namespace Rpc {
 
-bool ProtoClientManager::SendRaw(const OI::Base::Bytes& data)
+bool ProtoClientManager::SendRaw(const ::OI::Base::Bytes& data)
 {
 	sid_t sid = INVALID_SID;
 	{
-		OI::Thread::SpinLockGuard l(_client_locker);
+		::OI::Thread::SpinLockGuard l(_client_locker);
 		if (_conn && _ssid != INVALID_SID)
 		{
 			sid = _ssid;
@@ -19,11 +20,11 @@ bool ProtoClientManager::SendRaw(const OI::Base::Bytes& data)
 	return SendBytes(sid, data);
 }
 
-bool ProtoClientManager::SendRawOrPend(const OI::Base::Bytes& data, size_t max_pending_bytes)
+bool ProtoClientManager::SendRawOrPend(const ::OI::Base::Bytes& data, size_t max_pending_bytes)
 {
 	sid_t sid = INVALID_SID;
 	{
-		OI::Thread::SpinLockGuard l(_client_locker);
+		::OI::Thread::SpinLockGuard l(_client_locker);
 		if (_conn && _ssid != INVALID_SID)
 		{
 			sid = _ssid;
@@ -51,7 +52,7 @@ bool ProtoClientManager::SendProtocol(const Protocol* p)
 
 	sid_t sid = INVALID_SID;
 	{
-		OI::Thread::SpinLockGuard l(_client_locker);
+		::OI::Thread::SpinLockGuard l(_client_locker);
 		if (_conn && _ssid != INVALID_SID)
 		{
 			sid = _ssid;
@@ -67,10 +68,10 @@ bool ProtoClientManager::SendProtocol(const Protocol* p)
 	}
 
 	ProtocolParser parser;
-	OI::Base::BytesStream encoded = parser.EncodeProtocol(p);
+	::OI::Base::BytesStream encoded = parser.EncodeProtocol(p);
 	bool need_connect = false;
 	{
-		OI::Thread::SpinLockGuard l(_client_locker);
+		::OI::Thread::SpinLockGuard l(_client_locker);
 		if (_conn && _ssid != INVALID_SID)
 		{
 			sid = _ssid;
@@ -92,7 +93,7 @@ bool ProtoClientManager::SendProtocol(const Protocol* p)
 	}
 	if (need_connect && !StartClient())
 	{
-		OI::Thread::SpinLockGuard l(_client_locker);
+		::OI::Thread::SpinLockGuard l(_client_locker);
 		_connecting = false;
 		return false;
 	}
@@ -101,5 +102,6 @@ bool ProtoClientManager::SendProtocol(const Protocol* p)
 
 void ProtoClientManager::Reconnect(int millisecond)
 {
-	BaseTimerManager::GetInstance().AddTimer([this]() { StartClient(); }, millisecond);
+	::OI::Timer::BaseTimerManager::GetInstance().AddTimer([this]() { StartClient(); }, millisecond);
 }
+}}
