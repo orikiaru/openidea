@@ -3,7 +3,7 @@
 name = "webserver"
 id = 1
 
-# 只听 HTTP。query、JSON、二进制 body 由 cpp-httplib 和 nlohmann 处理。
+# 只听 HTTP。query、JSON、二进制 body 由 cpp-httplib 和 JsonCpp 处理。
 [WebServer]
 ip = "127.0.0.1"
 port = 18080

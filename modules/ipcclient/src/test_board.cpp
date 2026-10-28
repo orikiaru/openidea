@@ -1,5 +1,5 @@
 #include "test_board.h"
-#include "threadpool.h"
+#include "oi_thread.h"
 
 TestBoard::TestBoard() : _left(0), _code(0)
 {

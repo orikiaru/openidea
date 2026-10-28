@@ -118,10 +118,10 @@ class SerializeDataFileGen:
     def GenRpcDataFile(self):
         assert(self.data.GetType() == SerializeDataType.RPC_DATA)
         file_data = ""
-        file_data += '#pragma once\n#include "serialize.h"\n'
+        file_data += '#pragma once\n#include "oi_rpc.h"\n__JSON_INCLUDE__'
         file_data += '''
-namespace OI { namespace Rpc {
-class __CLASS_NAME__ : public RpcData
+namespace OI { namespace RpcData {
+class __CLASS_NAME__ : public ::OI::Rpc::RpcData
 {
 public:
     __MEMBER_DECLARE__
@@ -137,18 +137,64 @@ __PB_SERIALIZE__        return os;
     virtual ::OI::Base::BytesStream& deserialize(::OI::Base::BytesStream& os)
     {
 __PB_DESERIALIZE__    }
-    virtual RpcData* Clone() { return new __CLASS_NAME__(*this); }
+__COMPARE____JSON_METHODS__    virtual ::OI::Rpc::RpcData* Clone() { return new __CLASS_NAME__(*this); }
 };
 }}
-'''        
+'''
         file_data = self.DoReplace(file_data)
+        if self.data.json_ok:
+            file_data = file_data.replace("__JSON_INCLUDE__", '#include "oi_json.h"\n#include <memory>\n#include <string>\n')
+            file_data = file_data.replace("__JSON_METHODS__", self.GetJsonMethods())
+        else:
+            file_data = file_data.replace("__JSON_INCLUDE__", "")
+            file_data = file_data.replace("__JSON_METHODS__", "")
+        file_data = file_data.replace("__COMPARE__", self.GetCompareMethod())
         return file_data
 
-    def GenStubFile(self):
-        file_data = ""
-        if(self.data.GetType() == SerializeDataType.PROTOCOL):
-            file_data += "ProtocolStubs::GetInstance().RegisterStub(new __CLASS_NAME__ ( ));" + '\n'
-        elif(self.data.GetType() == SerializeDataType.RPC):
+    def GetCompareMethod(self):
+        if not self.data.is_key:
             return ""
-        file_data = self.DoReplace(file_data)
-        return file_data
+        lines = []
+        lines.append("    bool operator<(const %s& rhs) const" % self.class_name)
+        lines.append("    {")
+        for m in self.data.members:
+            lines.append("        if (%s < rhs.%s) return true;" % (m.name, m.name))
+            lines.append("        if (rhs.%s < %s) return false;" % (m.name, m.name))
+        lines.append("        return false;")
+        lines.append("    }")
+        return "\n".join(lines) + "\n"
+
+    def GetJsonMethods(self):
+        lines = []
+        lines.append("    bool FromJson(const Json::Value& in)")
+        lines.append("    {")
+        lines.append("        if (!in.isObject()) return false;")
+        for m in self.data.members:
+            lines.append('        if (in.isMember("%s") && !::OI::Rpc::FromJsonValue(in["%s"], %s)) return false;' % (m.name, m.name, m.name))
+        lines.append("        return true;")
+        lines.append("    }")
+        lines.append("    bool FromJson(const std::string& text)")
+        lines.append("    {")
+        lines.append("        Json::CharReaderBuilder builder;")
+        lines.append("        Json::Value root;")
+        lines.append("        std::string errs;")
+        lines.append("        const std::unique_ptr<Json::CharReader> reader(builder.newCharReader());")
+        lines.append("        const char* begin = text.data();")
+        lines.append("        if (!reader->parse(begin, begin + text.size(), &root, &errs)) return false;")
+        lines.append("        return FromJson(root);")
+        lines.append("    }")
+        lines.append("    void ToJson(Json::Value& out) const")
+        lines.append("    {")
+        lines.append("        out = Json::Value(Json::objectValue);")
+        for m in self.data.members:
+            lines.append('        ::OI::Rpc::ToJsonValue(out["%s"], %s);' % (m.name, m.name))
+        lines.append("    }")
+        lines.append("    std::string ToJson() const")
+        lines.append("    {")
+        lines.append("        Json::Value out;")
+        lines.append("        ToJson(out);")
+        lines.append("        Json::StreamWriterBuilder builder;")
+        lines.append('        builder["indentation"] = "";')
+        lines.append("        return Json::writeString(builder, out);")
+        lines.append("    }")
+        return "\n".join(lines) + "\n"

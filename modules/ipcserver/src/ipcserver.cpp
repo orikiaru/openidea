@@ -1,11 +1,11 @@
 #include "ipcserver.h"
-#include "allechoreq"
-#include "allechores"
-#include "holdreq"
-#include "holdres"
-#include "parser.h"
-#include "rpc.h"
-#include "rpc_coro.h"
+#include "oi_rpcdata_allechoreq.h"
+#include "oi_rpcdata_allechores.h"
+#include "oi_rpcdata_holdreq.h"
+#include "oi_rpcdata_holdres.h"
+#include "oi_parser.h"
+#include "oi_rpc_call.h"
+#include "oi_rpc_coro.h"
 #include "rpc_ids.h"
 #include <stdio.h>
 
@@ -21,7 +21,7 @@ const std::string IpcServer::GetIDString()
 
 bool IpcServer::Init()
 {
-	HandleRpc<OI::Rpc::AllEchoReq, OI::Rpc::AllEchoRes>([](coro::Token token, SessionManager* mgr, sid_t sid, OI::Rpc::AllEchoReq& req, OI::Rpc::AllEchoRes& res) -> coro::Task {
+	HandleRpc<OI::RpcData::AllEchoReq, OI::RpcData::AllEchoRes>([](coro::Token token, SessionManager* mgr, sid_t sid, OI::RpcData::AllEchoReq& req, OI::RpcData::AllEchoRes& res) -> coro::Task {
 		(void)token;
 		(void)mgr;
 		(void)sid;
@@ -29,7 +29,7 @@ bool IpcServer::Init()
 		res.code = 1;
 		co_return;
 	});
-	HandleRpc<OI::Rpc::HoldReq, OI::Rpc::HoldRes>([](coro::Token token, SessionManager* mgr, sid_t sid, OI::Rpc::HoldReq& req, OI::Rpc::HoldRes& res) -> coro::Task {
+	HandleRpc<OI::RpcData::HoldReq, OI::RpcData::HoldRes>([](coro::Token token, SessionManager* mgr, sid_t sid, OI::RpcData::HoldReq& req, OI::RpcData::HoldRes& res) -> coro::Task {
 		(void)token;
 		(void)mgr;
 		(void)sid;

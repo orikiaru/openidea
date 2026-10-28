@@ -1,6 +1,6 @@
 #pragma once
-#include "session_manager.h"
-#include "singleton.h"
+#include "oi_session_manager.h"
+#include "oi_singleton.h"
 #include <string>
 #include <vector>
 
@@ -9,7 +9,7 @@ struct redisAsyncContext;
 struct RedisLink
 {
 	redisAsyncContext* ac;
-	int index;
+	int32_t index;
 	bool dialing;
 	RedisLink() : ac(NULL), index(0), dialing(false) {}
 };
@@ -21,15 +21,15 @@ class RedisServer : public SessionManager
 	RedisServer();
 	std::string _redis_ip;
 	std::string _redis_port;
-	int _connections;
-	int _next;
+	int32_t _connections;
+	int32_t _next;
 	std::vector<RedisLink> _links;
 public:
 	virtual ~RedisServer();
 	virtual const std::string GetIDString() { return "RedisServer"; }
 	virtual bool Init();
 	// cmd 是一条完整的 RESP 命令，原样转给上游
-	void Issue(int link, sid_t sid, const char* cmd, size_t len);
+	void Issue(int32_t link, sid_t sid, const char* cmd, size_t len);
 	void Open(RedisLink* link);
 	void ArmReconnect(RedisLink* link);
 private:

@@ -3,10 +3,10 @@
 #include "hiredis.h"
 #include "async.h"
 #include "adapters/libuv.h"
-#include "poll.h"
-#include "base_timer_manager.h"
-#include "config.h"
-#include "logger.h"
+#include "oi_poll.h"
+#include "oi_timer_manager.h"
+#include "oi_config.h"
+#include "oi_log.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -236,7 +236,7 @@ void RedisServer::ArmReconnect(RedisLink* link)
 	}, 2000);
 }
 
-void RedisServer::Issue(int link, sid_t sid, const char* cmd, size_t len)
+void RedisServer::Issue(int32_t link, sid_t sid, const char* cmd, size_t len)
 {
 	OI::Base::Bytes err;
 	if (link < 0 || link >= (int)_links.size() || !_links[(size_t)link].ac || len == 0)

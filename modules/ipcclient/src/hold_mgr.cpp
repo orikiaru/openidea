@@ -1,10 +1,10 @@
 #include "hold_mgr.h"
-#include "config.h"
-#include "holdreq"
-#include "holdres"
+#include "oi_config.h"
+#include "oi_rpcdata_holdreq.h"
+#include "oi_rpcdata_holdres.h"
 #include "ipcclient.h"
 #include "rpc_ids.h"
-#include "redis_client.h"
+#include "oi_redis.h"
 #include "test_board.h"
 #include <atomic>
 #include <chrono>
@@ -61,9 +61,9 @@ static bool Pong(const RedisResult& result)
 
 struct RaceBox
 {
-	int rets[8];
-	int marks[8];
-	std::atomic<int> finished;
+	int32_t rets[8];
+	int32_t marks[8];
+	std::atomic<int32_t> finished;
 	RaceBox() : finished(0)
 	{
 		for (int i = 0; i < 8; ++i)
@@ -74,10 +74,10 @@ struct RaceBox
 	}
 };
 
-static coro::Task RaceOne(sid_t sid, int index, int mark, int delay, int* rets, int* marks, std::atomic<int>* finished)
+static coro::Task RaceOne(sid_t sid, int32_t index, int32_t mark, int32_t delay, int32_t* rets, int32_t* marks, std::atomic<int32_t>* finished)
 {
-	OI::Rpc::HoldReq one;
-	OI::Rpc::HoldRes back;
+	OI::RpcData::HoldReq one;
+	OI::RpcData::HoldRes back;
 	one.delay_ms = delay;
 	one.mark = mark;
 	int code = co_await RpcCall(IpcClient::GetInstance(), sid, one, back, 10);
@@ -90,8 +90,8 @@ static coro::Task RaceOne(sid_t sid, int index, int mark, int delay, int* rets, 
 coro::Task HoldMgr::Pump()
 {
 	int bad = 0;
-	OI::Rpc::HoldReq req;
-	OI::Rpc::HoldRes res;
+	OI::RpcData::HoldReq req;
+	OI::RpcData::HoldRes res;
 
 	req.delay_ms = 0;
 	req.mark = 1;

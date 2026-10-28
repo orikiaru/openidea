@@ -1,10 +1,10 @@
 #include "echo_mgr.h"
-#include "config.h"
+#include "oi_config.h"
 #include "ipcclient.h"
 #include "rpc_ids.h"
 #include "test_board.h"
-#include "base_timer_manager.h"
-#include "threadpool.h"
+#include "oi_timer_manager.h"
+#include "oi_thread.h"
 #include <cstdio>
 #include <cstring>
 
@@ -27,17 +27,17 @@ static bool SameBytes(const OI::Base::Bytes& a, const OI::Base::Bytes& b)
 	return memcmp(a.Data(), b.Data(), a.Size()) == 0;
 }
 
-static bool SameInner(const OI::Rpc::Inner& a, const OI::Rpc::Inner& b)
+static bool SameInner(const OI::RpcData::Inner& a, const OI::RpcData::Inner& b)
 {
 	return a.n == b.n && a.s == b.s;
 }
 
-static void FillAllTypes(OI::Rpc::AllTypesData& data, int n)
+static void FillAllTypes(OI::RpcData::AllTypesData& data, int n)
 {
-	data.c = (char)(n & 0x7f);
-	data.s = (short)(1000 + n);
+	data.c = (int8_t)(n & 0x7f);
+	data.s = (int16_t)(1000 + n);
 	data.i = n;
-	data.l = 100000L + n;
+	data.l = 100000LL + n;
 	data.i64 = 10000000000LL + n;
 	data.f = 1.5f + (float)n;
 	data.d = 2.5 + n;
@@ -56,7 +56,7 @@ static void FillAllTypes(OI::Rpc::AllTypesData& data, int n)
 	data.child.s = "child";
 	data.children.clear();
 	data.children.push_back(data.child);
-	OI::Rpc::Inner kin;
+	OI::RpcData::Inner kin;
 	kin.n = n + 7;
 	kin.s = "kin";
 	data.children.push_back(kin);
@@ -66,10 +66,29 @@ static void FillAllTypes(OI::Rpc::AllTypesData& data, int n)
 	data.named.clear();
 	data.named["a"] = data.child;
 	data.named["b"] = kin;
+	data.u8 = (uint8_t)200;
+	data.u16 = (uint16_t)40000;
+	data.u32 = 3000000000u + (uint32_t)(n & 0xff);
+	data.u64 = (1ULL << 63) + (uint64_t)n;
+	data.unums.clear();
+	data.unums.push_back(data.u64);
+	data.unums.push_back(1);
 	data.gap = 20 + n;
+	data.utable.clear();
+	data.utable[data.u32] = "u";
+	data.ubig.clear();
+	data.ubig[data.u64] = "b";
+	data.keyed.clear();
+	OI::RpcData::EchoKey key;
+	key.part.n = n;
+	key.name = "k";
+	data.keyed[key] = "v";
+	key.part.n = n + 1;
+	key.name = "k2";
+	data.keyed[key] = "w";
 }
 
-static void PoisonAllTypes(OI::Rpc::AllTypesData& data)
+static void PoisonAllTypes(OI::RpcData::AllTypesData& data)
 {
 	data.c = 0x5a;
 	data.s = -1;
@@ -87,10 +106,18 @@ static void PoisonAllTypes(OI::Rpc::AllTypesData& data)
 	data.children.clear();
 	data.table.clear();
 	data.named.clear();
+	data.u8 = 1;
+	data.u16 = 1;
+	data.u32 = 1;
+	data.u64 = 1;
+	data.unums.clear();
 	data.gap = -12345;
+	data.utable.clear();
+	data.ubig.clear();
+	data.keyed.clear();
 }
 
-static bool DiffAllTypes(const OI::Rpc::AllTypesData& sent, const OI::Rpc::AllTypesData& recv)
+static bool DiffAllTypes(const OI::RpcData::AllTypesData& sent, const OI::RpcData::AllTypesData& recv)
 {
 	bool same = true;
 	if (sent.c != recv.c) { EchoMgr::GetInstance().Note("c"); same = false; }
@@ -130,12 +157,37 @@ static bool DiffAllTypes(const OI::Rpc::AllTypesData& sent, const OI::Rpc::AllTy
 	}
 	else
 	{
-		for (std::map<std::string, OI::Rpc::Inner>::const_iterator it = sent.named.begin(); it != sent.named.end(); ++it)
+		for (std::map<std::string, OI::RpcData::Inner>::const_iterator it = sent.named.begin(); it != sent.named.end(); ++it)
 		{
-			std::map<std::string, OI::Rpc::Inner>::const_iterator jt = recv.named.find(it->first);
+			std::map<std::string, OI::RpcData::Inner>::const_iterator jt = recv.named.find(it->first);
 			if (jt == recv.named.end() || !SameInner(it->second, jt->second))
 			{
 				EchoMgr::GetInstance().Note("named");
+				same = false;
+				break;
+			}
+		}
+	}
+	if (sent.u8 != recv.u8) { EchoMgr::GetInstance().Note("u8"); same = false; }
+	if (sent.u16 != recv.u16) { EchoMgr::GetInstance().Note("u16"); same = false; }
+	if (sent.u32 != recv.u32) { EchoMgr::GetInstance().Note("u32"); same = false; }
+	if (sent.u64 != recv.u64) { EchoMgr::GetInstance().Note("u64"); same = false; }
+	if (sent.unums != recv.unums) { EchoMgr::GetInstance().Note("unums"); same = false; }
+	if (sent.utable != recv.utable) { EchoMgr::GetInstance().Note("utable"); same = false; }
+	if (sent.ubig != recv.ubig) { EchoMgr::GetInstance().Note("ubig"); same = false; }
+	if (sent.keyed.size() != recv.keyed.size())
+	{
+		EchoMgr::GetInstance().Note("keyed");
+		same = false;
+	}
+	else
+	{
+		for (std::map<OI::RpcData::EchoKey, std::string>::const_iterator it = sent.keyed.begin(); it != sent.keyed.end(); ++it)
+		{
+			std::map<OI::RpcData::EchoKey, std::string>::const_iterator jt = recv.keyed.find(it->first);
+			if (jt == recv.keyed.end() || jt->second != it->second)
+			{
+				EchoMgr::GetInstance().Note("keyed");
 				same = false;
 				break;
 			}
@@ -152,9 +204,9 @@ static bool DiffAllTypes(const OI::Rpc::AllTypesData& sent, const OI::Rpc::AllTy
 
 static coro::Task RunOne(int n)
 {
-	OI::Rpc::AllEchoReq req;
+	OI::RpcData::AllEchoReq req;
 	FillAllTypes(req.data, n);
-	OI::Rpc::AllEchoRes res;
+	OI::RpcData::AllEchoRes res;
 	PoisonAllTypes(res.data);
 	res.code = -1;
 	int ret = co_await RpcCall(IpcClient::GetInstance(), EchoMgr::GetInstance().Sid(), req, res);
@@ -234,7 +286,7 @@ coro::Task EchoMgr::Pump(int index)
 	co_return;
 }
 
-void EchoMgr::OnResult(int n, const OI::Rpc::AllEchoReq& req, const OI::Rpc::AllEchoRes& res, int ret, bool same)
+void EchoMgr::OnResult(int n, const OI::RpcData::AllEchoReq& req, const OI::RpcData::AllEchoRes& res, int ret, bool same)
 {
 	std::lock_guard<std::mutex> lock(_mu);
 	if (!_have_sample && n == 0)
@@ -273,7 +325,7 @@ void EchoMgr::OnResult(int n, const OI::Rpc::AllEchoReq& req, const OI::Rpc::All
 	printf("sample gap_sent=%d gap_recv=%d code=%d gap_differ=%d\n",
 		_sample_sent, _sample_recv, _sample_code, _gap_differ);
 	printf("fields");
-	for (std::map<std::string, int>::iterator it = _fields.begin(); it != _fields.end(); ++it)
+	for (std::map<std::string, int32_t>::iterator it = _fields.begin(); it != _fields.end(); ++it)
 	{
 		printf(" %s=%d", it->first.c_str(), it->second);
 	}

@@ -55,10 +55,10 @@ class GenFile:
                         continue
                     for member in p.members:
                         if(other.GetName() in member.GetType()):
-                            extra += '#include "%s"\n' % other.GetName().lower()
+                            extra += '#include "%s"\n' % other.GetDataName()
                             break
                 if(extra):
-                    data_file = data_file.replace('#include "serialize.h"\n', '#include "serialize.h"\n' + extra, 1)
+                    data_file = data_file.replace('#include "oi_rpc.h"\n', '#include "oi_rpc.h"\n' + extra, 1)
             if(data_file):
                 write_utf8(os.path.join(write_path, p.GetDataName()), data_file)
         if(not self.GenRpcIds(write_path)):
@@ -68,9 +68,9 @@ class GenFile:
     def GenRpcIds(self, write_path):
         lines = []
         lines.append("#pragma once")
-        lines.append("#include \"header.h\"")
+        lines.append("#include \"oi_header.h\"")
         lines.append("template<typename T> struct RpcProtoId;")
-        lines.append("namespace OI { namespace Rpc {")
+        lines.append("namespace OI { namespace RpcData {")
         for p in self.proto_parse.serialize_datas:
             if(p.GetType() != SerializeDataType.RPC):
                 continue
@@ -80,8 +80,8 @@ class GenFile:
         for p in self.proto_parse.serialize_datas:
             if(p.GetType() != SerializeDataType.RPC):
                 continue
-            lines.append("template<> struct RpcProtoId<::OI::Rpc::%s> { static const proto_type_t value = %s; };" % (p.GetReq(), p.GetID()))
-            lines.append("template<> struct RpcProtoId<::OI::Rpc::%s> { static const proto_type_t value = %s; };" % (p.GetRes(), p.GetResID()))
+            lines.append("template<> struct RpcProtoId<::OI::RpcData::%s> { static const proto_type_t value = %s; };" % (p.GetReq(), p.GetID()))
+            lines.append("template<> struct RpcProtoId<::OI::RpcData::%s> { static const proto_type_t value = %s; };" % (p.GetRes(), p.GetResID()))
         lines.append("")
         write_utf8(os.path.join(write_path, "rpc_ids.h"), "\n".join(lines) + "\n")
         return True

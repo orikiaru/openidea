@@ -1,4 +1,4 @@
-#include "log_protocol.h"
+#include "oi_log_protocol.h"
 #include <assert.h>
 #include "log_server.h"
 #include "log_manager.h"

@@ -1,6 +1,6 @@
 #include <stdio.h>
-#include "net_header.h"
-#include "base_header.h"
+#include "oi_net.h"
+#include "oi_base.h"
 #include "redis_server.h"
 
 int main(int argc, char* argv[])

@@ -1,9 +1,9 @@
 #include "log_manager.h"
 #include <string.h>
-#include "base_timer_helper.h"
-#include "file_path.h"
+#include "oi_timer_helper.h"
+#include "oi_file.h"
 #include "log_file_instance.h"
-#include "config.h"
+#include "oi_config.h"
 
 bool LogManager::Init()
 {

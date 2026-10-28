@@ -1,5 +1,5 @@
 #include "log_server.h"
-#include "logger.h"
+#include "oi_log.h"
 
 LogServer::~LogServer()
 {

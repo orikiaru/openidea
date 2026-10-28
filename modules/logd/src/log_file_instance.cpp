@@ -1,7 +1,7 @@
 #include <string.h>
 #include "log_file_instance.h"
-#include "threadpool.h"
-#include "logger.h"
+#include "oi_thread.h"
+#include "oi_log.h"
 #include "log_manager.h"
 
 #ifdef _SINGLE_THREAD_

@@ -3,11 +3,11 @@
 
 namespace
 {
-const long long kMaxArgs = 1024 * 1024;
-const long long kMaxBulk = 512LL * 1024 * 1024;
+const int64_t kMaxArgs = 1024 * 1024;
+const int64_t kMaxBulk = 512LL * 1024 * 1024;
 
 // 从 p 读一个十进制整数，到 \r\n 为止。返回下一段的起点，数据不够返回 NULL，格式错把 bad 置真。
-const char* ReadLine(const char* p, const char* end, long long& value, bool& bad)
+const char* ReadLine(const char* p, const char* end, int64_t& value, bool& bad)
 {
 	bool neg = false;
 	if (p < end && *p == '-')
@@ -15,7 +15,7 @@ const char* ReadLine(const char* p, const char* end, long long& value, bool& bad
 		neg = true;
 		++p;
 	}
-	long long v = 0;
+	int64_t v = 0;
 	int digits = 0;
 	for (; p < end; ++p)
 	{
@@ -46,7 +46,7 @@ const char* ReadLine(const char* p, const char* end, long long& value, bool& bad
 
 // 一条完整的 RESP 命令：*N\r\n 后跟 N 个 $len\r\n<data>\r\n。
 // 返回这条命令的字节数；不完整返回 0；格式不对把 bad 置真。
-size_t ScanCommand(const char* begin, const char* end, long long& argc, bool& bad)
+size_t ScanCommand(const char* begin, const char* end, int64_t& argc, bool& bad)
 {
 	const char* p = begin;
 	if (p >= end)
@@ -68,7 +68,7 @@ size_t ScanCommand(const char* begin, const char* end, long long& argc, bool& ba
 		bad = true;
 		return 0;
 	}
-	for (long long i = 0; i < argc; ++i)
+	for (int64_t i = 0; i < argc; ++i)
 	{
 		if (p >= end)
 		{
@@ -79,7 +79,7 @@ size_t ScanCommand(const char* begin, const char* end, long long& argc, bool& ba
 			bad = true;
 			return 0;
 		}
-		long long len = 0;
+		int64_t len = 0;
 		p = ReadLine(p + 1, end, len, bad);
 		if (!p)
 		{
@@ -139,7 +139,7 @@ void RedisServerSession::OnDataIn()
 	const char* p = begin;
 	while (p < end)
 	{
-		long long argc = 0;
+		int64_t argc = 0;
 		bool bad = false;
 		size_t n = ScanCommand(p, end, argc, bad);
 		if (bad)

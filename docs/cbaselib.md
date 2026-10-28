@@ -10,7 +10,7 @@
 
 `net` 是网络。`Poll` 包 libuv 的事件循环。`NetSocket`、`AcceptChannel`、`ConnectChannel`、`TcpChannel` 负责监听、连接和收发。`Session` 和 `SessionManager` 管一类连接，组件配置里的 ip、port、type 从这里读。监听口在 `bind` 之前打开 `SO_REUSEADDR`。进程退出后旧连接还会在 `TIME_WAIT` 里待一会儿，但不再挡住下一次监听。客户端连出去不走 `bind`。
 
-`proto` 是自有协议。`Protocol` 是协议基类，`Rpc` 是远程调用。`rpc_coro.h` 是协程任务和 RPC 等待。`ProtoSession`、`ProtoStubManager` 管会话和协议号注册。`parser` 做解码。`proto_tool` 是 cmake 时跑的 Python 生成器。
+`proto` 是自有协议。`Protocol` 是协议基类，`Rpc` 是远程调用。`oi_rpc_coro.h` 是协程任务和 RPC 等待。收包按协议号交给 `DeliverRpc`，不再按协议号克隆存根。`parser` 做组包。`proto_tool` 是 cmake 时跑的 Python 生成器。
 
 `timer` 是分层时间轮，见 [定时器](timer.md)。
 
@@ -20,9 +20,9 @@
 
 `port` 是套接字的平台差异。`port/win` 给 MSVC 补头文件。
 
-`3rd` 放进来一起编的第三方代码：`cpptoml`、`libuv`、`wepoll`、`hiredis`。HTTP 的 query、JSON 和二进制 body 用 header-only 的 `cpp-httplib` 和 `nlohmann`，不编进上面的静态库。
+`3rd` 放进来一起编的第三方代码：`cpptoml`、`libuv`、`hiredis`、`jsoncpp`。HTTP 的 query 和二进制 body 用 header-only 的 `cpp-httplib`。JSON 只用 JsonCpp。Windows 的事件循环用 libuv 自己的实现。
 
-`include` 是给业务包含的汇总头：`header.h`、`base_header.h`、`net_header.h`。
+`include` 是给业务包含的汇总头：`oi_header.h`、`oi_base.h`、`oi_net.h`。
 
 ## 进程里谁先起来
 

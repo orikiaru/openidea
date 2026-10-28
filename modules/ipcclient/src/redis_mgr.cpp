@@ -1,6 +1,6 @@
 #include "redis_mgr.h"
-#include "redis_client.h"
-#include "logger.h"
+#include "oi_redis.h"
+#include "oi_log.h"
 #include "test_board.h"
 #include <cstring>
 #include <string>

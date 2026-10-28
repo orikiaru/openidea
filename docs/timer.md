@@ -4,10 +4,10 @@
 
 | 文件 | 作用 |
 | --- | --- |
-| `base_timer` | 一个定时器。`OnTimer` 返回 true 会按原间隔再挂上，返回 false 则不再挂 |
-| `base_timer_level` | 一层轮子 |
-| `base_timer_helper` | 跨天、跨周、跨月、跨年，以及按星期几切的一周。`TimeMark` 存时间和偏移，偏移 `86400` 再偏一天 |
-| `base_timer_manager` | 初始化、推进 tick、执行到期定时器 |
+| `oi_timer` | 一个定时器。`OnTimer` 返回 true 会按原间隔再挂上，返回 false 则不再挂 |
+| `oi_timer_level` | 一层轮子 |
+| `oi_timer_helper` | 跨天、跨周、跨月、跨年，以及按星期几切的一周。`TimeMark` 存时间和偏移，偏移 `86400` 再偏一天 |
+| `oi_timer_manager` | 初始化、推进 tick、执行到期定时器 |
 
 返回 false 前要销毁这个定时器，或者先从管理器摘掉再销毁。
 

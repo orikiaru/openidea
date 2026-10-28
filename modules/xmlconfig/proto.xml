@@ -1,46 +1,105 @@
-<Protocols>
-  <!-- 字段默认按声明顺序从 0 编号。需要跳号时写 seq="N"，例如删掉 1 号字段后，后面的字段仍可保持原来的 seq。 -->
+// 每行是：字段号 类型 名字。字段号写在协议里，生成器不补、不重排。
+// 容器写成 vector<T>、map<K, V>。string 就是 std::string。
+// rpcdata 名字后面加 key，才生成比较器，才能当 map 键。这种结构不生成 JSON。
 
-	<rpcdata name="Inner">
-		<member type="int" name="n"/>
-		<member type="std::string" name="s"/>
-	</rpcdata>
+rpcdata Inner {
+    0 int32_t n;
+    1 string s;
+}
 
-	<rpcdata name="AllTypesData">
-		<member type="char" name="c"/>
-		<member type="short" name="s"/>
-		<member type="int" name="i"/>
-		<member type="long" name="l"/>
-		<member type="int64_t" name="i64"/>
-		<member type="float" name="f"/>
-		<member type="double" name="d"/>
-		<member type="Bytes" name="raw"/>
-		<member type="std::string" name="msg"/>
-		<member type="std::vector &lt; int &gt;" name="nums"/>
-		<member type="std::vector &lt; std::string &gt;" name="words"/>
-		<member type="Inner" name="child"/>
-		<member type="std::vector &lt; Inner &gt;" name="children"/>
-		<member type="std::map &lt; int, std::string &gt;" name="table"/>
-		<member type="std::map &lt; std::string, Inner &gt;" name="named"/>
-		<member type="int" name="gap" seq="20"/>
-	</rpcdata>
+rpcdata EchoKeyPart key {
+    0 int32_t n;
+}
 
-	<rpcdata name="AllEchoReq">
-		<member type="AllTypesData" name="data"/>
-	</rpcdata>
-	<rpcdata name="AllEchoRes">
-		<member type="AllTypesData" name="data"/>
-		<member type="int" name="code"/>
-	</rpcdata>
-	<rpc name="AllEcho" id="3001" res_id="3101" request="AllEchoReq" response="AllEchoRes" timeout="25"/>
+rpcdata EchoKey key {
+    0 EchoKeyPart part;
+    1 string name;
+}
 
-	<rpcdata name="HoldReq">
-		<member type="int" name="delay_ms"/>
-		<member type="int" name="mark"/>
-	</rpcdata>
-	<rpcdata name="HoldRes">
-		<member type="int" name="mark"/>
-	</rpcdata>
-	<rpc name="Hold" id="3002" res_id="3102" request="HoldReq" response="HoldRes" timeout="25"/>
+rpcdata AllTypesData {
+    0 int8_t c;
+    1 int16_t s;
+    2 int32_t i;
+    3 int64_t l;
+    4 int64_t i64;
+    5 float f;
+    6 double d;
+    7 Bytes raw;
+    8 string msg;
+    9 vector<int32_t> nums;
+    10 vector<string> words;
+    11 Inner child;
+    12 vector<Inner> children;
+    13 map<int32_t, string> table;
+    14 map<string, Inner> named;
+    15 uint8_t u8;
+    16 uint16_t u16;
+    17 uint32_t u32;
+    18 uint64_t u64;
+    19 vector<uint64_t> unums;
+    20 int32_t gap;
+    21 map<uint32_t, string> utable;
+    22 map<uint64_t, string> ubig;
+    23 map<EchoKey, string> keyed;
+}
 
-</Protocols>
+rpcdata AllEchoReq {
+    0 AllTypesData data;
+}
+
+rpcdata AllEchoRes {
+    0 AllTypesData data;
+    1 int32_t code;
+}
+
+rpc AllEcho {
+    id 3001;
+    res_id 3101;
+    request AllEchoReq;
+    response AllEchoRes;
+    timeout 25;
+}
+
+rpcdata HoldReq {
+    0 int32_t delay_ms;
+    1 int32_t mark;
+}
+
+rpcdata HoldRes {
+    0 int32_t mark;
+}
+
+rpc Hold {
+    id 3002;
+    res_id 3102;
+    request HoldReq;
+    response HoldRes;
+    timeout 25;
+}
+
+// JSON 能表达的全量结构。结构当 map 键的字段不在这里。
+rpcdata JsonAll {
+    0 int8_t c;
+    1 int16_t s;
+    2 int32_t i;
+    3 int64_t l;
+    4 int64_t i64;
+    5 float f;
+    6 double d;
+    7 Bytes raw;
+    8 string msg;
+    9 vector<int32_t> nums;
+    10 vector<string> words;
+    11 Inner child;
+    12 vector<Inner> children;
+    13 map<int32_t, string> table;
+    14 map<string, Inner> named;
+    15 uint8_t u8;
+    16 uint16_t u16;
+    17 uint32_t u32;
+    18 uint64_t u64;
+    19 vector<uint64_t> unums;
+    20 int32_t gap;
+    21 map<uint32_t, string> utable;
+    22 map<uint64_t, string> ubig;
+}

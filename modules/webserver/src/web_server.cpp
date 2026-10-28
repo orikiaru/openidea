@@ -1,10 +1,28 @@
 #include "web_server.h"
-#include "config.h"
+#include "oi_config.h"
+#include "oi_rpcdata_jsonall.h"
 #include "httplib.h"
-#include "json.hpp"
+#include "json/json.h"
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
 #include <string>
+
+static std::string DumpJson(const Json::Value& value)
+{
+	Json::StreamWriterBuilder builder;
+	builder["indentation"] = "";
+	return Json::writeString(builder, value);
+}
+
+static bool ParseJson(const std::string& text, Json::Value& out)
+{
+	Json::CharReaderBuilder builder;
+	std::string errs;
+	const std::unique_ptr<Json::CharReader> reader(builder.newCharReader());
+	const char* begin = text.data();
+	return reader->parse(begin, begin + text.size(), &out, &errs);
+}
 
 bool WebServer::Run()
 {
@@ -28,21 +46,29 @@ bool WebServer::Run()
 			res.status = 400;
 			return;
 		}
-		nlohmann::json out;
+		Json::Value out(Json::objectValue);
 		out["text"] = req.get_param_value("text");
-		res.set_content(out.dump(), "application/json");
+		res.set_content(DumpJson(out), "application/json");
 	});
 	svr.Post("/json", [](const httplib::Request& req, httplib::Response& res) {
-		try
-		{
-			nlohmann::json body = nlohmann::json::parse(req.body);
-			body["ok"] = true;
-			res.set_content(body.dump(), "application/json");
-		}
-		catch (const nlohmann::json::parse_error&)
+		Json::Value body;
+		if (!ParseJson(req.body, body) || !body.isObject())
 		{
 			res.status = 400;
+			return;
 		}
+		body["ok"] = true;
+		res.set_content(DumpJson(body), "application/json");
+	});
+	svr.Post("/rpcjson", [](const httplib::Request& req, httplib::Response& res) {
+		OI::RpcData::JsonAll data;
+		if (!data.FromJson(req.body))
+		{
+			res.status = 400;
+			return;
+		}
+		data.gap += 1;
+		res.set_content(data.ToJson(), "application/json");
 	});
 	svr.Post("/bin", [](const httplib::Request& req, httplib::Response& res) {
 		res.set_content(req.body.data(), req.body.size(), "application/octet-stream");

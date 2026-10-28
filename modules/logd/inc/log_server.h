@@ -1,7 +1,7 @@
 #pragma once
-#include "proto_session_manager.h"
+#include "oi_rpc_session_manager.h"
 #include "log_server_session.h"
-#include "singleton.h"
+#include "oi_singleton.h"
 class LogServer : public ProtoSessionManager
 {
 	DECLARE_SINGLETON(LogServer)

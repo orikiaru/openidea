@@ -5,8 +5,8 @@ set(LIBRARY ${LIBNAME}_static)
 set(LIBRARY_M ${LIBNAME}_m_static)
 
 set(LIBSRC
-	src/redis_client.cpp
-	src/redis_client_session.cpp
+	src/oi_redis.cpp
+	src/oi_redis_session.cpp
 )
 
 add_library(${LIBRARY} STATIC ${LIBSRC})

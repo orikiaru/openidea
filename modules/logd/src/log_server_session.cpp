@@ -1,5 +1,5 @@
 #include "log_server_session.h"
-#include "log_frame.h"
+#include "oi_log_frame.h"
 #include "log_manager.h"
 
 void LogServerSession::OnDataIn()

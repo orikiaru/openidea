@@ -3,7 +3,7 @@
 #include "hold_mgr.h"
 #include "log_mgr.h"
 #include "redis_mgr.h"
-#include "redis_client.h"
+#include "oi_redis.h"
 
 IpcClient::~IpcClient()
 {

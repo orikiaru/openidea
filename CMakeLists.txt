@@ -68,6 +68,7 @@ set(LIBUV_BUILD_SHARED OFF CACHE BOOL "" FORCE)
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 add_subdirectory(${BASE_LIB_PATH}/3rd/libuv EXCLUDE_FROM_ALL)
 add_subdirectory(${BASE_LIB_PATH}/3rd/hiredis EXCLUDE_FROM_ALL)
+add_subdirectory(${BASE_LIB_PATH}/3rd/jsoncpp EXCLUDE_FROM_ALL)
 if(MSVC AND TARGET uv_a)
 	target_compile_options(uv_a PRIVATE /W0)
 endif()
@@ -88,6 +89,7 @@ include_directories(SYSTEM
 	${BASE_LIB_PATH}/3rd/cpptoml
 	${BASE_LIB_PATH}/3rd/libuv/include
 	${BASE_LIB_PATH}/3rd/hiredis
+	${BASE_LIB_PATH}/3rd/jsoncpp/include
 )
 
 if(MSVC)

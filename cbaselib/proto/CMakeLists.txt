@@ -5,13 +5,12 @@ set(LIBRARY ${LIBNAME}_static)
 set(LIBRARY_M ${LIBNAME}_m_static)
 
 set(LIBSRC 	
-	src/protocol.cpp
-	src/rpc.cpp
-	src/parser.cpp
-	src/proto_session.cpp
-	src/proto_session_manager.cpp
-	src/proto_stub_manager.cpp
-	src/rpc_coro.cpp
+	src/oi_protocol.cpp
+	src/oi_rpc_call.cpp
+	src/oi_parser.cpp
+	src/oi_rpc_session.cpp
+	src/oi_rpc_session_manager.cpp
+	src/oi_rpc_coro.cpp
 	)
 
 add_library(${LIBRARY} STATIC ${LIBSRC})

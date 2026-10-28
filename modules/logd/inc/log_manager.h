@@ -1,7 +1,7 @@
 #pragma once
 #include <map>
-#include "base_header.h"
-#include "singleton.h"
+#include "oi_base.h"
+#include "oi_singleton.h"
 
 class LogFileInstance;
 
@@ -21,7 +21,7 @@ class LogManager : public BaseTimer
 	time_t		_last_ts;
 
 	//日志title无锁队列[时间的缓存]
-	int			_log_title_index;											//当前log_title索引
+	int32_t		_log_title_index;											//当前log_title索引
 	char		_log_title_data[LOG_TITLE_LEVEL_SIZE][LOG_TITLE_BUFF_SIZE];	//备选数组,方便切换title,每次OnTimer修改index数据，切换index
 
 	//日志lv对应的文件和缓存包装

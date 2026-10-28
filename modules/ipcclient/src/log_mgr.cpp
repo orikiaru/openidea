@@ -1,6 +1,6 @@
 #include "log_mgr.h"
-#include "config.h"
-#include "log_client.h"
+#include "oi_config.h"
+#include "oi_log_client.h"
 #include "test_board.h"
 #include <cstdio>
 #include <vector>

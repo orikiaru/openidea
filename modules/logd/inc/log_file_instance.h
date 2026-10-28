@@ -3,8 +3,8 @@
 #include <list>
 #include <map>
 #include <thread>
-#include "bytes.h"
-#include "spin_lock.h"
+#include "oi_bytes.h"
+#include "oi_lock.h"
 
 class LogManager;
 class LogFileInstance

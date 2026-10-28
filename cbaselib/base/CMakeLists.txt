@@ -5,12 +5,12 @@ set(LIBRARY ${LIBNAME}_static)
 set(LIBRARY_M ${LIBNAME}_m_static)
 
 set(LIBSRC 	
-	src/spin_lock.cpp 
-	src/bytes.cpp 
-	src/threadpool.cpp 
-	src/bytes_stream.cpp
-	src/config.cpp
-	src/file_path.cpp
+	src/oi_lock.cpp 
+	src/oi_bytes.cpp 
+	src/oi_thread.cpp 
+	src/oi_bytes_stream.cpp
+	src/oi_config.cpp
+	src/oi_file.cpp
 	)
 
 add_library(${LIBRARY} STATIC ${LIBSRC})

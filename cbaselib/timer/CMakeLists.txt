@@ -6,10 +6,10 @@ set(LIBRARY ${LIBNAME}_static)
 set(LIBRARY_M ${LIBNAME}_m_static)
 
 set(LIBSRC 	
-	src/base_timer.cpp
-	src/base_timer_level.cpp
-	src/base_timer_manager.cpp
-	src/base_timer_helper.cpp
+	src/oi_timer.cpp
+	src/oi_timer_level.cpp
+	src/oi_timer_manager.cpp
+	src/oi_timer_helper.cpp
 	)
 
 add_library(${LIBRARY} STATIC ${LIBSRC})

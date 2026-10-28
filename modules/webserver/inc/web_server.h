@@ -1,5 +1,5 @@
 #pragma once
-#include "singleton.h"
+#include "oi_singleton.h"
 
 class WebServer
 {

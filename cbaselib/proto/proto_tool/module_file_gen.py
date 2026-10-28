@@ -1,11 +1,10 @@
 from encodings import utf_8
 import os
+import shutil
 from component_file_gen import ComponentFileGen
 from common import loginfo
 from common import write_utf8
 from module_data_parse import Module
-from serialize_data_file_gen import SerializeDataFileGen
-from serialize_data_parse import SerializeDataType
 
 class ModuleFileGen:
     def __init__(self, module: Module, module_root_path:str, module_depoly_path:str) -> None:
@@ -17,8 +16,8 @@ class ModuleFileGen:
         self.module_relative_config_path = "../config"
         
         self.common_header = '''#include <stdio.h>
-#include "net_header.h"
-#include "base_header.h"
+#include "oi_net.h"
+#include "oi_base.h"
 '''
     
     def GetModulePath(self, short_path = False):
@@ -34,10 +33,6 @@ class ModuleFileGen:
         return os.path.join(self.GetModulePath(short_path), "src") + os.sep
     def GetModuleIncPath(self, short_path = False):
         return os.path.join(self.GetModulePath(short_path), "inc") + os.sep
-    def GetModuleProtoPath(self, short_path = False):
-        return os.path.join(self.GetModulePath(short_path), "protocol") + os.sep
-    def GetModuleStubPath(self, short_path = False):
-        return os.path.join(self.GetModuleSrcPath(short_path), "proto_stub.cpp")
     def GetModuleCMakePath(self, short_path = False):
         return os.path.join(self.GetModulePath(short_path), "CMakeLists.txt")
     def GetModuleMainPath(self, short_path = False):
@@ -91,9 +86,6 @@ class ModuleFileGen:
         #module_name = self.GetModuleName()
         module_name_lower = self.GetModuleNameLower()
 
-        #stub_file_path = self.GetModuleStubPath()
-        cmake_stub_file_path = self.GetModuleStubPath(True).replace("\\", "/")
-
         #component_cpp_path = self.GetCompontCppsPath()
         cmake_component_cpp_path = self.GetCompontCppsPath(True).replace("\\", "/")
 
@@ -113,7 +105,6 @@ class ModuleFileGen:
         file_data = file_data.replace("__MODULE_CONFIG_RELATIVE_PATH__", module_config_relative_path)
         
         file_data = file_data.replace("__MODULE_NAME_LOWER__", module_name_lower)
-        file_data = file_data.replace("__CMAKE_STUB_FILE_PATH__",cmake_stub_file_path)
         file_data = file_data.replace("__CMAKE_COMPONTENTS_CPP_PATH__",cmake_component_cpp_path)
         file_data = file_data.replace("__CMAKE_MAIN_CPP_PATH__",cmake_main_cpp_path)
         file_data = file_data.replace("__MODULE_COMPONENTS_INIT__", module_components_init)
@@ -129,14 +120,12 @@ class ModuleFileGen:
             os.makedirs(self.GetModuleIncPath())
         if(not os.access(self.GetModuleSrcPath(), os.F_OK)):
             os.makedirs(self.GetModuleSrcPath())
-        if(not os.access(self.GetModuleProtoPath(), os.F_OK)):
-            os.makedirs(self.GetModuleProtoPath())
+        proto_path = os.path.join(self.GetModulePath(), "protocol")
+        if os.path.isdir(proto_path):
+            shutil.rmtree(proto_path)
         if(not os.access(self.GetConfigPath(), os.F_OK)):
             os.makedirs(self.DoReplace(self.GetConfigPath()))
-            
-        if(not self.GenProtocolAndStub()):
-            loginfo("ModuleName=[{}] [{}]".format(self.module.name, "GenProtocolAndStubError"))
-            return False
+
         if(not self.GenModuleFile()):
             loginfo("ModuleName=[{}] [{}]".format(self.module.name, "GenModuleFileError"))
             return False
@@ -217,10 +206,7 @@ int main(int argc, char* argv[])
             self.WriteFile(file_data, self.GetModuleSrcPath() + cf.GetComponentCppFileName())
 
         return True
-    
-    def GenProtocolAndStub(self):
-        return True
-            
+
     def GenCMakeFile(self):
         file_path = self.GetModuleCMakePath()
         file_data = '''

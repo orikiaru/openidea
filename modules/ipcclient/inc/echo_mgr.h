@@ -1,8 +1,8 @@
 #pragma once
-#include "allechoreq"
-#include "allechores"
-#include "rpc_coro.h"
-#include "singleton.h"
+#include "oi_rpcdata_allechoreq.h"
+#include "oi_rpcdata_allechores.h"
+#include "oi_rpc_coro.h"
+#include "oi_singleton.h"
 #include <atomic>
 #include <chrono>
 #include <map>
@@ -14,30 +14,30 @@ class EchoMgr
 	DECLARE_SINGLETON(EchoMgr)
 	EchoMgr();
 	bool _on;
-	int _total;
-	int _timeout_ms;
+	int32_t _total;
+	int32_t _timeout_ms;
 	sid_t _sid;
 	std::chrono::steady_clock::time_point _start;
-	std::atomic<int> _done;
-	std::atomic<int> _ok;
-	std::atomic<int> _rpc_fail;
+	std::atomic<int32_t> _done;
+	std::atomic<int32_t> _ok;
+	std::atomic<int32_t> _rpc_fail;
 	std::mutex _mu;
-	int _mismatch;
-	int _gap_differ;
-	int _sample_sent;
-	int _sample_recv;
-	int _sample_code;
+	int32_t _mismatch;
+	int32_t _gap_differ;
+	int32_t _sample_sent;
+	int32_t _sample_recv;
+	int32_t _sample_code;
 	bool _have_sample;
-	std::map<std::string, int> _fields;
+	std::map<std::string, int32_t> _fields;
 public:
 	void Load();
 	void ArmTimeout();
 	void Start(sid_t sid);
 	sid_t Sid() const { return _sid; }
-	int Done() const { return _done.load(); }
-	int Ok() const { return _ok.load(); }
+	int32_t Done() const { return _done.load(); }
+	int32_t Ok() const { return _ok.load(); }
 	void Note(const char* name);
-	int* GapDiffer() { return &_gap_differ; }
-	void OnResult(int n, const OI::Rpc::AllEchoReq& req, const OI::Rpc::AllEchoRes& res, int ret, bool same);
+	int32_t* GapDiffer() { return &_gap_differ; }
+	void OnResult(int n, const OI::RpcData::AllEchoReq& req, const OI::RpcData::AllEchoRes& res, int ret, bool same);
 	coro::Task Pump(int index);
 };

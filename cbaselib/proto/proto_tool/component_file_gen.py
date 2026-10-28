@@ -11,8 +11,8 @@ class ComponentFileGen:
         self.component = component
         self.module = module
         self.common_header = '#pragma once' + '\n' 
-        self.common_header += '#include "net_header.h"'  + '\n'
-        self.common_header += '#include "base_header.h"' + '\n'
+        self.common_header += '#include "oi_net.h"'  + '\n'
+        self.common_header += '#include "oi_base.h"' + '\n'
         
     def GetComponentHeaderFileName(self):
         return self.component.name.lower() + '.h'
@@ -110,9 +110,9 @@ type = ""
     
     def GenServerHeader(self):
         file_data = '''#pragma once
-#include "protocol.h"
-#include "rpc.h"
-#include "net_header.h"
+#include "oi_protocol.h"
+#include "oi_rpc_call.h"
+#include "oi_net.h"
 
 class __COMPONENT_NAME__ : public ProtoSessionManager
 {
@@ -133,9 +133,9 @@ private:
     
     def GenClientHeader(self):
         file_data = '''#pragma once
-#include "protocol.h"
-#include "rpc.h"
-#include "net_header.h"
+#include "oi_protocol.h"
+#include "oi_rpc_call.h"
+#include "oi_net.h"
 
 class __COMPONENT_NAME__ : public ProtoClientManager
 {

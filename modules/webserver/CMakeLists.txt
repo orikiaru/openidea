@@ -16,7 +16,6 @@ target_include_directories(webserver
 target_include_directories(webserver SYSTEM
 	PRIVATE
 		${CMAKE_SOURCE_DIR}/cbaselib/3rd/cpp-httplib
-		${CMAKE_SOURCE_DIR}/cbaselib/3rd/nlohmann
 )
 
 # HTTP 服务自己带线程。这里不再开业务线程池。
@@ -30,6 +29,7 @@ if(MSVC)
 		target_link_libraries(webserver PUBLIC ${BASE_M_LIBS})
 	endif()
 	target_link_libraries(webserver PUBLIC ws2_32)
+	target_link_libraries(webserver PUBLIC jsoncpp_static)
 else()
 	if(SINGLE_THREAD)
 		target_link_libraries(webserver PUBLIC -Wl,--start-group ${BASE_LIBS} -Wl,--end-group)
@@ -38,4 +38,5 @@ else()
 		target_link_libraries(webserver PUBLIC -Wl,--start-group ${BASE_M_LIBS} -Wl,--end-group)
 	endif()
 	target_link_libraries(webserver PUBLIC pthread)
+	target_link_libraries(webserver PUBLIC jsoncpp_static)
 endif()

@@ -7,6 +7,6 @@ alwaysApply: false
 
 先读 `docs/cbaselib.md` 的 net 段。监听口在 `bind` 之前打开 `SO_REUSEADDR`。旧连接留在 `TIME_WAIT` 里时，新进程可以再绑同一个端口。`TIME_WAIT` 本身要等内核超时才消失。
 
-标准用例是 `cbaselib/port/net_os.cpp` 的 `NetOs_Bind`。客户端连接不走 `bind`，不要在连接套接字上另做一套复用。
+标准用例是 `cbaselib/port/oi_net_os.cpp` 的 `NetOs_Bind`。客户端连接不走 `bind`，不要在连接套接字上另做一套复用。
 
 Linux 上这个选项不会让两个进程同时听同一个口。口还被别的进程占着时，绑定仍然失败。

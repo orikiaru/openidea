@@ -46,6 +46,8 @@ class SerializeData:
         self.proto_type = ""
         self.timeout = "30"
         self.res_id = ""
+        self.is_key = False
+        self.json_ok = True
 
     def GenLogHeader(self):
         log = 'type={},id={},name={},type_enum={}'.format(SerializeDataType(self.type), self.id, self.name, self.GetProtoType())
@@ -70,7 +72,7 @@ class SerializeData:
     def GetName(self):
         return self.name
     def GetDataName(self):
-        return self.name.lower()
+        return "oi_rpcdata_" + self.name.lower() + ".h"
     def GetProtoFileName(self):
         suffix = ""
         if(self.type == SerializeDataType.RPC):
@@ -122,25 +124,17 @@ class SerializeData:
             self.members.append(member)
         return self.AssignFieldSeq()
 
-    # 没写 seq 的字段从 0 起补空位。写了 seq 就可以跳过中间的号，避免删字段后把后面的号全挤乱。
+    # 字段号必须写在协议里。缺号、重号都是协议错，生成器不补。
     def AssignFieldSeq(self):
         used = set()
         for member in self.members:
             if member.seq is None:
-                continue
+                loginfo("field number required proto=", self.name, ",field=", member.GetName())
+                return False
             if member.seq in used:
-                loginfo("ParseProtocol error Proto[", self.name, "], duplicate seq [", member.seq, "]")
+                loginfo("duplicate field number proto=", self.name, ",field=", member.GetName(), ",seq=", member.seq)
                 return False
             used.add(member.seq)
-        next_seq = 0
-        for member in self.members:
-            if member.seq is not None:
-                continue
-            while next_seq in used:
-                next_seq += 1
-            member.seq = next_seq
-            used.add(member.seq)
-            next_seq += 1
         return True  
     #解析Rpc的Req和Res
     def ParseRpcMember(self)->bool:
@@ -178,7 +172,6 @@ class SerializeData:
         else:
             loginfo("SerializeData::Parse Error Invalid self.type=", self.type)
             return False
-        self.ParseCommon()
         if(ret):
             loginfo(self.GenLogHeader(), " ParseFinish")
         else:
@@ -197,6 +190,17 @@ class SerializeData:
         self.name = self.xml_data.get("name")
         if(not self.name):
             loginfo("ParseRpcData error not id or name, content=", self.xml_data.text, "id=", self.id, ",name=", self.name)
+            return False
+        key_text = self.xml_data.get("key")
+        if key_text is None or key_text == "":
+            self.is_key = False
+        elif str(key_text).lower() in ("true", "1"):
+            self.is_key = True
+        elif str(key_text).lower() in ("false", "0"):
+            self.is_key = False
+        else:
+            loginfo("ParseRpcData key invalid name=", self.name, ",key=", key_text)
+            return False
         return self.ParseMember()
 
     #解析RPC
@@ -211,8 +215,4 @@ class SerializeData:
         if(timeout):
             self.timeout = timeout
         return self.ParseMember()
-    
-    #解析一些通用内容
-    def ParseCommon(self)->bool:
-        pass
     

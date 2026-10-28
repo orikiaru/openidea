@@ -6,9 +6,9 @@ set(LIBRARY ${LIBNAME}_static)
 set(LIBRARY_M ${LIBNAME}_m_static)
 
 set(LIBSRC 	
-	src/log_client.cpp
-	src/log_client_session.cpp
-	src/logger.cpp
+	src/oi_log_client.cpp
+	src/oi_log_client_session.cpp
+	src/oi_log.cpp
 	)
 
 add_library(${LIBRARY} STATIC ${LIBSRC})
@@ -29,9 +29,9 @@ set(LIBRARY_M2 ${LIBNAME2}_m_static)
 
 #logserver也会包含logclient,所以重复的target不需要包含
 set(LIBSRC2
-	src/log_client.cpp
-	src/log_client_session.cpp
-	src/logger.cpp
+	src/oi_log_client.cpp
+	src/oi_log_client_session.cpp
+	src/oi_log.cpp
 	)
 
 add_library(${LIBRARY_M2} STATIC ${LIBSRC2})

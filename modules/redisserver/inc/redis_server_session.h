@@ -1,16 +1,16 @@
 #pragma once
-#include "net_session.h"
+#include "oi_net_session.h"
 
 class RedisServer;
 
 class RedisServerSession : public NetSession
 {
 	RedisServer* _owner;
-	int _link;
+	int32_t _link;
 public:
 	RedisServerSession(RedisServer* owner);
 	virtual ~RedisServerSession();
-	void Bind(int link) { _link = link; }
+	void Bind(int32_t link) { _link = link; }
 	virtual void Send(const OI::Base::Bytes& bytes);
 	virtual void SendProtocol(const Protocol* proto);
 	virtual void OnDataIn();

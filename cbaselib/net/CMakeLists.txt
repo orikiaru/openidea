@@ -5,22 +5,22 @@ set(LIBRARY ${LIBNAME}_static)
 set(LIBRARY_M ${LIBNAME}_m_static)
 
 set(LIBSRC 	
-	src/net_socket.cpp
-	src/net_helper.cpp
+	src/oi_socket.cpp
+	src/oi_net_helper.cpp
 
-	src/poll.cpp
+	src/oi_poll.cpp
 
-	src/session_manager.cpp
-	src/session.cpp 
-	src/net_session.cpp 
+	src/oi_session_manager.cpp
+	src/oi_session.cpp 
+	src/oi_net_session.cpp 
 
-	src/channel.cpp 
-	src/accept_channel.cpp
-	src/connect_channel.cpp
-	src/net_channel.cpp 
-	src/tcp_channel.cpp
-	src/ssl_channel.cpp
-	../port/net_os.cpp
+	src/oi_channel.cpp 
+	src/oi_accept_channel.cpp
+	src/oi_connect_channel.cpp
+	src/oi_net_channel.cpp 
+	src/oi_tcp_channel.cpp
+	src/oi_ssl_channel.cpp
+	../port/oi_net_os.cpp
 
 	)
 
