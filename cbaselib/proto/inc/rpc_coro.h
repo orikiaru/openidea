@@ -8,41 +8,13 @@
 #include <atomic>
 #include <coroutine>
 #include <cstdint>
-#include <exception>
 #include <functional>
-#include <map>
 #include <utility>
 #include <vector>
 
 namespace coro
 {
-class RpcError : public std::exception
-{
-	int _code;
-public:
-	explicit RpcError(int code) : _code(code) {}
-	int code() const { return _code; }
-	const char* what() const noexcept override { return "RpcError"; }
-};
-
-class Hub
-{
-public:
-	static uint64_t Add(std::function<void(int, const void*)> done);
-	static void Bind(uint64_t id, std::function<void(int, const void*)> done);
-	static uint64_t LastId();
-	static int Pending();
-	template<typename Res>
-	static void Complete(uint64_t id, int code, const Res* value)
-	{
-		CompleteRaw(id, code, value);
-	}
-	static bool CompleteRaw(uint64_t id, int code, const void* value);
-};
-
-void ArmRpcTimeout(uint64_t rid, int seconds);
-
-// 协程 token。StartTask 生成并传进协程，Wake 用同一个值。
+// 协程 token。StartTask 生成并传进协程。
 typedef uint64_t Token;
 typedef Token TaskUid;
 
@@ -50,18 +22,18 @@ TaskUid AllocTaskUid();
 
 // 挂起的协程放回运行队列。单线程进本线程队列，多线程进工人队列。RPC 回包和定时器都走这里。
 void Schedule(std::coroutine_handle<> handle);
-void NotePollWake();
 
 // 根协程跑完后不能在 final_suspend 里销毁自己。登记下来，等 resume 返回再释放。
 void DetachFinished(std::coroutine_handle<> handle);
 void DrainDetached();
 
-// 单线程：队列空了再进 poll。
+// 单线程就绪队列。Poll 只跑进入时已经在队列里的句柄，这一轮新挂上的留到 poll 之后。
 class StScheduler
 {
 public:
 	static void Post(std::coroutine_handle<> handle);
 	static bool Poll();
+	static bool Queued();
 };
 
 // 下一轮再跑，或者过 ms 毫秒再跑。到点就是 Schedule。
@@ -77,42 +49,6 @@ inline SleepMs yield(int ms)
 {
 	return SleepMs{ms};
 }
-
-struct YieldToPool
-{
-	bool await_ready() const noexcept { return false; }
-	void await_suspend(std::coroutine_handle<> handle) const noexcept;
-	void await_resume() const noexcept {}
-};
-
-// 停住当前协程。还没停到这里就 Wake，会先记下，这次 Park 直接过去。
-struct Park
-{
-	bool await_ready() const noexcept { return false; }
-	template<typename Promise>
-	bool await_suspend(std::coroutine_handle<Promise> h) const
-	{
-		return ParkAt(h.promise().uid, h);
-	}
-	void await_resume() const noexcept {}
-};
-
-bool ParkAt(TaskUid uid, std::coroutine_handle<> handle);
-bool Wake(TaskUid uid);
-
-struct ThisUid
-{
-	TaskUid value;
-	ThisUid() : value(0) {}
-	bool await_ready() const noexcept { return false; }
-	template<typename Promise>
-	bool await_suspend(std::coroutine_handle<Promise> h)
-	{
-		value = h.promise().uid;
-		return false;
-	}
-	TaskUid await_resume() const noexcept { return value; }
-};
 
 // 子任务跑完时：调用方已经挂起，就把调用方 Schedule 回去；还没挂起，就只做个标记。
 struct TaskFinalSuspend
@@ -149,9 +85,6 @@ struct TaskState
 	TaskFinalSuspend final_suspend() noexcept { return {}; }
 	void return_void() {}
 	void unhandled_exception() { std::terminate(); }
-	SleepMs yield_value(int ms) noexcept { return SleepMs{ms}; }
-	template<typename T>
-	YieldToPool yield_value(T&&) noexcept { return {}; }
 };
 
 // 一条任务。Start 丢进队列；co_await 就是调用它，跑完回到调用方。
@@ -210,88 +143,6 @@ Token StartTask(F&& fn)
 	return token;
 }
 
-// 下面三个都是同一件事：先挂上回调，回调里 Schedule 当前协程。
-template<typename Req, typename Res>
-struct RpcAwaiter
-{
-	const Req* req;
-	Res* res;
-	int result;
-	uint64_t id;
-	std::coroutine_handle<> handle;
-
-	bool await_ready() const noexcept { return false; }
-	void await_suspend(std::coroutine_handle<> h)
-	{
-		handle = h;
-		result = -1;
-		id = Hub::Add([this](int code, const void* value) {
-			result = code;
-			if (code == 0 && value && res)
-			{
-				*res = *static_cast<const Res*>(value);
-			}
-			Schedule(handle);
-		});
-	}
-	int await_resume() const noexcept { return result; }
-};
-
-template<typename Res>
-struct RidAwaiter
-{
-	Res* res;
-	uint64_t rid;
-	int timeout_sec;
-	int result;
-	std::coroutine_handle<> handle;
-
-	bool await_ready() const noexcept { return false; }
-	void await_suspend(std::coroutine_handle<> h)
-	{
-		handle = h;
-		result = -1;
-		uint64_t key = rid & ~((uint64_t)RPC_REQ_MASK);
-		Hub::Bind(key, [this](int code, const void* value) {
-			result = code;
-			if (code == 0 && value && res)
-			{
-				BytesStream* in = (BytesStream*)value;
-				(*in) >> *res;
-			}
-			Schedule(handle);
-		});
-		if (timeout_sec > 0)
-		{
-			ArmRpcTimeout(key, timeout_sec);
-		}
-	}
-	int await_resume() const noexcept { return result; }
-};
-
-template<typename Res>
-RidAwaiter<Res> WaitRid(uint64_t rid, Res& res, int timeout_sec = 25)
-{
-	RidAwaiter<Res> awaiter;
-	awaiter.res = &res;
-	awaiter.rid = rid;
-	awaiter.timeout_sec = timeout_sec;
-	awaiter.result = -1;
-	awaiter.handle = {};
-	return awaiter;
-}
-
-template<typename Req, typename Res>
-RpcAwaiter<Req, Res> AwaitRpc(const Req& req, Res& res)
-{
-	RpcAwaiter<Req, Res> awaiter;
-	awaiter.req = &req;
-	awaiter.res = &res;
-	awaiter.result = -1;
-	awaiter.id = 0;
-	awaiter.handle = {};
-	return awaiter;
-}
 }
 
 template<typename T>
@@ -355,7 +206,6 @@ struct RpcCallAwaiter
 	Req* req;
 	Res* res;
 	int result;
-	bool trace;
 	int timeout_sec;
 	std::coroutine_handle<> handle;
 	std::atomic<int> gate;
@@ -364,11 +214,11 @@ struct RpcCallAwaiter
 	bool replied;
 
 	RpcCallAwaiter()
-		: mgr(NULL), sid(0), req(NULL), res(NULL), result(-1), trace(false), timeout_sec(180), handle(), gate(0), replied(false)
+		: mgr(NULL), sid(0), req(NULL), res(NULL), result(-1), timeout_sec(180), handle(), gate(0), replied(false)
 	{}
 	RpcCallAwaiter(const RpcCallAwaiter&) = delete;
 	RpcCallAwaiter(RpcCallAwaiter&& other) noexcept
-		: mgr(other.mgr), sid(other.sid), req(other.req), res(other.res), result(other.result), trace(other.trace),
+		: mgr(other.mgr), sid(other.sid), req(other.req), res(other.res), result(other.result),
 		  timeout_sec(other.timeout_sec), handle(other.handle), gate(other.gate.load(std::memory_order_relaxed)),
 		  replied(false)
 	{
@@ -390,10 +240,6 @@ struct RpcCallAwaiter
 			replied = true;
 			return true;
 		}, [this]() {
-			if (trace)
-			{
-				coro::NotePollWake();
-			}
 			int prev = gate.exchange(1, std::memory_order_acq_rel);
 			if (prev == 2)
 			{
@@ -430,7 +276,7 @@ struct RpcCallAwaiter
 };
 
 template<typename Req, typename Res>
-RpcCallAwaiter<Req, Res> RpcCall(SessionManager& mgr, sid_t sid, Req& req, Res& res, bool trace = false, int timeout_sec = 180)
+RpcCallAwaiter<Req, Res> RpcCall(SessionManager& mgr, sid_t sid, Req& req, Res& res, int timeout_sec = 180)
 {
 	RpcCallAwaiter<Req, Res> awaiter;
 	awaiter.mgr = &mgr;
@@ -438,20 +284,7 @@ RpcCallAwaiter<Req, Res> RpcCall(SessionManager& mgr, sid_t sid, Req& req, Res& 
 	awaiter.req = &req;
 	awaiter.res = &res;
 	awaiter.result = -1;
-	awaiter.trace = trace;
 	awaiter.timeout_sec = timeout_sec;
 	awaiter.handle = {};
 	return awaiter;
 }
-
-#define AWAIT_RPC(ret, req, res) \
-	int ret = co_await ::coro::AwaitRpc((req), (res))
-
-#define AWAIT_RID(ret, rid, res) \
-	int ret = co_await ::coro::WaitRid((rid), (res))
-
-#define AWAIT_RPC_THROW(req, res) \
-	do { \
-		int _rpc_ret = co_await ::coro::AwaitRpc((req), (res)); \
-		if (_rpc_ret != 0) throw ::coro::RpcError(_rpc_ret); \
-	} while (0)

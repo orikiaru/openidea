@@ -14,6 +14,7 @@ type = "tcp"
 echo = true
 log = false
 redis = false
+hold = false
 
 [TestEcho]
 total = 1000000

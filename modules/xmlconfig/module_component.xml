@@ -3,8 +3,10 @@
 <Components>
     <component name="IpcClient" type="Client">
         <rpc name="AllEcho"/>
+        <rpc name="Hold"/>
     </component>
     <component name="IpcServer" type="Server">
         <rpc name="AllEcho"/>
+        <rpc name="Hold"/>
     </component>
 </Components>

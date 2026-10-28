@@ -172,13 +172,15 @@ RedisResult RedisClient::CallSync(std::vector<std::string> args)
 	st->sync = true;
 	Poll::GetInstance()->CallOnLoop(Submit, st);
 #ifdef _SINGLE_THREAD_
-	// 命令已经进等待队列。不把 poll 跑起来，回包没人读，这条调用还会占住队头。
+	// 同步等回包。先把已经挂上的协程跑一轮，再 poll；没有别人在等就堵住。
 	while (!st->ready)
 	{
-		if (!coro::StScheduler::Poll())
+		coro::StScheduler::Poll();
+		if (st->ready)
 		{
-			Poll::GetInstance()->PollWait(1);
+			break;
 		}
+		Poll::GetInstance()->PollWait(coro::StScheduler::Queued() ? 0 : 1);
 	}
 #else
 	{

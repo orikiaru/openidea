@@ -59,6 +59,7 @@ public:
 
 	static void* StartThreadPollWait(void* arg);
 	void StopAndJoin();
+	// wait_ms 为 0 时只试一次已经就绪的事件，不睡。否则堵住等网络或定时器。
 	void PollWait(int wait_ms = 1000);
 	// libuv 重复定时器。循环起来之前调用，到点在 poll 线程执行 fn。
 	void ArmTick(unsigned repeat_ms, void (*fn)());

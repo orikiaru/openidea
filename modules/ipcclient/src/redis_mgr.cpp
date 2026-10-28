@@ -47,7 +47,6 @@ static bool StatusIs(const RedisResult& result, const char* text)
 
 coro::Task RedisMgr::Pump()
 {
-	co_await coro::YieldToPool{};
 	int spins = 0;
 	int limit = _timeout_ms > 0 ? _timeout_ms / 50 : 100;
 	if (limit < 1)
@@ -305,7 +304,6 @@ void RedisMgr::SyncStress(int id)
 
 coro::Task RedisMgr::Stress(int id)
 {
-	co_await coro::YieldToPool{};
 	std::string value(64, 'x');
 	std::string hash = "h:" + std::to_string(id);
 	std::string list = "l:" + std::to_string(id);

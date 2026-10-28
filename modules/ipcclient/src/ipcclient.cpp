@@ -1,5 +1,6 @@
 #include "ipcclient.h"
 #include "echo_mgr.h"
+#include "hold_mgr.h"
 #include "log_mgr.h"
 #include "redis_mgr.h"
 #include "redis_client.h"
@@ -17,7 +18,8 @@ bool IpcClient::Init()
 		return false;
 	}
 	RedisMgr::Get().Load();
-	if (!RedisMgr::Get().Enabled())
+	HoldMgr::Get().Load();
+	if (!RedisMgr::Get().Enabled() && !HoldMgr::Get().Enabled())
 	{
 		return true;
 	}
@@ -26,7 +28,10 @@ bool IpcClient::Init()
 		return false;
 	}
 	RedisClient::GetInstance().StartClient();
-	RedisMgr::Get().Start();
+	if (RedisMgr::Get().Enabled())
+	{
+		RedisMgr::Get().Start();
+	}
 	return true;
 }
 
@@ -41,6 +46,7 @@ void IpcClient::OnClientConnect(Session* pSession)
 	LogMgr::Get().Load();
 	EchoMgr::Get().Start(pSession->GetSessionID());
 	LogMgr::Get().Start();
+	HoldMgr::Get().Start(pSession->GetSessionID());
 }
 
 void IpcClient::OnClientDisconnect(const Session* pSession)

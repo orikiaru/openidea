@@ -1,6 +1,8 @@
 #include "ipcserver.h"
 #include "allechoreq"
 #include "allechores"
+#include "holdreq"
+#include "holdres"
 #include "parser.h"
 #include "rpc.h"
 #include "rpc_coro.h"
@@ -27,6 +29,17 @@ bool IpcServer::Init()
 		(void)sid;
 		res.data = req.data;
 		res.code = 1;
+		co_return;
+	});
+	HandleRpc<HoldReq, HoldRes>([](coro::Token token, SessionManager* mgr, sid_t sid, HoldReq& req, HoldRes& res) -> coro::Task {
+		(void)token;
+		(void)mgr;
+		(void)sid;
+		if (req.delay_ms > 0)
+		{
+			co_await coro::yield(req.delay_ms);
+		}
+		res.mark = req.mark;
 		co_return;
 	});
 	return SessionManager::Init();

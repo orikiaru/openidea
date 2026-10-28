@@ -488,11 +488,13 @@ void Poll::AfterPoll()
 	}
 }
 
-void Poll::PollWait(int)
+void Poll::PollWait(int wait_ms)
 {
 #ifdef _SINGLE_THREAD_
 	BeforePoll();
-	uv_run(&g_loop, UV_RUN_ONCE);
+	uv_run(&g_loop, wait_ms == 0 ? UV_RUN_NOWAIT : UV_RUN_ONCE);
 	AfterPoll();
+#else
+	(void)wait_ms;
 #endif
 }

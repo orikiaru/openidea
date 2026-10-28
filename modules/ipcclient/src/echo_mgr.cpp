@@ -7,8 +7,6 @@
 #include "threadpool.h"
 #include <cstdio>
 #include <cstring>
-#include <sstream>
-#include <thread>
 
 #ifdef _SINGLE_THREAD_
 static const char* kMode = "st";
@@ -152,33 +150,14 @@ static bool DiffAllTypes(const AllTypesData& sent, const AllTypesData& recv)
 	return same;
 }
 
-static std::string TidText()
-{
-	std::ostringstream os;
-	os << std::this_thread::get_id();
-	return os.str();
-}
-
-static coro::Task RunOne(coro::Token token, int n)
+static coro::Task RunOne(int n)
 {
 	AllEchoReq req;
 	FillAllTypes(req.data, n);
 	AllEchoRes res;
 	PoisonAllTypes(res.data);
 	res.code = -1;
-	const bool trace = (n == 0);
-	if (trace)
-	{
-		printf("coro await begin token=%llu tid=%s\n", (unsigned long long)token, TidText().c_str());
-		fflush(stdout);
-	}
-	int ret = co_await RpcCall(IpcClient::GetInstance(), EchoMgr::Get().Sid(), req, res, trace);
-	if (trace)
-	{
-		printf("coro await end token=%llu tid=%s ret=%d code=%d\n",
-			(unsigned long long)token, TidText().c_str(), ret, res.code);
-		fflush(stdout);
-	}
+	int ret = co_await RpcCall(IpcClient::GetInstance(), EchoMgr::Get().Sid(), req, res);
 	EchoMgr::Get().OnResult(n, req, res, ret, DiffAllTypes(req.data, res.data));
 }
 
@@ -235,8 +214,6 @@ void EchoMgr::Start(sid_t sid)
 
 coro::Task EchoMgr::Pump(int index)
 {
-	// StartTask 会把协程跑到第一次挂起。先让出，避免分发把自己嵌进同一条调用栈。
-	co_await coro::YieldToPool{};
 	if (index >= _total)
 	{
 		co_return;
@@ -249,26 +226,17 @@ coro::Task EchoMgr::Pump(int index)
 	}
 	for (int n = index; n < end; ++n)
 	{
-		coro::StartTask([n](coro::Token token) {
-			return RunOne(token, n);
+		coro::StartTask([n](coro::Token) {
+			return RunOne(n);
 		});
 	}
-#ifdef _SINGLE_THREAD_
-	// 协程只在主线程跑，这条线程接着才会进 poll。这一批丢完就让出。
-	if (end < _total)
-	{
-		co_await coro::yield(1);
-		co_await Pump(end);
-	}
-#else
-	// 多线程协程在工人上跑，不在 poll 线程。这一轮 loop 结束，另起一条协程继续。
+	// 下一批不等这一批的回包。单线程主循环会先 poll，再捞这些新挂上的。
 	if (end < _total)
 	{
 		coro::StartTask([end](coro::Token) {
 			return EchoMgr::Get().Pump(end);
 		});
 	}
-#endif
 	co_return;
 }
 

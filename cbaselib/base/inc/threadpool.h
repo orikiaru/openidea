@@ -35,6 +35,7 @@ public:
 	SIG_HANDLE_MAP	_sig_handle_map;
 	std::thread::id	_main_thread_id;
 	bool (*_drain)() = nullptr;
+	bool (*_pending)() = nullptr;
 	void (*_after_resume)() = nullptr;
 	std::atomic<bool> _stop{false};
 	int _exit_code = 0;
@@ -61,6 +62,8 @@ public:
 	void AddSigHandleTask(int sig, Task* pTask);
 	void OnSignal(int sig);
 	void SetDrain(bool (*fn)());
+	// 单线程这一轮没跑到、但已经挂进协程队列的。yield(0) 靠它留到下一轮。
+	void SetPending(bool (*fn)());
 	// 协程 resume 返回后调用。用来释放已经跑完的根协程，不在 base 里直接依赖 proto。
 	void SetAfterResume(void (*fn)());
 

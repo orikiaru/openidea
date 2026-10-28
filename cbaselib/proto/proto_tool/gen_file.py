@@ -73,6 +73,11 @@ class GenFile:
         for p in self.proto_parse.serialize_datas:
             if(p.GetType() != SerializeDataType.RPC):
                 continue
+            lines.append("class %s;" % p.GetReq())
+            lines.append("class %s;" % p.GetRes())
+        for p in self.proto_parse.serialize_datas:
+            if(p.GetType() != SerializeDataType.RPC):
+                continue
             lines.append("template<> struct RpcProtoId<%s> { static const proto_type_t value = %s; };" % (p.GetReq(), p.GetID()))
             lines.append("template<> struct RpcProtoId<%s> { static const proto_type_t value = %s; };" % (p.GetRes(), p.GetResID()))
         lines.append("")

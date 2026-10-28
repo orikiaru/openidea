@@ -19,11 +19,17 @@ static bool DrainStCoro()
 	return coro::StScheduler::Poll();
 }
 
+static bool PendingStCoro()
+{
+	return coro::StScheduler::Queued();
+}
+
 static struct StDrainReg
 {
 	StDrainReg()
 	{
 		ThreadPool::GetInstance()->SetDrain(DrainStCoro);
+		ThreadPool::GetInstance()->SetPending(PendingStCoro);
 		ThreadPool::GetInstance()->SetAfterResume(coro::DrainDetached);
 	}
 } g_st_drain_reg;
@@ -421,30 +427,4 @@ bool DeliverRpc(proto_type_t id, BytesStream& body, SessionManager* mgr, sid_t s
 	{
 	}
 	return true;
-}
-
-namespace coro
-{
-class CoroRpcTimer : public BaseTimer
-{
-	uint64_t _rid;
-public:
-	explicit CoroRpcTimer(uint64_t rid) : _rid(rid) {}
-	bool OnTimer()
-	{
-		Hub::CompleteRaw(_rid, -1, NULL);
-		CoroRpcTimer* self = this;
-		SAFE_DELETE(self);
-		return false;
-	}
-};
-
-void ArmRpcTimeout(uint64_t rid, int seconds)
-{
-	if (seconds <= 0)
-	{
-		return;
-	}
-	BaseTimerManager::GetInstance()->AddTimer(new CoroRpcTimer(rid), seconds * 1000);
-}
 }

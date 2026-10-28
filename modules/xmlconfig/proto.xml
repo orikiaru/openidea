@@ -34,4 +34,13 @@
 	</rpcdata>
 	<rpc name="AllEcho" id="3001" res_id="3101" request="AllEchoReq" response="AllEchoRes" timeout="25"/>
 
+	<rpcdata name="HoldReq">
+		<member type="int" name="delay_ms"/>
+		<member type="int" name="mark"/>
+	</rpcdata>
+	<rpcdata name="HoldRes">
+		<member type="int" name="mark"/>
+	</rpcdata>
+	<rpc name="Hold" id="3002" res_id="3102" request="HoldReq" response="HoldRes" timeout="25"/>
+
 </Protocols>

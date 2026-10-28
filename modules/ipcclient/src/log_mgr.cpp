@@ -45,28 +45,11 @@ void LogMgr::Start()
 
 coro::Task LogMgr::Pump()
 {
-	co_await coro::YieldToPool{};
 	std::vector<char> payload((size_t)_line, 'L');
 	if (!payload.empty())
 	{
 		payload.back() = '\n';
 	}
-#ifdef _SINGLE_THREAD_
-	// 和 poll 同一条主线程。让出后队列空了，主循环才能进 poll，把日志写进套接字。
-	for (;;)
-	{
-		int64_t prev = _sent.fetch_add(_line);
-		if (prev >= _bytes)
-		{
-			break;
-		}
-		if (!LogClient::GetInstance().SendLog(LOG_INFO, payload.data(), payload.size()))
-		{
-			_sent.fetch_sub(_line);
-		}
-		co_await coro::yield(1);
-	}
-#else
 	int64_t prev = _sent.fetch_add(_line);
 	if (prev < _bytes)
 	{
@@ -74,13 +57,12 @@ coro::Task LogMgr::Pump()
 		{
 			_sent.fetch_sub(_line);
 		}
-		// 这一轮结束。下一条日志另起一个协程。
+		// 下一条不等这条写完。单线程先 poll 把缓冲发出去，再跑新挂上的。
 		coro::StartTask([](coro::Token) {
 			return LogMgr::Get().Pump();
 		});
 		co_return;
 	}
-#endif
 	if (_done.fetch_add(1) + 1 == _tasks)
 	{
 		long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(

@@ -231,6 +231,11 @@ void ThreadPool::SetDrain(bool (*fn)())
 	_drain = fn;
 }
 
+void ThreadPool::SetPending(bool (*fn)())
+{
+	_pending = fn;
+}
+
 void ThreadPool::SetAfterResume(void (*fn)())
 {
 	_after_resume = fn;
@@ -243,27 +248,39 @@ void ThreadPool::SingleThreadStartWork()
 
 	while (!Stopping())
 	{
-		bool ran = false;
+		// 普通 Task 也只跑此刻队列里的。执行中再投的留到 poll 之后，避免自己把 poll 饿死。
 		for (int i = PRIO_NUM - 1; i >= PRIO_NORMAL; --i)
 		{
 			ThreadData& thread_data = _thread_data[i];
-			Task* pTask = NULL;
-			while ((pTask = FetchTask(&thread_data)))
+			unsigned int n = thread_data._task_count;
+			for (unsigned int k = 0; k < n; ++k)
 			{
-				// 这里只跑普通 Task。协程句柄在下面的 drain 里 resume。
+				Task* pTask = FetchTask(&thread_data);
+				if (!pTask)
+				{
+					break;
+				}
 				pTask->Exec();
-				ran = true;
 			}
 		}
-		// 协程句柄单独排队，不包成堆上的 Task。await 把句柄挂起后，这里才会进 poll。
-		if (_drain && _drain())
+		if (_drain)
 		{
-			ran = true;
+			_drain();
 		}
-		if (!ran)
+		bool pending = _pending && _pending();
+		if (!pending)
 		{
-			Poll::GetInstance()->PollWait();
+			for (int i = PRIO_NORMAL; i < PRIO_NUM; ++i)
+			{
+				if (_thread_data[i]._task_count)
+				{
+					pending = true;
+					break;
+				}
+			}
 		}
+		// 队列里还有下一轮，就只试一次网络；谁都不跑了才堵住等。
+		Poll::GetInstance()->PollWait(pending ? 0 : 1000);
 	}
 }
 

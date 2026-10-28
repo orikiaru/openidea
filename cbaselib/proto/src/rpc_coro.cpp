@@ -4,12 +4,7 @@
 #include "threadpool.h"
 #include <atomic>
 #include <cstdio>
-#include <sstream>
-#include <condition_variable>
 #include <deque>
-#include <map>
-#include <mutex>
-#include <thread>
 #include <vector>
 
 namespace
@@ -31,9 +26,6 @@ void PostTask(std::coroutine_handle<> handle)
 }
 
 std::atomic<uint64_t> g_task_uid(1);
-Mutex g_park_mu;
-std::map<uint64_t, std::coroutine_handle<> > g_parked;
-std::map<uint64_t, bool> g_wake_pending;
 }
 
 namespace coro
@@ -46,14 +38,6 @@ TaskUid AllocTaskUid()
 		uid = g_task_uid.fetch_add(1, std::memory_order_relaxed);
 	}
 	return uid;
-}
-
-void NotePollWake()
-{
-	std::ostringstream os;
-	os << std::this_thread::get_id();
-	printf("rpc poll wake tid=%s in_poll=%d\n", os.str().c_str(), Poll::GetInstance()->InLoopThread() ? 1 : 0);
-	fflush(stdout);
 }
 
 namespace
@@ -83,42 +67,6 @@ void DrainDetached()
 }
 
 void Schedule(std::coroutine_handle<> handle)
-{
-	PostTask(handle);
-}
-
-bool Wake(TaskUid uid)
-{
-	std::coroutine_handle<> handle;
-	{
-		MutexGuard lock(g_park_mu);
-		std::map<uint64_t, std::coroutine_handle<> >::iterator it = g_parked.find(uid);
-		if (it == g_parked.end())
-		{
-			g_wake_pending[uid] = true;
-			return false;
-		}
-		handle = it->second;
-		g_parked.erase(it);
-	}
-	PostTask(handle);
-	return true;
-}
-
-bool ParkAt(TaskUid uid, std::coroutine_handle<> handle)
-{
-	MutexGuard lock(g_park_mu);
-	std::map<uint64_t, bool>::iterator pending = g_wake_pending.find(uid);
-	if (pending != g_wake_pending.end())
-	{
-		g_wake_pending.erase(pending);
-		return false;
-	}
-	g_parked[uid] = handle;
-	return true;
-}
-
-void YieldToPool::await_suspend(std::coroutine_handle<> handle) const noexcept
 {
 	PostTask(handle);
 }
@@ -156,58 +104,8 @@ void SleepMs::await_suspend(std::coroutine_handle<> handle) const noexcept
 
 namespace
 {
-Mutex g_hub_lock;
-uint64_t g_seq = 0;
-uint64_t g_last = 0;
-std::map<uint64_t, std::function<void(int, const void*)> > g_slots;
-
 Mutex g_st_lock;
 std::deque<std::coroutine_handle<> > g_st_queue;
-}
-
-uint64_t Hub::Add(std::function<void(int, const void*)> done)
-{
-	MutexGuard lock(g_hub_lock);
-	uint64_t id = ++g_seq;
-	g_last = id;
-	g_slots[id] = std::move(done);
-	return id;
-}
-
-void Hub::Bind(uint64_t id, std::function<void(int, const void*)> done)
-{
-	MutexGuard lock(g_hub_lock);
-	g_last = id;
-	g_slots[id] = std::move(done);
-}
-
-uint64_t Hub::LastId()
-{
-	MutexGuard lock(g_hub_lock);
-	return g_last;
-}
-
-int Hub::Pending()
-{
-	MutexGuard lock(g_hub_lock);
-	return (int)g_slots.size();
-}
-
-bool Hub::CompleteRaw(uint64_t id, int code, const void* value)
-{
-	std::function<void(int, const void*)> done;
-	{
-		MutexGuard lock(g_hub_lock);
-		std::map<uint64_t, std::function<void(int, const void*)> >::iterator it = g_slots.find(id);
-		if (it == g_slots.end())
-		{
-			return false;
-		}
-		done = std::move(it->second);
-		g_slots.erase(it);
-	}
-	done(code, value);
-	return true;
 }
 
 void StScheduler::Post(std::coroutine_handle<> handle)
@@ -226,20 +124,16 @@ void StScheduler::Post(std::coroutine_handle<> handle)
 
 bool StScheduler::Poll()
 {
-	// 单线程主循环在普通任务跑完后调用。这里把就绪协程跑完，一个都没有再回去进 poll。
-	bool ran = false;
-	for (;;)
+	// 把进来时的队列整批拿走。resume 里 yield(0)、StartTask 进的是原队列，这次循环碰不到。
+	std::deque<std::coroutine_handle<> > batch;
 	{
-		std::coroutine_handle<> handle;
-		{
-			MutexGuard lock(g_st_lock);
-			if (g_st_queue.empty())
-			{
-				return ran;
-			}
-			handle = g_st_queue.front();
-			g_st_queue.pop_front();
-		}
+		MutexGuard lock(g_st_lock);
+		batch.swap(g_st_queue);
+	}
+	bool ran = false;
+	for (size_t i = 0; i < batch.size(); ++i)
+	{
+		std::coroutine_handle<> handle = batch[i];
 		if (handle && !handle.done())
 		{
 			handle.resume();
@@ -247,5 +141,12 @@ bool StScheduler::Poll()
 			ran = true;
 		}
 	}
+	return ran;
+}
+
+bool StScheduler::Queued()
+{
+	MutexGuard lock(g_st_lock);
+	return !g_st_queue.empty();
 }
 }
