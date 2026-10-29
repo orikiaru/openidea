@@ -22,7 +22,7 @@ target_include_directories(ipcclient
 		${CMAKE_SOURCE_DIR}/modules/include
 )
 
-set(SINGLE_THREAD FALSE)
+set(SINGLE_THREAD ${OI_IPC_SINGLE_THREAD})
 
 #链接base,net,proto,timer,logger
 if(MSVC)

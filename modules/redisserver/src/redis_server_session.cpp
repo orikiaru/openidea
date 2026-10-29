@@ -1,5 +1,7 @@
 #include "redis_server_session.h"
 #include "redis_server.h"
+#include "oi_log.h"
+#include <string>
 
 namespace
 {
@@ -63,7 +65,7 @@ size_t ScanCommand(const char* begin, const char* end, int64_t& argc, bool& bad)
 	{
 		return 0;
 	}
-	if (argc > kMaxArgs)
+	if (argc <= 0 || argc > kMaxArgs)
 	{
 		bad = true;
 		return 0;
@@ -102,6 +104,30 @@ size_t ScanCommand(const char* begin, const char* end, int64_t& argc, bool& bad)
 		p += len + 2;
 	}
 	return (size_t)(p - begin);
+}
+
+bool ChangesConnection(const char* begin, const char* end)
+{
+	bool bad = false;
+	int64_t count = 0;
+	const char* p = ReadLine(begin + 1, end, count, bad);
+	int64_t len = 0;
+	p = ReadLine(p + 1, end, len, bad);
+	std::string command(p, (size_t)len);
+	for (char& c : command)
+	{
+		if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
+	}
+	// 上游由多个下游共享，任何连接状态都不能带到其他会话。
+	static const char* commands[] = {"SELECT", "AUTH", "HELLO", "RESET", "QUIT",
+		"MULTI", "EXEC", "DISCARD", "WATCH", "UNWATCH", "CLIENT", "MONITOR",
+		"SUBSCRIBE", "PSUBSCRIBE", "SSUBSCRIBE", "UNSUBSCRIBE", "PUNSUBSCRIBE",
+		"SUNSUBSCRIBE", "READONLY", "READWRITE", "ASKING", "SYNC", "PSYNC", "REPLCONF"};
+	for (const char* name : commands)
+	{
+		if (command == name) return true;
+	}
+	return false;
 }
 }
 
@@ -153,6 +179,13 @@ void RedisServerSession::OnDataIn()
 		}
 		if (argc > 0)
 		{
+			if (ChangesConnection(p, p + n))
+			{
+				// 直接断开，不能插入一个本地错误回包，抢在此前未完成的回复前面。
+				LOG_ERROR("redisserver rejects connection-state command sid=%d", GetSessionID());
+				PassiveClose(PARSER_ERR_PROTOCOL_SIZE);
+				break;
+			}
 			_owner->Issue(_link, GetSessionID(), p, n);
 		}
 		p += n;

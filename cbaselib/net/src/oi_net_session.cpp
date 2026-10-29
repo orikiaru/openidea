@@ -13,9 +13,11 @@ void NetSession::PassiveClose(int err)
 	if (err && err < NET_PARSER_ERR_BEGIN)
 	{
 		LOG_TRACE("NetSession::PassiveClose sid=%d, system_err=%s", GetSessionID(), NetOs_StrError(err));
-		return;
 	}
-	LOG_TRACE("NetSession::PassiveClose sid=%d, errno=%d", GetSessionID(), err);
+	else
+	{
+		LOG_TRACE("NetSession::PassiveClose sid=%d, errno=%d", GetSessionID(), err);
+	}
 
 	if (err != SESSION_MANAGER_NORMAL_CLOSE)
 	{

@@ -14,6 +14,7 @@
 #include "oi_lock.h"
 #include <type_traits>
 #include <utility>
+#include <chrono>
 namespace OI { namespace Timer {
 
 typedef std::deque<TimerLevel> TimerLevelVector;
@@ -78,8 +79,8 @@ public:
 	}
 	std::string GenTraceLog();
 private:
-	// 墙上时间到到期点还要几个 tick。不满一跳的零头留着，避免提前回调。
-	int64_t TicksFromWall(int millisecond) const;
+	// 相对延时只用单调时钟；系统校时只影响日历快照。
+	int64_t TicksFromNow(int millisecond) const;
 
 	//增加定时器
 	void add_timer(BaseTimer* pTimer);
@@ -106,10 +107,10 @@ private:
 	friend class TimerLevel;
 	::OI::Thread::Mutex _wheel_mu;
 
-	// 已经执行完的最后一个 tick 的逻辑时间。不满一跳的毫秒留在和墙上时间的差里，下次补齐。
-	struct timeval		_last_tick_tv;
+	// 最后一个已执行 tick 的单调时钟基点，未满一跳的余数留到下一次。
+	std::chrono::steady_clock::time_point _last_tick_mono;
 
-	// 最近一次 tick 的逻辑时间。这一跳还没满时，Update 会先写成墙上时间。
+	// 最近一次 Update 的日历时间，独立于相对定时。
 	struct timeval		_cur_tv;
 
 	//当前tick数

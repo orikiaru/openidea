@@ -1,4 +1,6 @@
 #include <string.h>
+#include <cerrno>
+#include <cstdlib>
 #include "log_file_instance.h"
 #include "oi_thread.h"
 #include "oi_log.h"
@@ -108,7 +110,7 @@ void* LogFileInstance::WriteLogThreadHandle(void* arg)
 	return NULL;
 }
 
-const char* LogFileInstance::GetLogTiTle()
+std::string LogFileInstance::GetLogTiTle()
 {
 	return _p_mgr->GetLogTitle();
 }
@@ -118,6 +120,15 @@ void LogFileInstance::Dump()
 	LOG_TRACE("LogFileInstance::Dump lv=%d, write_size=%ld", _lv, _write_size);
 }
 
+static void DiskFailure(const char* operation)
+{
+	const int error = errno;
+	// 不经日志网络告警，避免递归记录。停止进程并明确暴露失败，不能清空后假装已落盘。
+	fprintf(stderr, "logd %s failed: %s\n", operation, strerror(error));
+	fflush(stderr);
+	std::abort();
+}
+
 static bool WriteAll(FILE* fp, const char* data, size_t size)
 {
 	while (size > 0)
@@ -125,7 +136,7 @@ static bool WriteAll(FILE* fp, const char* data, size_t size)
 		size_t wrote = fwrite(data, 1, size, fp);
 		if (wrote == 0)
 		{
-			return false;
+			DiskFailure("fwrite");
 		}
 		data += wrote;
 		size -= wrote;
@@ -146,6 +157,11 @@ void LogFileInstance::WriteLog()
 	for(;;)
 	{
 		FILE* fp = GetActiveFile();
+		if (!fp)
+		{
+			errno = EBADF;
+			DiskFailure("missing active file");
+		}
 
 		LogCacheList tmp_logs;
 		_cache_locker.Lock();
@@ -160,13 +176,13 @@ void LogFileInstance::WriteLog()
 
 		if (!tmp_logs.empty())
 		{
-			const char* time_title = GetLogTiTle();
-			size_t title_len = time_title ? strlen(time_title) : 0;
+			const std::string time_title = GetLogTiTle();
+			size_t title_len = time_title.size();
 			for (LogCacheList::iterator it = tmp_logs.begin(); it != tmp_logs.end(); ++it)
 			{
 				if (title_len > 0)
 				{
-					tmp.Append(time_title, title_len);
+					tmp.Append(time_title.data(), title_len);
 				}
 				tmp.Append(*it);
 				if (tmp.Size() >= kChunk)
@@ -179,7 +195,7 @@ void LogFileInstance::WriteLog()
 					tmp.Reserve(0);
 					if (fp && unflushed >= (int64_t)kChunk)
 					{
-						fflush(fp);
+						if (fflush(fp) != 0) DiskFailure("fflush");
 						unflushed = 0;
 					}
 				}
@@ -195,7 +211,7 @@ void LogFileInstance::WriteLog()
 			tmp.Reserve(0);
 			if (fp)
 			{
-				fflush(fp);
+				if (fflush(fp) != 0) DiskFailure("fflush");
 			}
 			unflushed = 0;
 		}

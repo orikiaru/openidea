@@ -19,6 +19,7 @@ class SessionManager;
 class Session
 {
 	friend class Poll;
+	friend class NetChannel;
 protected:
 	int32_t 	_status;
 	int32_t		_errcode;

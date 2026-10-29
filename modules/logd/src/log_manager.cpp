@@ -7,10 +7,11 @@
 
 bool LogManager::Init()
 {
-	_log_title_index = 0;
-	memset(_log_title_data, 0, sizeof(_log_title_data));
 	_last_ts = ::OI::Timer::GetTime();
 	_last_tm = ::OI::Timer::GetLocalTime();
+	char initial_title[LOG_TITLE_BUFF_SIZE];
+	const size_t title_size = strftime(initial_title, sizeof(initial_title), "%T ", &_last_tm);
+	_log_title.assign(initial_title, title_size);
 
 	std::string log_root_path = "./";
 	TryGetConfig("Log.root_path", log_root_path);
@@ -52,13 +53,15 @@ bool LogManager::OnTimer()
 		OnCrossDay();
 	}
 	
-	int next_index = (this->_log_title_index + 1) / LOG_TITLE_LEVEL_SIZE;
-	char* log_title_str = GetLogTitle(next_index);
+	char log_title_str[LOG_TITLE_BUFF_SIZE];
 	//只需要时分秒.
-	size_t len = strftime(log_title_str, LOG_TITLE_LEVEL_SIZE - 1, "%T ", &_now_tm);
-	assert(len < LOG_TITLE_LEVEL_SIZE - 1);
+	size_t len = strftime(log_title_str, sizeof(log_title_str), "%T ", &_now_tm);
+	assert(len < sizeof(log_title_str));
 	log_title_str[len] = '\0';	//字符串结尾
-	_log_title_index = next_index;
+	{
+		::OI::Thread::MutexGuard lock(_title_locker);
+		_log_title.assign(log_title_str, len);
+	}
 
 	for (LogFileMap::iterator it = _log_file_map.begin(); it != _log_file_map.end(); ++it)
 	{
@@ -165,18 +168,10 @@ void LogManager::WriteLog(LOG_LEVEL lv, ::OI::Base::Bytes& b)
 	_log_file_map[lv]->AddLog(b);
 }
 
-char* LogManager::GetLogTitle(int index)
+std::string LogManager::GetLogTitle()
 {
-	if (index == -1)
-	{
-		return _log_title_data[_log_title_index];
-	}
-	else if(index >= 0 &&  index <= LOG_LEVEL_COUNT - 1)
-	{
-		return _log_title_data[index];
-	}
-	assert(false);
-	return _log_title_data[_log_title_index];
+	::OI::Thread::MutexGuard lock(_title_locker);
+	return _log_title;
 }
 
 

@@ -13,16 +13,14 @@ class LogManager : public ::OI::Timer::BaseTimer
 	//12:09:08 service_type-service_id:
 	enum
 	{
-		LOG_TITLE_LEVEL_SIZE = 60,
 		LOG_TITLE_BUFF_SIZE = 128,
 	};
 	//上一次创建log文件的时间戳,跨天重新建立
 	struct tm	_last_tm;
 	time_t		_last_ts;
 
-	//日志title无锁队列[时间的缓存]
-	int32_t		_log_title_index;											//当前log_title索引
-	char		_log_title_data[LOG_TITLE_LEVEL_SIZE][LOG_TITLE_BUFF_SIZE];	//备选数组,方便切换title,每次OnTimer修改index数据，切换index
+	::OI::Thread::Mutex _title_locker;
+	std::string _log_title;
 
 	//日志lv对应的文件和缓存包装
 	typedef std::map<LOG_LEVEL, LogFileInstance*>	LogFileMap;
@@ -47,5 +45,5 @@ private:
 	bool OpenLogFile(LOG_LEVEL lv);
 	void OnCrossDay();
 	virtual bool OnTimer();
-	char* GetLogTitle(int index = -1);
+	std::string GetLogTitle();
 };

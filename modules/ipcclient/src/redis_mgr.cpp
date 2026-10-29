@@ -1,6 +1,8 @@
 #include "redis_mgr.h"
 #include "oi_redis.h"
 #include "oi_log.h"
+#include "oi_poll.h"
+#include <stdexcept>
 #include "test_board.h"
 #include <cstring>
 #include <string>
@@ -113,6 +115,17 @@ static bool BulkIs(const ::OI::Redis::RedisResult& result, const char* text, siz
 
 coro::Task RedisMgr::Check()
 {
+#ifndef _SINGLE_THREAD_
+	std::atomic<int32_t> sync_guard(0);
+	::OI::Net::Poll::GetInstance().CallOnLoop([](void* arg) {
+		int32_t checked = -1;
+		try { ::OI::Redis::RedisPingSync(); }
+		catch (const std::logic_error&) { checked = 1; }
+		((std::atomic<int32_t>*)arg)->store(checked, std::memory_order_release);
+	}, &sync_guard);
+	while (sync_guard.load(std::memory_order_acquire) == 0) co_await coro::yield(10);
+	if (sync_guard.load() != 1) ++_failed;
+#endif
 	::OI::Redis::RedisResult synced = ::OI::Redis::RedisPingSync();
 	if (!StatusIs(synced, "PONG"))
 	{
@@ -248,6 +261,24 @@ coro::Task RedisMgr::Check()
 			++_failed;
 			break;
 		}
+	}
+	// 状态命令必须被代理拒绝；重连后普通命令仍能使用，不能留下事务或切库状态。
+	const char* denied[] = {"SELECT", "MULTI", "CLIENT", "SUBSCRIBE"};
+	for (const char* command : denied)
+	{
+		::OI::Redis::RedisResult rejected;
+		::OI::Redis::RedisCall call = ::OI::Redis::CallRedis({command, "1"}, rejected);
+		co_await call;
+		if (!rejected.timeout) ++_failed;
+		int attempts = 0;
+		while (!::OI::Redis::RedisClient::GetInstance().IsConnect() && attempts++ < 100)
+		{
+			co_await coro::yield(50);
+		}
+		::OI::Redis::RedisResult pong;
+		::OI::Redis::RedisCall check = ::OI::Redis::RedisPing(pong);
+		co_await check;
+		if (!StatusIs(pong, "PONG")) ++_failed;
 	}
 	co_return;
 }

@@ -4,6 +4,7 @@ cmake_minimum_required(VERSION 3.10)
 set(CMAKE_VERBOSE_MAKEFILE ON)
 
 project(CPP_DEV)
+option(OI_IPC_SINGLE_THREAD "Build ipcclient and ipcserver with single-thread scheduling" OFF)
 
 # 给 clangd 用。Ninja 配置后会在构建目录写出 compile_commands.json。
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON CACHE BOOL "Write compile_commands.json for clangd" FORCE)

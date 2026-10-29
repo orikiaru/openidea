@@ -7,13 +7,6 @@ namespace OI { namespace Timer {
 
 static std::atomic<bool> g_tick_queued(false);
 
-static void AddMs(timeval& tv, int64_t ms)
-{
-	int64_t us = (int64_t)tv.tv_sec * 1000000 + (int64_t)tv.tv_usec + ms * 1000;
-	tv.tv_sec = (decltype(tv.tv_sec))(us / 1000000);
-	tv.tv_usec = (decltype(tv.tv_usec))(us % 1000000);
-}
-
 static void OnLoopTick()
 {
 	BaseTimerManager::GetInstance().OnSignal();
@@ -21,7 +14,6 @@ static void OnLoopTick()
 
 BaseTimerManager::BaseTimerManager()
 {
-	memset(&_last_tick_tv, 0, sizeof(_last_tick_tv));
 	memset(&_cur_tv, 0, sizeof(_cur_tv));
 	_cur_tick = 0;
 	_tick_offset_ms = 0;
@@ -69,7 +61,7 @@ bool BaseTimerManager::Init()
 	}
 
 	_tick_offset_ms = offset_ms;
-	gettimeofday(&_last_tick_tv, 0); //记录第0帧的时间
+	_last_tick_mono = std::chrono::steady_clock::now();
 	gettimeofday(&_cur_tv, 0);	 //记录第0帧的时间
 	_cur_time = time(NULL);
 	localtime_r(&_cur_time, &_cur_tm);
@@ -95,14 +87,10 @@ std::string BaseTimerManager::GenTraceLog()
 {
 	char buff[1024];
 	snprintf(buff, sizeof(buff) - 1, 
-		"BaseTimerManager::Update l_tick=[%8lld,%8lld] c_tick=[%8lld,%8lld] tick_num=[%8lld] offset=[%4u|%4u,%4u|%4u,%4u|%4u,%4u|%4u]",
-		(long long)_last_tick_tv.tv_sec, (long long)_last_tick_tv.tv_usec,
+		"BaseTimerManager::Update mono_ms=%lld wall=[%lld,%lld] tick_num=%lld",
+		(long long)std::chrono::duration_cast<std::chrono::milliseconds>(_last_tick_mono.time_since_epoch()).count(),
 		(long long)_cur_tv.tv_sec, (long long)_cur_tv.tv_usec,
-		(long long)_cur_tick,
-		_timer_levels[0]._offset, _timer_levels[0]._max_tick,
-		_timer_levels[1]._offset, _timer_levels[1]._max_tick,
-		_timer_levels[2]._offset, _timer_levels[2]._max_tick,
-		_timer_levels[3]._offset, _timer_levels[3]._max_tick
+		(long long)_cur_tick
 	);
 	return buff;
 }
@@ -111,49 +99,41 @@ void BaseTimerManager::Update()
 {
 	::OI::Thread::MutexGuard lock(_wheel_mu);
 	gettimeofday(&_cur_tv, 0);
-
-	int64_t delta_us = (int64_t)_cur_tv.tv_sec - (int64_t)_last_tick_tv.tv_sec;
-	delta_us *= 1000000;
-	delta_us += (int64_t)_cur_tv.tv_usec - (int64_t)_last_tick_tv.tv_usec;
+	_cur_time = _cur_tv.tv_sec;
+	localtime_r(&_cur_time, &_cur_tm);
+	const int64_t delta_us = std::chrono::duration_cast<std::chrono::microseconds>(
+		std::chrono::steady_clock::now() - _last_tick_mono).count();
 	if (delta_us <= 0)
 	{
-		_cur_time = _cur_tv.tv_sec;
-		localtime_r(&_cur_time, &_cur_tm);
 		return;
 	}
 
-	// 只取完整的 tick。剩下的毫秒留在 _last_tick_tv 和墙上时间的差里。
+	// 只取完整的 tick，余数留在单调时钟基点里，系统时间回拨不会暂停计时。
 	int64_t ticks = (delta_us / 1000) / (int64_t)_tick_offset_ms;
 	for (int64_t i = 0; i < ticks; ++i)
 	{
 		run_tick();
-	}
-	if (ticks == 0)
-	{
-		_cur_time = _cur_tv.tv_sec;
-		localtime_r(&_cur_time, &_cur_tm);
 	}
 }
 
 void BaseTimerManager::AddTimer(BaseTimer* pTimer, int millisecond)
 {
 	::OI::Thread::MutexGuard lock(_wheel_mu);
-	pTimer->InitData(this, millisecond, TicksFromWall(millisecond));
+	pTimer->InitData(this, millisecond, TicksFromNow(millisecond));
 	add_timer(pTimer);
 }
 
-int64_t BaseTimerManager::TicksFromWall(int millisecond) const
+int64_t BaseTimerManager::TicksFromNow(int millisecond) const
 {
-	struct timeval now;
-	gettimeofday(&now, 0);
-	int64_t elapsed_us = ((int64_t)now.tv_sec - (int64_t)_last_tick_tv.tv_sec) * 1000000;
-	elapsed_us += (int64_t)now.tv_usec - (int64_t)_last_tick_tv.tv_usec;
+	int64_t elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
+		std::chrono::steady_clock::now() - _last_tick_mono).count();
 	if (elapsed_us < 0)
 	{
 		elapsed_us = 0;
 	}
-	int64_t due_ms = elapsed_us / 1000 + millisecond;
-	int64_t ticks = (due_ms + (int64_t)_tick_offset_ms - 1) / (int64_t)_tick_offset_ms;
+	const int64_t tick_us = (int64_t)_tick_offset_ms * 1000;
+	const int64_t due_us = elapsed_us + (int64_t)millisecond * 1000;
+	int64_t ticks = (due_us + tick_us - 1) / tick_us;
 	if (ticks < 1)
 	{
 		ticks = 1;
@@ -231,11 +211,8 @@ void BaseTimerManager::try_run_timer()
 
 void BaseTimerManager::run_tick()
 {
-	AddMs(_last_tick_tv, _tick_offset_ms);
+	_last_tick_mono += std::chrono::milliseconds(_tick_offset_ms);
 	++_cur_tick;
-	_cur_tv = _last_tick_tv;
-	_cur_time = _cur_tv.tv_sec;
-	localtime_r(&_cur_time, &_cur_tm);
 
 	try_run_timer();
 

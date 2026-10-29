@@ -28,6 +28,8 @@ void NetChannel::Destory()
 {
 	if (_p_session)
 	{
+		// 会话已经从管理器解绑，在销毁前通知客户端清理等待并安排重连。
+		_p_session->OnClose();
 		delete _p_session;
 	}
 	delete this;

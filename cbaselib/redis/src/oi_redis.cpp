@@ -9,6 +9,7 @@
 #include <chrono>
 #include <deque>
 #include <mutex>
+#include <stdexcept>
 #include <utility>
 namespace OI { namespace Redis {
 
@@ -166,6 +167,13 @@ RedisCall RedisClient::Call(std::vector<std::string> args, RedisResult* out)
 
 RedisResult RedisClient::CallSync(std::vector<std::string> args)
 {
+#ifndef _SINGLE_THREAD_
+	// 回包和超时都在 poll 上完成，不能在这里阻塞 poll 等自己。
+	if (::OI::Net::Poll::GetInstance().InLoopThread())
+	{
+		throw std::logic_error("CallRedisSync cannot run on the poll thread; use co_await CallRedis");
+	}
+#endif
 	RedisCall::State* st = new RedisCall::State();
 	st->args = std::move(args);
 	st->sync = true;
@@ -235,17 +243,19 @@ void RedisClient::Settle(RedisCall::State* st, std::shared_ptr<redisReply> reply
 	{
 		return;
 	}
+	const bool sync = st->sync;
 	{
 		::OI::Thread::MutexGuard lock(st->mu);
 		st->reply = std::move(reply);
 		st->timeout = timeout;
 		st->ready = true;
-		if (st->sync)
+		if (sync)
 		{
 			st->cv.Signal();
 		}
 	}
-	if (st->sync)
+	// 同步调用可能在通知后立即释放状态，出锁后不再解引用它。
+	if (sync)
 	{
 		return;
 	}

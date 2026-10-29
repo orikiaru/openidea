@@ -18,6 +18,8 @@
 
 `redis` 是连 `redisserver` 的客户端，类型在 `OI::Redis`，字节是 RESP，不进 proto。一条连接上的命令按发送顺序对回包。超时后这条命令仍留在队列里，等它自己的回包来认领，避免后面的应答串位。回包如果再也没来，而连接还在，后面的命令会一直顶在它后面。超时单位是毫秒，来自 `RedisClient.timeout_ms`，由 200 毫秒的周期定时器扫描。先到的那个算数：`timeout` 为真是超时，`reply` 非空是回执。
 
+共享上游连接不支持改变连接状态的命令（切库、认证、事务、订阅、CLIENT 等）。代理收到这类命令会记录错误并关闭该下游连接，避免本地错误回包与在途回包错位。阻塞命令仍会阻塞共用该上游的其他会话，生产环境应单独部署这类调用。多线程版同步 Redis 调用禁止在 poll 线程执行，会抛出 `std::logic_error`；该线程应使用协程接口。
+
 `http` 是 HTTP/1.1 客户端，在 `OI::Http`。套接字是一条 `OI::Net::Channel`，可读走 `DataIn`，可写走 `DataOut`。`co_await` 之后由 poll 线程收完，再 `Schedule` 把协程句柄交回去，不在回调里 `resume`，也不睡线程。查询参数按百分号编码，和 `cpp-httplib` 的 `encode_query_param` 同一套字符。body 按 `Content-Length` 原样发送。单线程模块链 `http_static`，多线程模块链 `http_m_static`。服务端不在这个库里。
 
 `port` 是套接字的平台差异。`port/win` 给 MSVC 补头文件。

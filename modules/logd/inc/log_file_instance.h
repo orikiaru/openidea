@@ -50,5 +50,5 @@ private:
 	void Active();
 	void Passive();
 	static void* WriteLogThreadHandle(void* arg);
-	const char* GetLogTiTle();
+	std::string GetLogTiTle();
 };
