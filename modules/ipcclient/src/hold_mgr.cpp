@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <memory>
 #include <string>
 
 HoldMgr::HoldMgr()
@@ -74,16 +75,16 @@ struct RaceBox
 	}
 };
 
-static coro::Task RaceOne(sid_t sid, int32_t index, int32_t mark, int32_t delay, int32_t* rets, int32_t* marks, std::atomic<int32_t>* finished)
+static coro::Task RaceOne(sid_t sid, int32_t index, int32_t mark, int32_t delay, std::shared_ptr<RaceBox> box)
 {
 	::OI::RpcData::HoldReq one;
 	::OI::RpcData::HoldRes back;
 	one.delay_ms = delay;
 	one.mark = mark;
 	int code = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), sid, one, back, 10);
-	rets[index] = code;
-	marks[index] = back.mark;
-	finished->fetch_add(1, std::memory_order_release);
+	box->rets[index] = code;
+	box->marks[index] = back.mark;
+	box->finished.fetch_add(1, std::memory_order_release);
 	co_return;
 }
 
@@ -134,7 +135,8 @@ coro::Task HoldMgr::Pump()
 
 	const int delays[] = {9800, 9900, 10000, 10100, 10200, 10400, 10600, 10800};
 	const int n = 8;
-	RaceBox* box = new RaceBox();
+	// 每个调用自己持有一份。没写完之前，这里退出也不会把盒子释放掉。
+	std::shared_ptr<RaceBox> box(new RaceBox());
 	sid_t sid = _sid;
 	cpu_begin = std::clock();
 	wall_begin = std::chrono::steady_clock::now();
@@ -143,30 +145,39 @@ coro::Task HoldMgr::Pump()
 		int mark = 100 + i;
 		int delay = delays[i];
 		coro::StartTask([mark, delay, i, box, sid](coro::Token) {
-			return RaceOne(sid, i, mark, delay, box->rets, box->marks, &box->finished);
+			return RaceOne(sid, i, mark, delay, box);
 		});
 	}
-	co_await coro::yield(13000);
+	// 单次超时是 10 秒。等都写完再读，避免读到写了一半的结果。
+	int waited = 0;
+	const int kCapMs = 20000;
+	while (box->finished.load(std::memory_order_acquire) < n && waited < kCapMs)
+	{
+		co_await coro::yield(50);
+		waited += 50;
+	}
 	int done = box->finished.load(std::memory_order_acquire);
 	int reply_n = 0;
 	int timeout_n = 0;
 	int race_bad = done == n ? 0 : 1;
-	for (int i = 0; i < n; ++i)
+	if (done == n)
 	{
-		if (box->rets[i] == 0 && box->marks[i] == 100 + i)
+		for (int i = 0; i < n; ++i)
 		{
-			reply_n += 1;
-		}
-		else if (box->rets[i] == -2)
-		{
-			timeout_n += 1;
-		}
-		else
-		{
-			race_bad += 1;
+			if (box->rets[i] == 0 && box->marks[i] == 100 + i)
+			{
+				reply_n += 1;
+			}
+			else if (box->rets[i] == -2)
+			{
+				timeout_n += 1;
+			}
+			else
+			{
+				race_bad += 1;
+			}
 		}
 	}
-	delete box;
 	bad += race_bad;
 	printf("hold rpc race n=%d done=%d reply=%d timeout=%d bad=%d cpu_ms=%lld wall_ms=%lld\n",
 		n, done, reply_n, timeout_n, race_bad, CpuMs(cpu_begin), WallMs(wall_begin));

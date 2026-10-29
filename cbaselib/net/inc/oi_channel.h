@@ -24,6 +24,8 @@ public:
 	virtual bool TryClose() = 0;
 
 public:
+	// 套接字交给调用方关闭。析构看到的是无效号，不会再关一次。
+	void DetachSocket() { _socket.Detach(); }
 	void AllowSend();
 	void ForbidSend();
 	void AllowRead();

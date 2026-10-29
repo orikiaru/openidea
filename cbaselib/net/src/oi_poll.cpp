@@ -141,6 +141,8 @@ static void ApplyOp(const IoOp& op)
 		int init_rc = uv_poll_init_socket(&g_loop, &watch->poll, (uv_os_sock_t)op.fd);
 		if (init_rc != 0)
 		{
+			// 套接字还在 channel 上。先摘掉再关，析构里就不会再关一次。
+			op.channel->DetachSocket();
 			NetOs_Close(op.fd);
 			delete watch;
 			op.channel->_poll_token = NULL;
