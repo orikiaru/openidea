@@ -42,13 +42,13 @@ HandleRpc<AllEchoReq, AllEchoRes>([](coro::Token, SessionManager*, sid_t, AllEch
 
 要在处理里等一段时间，直接 `co_await coro::yield(毫秒)`，不要占着工人空转。`Hold` 就是这样把回包推迟的。
 
-序号和处理函数必须是协程参数。写在 lambda 捕获里不会进协程帧，函数返回后就是悬空引用。
+`StartTask` 按值持有可调用对象直到任务结束，支持带捕获的协程 lambda；`HandleRpc` 也在包装协程中持有处理函数。捕获引用、裸 `this` 不会延长其指向对象的寿命，需由调用方保证有效，或按值捕获 `shared_ptr`。
 
 ## 客户端
 
 连接建立后用 `StartTask` 拉起任务，任务里 `co_await RpcCall`。等待键是每次调用新分配的调用号，等待表按调用号分片加锁。回包、超时或发送失败只有一个会把这条协程 `Schedule` 回来。迟到的回包发现调用号已经取走，就丢掉，不会配给下一次调用。
 
-超时单位是秒，默认 180，`RpcCall` 最后一个参数可改。它不挂时间轮，由一个 200 毫秒的周期定时器按时长分桶扫队头，所以精度是秒，不是毫秒。
+整数超时保持以秒为单位，默认 180；也可传 `std::chrono::milliseconds`，例如 `OI::Timer::Milliseconds(500)`、`OI::Timer::Seconds(10)`。由 200 毫秒周期扫描，因此毫秒参数不代表毫秒级唤醒精度。非正超时表示不设截止时间，断连仍会结束等待。`yield` 同样支持时长参数。
 
 ```cpp
 coro::StartTask([n](coro::Token) {
@@ -58,4 +58,17 @@ coro::StartTask([n](coro::Token) {
 int ret = co_await RpcCall(mgr, sid, req, res);
 ```
 
-`ret == 0` 是回包已解出，`-2` 是超时，`-1` 是发送失败或解包失败。
+`ret == 0` 是回包已解出，`-2` 是超时，`-3` 是连接断开，`-1` 是发送失败或解包失败。等待绑定管理器、会话和回复协议号；其他连接的回包不会消费等待项。断连时框架自动结束该连接的 RPC，不需要业务额外清理。
+
+新代码可直接取得结果，请求由等待对象按值持有：
+
+```cpp
+auto result = co_await RpcCall<AllEchoRes>(mgr, sid, req, OI::Timer::Seconds(10));
+if (result) { /* result.value 是响应，result.code 是传输结果 */ }
+```
+
+直接 await 普通 `Task` 不受 `StartTask` 闭包保活保护；不要直接 await 临时的带捕获协程 lambda。
+
+应用层时间统一由 `oi_duration.h` 构造：`OI::Timer::Milliseconds(n)`、`Seconds(n)`、`Minutes(n)`、`Hours(n)`、`Days(n)`。这些函数保留时长类型，可以直接传给 `yield` 和 RPC，无需引入字面量名字空间。
+
+`Days(n)` 是每单位 24 小时的持续时长；日历跨天、跨周等刷新判断仍使用时间辅助接口。

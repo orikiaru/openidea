@@ -196,7 +196,7 @@ static bool DiffAllTypes(const ::OI::RpcData::AllTypesData& sent, const ::OI::Rp
 	if (sent.gap != recv.gap)
 	{
 		EchoMgr::GetInstance().Note("gap");
-		*EchoMgr::GetInstance().GapDiffer() += 1;
+		EchoMgr::GetInstance().NoteGap();
 		same = false;
 	}
 	return same;
@@ -229,7 +229,14 @@ void EchoMgr::Load()
 
 void EchoMgr::Note(const char* name)
 {
+	::OI::Thread::MutexGuard lock(_mu);
 	_fields[name] += 1;
+}
+
+void EchoMgr::NoteGap()
+{
+	::OI::Thread::MutexGuard lock(_mu);
+	++_gap_differ;
 }
 
 void EchoMgr::ArmTimeout()
@@ -288,7 +295,7 @@ coro::Task EchoMgr::Pump(int index)
 
 void EchoMgr::OnResult(int n, const ::OI::RpcData::AllEchoReq& req, const ::OI::RpcData::AllEchoRes& res, int ret, bool same)
 {
-	std::lock_guard<std::mutex> lock(_mu);
+	::OI::Thread::MutexGuard lock(_mu);
 	if (!_have_sample && n == 0)
 	{
 		_have_sample = true;

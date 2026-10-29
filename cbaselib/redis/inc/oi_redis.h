@@ -9,12 +9,16 @@
 #include <vector>
 namespace OI { namespace Redis {
 
-// reply 非空是回执，timeout 为真是超时。先到的那个算数。
+enum class RedisStatus { Ok, Timeout, Disconnected, InvalidArgument, SendFailed, ServerError, ProtocolError, Busy };
+
+// reply 共享 hiredis 回执，错误回执也保留，方便业务读取错误文本。
 struct RedisResult
 {
 	std::shared_ptr<redisReply> reply;
 	bool timeout;
-	RedisResult() : timeout(false) {}
+	RedisStatus status;
+	RedisResult() : timeout(false), status(RedisStatus::Disconnected) {}
+	explicit operator bool() const { return status == RedisStatus::Ok; }
 };
 
 class RedisClient;
@@ -36,7 +40,7 @@ public:
 	{
 		return Suspend(h);
 	}
-	void await_resume();
+	RedisResult await_resume();
 private:
 	bool Suspend(std::coroutine_handle<> h);
 };
@@ -49,6 +53,7 @@ class RedisClient : public ::OI::Rpc::ProtoClientManager
 	RedisClient();
 	redisReader* _reader;
 	int32_t _timeout_ms;
+	int32_t _max_pending;
 	::OI::Thread::Mutex _wait_mu;
 	std::deque<RedisCall::State*> _wait;
 	// _wait 前面这么多条已经判过超时
@@ -61,6 +66,11 @@ public:
 	// 阻塞到回执或超时。多线程不能在 poll 线程上调。
 	// 单线程没有第二个人收包，调用方就在这条线程上把 poll 和协程跑到回执为止。
 	RedisResult CallSync(std::vector<std::string> args);
+	size_t PendingCount()
+	{
+		::OI::Thread::MutexGuard lock(_wait_mu);
+		return _wait.size();
+	}
 	void Feed(const char* data, size_t size);
 	// poll 线程上周期调用，把到期还没回执的调用按超时结掉
 	static void SweepTimeout(void*);
@@ -71,14 +81,19 @@ private:
 	virtual void OnAbortSession();
 	static void Submit(void* state);
 	void Enqueue(RedisCall::State* st);
-	void FailAll();
-	void Settle(RedisCall::State* st, std::shared_ptr<redisReply> reply, bool timeout);
+	void FailAll(RedisStatus status = RedisStatus::Disconnected);
+	void Settle(RedisCall::State* st, std::shared_ptr<redisReply> reply, RedisStatus status);
 	static void Release(RedisCall::State* st);
 };
 
 inline RedisCall CallRedis(std::vector<std::string> args, RedisResult& out)
 {
 	return RedisClient::GetInstance().Call(std::move(args), &out);
+}
+
+inline RedisCall CallRedis(std::vector<std::string> args)
+{
+	return RedisClient::GetInstance().Call(std::move(args), nullptr);
 }
 
 inline RedisResult CallRedisSync(std::vector<std::string> args)

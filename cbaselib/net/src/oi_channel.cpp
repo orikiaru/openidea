@@ -17,7 +17,8 @@ Channel::~Channel()
 void Channel::AllowSend()
 {
 	::OI::Thread::MutexGuard l(_locker);
-	if (_p_session && !_p_session->IsClosed() && (0 == (_event_mask & IO_EV_WRITE)))
+	// 关闭中的会话也要触发一次 IO，让 TryClose 回收空闲连接，不能等对端发数据。
+	if (_p_session && (0 == (_event_mask & IO_EV_WRITE)))
 	{
 		_event_mask |= IO_EV_WRITE;
 		Poll::GetInstance().IOEventMod(this, _event_mask);

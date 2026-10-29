@@ -39,6 +39,7 @@ def reset_connections():
 def run(case, args):
     mode = "hold" if case.startswith("clock-") else ("echo" if case == "reset" else case)
     mode = "log" if case == "disk-full" else mode
+    mode = "redis" if case == "redis-limit" else mode
     procs = []
     handles = []
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
@@ -53,6 +54,9 @@ def run(case, args):
             if name == "logd":
                 text = replace(text, "root_path", '"' + str(logs) + '"')
             if name == "ipcclient":
+                if case == "redis-limit":
+                    text = text.replace("[RedisClient]", "[RedisClient]\nmax_pending = 1")
+                    text = replace(text, "tasks", "0")
                 for flag in ("echo", "log", "redis", "hold"):
                     text = replace(text, flag, "true" if mode == flag else "false")
                 if mode == "hold":
@@ -146,7 +150,11 @@ def run(case, args):
             if mode == "echo":
                 assert "ok=1000000 mismatch=0 rpc_fail=0" in text
             elif mode == "redis":
-                assert "redis integrity ok" in text and re.search(r"redis stress .*bad=0", text)
+                assert "redis integrity ok" in text
+                if case == "redis-limit":
+                    assert "redis pending limit bad=0" in text
+                else:
+                    assert re.search(r"redis stress .*bad=0", text)
             elif mode == "hold":
                 assert "hold done bad=0" in text
             elif mode == "log":
@@ -181,7 +189,7 @@ def run(case, args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case", default="all", choices=("all", "echo", "log", "redis", "hold", "reset", "disk-full", "clock-forward", "clock-back"))
+    parser.add_argument("--case", default="all", choices=("all", "echo", "log", "redis", "redis-limit", "hold", "reset", "disk-full", "clock-forward", "clock-back"))
     parser.add_argument("--bin-dir", type=Path, default=REPO / "deploy/bin")
     parser.add_argument("--redis-binary", type=Path, default=Path("/tmp/redis-7.4.12/src/redis-server"))
     parser.add_argument("--clock-fault-so", type=Path)
@@ -190,6 +198,6 @@ if __name__ == "__main__":
         with socket.socket() as probe:
             probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             probe.bind(("127.0.0.1", port))
-    cases = ("echo", "log", "redis", "hold", "reset", "disk-full") if options.case == "all" else (options.case,)
+    cases = ("echo", "log", "redis", "redis-limit", "hold", "reset", "disk-full") if options.case == "all" else (options.case,)
     for item in cases:
         run(item, options)

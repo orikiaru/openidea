@@ -6,6 +6,8 @@
 #include "oi_log.h"
 namespace OI { namespace Rpc {
 
+void FailRpcCalls(::OI::Net::SessionManager* mgr, sid_t sid);
+
 enum CLIENT_CONNECT_MODE
 {
 	CLIENT_CONNECT_DIRECT = 0,
@@ -14,6 +16,7 @@ enum CLIENT_CONNECT_MODE
 
 class ProtoSessionManager : public ::OI::Net::SessionManager
 {
+	void OnSessionClosed(sid_t sid) override final { FailRpcCalls(this, sid); }
 public:
 	ProtoSessionManager() {}
 	virtual const std::string GetIDString() { return "ProtoSessionManager"; }
@@ -50,7 +53,11 @@ public:
 	virtual void OnClientConnect(::OI::Net::Session* pSession) = 0;
 	virtual void OnClientDisconnect(const ::OI::Net::Session* pSession) = 0;
 
-	bool IsConnect() { return _conn; }
+	bool IsConnect()
+	{
+		::OI::Thread::SpinLockGuard lock(_client_locker);
+		return _conn;
+	}
 	virtual void OnAddSession(::OI::Net::Session* pSession)
 	{
 		std::deque<::OI::Base::Bytes> pending;

@@ -6,7 +6,7 @@
 #include <atomic>
 #include <chrono>
 #include <map>
-#include <mutex>
+#include "oi_lock.h"
 #include <string>
 
 class EchoMgr
@@ -21,7 +21,7 @@ class EchoMgr
 	std::atomic<int32_t> _done;
 	std::atomic<int32_t> _ok;
 	std::atomic<int32_t> _rpc_fail;
-	std::mutex _mu;
+	::OI::Thread::Mutex _mu;
 	int32_t _mismatch;
 	int32_t _gap_differ;
 	int32_t _sample_sent;
@@ -37,7 +37,7 @@ public:
 	int32_t Done() const { return _done.load(); }
 	int32_t Ok() const { return _ok.load(); }
 	void Note(const char* name);
-	int32_t* GapDiffer() { return &_gap_differ; }
+	void NoteGap();
 	void OnResult(int n, const ::OI::RpcData::AllEchoReq& req, const ::OI::RpcData::AllEchoRes& res, int ret, bool same);
 	coro::Task Pump(int index);
 };

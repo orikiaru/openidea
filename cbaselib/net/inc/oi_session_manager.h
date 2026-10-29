@@ -86,6 +86,7 @@ protected:
 	virtual Session* CloneSession() = 0;//{ 	return new TCPSession(fd, this);	}	//自定制回话类型
 	virtual void OnAddSession(Session* pSession) = 0;
 	virtual void OnDelSession(const Session* pSession) = 0;
+	virtual void OnSessionClosed(sid_t) {}
 	virtual void OnAbortSession() {}
 	virtual void OnConnectFailed() {}
 };

@@ -2,6 +2,7 @@
 #include "oi_redis.h"
 #include "oi_log.h"
 #include "oi_poll.h"
+#include "oi_config.h"
 #include <stdexcept>
 #include "test_board.h"
 #include <cstring>
@@ -115,6 +116,34 @@ static bool BulkIs(const ::OI::Redis::RedisResult& result, const char* text, siz
 
 coro::Task RedisMgr::Check()
 {
+	int32_t pending_limit = 65536;
+	TryGetConfig("RedisClient.max_pending", pending_limit);
+	if (pending_limit == 1)
+	{
+		struct Pending { std::atomic<bool> done{false}; ::OI::Redis::RedisResult result; };
+		auto pending = std::make_shared<Pending>();
+		coro::StartTask([pending](coro::Token) -> coro::Task {
+			pending->result = co_await ::OI::Redis::CallRedis({"BLPOP", "oi-limit-empty", "1"});
+			pending->done.store(true, std::memory_order_release);
+		});
+		while (::OI::Redis::RedisClient::GetInstance().PendingCount() == 0 && !pending->done.load(std::memory_order_acquire))
+			co_await coro::yield(::OI::Timer::Milliseconds(10));
+		auto busy = co_await ::OI::Redis::RedisPing();
+		if (busy.status != ::OI::Redis::RedisStatus::Busy || busy.timeout) ++_failed;
+		while (!pending->done.load(std::memory_order_acquire)) co_await coro::yield(::OI::Timer::Milliseconds(10));
+		if (!pending->result || !pending->result.reply || pending->result.reply->type != REDIS_REPLY_NIL) ++_failed;
+		auto recovered = co_await ::OI::Redis::RedisPing();
+		if (!StatusIs(recovered, "PONG")) ++_failed;
+		LOG_TRACE("redis pending limit bad=%d", _failed);
+		co_return;
+	}
+	auto invalid = co_await ::OI::Redis::CallRedis({});
+	if (invalid.status != ::OI::Redis::RedisStatus::InvalidArgument || invalid.timeout) ++_failed;
+	auto direct = co_await ::OI::Redis::RedisPing();
+	if (!direct || !StatusIs(direct, "PONG")) ++_failed;
+	auto error = co_await ::OI::Redis::CallRedis({"OI_UNKNOWN_COMMAND"});
+	if (error.status != ::OI::Redis::RedisStatus::ServerError || !error.reply || error.timeout) ++_failed;
+
 #ifndef _SINGLE_THREAD_
 	std::atomic<int32_t> sync_guard(0);
 	::OI::Net::Poll::GetInstance().CallOnLoop([](void* arg) {
@@ -191,11 +220,7 @@ coro::Task RedisMgr::Check()
 		::OI::Redis::RedisCall call = ::OI::Redis::RedisSet("rk-exp", "1", exp);
 		co_await call;
 	}
-	::OI::Redis::RedisResult ttl;
-	{
-		::OI::Redis::RedisCall call = ::OI::Redis::RedisExpire("rk-exp", "60", ttl);
-		co_await call;
-	}
+	auto ttl = co_await ::OI::Redis::RedisExpire("rk-exp", ::OI::Timer::Seconds(60));
 	if (!IntIs(ttl, 1))
 	{
 		++_failed;
@@ -228,11 +253,7 @@ coro::Task RedisMgr::Check()
 		::OI::Redis::RedisCall call = ::OI::Redis::RedisLPush("rl", "b", lpush2);
 		co_await call;
 	}
-	::OI::Redis::RedisResult lrange;
-	{
-		::OI::Redis::RedisCall call = ::OI::Redis::RedisLRange("rl", "0", "1", lrange);
-		co_await call;
-	}
+	auto lrange = co_await ::OI::Redis::RedisLRange("rl", 0, 1);
 	if (lrange.timeout || !lrange.reply || lrange.reply->type != REDIS_REPLY_ARRAY || lrange.reply->elements != 2)
 	{
 		++_failed;
@@ -269,7 +290,7 @@ coro::Task RedisMgr::Check()
 		::OI::Redis::RedisResult rejected;
 		::OI::Redis::RedisCall call = ::OI::Redis::CallRedis({command, "1"}, rejected);
 		co_await call;
-		if (!rejected.timeout) ++_failed;
+		if (rejected.status != ::OI::Redis::RedisStatus::Disconnected || rejected.timeout) ++_failed;
 		int attempts = 0;
 		while (!::OI::Redis::RedisClient::GetInstance().IsConnect() && attempts++ < 100)
 		{
@@ -344,26 +365,21 @@ coro::Task RedisMgr::Stress(int id)
 		bool ok = false;
 		if (kind == 0)
 		{
-			::OI::Redis::RedisCall call = ::OI::Redis::RedisSet(key, value, result);
-			co_await call;
+			result = co_await ::OI::Redis::RedisSet(key, value);
 			ok = StatusIs(result, "OK");
 		}
 		else if (kind == 1)
 		{
-			::OI::Redis::RedisCall call = ::OI::Redis::RedisHSet(hash, member, value, result);
-			co_await call;
+			result = co_await ::OI::Redis::RedisHSet(hash, member, value);
 			ok = IntIs(result, 0) || IntIs(result, 1);
 		}
 		else if (kind == 2)
 		{
-			::OI::Redis::RedisCall call = ::OI::Redis::RedisLPush(list, member, result);
-			co_await call;
+			result = co_await ::OI::Redis::RedisLPush(list, member);
 			ok = !result.timeout && result.reply && result.reply->type == REDIS_REPLY_INTEGER;
 			if (ok && (seq % 16) == 0)
 			{
-				::OI::Redis::RedisResult trim;
-				::OI::Redis::RedisCall trim_call = ::OI::Redis::RedisLTrim(list, "0", "15", trim);
-				co_await trim_call;
+				auto trim = co_await ::OI::Redis::RedisLTrim(list, 0, 15);
 				if (!StatusIs(trim, "OK"))
 				{
 					ok = false;
@@ -372,8 +388,7 @@ coro::Task RedisMgr::Stress(int id)
 		}
 		else
 		{
-			::OI::Redis::RedisCall call = ::OI::Redis::RedisIncr(key, result);
-			co_await call;
+			result = co_await ::OI::Redis::RedisIncr(key);
 			ok = !result.timeout && result.reply && result.reply->type == REDIS_REPLY_INTEGER;
 		}
 		if (!ok)

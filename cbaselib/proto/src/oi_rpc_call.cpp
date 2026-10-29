@@ -153,6 +153,8 @@ typedef std::function<coro::Task(coro::Token, ::OI::Net::SessionManager*, sid_t,
 
 struct RpcCoroSlot
 {
+	::OI::Net::SessionManager* mgr;
+	sid_t sid;
 	std::coroutine_handle<> handle;
 	int32_t* result;
 	std::function<bool(::OI::Base::BytesStream&)> decode;
@@ -172,7 +174,7 @@ struct RpcCallShard
 {
 	::OI::Thread::Mutex mu;
 	std::unordered_map<uint64_t, RpcCoroSlot> slots;
-	std::map<int32_t, std::deque<RpcExpire> > expire;
+	std::map<int64_t, std::deque<RpcExpire> > expire;
 };
 
 const uint64_t kCallShards = 64;
@@ -220,7 +222,7 @@ void FinishRpcSlot(RpcCoroSlot& slot, int32_t code, ::OI::Base::BytesStream* bod
 	}
 }
 
-bool TakeRpcSlot(uint64_t call_id, RpcCoroSlot& out)
+bool TakeRpcSlot(uint64_t call_id, RpcCoroSlot& out, ::OI::Net::SessionManager* mgr = NULL, sid_t sid = 0, proto_type_t res_id = 0)
 {
 	RpcCallShard& shard = ShardOf(call_id);
 	::OI::Thread::MutexGuard lock(shard.mu);
@@ -229,6 +231,8 @@ bool TakeRpcSlot(uint64_t call_id, RpcCoroSlot& out)
 	{
 		return false;
 	}
+	// 来源或协议错误不能消费其他连接的等待项。
+	if (mgr && (it->second.mgr != mgr || it->second.sid != sid || it->second.res_id != res_id)) return false;
 	out = std::move(it->second);
 	shard.slots.erase(it);
 	return true;
@@ -242,7 +246,7 @@ void SweepRpcCalls()
 	{
 		RpcCallShard& shard = g_call_shards[i];
 		::OI::Thread::MutexGuard lock(shard.mu);
-		for (std::map<int32_t, std::deque<RpcExpire> >::iterator bit = shard.expire.begin(); bit != shard.expire.end(); ++bit)
+		for (auto bit = shard.expire.begin(); bit != shard.expire.end(); )
 		{
 			std::deque<RpcExpire>& q = bit->second;
 			while (!q.empty())
@@ -261,6 +265,8 @@ void SweepRpcCalls()
 				shard.slots.erase(it);
 				q.pop_front();
 			}
+			if (q.empty()) bit = shard.expire.erase(bit);
+			else ++bit;
 		}
 	}
 	for (size_t i = 0; i < fired.size(); ++i)
@@ -291,13 +297,15 @@ void RegisterRpcRes(proto_type_t res_id)
 	g_rpc_res.insert(res_id);
 }
 
-uint64_t BindRpcCall(proto_type_t res_id, std::coroutine_handle<> handle, int32_t* result, int32_t timeout_sec, std::function<bool(::OI::Base::BytesStream&)> decode, std::function<void()> resume)
+uint64_t BindRpcCall(::OI::Net::SessionManager* mgr, sid_t sid, proto_type_t res_id, std::coroutine_handle<> handle, int32_t* result, int64_t timeout_ms, std::function<bool(::OI::Base::BytesStream&)> decode, std::function<void()> resume)
 {
 	std::call_once(g_sweep_once, []() {
 		::OI::Net::Poll::GetInstance().CallOnLoop(ArmRpcSweep, NULL);
 	});
 	uint64_t call_id = g_call_seq.fetch_add(1, std::memory_order_relaxed);
 	RpcCoroSlot slot;
+	slot.mgr = mgr;
+	slot.sid = sid;
 	slot.handle = handle;
 	slot.result = result;
 	slot.decode = std::move(decode);
@@ -306,12 +314,12 @@ uint64_t BindRpcCall(proto_type_t res_id, std::coroutine_handle<> handle, int32_
 	RpcCallShard& shard = ShardOf(call_id);
 	::OI::Thread::MutexGuard lock(shard.mu);
 	shard.slots.emplace(call_id, std::move(slot));
-	if (timeout_sec > 0)
+	if (timeout_ms > 0)
 	{
 		RpcExpire e;
-		e.deadline_ms = NowMs() + (int64_t)timeout_sec * 1000;
+		e.deadline_ms = NowMs() + timeout_ms;
 		e.call_id = call_id;
-		shard.expire[timeout_sec].push_back(e);
+		shard.expire[timeout_ms].push_back(e);
 	}
 	return call_id;
 }
@@ -325,6 +333,26 @@ bool WakeRpcCall(uint64_t call_id, int32_t code, ::OI::Base::BytesStream* body)
 	}
 	FinishRpcSlot(slot, code, body);
 	return true;
+}
+
+void FailRpcCalls(::OI::Net::SessionManager* mgr, sid_t sid)
+{
+	std::vector<RpcCoroSlot> failed;
+	for (auto& shard : g_call_shards)
+	{
+		::OI::Thread::MutexGuard lock(shard.mu);
+		for (auto it = shard.slots.begin(); it != shard.slots.end(); )
+		{
+			if (it->second.mgr == mgr && it->second.sid == sid)
+			{
+				failed.push_back(std::move(it->second));
+				it = shard.slots.erase(it);
+			}
+			else ++it;
+		}
+	}
+	// 唤醒放在锁外，应用可以立即发起新的调用。
+	for (auto& slot : failed) FinishRpcSlot(slot, -3, NULL);
 }
 
 void WatchRpc(proto_type_t id, std::function<void(::OI::Base::BytesStream&)> decode)
@@ -381,13 +409,8 @@ bool DeliverRpc(proto_type_t id, ::OI::Base::BytesStream& body, ::OI::Net::Sessi
 			uint64_t call_id = 0;
 			body >> call_id;
 			RpcCoroSlot slot;
-			if (!TakeRpcSlot(call_id, slot))
+			if (!TakeRpcSlot(call_id, slot, mgr, sid, id))
 			{
-				return true;
-			}
-			if (slot.res_id != id)
-			{
-				FinishRpcSlot(slot, -1, NULL);
 				return true;
 			}
 			FinishRpcSlot(slot, 0, &body);

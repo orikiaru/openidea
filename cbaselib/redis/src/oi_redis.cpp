@@ -48,7 +48,7 @@ struct RedisCall::State
 {
 	std::vector<std::string> args;
 	std::shared_ptr<redisReply> reply;
-	bool timeout;
+	RedisStatus status;
 	bool ready;
 	bool sync;
 	RedisResult* out;
@@ -59,10 +59,10 @@ struct RedisCall::State
 	std::atomic<int32_t> refs;
 	::OI::Thread::Mutex mu;
 	::OI::Thread::MutexCond cv;
-	State() : timeout(false), ready(false), sync(false), out(NULL), deadline_ms(0), gate(0), won(0), refs(1) {}
+	State() : status(RedisStatus::Disconnected), ready(false), sync(false), out(NULL), deadline_ms(0), gate(0), won(0), refs(1) {}
 };
 
-RedisClient::RedisClient() : _reader(NULL), _timeout_ms(25000), _swept(0)
+RedisClient::RedisClient() : _reader(NULL), _timeout_ms(25000), _max_pending(65536), _swept(0)
 {
 }
 
@@ -78,6 +78,8 @@ RedisClient::~RedisClient()
 bool RedisClient::Init()
 {
 	TryGetConfig("RedisClient.timeout_ms", _timeout_ms);
+	TryGetConfig("RedisClient.max_pending", _max_pending);
+	if (_max_pending < 1) return false;
 	if (_timeout_ms <= 0)
 	{
 		_timeout_ms = 25000;
@@ -143,13 +145,14 @@ RedisCall::~RedisCall()
 	RedisClient::Release(_state);
 }
 
-void RedisCall::await_resume()
+RedisResult RedisCall::await_resume()
 {
-	if (_state->out)
-	{
-		_state->out->reply = _state->reply;
-		_state->out->timeout = _state->timeout;
-	}
+	RedisResult result;
+	result.reply = _state->reply;
+	result.status = _state->status;
+	result.timeout = result.status == RedisStatus::Timeout;
+	if (_state->out) *_state->out = result;
+	return result;
 }
 
 bool RedisCall::Suspend(std::coroutine_handle<> h)
@@ -200,7 +203,8 @@ RedisResult RedisClient::CallSync(std::vector<std::string> args)
 #endif
 	RedisResult out;
 	out.reply = st->reply;
-	out.timeout = st->timeout || !st->ready;
+	out.status = st->status;
+	out.timeout = out.status == RedisStatus::Timeout;
 	Release(st);
 	return out;
 }
@@ -232,11 +236,11 @@ void RedisClient::SweepTimeout(void*)
 	}
 	for (size_t i = 0; i < expired.size(); ++i)
 	{
-		self.Settle(expired[i], std::shared_ptr<redisReply>(), true);
+		self.Settle(expired[i], std::shared_ptr<redisReply>(), RedisStatus::Timeout);
 	}
 }
 
-void RedisClient::Settle(RedisCall::State* st, std::shared_ptr<redisReply> reply, bool timeout)
+void RedisClient::Settle(RedisCall::State* st, std::shared_ptr<redisReply> reply, RedisStatus status)
 {
 	int expect = 0;
 	if (!st->won.compare_exchange_strong(expect, 1, std::memory_order_acq_rel))
@@ -247,7 +251,7 @@ void RedisClient::Settle(RedisCall::State* st, std::shared_ptr<redisReply> reply
 	{
 		::OI::Thread::MutexGuard lock(st->mu);
 		st->reply = std::move(reply);
-		st->timeout = timeout;
+		st->status = status;
 		st->ready = true;
 		if (sync)
 		{
@@ -268,12 +272,23 @@ void RedisClient::Settle(RedisCall::State* st, std::shared_ptr<redisReply> reply
 
 void RedisClient::Enqueue(RedisCall::State* st)
 {
-	if (st->args.empty() || !IsConnect())
+	if (st->args.empty())
 	{
-		Settle(st, std::shared_ptr<redisReply>(), true);
+		Settle(st, {}, RedisStatus::InvalidArgument);
+		return;
+	}
+	if (!IsConnect())
+	{
+		Settle(st, {}, RedisStatus::Disconnected);
 		return;
 	}
 	std::vector<const char*> argv(st->args.size());
+	// 已超时的项也占配对位置，不能无限积压。
+	if (_wait.size() >= static_cast<size_t>(_max_pending))
+	{
+		Settle(st, {}, RedisStatus::Busy);
+		return;
+	}
 	std::vector<size_t> arglen(st->args.size());
 	for (size_t i = 0; i < st->args.size(); ++i)
 	{
@@ -284,7 +299,7 @@ void RedisClient::Enqueue(RedisCall::State* st)
 	long long n = redisFormatCommandArgv(&cmd, (int)argv.size(), argv.data(), arglen.data());
 	if (n < 0 || !cmd)
 	{
-		Settle(st, std::shared_ptr<redisReply>(), true);
+		Settle(st, {}, RedisStatus::InvalidArgument);
 		return;
 	}
 	::OI::Base::Bytes frame;
@@ -314,13 +329,13 @@ void RedisClient::Enqueue(RedisCall::State* st)
 				break;
 			}
 		}
-		Settle(st, std::shared_ptr<redisReply>(), true);
+		Settle(st, {}, RedisStatus::SendFailed);
 		Release(st);
 		return;
 	}
 }
 
-void RedisClient::FailAll()
+void RedisClient::FailAll(RedisStatus status)
 {
 	std::deque<RedisCall::State*> left;
 	{
@@ -332,7 +347,7 @@ void RedisClient::FailAll()
 	{
 		if (left[i]->won.load(std::memory_order_acquire) == 0)
 		{
-			Settle(left[i], std::shared_ptr<redisReply>(), true);
+			Settle(left[i], {}, status);
 		}
 		Release(left[i]);
 	}
@@ -346,7 +361,7 @@ void RedisClient::Feed(const char* data, size_t size)
 	}
 	if (redisReaderFeed(_reader, data, size) != REDIS_OK)
 	{
-		FailAll();
+		FailAll(RedisStatus::ProtocolError);
 		if (g_sid != INVALID_SID)
 		{
 			CloseSession(g_sid);
@@ -358,7 +373,7 @@ void RedisClient::Feed(const char* data, size_t size)
 		void* raw = NULL;
 		if (redisReaderGetReply(_reader, &raw) != REDIS_OK)
 		{
-			FailAll();
+			FailAll(RedisStatus::ProtocolError);
 			if (g_sid != INVALID_SID)
 			{
 				CloseSession(g_sid);
@@ -386,7 +401,8 @@ void RedisClient::Feed(const char* data, size_t size)
 		}
 		if (st->won.load(std::memory_order_acquire) == 0)
 		{
-			Settle(st, std::move(held), false);
+			const auto status = held->type == REDIS_REPLY_ERROR ? RedisStatus::ServerError : RedisStatus::Ok;
+			Settle(st, std::move(held), status);
 		}
 		Release(st);
 	}

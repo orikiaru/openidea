@@ -139,14 +139,20 @@ void SessionManager::AbortSession()
 
 void SessionManager::CloseSession(sid_t sid)
 {
-	::OI::Thread::MutexGuard l(_locker);
-	SessionMap::iterator it = _session_map.find(sid);
-	if (it != _session_map.end())
+	bool closed = false;
 	{
-		Session* pSession = it->second;
-		_session_map.erase(it);
-		pSession->ActiveClose();
+		::OI::Thread::MutexGuard l(_locker);
+		SessionMap::iterator it = _session_map.find(sid);
+		if (it != _session_map.end())
+		{
+			Session* pSession = it->second;
+			_session_map.erase(it);
+			pSession->ActiveClose();
+			closed = true;
+		}
 	}
+	// 逻辑断开立即结束等待；唤醒放在管理器锁外。
+	if (closed) OnSessionClosed(sid);
 }
 
 void SessionManager::DelSession(const Session* pSession)
