@@ -283,12 +283,6 @@ void RedisClient::Enqueue(RedisCall::State* st)
 		return;
 	}
 	std::vector<const char*> argv(st->args.size());
-	// 已超时的项也占配对位置，不能无限积压。
-	if (_wait.size() >= static_cast<size_t>(_max_pending))
-	{
-		Settle(st, {}, RedisStatus::Busy);
-		return;
-	}
 	std::vector<size_t> arglen(st->args.size());
 	for (size_t i = 0; i < st->args.size(); ++i)
 	{
@@ -309,10 +303,21 @@ void RedisClient::Enqueue(RedisCall::State* st)
 		::OI::Timer::BaseTimerManager::GetInstance().AddTimer(new RedisSweepTimer(), kSweepMs);
 	});
 	st->deadline_ms = NowMs() + _timeout_ms;
-	st->refs.fetch_add(1, std::memory_order_relaxed);
+	bool queued = false;
 	{
 		::OI::Thread::MutexGuard lock(_wait_mu);
-		_wait.push_back(st);
+		// 超时的也占着位置。满了就不再排。
+		if (_wait.size() < static_cast<size_t>(_max_pending))
+		{
+			st->refs.fetch_add(1, std::memory_order_relaxed);
+			_wait.push_back(st);
+			queued = true;
+		}
+	}
+	if (!queued)
+	{
+		Settle(st, {}, RedisStatus::Busy);
+		return;
 	}
 	if (!SendRaw(frame))
 	{
