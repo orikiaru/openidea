@@ -78,18 +78,12 @@ Handle<AllEchoReq, AllEchoRes>([](AllEchoReq& req, AllEchoRes& res) -> coro::Tas
 ```cpp
 auto res = co_await RpcCall<AllEchoRes>("ipcserver", req);
 auto one = co_await RpcCall<AllEchoRes>("gameserver.1001", req);
-
-// 先全部发出去，再逐个等已经在途的等待器。总耗时取决于最慢的一台。
-auto waits = RpcCallBatch<AllEchoRes>("gameserver.*", req);
-for (auto& w : waits)
-{
-    auto item = co_await w;
-}
+auto batch = co_await RpcCallBatch<AllEchoRes>("gameserver.*", req);
 ```
 
-`RpcCallBatch` 在返回前把这一批请求都写出去，每个等待器已经挂在自己的调用号上。后面的循环只是收结果。某一台超时或断连只记在它自己的结果里。
+`RpcCallBatch` 自己先把这一批请求都发出去，再逐个等已经在途的等待器，然后把每台的结果一起交回来。调用方不写这个循环。总耗时取决于最慢的一台。某一台超时或断连只记在它自己的结果里。
 
-现有的 `RpcCall` 把发送写在 `await_suspend` 里，所以不能先造一串还没发送的等待器再挨个 `co_await`，那样会等完一台才发下一台。`name.*` 必须把发送和等待拆开。
+现有的 `RpcCall` 把发送写在 `await_suspend` 里。`RpcCallBatch` 不能先造一串还没发送的等待器再挨个 `co_await`，那样会等完一台才发下一台。发送和等待拆开，拆在函数里面。
 
 日志、Redis、访问本框架里的 HTTP 服务，也是这种调用，编码留在框架里。应用不写会话子类。对外的 HTTP 网址，以及 `redisserver` 背后那台真正的 Redis，不是注册表里的服务，地址仍要配置。
 
