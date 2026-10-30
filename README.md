@@ -41,4 +41,5 @@ cmake 会先跑 `cbaselib/proto/proto_tool/main.py`，再编库和模块。可�
 - [协程](docs/coroutine.md)
 - [模块和协议](docs/module.md)
 - [定时器](docs/timer.md)
+- [服务注册](docs/registry.md)（后期做，现在未实现）
 - [时序图](docs/sequence-diagram/README.md)
