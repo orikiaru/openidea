@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include "oi_net.h"
 #include "oi_base.h"
-#include "oi_registry.h"
+#include "registry_server.h"
 
 int main(int argc, char* argv[])
 {
@@ -18,12 +18,12 @@ int main(int argc, char* argv[])
 	::OI::Net::Poll::GetInstance().Init();
 	::OI::Log::Init();
 
-	if (!::OI::Base::RegistryServer::GetInstance().Init())
+	if (!RegistryServer::GetInstance().Init())
 	{
 		printf("RegistryServer Init error\n");
 		return -1;
 	}
-	if (!::OI::Base::RegistryServer::GetInstance().StartServer())
+	if (!RegistryServer::GetInstance().StartServer())
 	{
 		printf("RegistryServer StartServer error\n");
 		return -1;

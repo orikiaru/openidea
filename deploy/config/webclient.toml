@@ -3,17 +3,13 @@
 name = "webclient"
 id = 1
 
+# 注册进程的地址。查不到服务名时仍用下面各段的 ip/port。
 [Registry]
 ip = "127.0.0.1"
 port = "17990"
 type = "tcp"
 heartbeat_ms = 1000
-expire_ms = 3000
 pull_ms = 1000
-
-[Redis]
-ip = "127.0.0.1"
-port = "6379"
 
 # 连的是 webserver，只走 HTTP。
 [WebClient]

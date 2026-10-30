@@ -66,6 +66,5 @@ public:
         builder["indentation"] = "";
         return Json::writeString(builder, out);
     }
-    virtual ::OI::Rpc::RpcData* Clone() { return new RegHeartbeatRes(*this); }
 };
 }}

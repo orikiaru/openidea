@@ -11,12 +11,7 @@ ip = "127.0.0.1"
 port = "17990"
 type = "tcp"
 heartbeat_ms = 1000
-expire_ms = 3000
 pull_ms = 1000
-
-[Redis]
-ip = "127.0.0.1"
-port = "6379"
 
 [Log]
 root_path = "./logs"

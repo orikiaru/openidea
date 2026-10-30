@@ -6,30 +6,25 @@
 #include <string>
 
 namespace OI { namespace RpcData {
-class RegLookupRes : public ::OI::Rpc::RpcData
+class RegPull : public ::OI::Rpc::RpcData
 {
 public:
-    int32_t code;
-    std::string ip;
-    std::string port;
+    std::vector<std::string> names;
     
-    explicit RegLookupRes (){}
-    RegLookupRes ( const int32_t & l_code, const std::string & l_ip, const std::string & l_port )
+    explicit RegPull (){}
+    RegPull ( const std::vector<std::string> & l_names )
     {
-        code = l_code;
-        ip = l_ip;
-        port = l_port;
+        names = l_names;
         
     }
     virtual ::OI::Base::BytesStream& serialize(::OI::Base::BytesStream& os) const
     {
-        os.WritePb(0, code);
-        os.WritePb(1, ip);
-        os.WritePb(2, port);
+        os.WritePb(0, names);
         return os;
     }
     virtual ::OI::Base::BytesStream& deserialize(::OI::Base::BytesStream& os)
     {
+        names.clear();
         while (os.RemainSize() > 0)
         {
             uint32_t field_seq = 0;
@@ -37,9 +32,7 @@ public:
             os.ReadPbHeader(field_seq, field_size);
             switch (field_seq)
             {
-            case 0: os.ReadPb(field_size, code); break;
-            case 1: os.ReadPb(field_size, ip); break;
-            case 2: os.ReadPb(field_size, port); break;
+            case 0: os.ReadPb(field_size, names); break;
             default: os.SkipPb(field_size); break;
             }
         }
@@ -48,9 +41,7 @@ public:
     bool FromJson(const Json::Value& in)
     {
         if (!in.isObject()) return false;
-        if (in.isMember("code") && !::OI::Rpc::FromJsonValue(in["code"], code)) return false;
-        if (in.isMember("ip") && !::OI::Rpc::FromJsonValue(in["ip"], ip)) return false;
-        if (in.isMember("port") && !::OI::Rpc::FromJsonValue(in["port"], port)) return false;
+        if (in.isMember("names") && !::OI::Rpc::FromJsonValue(in["names"], names)) return false;
         return true;
     }
     bool FromJson(const std::string& text)
@@ -66,9 +57,7 @@ public:
     void ToJson(Json::Value& out) const
     {
         out = Json::Value(Json::objectValue);
-        ::OI::Rpc::ToJsonValue(out["code"], code);
-        ::OI::Rpc::ToJsonValue(out["ip"], ip);
-        ::OI::Rpc::ToJsonValue(out["port"], port);
+        ::OI::Rpc::ToJsonValue(out["names"], names);
     }
     std::string ToJson() const
     {
@@ -78,6 +67,5 @@ public:
         builder["indentation"] = "";
         return Json::writeString(builder, out);
     }
-    virtual ::OI::Rpc::RpcData* Clone() { return new RegLookupRes(*this); }
 };
 }}

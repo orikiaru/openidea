@@ -4,24 +4,28 @@ name = "registry"
 id = 1
 
 # 注册进程自己的地址。别的进程靠这一段来找它，不能再向注册表查。
+# 注册空间 oi:{project.env}: 只写在这里。测试和正式各起各的 registry，应用只认自己那台。
 [Registry]
 ip = "127.0.0.1"
 port = "17990"
 type = "tcp"
-# 对外映射。IP 和端口都可以和上面的监听不一样。
-# advertise_ip = "203.0.113.10"
-# advertise_port = "27990"
-heartbeat_ms = 1000
+project = "openidea"
+env = "dev"
+# 心跳停了这么久就判下线。登记的连接断了当场下线，不用等。
 expire_ms = 3000
+# 隔这么久从 Redis 整量拉一次，客户端来拉时直接给这份
 pull_ms = 1000
 
-# 表和日志写到这台 Redis。redisserver 对外的地址另外登记，靠服务名找。
-[Redis]
+# 注册表写到这台 Redis。直接连真正的 Redis，不经 redisserver，也不写 service。
+# 超时要比 expire_ms 短，Redis 卡住时客户端还来得及重新登记。
+[RedisClient]
 ip = "127.0.0.1"
 port = "6379"
+type = "tcp"
+timeout_ms = 1000
 
+# 不写 service：registry 不向自己查 logd 的地址
 [LogClient]
-service = "logd"
 ip		= "127.0.0.1"
 port	= "19995"
 type   	= "tcp"

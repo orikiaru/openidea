@@ -33,6 +33,5 @@ class RpcData : public Serialize
 public:
 	virtual ::OI::Base::BytesStream& serialize(::OI::Base::BytesStream& os) const = 0;
 	virtual ::OI::Base::BytesStream& deserialize(::OI::Base::BytesStream& os) = 0;
-	virtual RpcData* Clone() = 0;
 };
 }}

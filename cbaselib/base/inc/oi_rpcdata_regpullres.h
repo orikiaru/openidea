@@ -1,29 +1,34 @@
 /* 由 proto 工具生成后拷进 base，不进 proto.xml。rpc 号只是 req/res 的映射。 */
 #pragma once
 #include "oi_rpc.h"
+#include "oi_rpcdata_reginstance.h"
 #include "oi_json.h"
 #include <memory>
 #include <string>
 
 namespace OI { namespace RpcData {
-class RegLookup : public ::OI::Rpc::RpcData
+class RegPullRes : public ::OI::Rpc::RpcData
 {
 public:
-    std::string name;
+    int32_t code;
+    std::vector<RegInstance> list;
     
-    explicit RegLookup (){}
-    RegLookup ( const std::string & l_name )
+    explicit RegPullRes (){}
+    RegPullRes ( const int32_t & l_code, const std::vector<RegInstance> & l_list )
     {
-        name = l_name;
+        code = l_code;
+        list = l_list;
         
     }
     virtual ::OI::Base::BytesStream& serialize(::OI::Base::BytesStream& os) const
     {
-        os.WritePb(0, name);
+        os.WritePb(0, code);
+        os.WritePb(1, list);
         return os;
     }
     virtual ::OI::Base::BytesStream& deserialize(::OI::Base::BytesStream& os)
     {
+        list.clear();
         while (os.RemainSize() > 0)
         {
             uint32_t field_seq = 0;
@@ -31,7 +36,8 @@ public:
             os.ReadPbHeader(field_seq, field_size);
             switch (field_seq)
             {
-            case 0: os.ReadPb(field_size, name); break;
+            case 0: os.ReadPb(field_size, code); break;
+            case 1: os.ReadPb(field_size, list); break;
             default: os.SkipPb(field_size); break;
             }
         }
@@ -40,7 +46,8 @@ public:
     bool FromJson(const Json::Value& in)
     {
         if (!in.isObject()) return false;
-        if (in.isMember("name") && !::OI::Rpc::FromJsonValue(in["name"], name)) return false;
+        if (in.isMember("code") && !::OI::Rpc::FromJsonValue(in["code"], code)) return false;
+        if (in.isMember("list") && !::OI::Rpc::FromJsonValue(in["list"], list)) return false;
         return true;
     }
     bool FromJson(const std::string& text)
@@ -56,7 +63,8 @@ public:
     void ToJson(Json::Value& out) const
     {
         out = Json::Value(Json::objectValue);
-        ::OI::Rpc::ToJsonValue(out["name"], name);
+        ::OI::Rpc::ToJsonValue(out["code"], code);
+        ::OI::Rpc::ToJsonValue(out["list"], list);
     }
     std::string ToJson() const
     {
@@ -66,6 +74,5 @@ public:
         builder["indentation"] = "";
         return Json::writeString(builder, out);
     }
-    virtual ::OI::Rpc::RpcData* Clone() { return new RegLookup(*this); }
 };
 }}

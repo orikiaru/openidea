@@ -4,23 +4,63 @@
 #include "oi_rpcdata_regregisterres.h"
 #include "oi_rpcdata_regheartbeat.h"
 #include "oi_rpcdata_regheartbeatres.h"
-#include "oi_rpcdata_reglookup.h"
-#include "oi_rpcdata_reglookupres.h"
+#include "oi_rpcdata_reginstance.h"
+#include "oi_rpcdata_regpull.h"
+#include "oi_rpcdata_regpullres.h"
 #include "oi_net_session.h"
 #include "oi_config.h"
 #include "oi_log.h"
 #include "oi_poll.h"
 #include "oi_timer_manager.h"
-#include "hiredis.h"
 #include <chrono>
-#include <cstdlib>
+#include <cstdio>
 
 namespace OI { namespace Base {
 
 namespace {
 const int kWaitMs = 1000;
 
-::OI::Base::Bytes EncodeFrame(uint32_t id, const ::OI::Rpc::Serialize& msg)
+class RegistryClientSession : public ::OI::Net::NetSession
+{
+public:
+	explicit RegistryClientSession(::OI::Net::SessionManager* mgr) : ::OI::Net::NetSession(mgr) {}
+	virtual void Send(const ::OI::Base::Bytes& bytes)
+	{
+		::OI::Thread::MutexGuard lock(_locker);
+		_obuff.Append(bytes);
+		AllowSend();
+	}
+	virtual void OnDataOut() {}
+	virtual void OnDataIn()
+	{
+		ReadRegFrames(_ibuff, this, [](uint32_t id, ::OI::Base::BytesStream& body) {
+			RegistryClient::GetInstance().OnFrame(id, body);
+		});
+	}
+};
+
+class HeartbeatTimer : public ::OI::Timer::BaseTimer
+{
+public:
+	bool OnTimer()
+	{
+		RegistryClient::GetInstance().Touch();
+		return true;
+	}
+};
+
+class PullTimer : public ::OI::Timer::BaseTimer
+{
+public:
+	bool OnTimer()
+	{
+		RegistryClient::GetInstance().Pull();
+		return true;
+	}
+};
+}
+
+::OI::Base::Bytes EncodeRegFrame(uint32_t id, const ::OI::Rpc::Serialize& msg)
 {
 	::OI::Base::BytesStream body;
 	msg.serialize(body);
@@ -30,7 +70,7 @@ const int kWaitMs = 1000;
 	return frame;
 }
 
-bool ReadFrames(::OI::Base::Bytes& in, void (*on_frame)(::OI::Net::Session*, uint32_t, ::OI::Base::BytesStream&, void*), ::OI::Net::Session* session, void* self)
+bool ReadRegFrames(::OI::Base::Bytes& in, ::OI::Net::Session* session, const std::function<void(uint32_t, ::OI::Base::BytesStream&)>& on_frame)
 {
 	::OI::Base::BytesStream os;
 	os.Swap(in);
@@ -60,7 +100,7 @@ bool ReadFrames(::OI::Base::Bytes& in, void (*on_frame)(::OI::Net::Session*, uin
 		os.AddCurPos(size);
 		try
 		{
-			on_frame(session, id, body, self);
+			on_frame(id, body);
 		}
 		catch (::OI::Base::ParserException&)
 		{
@@ -76,629 +116,120 @@ bool ReadFrames(::OI::Base::Bytes& in, void (*on_frame)(::OI::Net::Session*, uin
 	return !closed;
 }
 
-class RegistryServerSession : public ::OI::Net::NetSession
-{
-public:
-	explicit RegistryServerSession(::OI::Net::SessionManager* mgr) : ::OI::Net::NetSession(mgr) {}
-	virtual void Send(const ::OI::Base::Bytes& bytes)
-	{
-		::OI::Thread::MutexGuard lock(_locker);
-		_obuff.Append(bytes);
-		AllowSend();
-	}
-	virtual void OnDataOut() {}
-	virtual void OnDataIn()
-	{
-		ReadFrames(_ibuff, [](::OI::Net::Session* session, uint32_t id, ::OI::Base::BytesStream& body, void* self) {
-			static_cast<RegistryServer*>(self)->Handle(session, id, body);
-		}, this, _p_session_mgr);
-	}
-};
+// ---------------------------------------------------------------- ServiceTable
 
-class RegistryClientSession : public ::OI::Net::NetSession
-{
-public:
-	explicit RegistryClientSession(::OI::Net::SessionManager* mgr) : ::OI::Net::NetSession(mgr) {}
-	virtual void Send(const ::OI::Base::Bytes& bytes)
-	{
-		::OI::Thread::MutexGuard lock(_locker);
-		_obuff.Append(bytes);
-		AllowSend();
-	}
-	virtual void OnDataOut() {}
-	virtual void OnDataIn()
-	{
-		ReadFrames(_ibuff, [](::OI::Net::Session* session, uint32_t id, ::OI::Base::BytesStream& body, void* self) {
-			(void)session;
-			static_cast<RegistryClient*>(self)->OnFrame(id, body);
-		}, this, _p_session_mgr);
-	}
-};
-
-}
-
-RedisStore::RedisStore() : _ctx(NULL), _opened(false), _expire_ms(3000) {}
-
-RedisStore::~RedisStore()
-{
-	Close();
-}
-
-void RedisStore::Close()
-{
-	if (_ctx)
-	{
-		redisFree((redisContext*)_ctx);
-		_ctx = NULL;
-	}
-	_opened = false;
-}
-
-bool RedisStore::Ensure()
-{
-	if (_ctx)
-	{
-		return true;
-	}
-	std::string ip;
-	std::string port;
-	if (!::OI::Base::Config::GlobalConfig().GetAs("Redis.ip", ip) || ip.empty())
-	{
-		return false;
-	}
-	if (!::OI::Base::Config::GlobalConfig().GetAs("Redis.port", port) || port.empty())
-	{
-		return false;
-	}
-	TryGetConfig("Registry.expire_ms", _expire_ms);
-	if (_expire_ms <= 0)
-	{
-		_expire_ms = 3000;
-	}
-	struct timeval tv;
-	tv.tv_sec = 0;
-	tv.tv_usec = 200000;
-	redisContext* ctx = redisConnectWithTimeout(ip.c_str(), atoi(port.c_str()), tv);
-	if (!ctx || ctx->err)
-	{
-		if (ctx)
-		{
-			redisFree(ctx);
-		}
-		return false;
-	}
-	_ctx = ctx;
-	_opened = true;
-	return true;
-}
-
-bool RedisStore::Enabled()
-{
-	::OI::Thread::MutexGuard lock(_mu);
-	return Ensure();
-}
-
-bool RedisStore::SetService(const std::string& name, const std::string& ip, const std::string& port)
-{
-	if (name.empty() || ip.empty() || port.empty())
-	{
-		return false;
-	}
-	std::string value = ip + " " + port;
-	std::string key = "oi:svc:" + name;
-	::OI::Thread::MutexGuard lock(_mu);
-	if (!Ensure())
-	{
-		return false;
-	}
-	redisReply* reply = (redisReply*)redisCommand((redisContext*)_ctx, "SET %s %b PX %d",
-		key.c_str(), value.data(), (size_t)value.size(), _expire_ms);
-	bool ok = reply && reply->type != REDIS_REPLY_ERROR;
-	if (reply)
-	{
-		freeReplyObject(reply);
-	}
-	if (!ok)
-	{
-		Close();
-	}
-	return ok;
-}
-
-bool RedisStore::GetService(const std::string& name, std::string& ip, std::string& port)
-{
-	if (name.empty())
-	{
-		return false;
-	}
-	std::string key = "oi:svc:" + name;
-	::OI::Thread::MutexGuard lock(_mu);
-	if (!Ensure())
-	{
-		return false;
-	}
-	redisReply* reply = (redisReply*)redisCommand((redisContext*)_ctx, "GET %s", key.c_str());
-	bool ok = false;
-	if (reply && reply->type == REDIS_REPLY_STRING && reply->str)
-	{
-		std::string value(reply->str, (size_t)reply->len);
-		size_t sp = value.find(' ');
-		if (sp != std::string::npos && sp + 1 < value.size())
-		{
-			ip = value.substr(0, sp);
-			port = value.substr(sp + 1);
-			ok = !ip.empty() && !port.empty();
-		}
-	}
-	if (reply)
-	{
-		freeReplyObject(reply);
-	}
-	else
-	{
-		Close();
-	}
-	return ok;
-}
-
-bool RedisStore::DeleteService(const std::string& name)
-{
-	if (name.empty())
-	{
-		return false;
-	}
-	std::string key = "oi:svc:" + name;
-	::OI::Thread::MutexGuard lock(_mu);
-	if (!Ensure())
-	{
-		return false;
-	}
-	redisReply* reply = (redisReply*)redisCommand((redisContext*)_ctx, "DEL %s", key.c_str());
-	bool ok = reply != NULL;
-	if (reply)
-	{
-		freeReplyObject(reply);
-	}
-	else
-	{
-		Close();
-	}
-	return ok;
-}
-
-bool RedisStore::AppendLog(const void* data, size_t n)
-{
-	if (!data || n == 0)
-	{
-		return false;
-	}
-	::OI::Thread::MutexGuard lock(_mu);
-	if (!Ensure())
-	{
-		return false;
-	}
-	redisReply* reply = (redisReply*)redisCommand((redisContext*)_ctx, "RPUSH oi:log %b", data, n);
-	bool ok = reply && reply->type != REDIS_REPLY_ERROR;
-	if (reply)
-	{
-		freeReplyObject(reply);
-	}
-	if (!ok)
-	{
-		Close();
-		return false;
-	}
-	reply = (redisReply*)redisCommand((redisContext*)_ctx, "LTRIM oi:log -10000 -1");
-	if (reply)
-	{
-		freeReplyObject(reply);
-	}
-	else
-	{
-		Close();
-	}
-	return true;
-}
-
-bool RedisStore::ListServices(std::map<std::string, std::pair<std::string, std::string> >& out)
-{
-	out.clear();
-	::OI::Thread::MutexGuard lock(_mu);
-	if (!Ensure())
-	{
-		return false;
-	}
-	redisReply* keys = (redisReply*)redisCommand((redisContext*)_ctx, "KEYS oi:svc:*");
-	if (!keys)
-	{
-		Close();
-		return false;
-	}
-	if (keys->type != REDIS_REPLY_ARRAY)
-	{
-		freeReplyObject(keys);
-		return false;
-	}
-	for (size_t i = 0; i < (size_t)keys->elements; ++i)
-	{
-		redisReply* key = keys->element[i];
-		if (!key || key->type != REDIS_REPLY_STRING || !key->str)
-		{
-			continue;
-		}
-		std::string key_text(key->str, (size_t)key->len);
-		const std::string prefix = "oi:svc:";
-		if (key_text.size() <= prefix.size() || key_text.compare(0, prefix.size(), prefix) != 0)
-		{
-			continue;
-		}
-		redisReply* value = (redisReply*)redisCommand((redisContext*)_ctx, "GET %s", key_text.c_str());
-		if (!value)
-		{
-			freeReplyObject(keys);
-			Close();
-			return false;
-		}
-		if (value->type == REDIS_REPLY_STRING && value->str)
-		{
-			std::string text(value->str, (size_t)value->len);
-			size_t sp = text.find(' ');
-			if (sp != std::string::npos && sp + 1 < text.size())
-			{
-				out[key_text.substr(prefix.size())] = std::make_pair(text.substr(0, sp), text.substr(sp + 1));
-			}
-		}
-		freeReplyObject(value);
-	}
-	freeReplyObject(keys);
-	return true;
-}
-
-namespace {
-class SweepTimer : public ::OI::Timer::BaseTimer
-{
-public:
-	bool OnTimer()
-	{
-		RegistryServer::GetInstance().Sweep();
-		return true;
-	}
-};
-
-class HeartbeatTimer : public ::OI::Timer::BaseTimer
-{
-public:
-	bool OnTimer()
-	{
-		RegistryClient::GetInstance().Touch();
-		return true;
-	}
-};
-
-class PullTimer : public ::OI::Timer::BaseTimer
-{
-public:
-	bool OnTimer()
-	{
-		ServiceTable::GetInstance().Pull();
-		return true;
-	}
-};
-}
-
-ServiceTable::ServiceTable() : _pull_armed(false), _pull_ms(1000) {}
+ServiceTable::ServiceTable() {}
 ServiceTable::~ServiceTable() {}
 
-void ServiceTable::ArmPull()
+bool ServiceTable::Pick(const std::vector<ServiceInstance>& list, const std::string& name, int32_t current, ServiceInstance& out)
 {
-	if (_pull_armed)
+	const ServiceInstance* best = NULL;
+	for (size_t i = 0; i < list.size(); ++i)
 	{
-		return;
+		if (list[i].name != name)
+		{
+			continue;
+		}
+		if (current > 0 && list[i].id == current)
+		{
+			out = list[i];
+			return true;
+		}
+		if (!best || list[i].id < best->id)
+		{
+			best = &list[i];
+		}
 	}
-	_pull_ms = 1000;
-	TryGetConfig("Registry.pull_ms", _pull_ms);
-	if (_pull_ms <= 0)
+	if (!best)
 	{
-		return;
+		return false;
 	}
-	::OI::Timer::BaseTimerManager::GetInstance().AddTimer(new PullTimer(), _pull_ms);
-	_pull_armed = true;
+	out = *best;
+	return true;
 }
 
 void ServiceTable::Watch(::OI::Net::SessionManager* mgr, const std::string& name)
 {
-	if (!mgr || name.empty())
+	::OI::Thread::MutexGuard lock(_mu);
+	State& state = _services[name];
+	for (size_t i = 0; i < state.watchers.size(); ++i)
 	{
-		return;
-	}
-	{
-		::OI::Thread::MutexGuard lock(_mu);
-		State& state = _services[name];
-		for (size_t i = 0; i < state.watchers.size(); ++i)
+		if (state.watchers[i] == mgr)
 		{
-			if (state.watchers[i] == mgr)
-			{
-				return;
-			}
+			return;
 		}
-		state.watchers.push_back(mgr);
 	}
-	ArmPull();
+	state.watchers.push_back(mgr);
 }
 
-bool ServiceTable::Publish(const std::string& name, const std::string& ip, const std::string& port)
+std::vector<std::string> ServiceTable::Names()
 {
-	if (name.empty() || ip.empty() || port.empty())
+	std::vector<std::string> names;
+	::OI::Thread::MutexGuard lock(_mu);
+	for (std::map<std::string, State>::iterator it = _services.begin(); it != _services.end(); ++it)
 	{
-		return false;
-	}
-	std::vector<::OI::Net::SessionManager*> watchers;
-	{
-		::OI::Thread::MutexGuard lock(_mu);
-		std::map<std::string, State>::iterator it = _services.find(name);
-		if (it != _services.end() && it->second.published
-			&& it->second.ip == ip && it->second.port == port)
+		if (!it->second.watchers.empty())
 		{
-			watchers.clear();
-		}
-		else if (it != _services.end())
-		{
-			watchers = it->second.watchers;
+			names.push_back(it->first);
 		}
 	}
-	if (!RedisStore::GetInstance().SetService(name, ip, port))
-	{
-		return false;
-	}
-	{
-		::OI::Thread::MutexGuard lock(_mu);
-		State& state = _services[name];
-		bool same = state.published && state.ip == ip && state.port == port;
-		state.ip = ip;
-		state.port = port;
-		state.online = true;
-		state.published = true;
-		if (same)
-		{
-			return true;
-		}
-		if (watchers.empty())
-		{
-			watchers = state.watchers;
-		}
-	}
-	for (size_t i = 0; i < watchers.size(); ++i)
-	{
-		watchers[i]->ApplyService(ip, port, true);
-	}
-	return true;
+	return names;
 }
 
-void ServiceTable::Touch()
+void ServiceTable::Apply(const std::vector<std::string>& names, const std::vector<ServiceInstance>& list)
 {
-	std::vector<std::pair<std::string, std::pair<std::string, std::string> > > owned;
+	struct Change
+	{
+		::OI::Net::SessionManager* mgr;
+		std::string ip;
+		std::string port;
+		bool online;
+	};
+	std::vector<Change> changed;
 	{
 		::OI::Thread::MutexGuard lock(_mu);
-		for (std::map<std::string, State>::iterator it = _services.begin(); it != _services.end(); ++it)
+		for (size_t n = 0; n < names.size(); ++n)
 		{
-			if (!it->second.published)
+			std::map<std::string, State>::iterator it = _services.find(names[n]);
+			if (it == _services.end())
 			{
 				continue;
 			}
-			owned.push_back(std::make_pair(it->first, std::make_pair(it->second.ip, it->second.port)));
-		}
-	}
-	for (size_t i = 0; i < owned.size(); ++i)
-	{
-		RedisStore::GetInstance().SetService(owned[i].first, owned[i].second.first, owned[i].second.second);
-	}
-}
-
-void ServiceTable::Pull()
-{
-	std::map<std::string, std::pair<std::string, std::string> > list;
-	if (!RedisStore::GetInstance().ListServices(list))
-	{
-		return;
-	}
-	std::vector<std::pair<::OI::Net::SessionManager*, std::pair<std::string, std::pair<std::string, std::string> > > > changed;
-	{
-		::OI::Thread::MutexGuard lock(_mu);
-		for (std::map<std::string, State>::iterator it = _services.begin(); it != _services.end(); ++it)
-		{
-			if (it->second.watchers.empty())
+			State& state = it->second;
+			ServiceInstance pick;
+			bool online = Pick(list, names[n], state.online ? state.id : 0, pick);
+			if (online == state.online && (!online || (pick.id == state.id && pick.ip == state.ip && pick.port == state.port)))
 			{
 				continue;
 			}
-			std::map<std::string, std::pair<std::string, std::string> >::iterator found = list.find(it->first);
-			bool online = found != list.end();
-			std::string ip = online ? found->second.first : "";
-			std::string port = online ? found->second.second : "";
-			bool same = it->second.online == online && it->second.ip == ip && it->second.port == port;
-			if (same && it->second.online)
+			state.online = online;
+			state.id = online ? pick.id : 0;
+			state.ip = online ? pick.ip : "";
+			state.port = online ? pick.port : "";
+			for (size_t i = 0; i < state.watchers.size(); ++i)
 			{
-				continue;
-			}
-			it->second.online = online;
-			it->second.ip = ip;
-			it->second.port = port;
-			for (size_t i = 0; i < it->second.watchers.size(); ++i)
-			{
-				changed.push_back(std::make_pair(it->second.watchers[i], std::make_pair(it->first, std::make_pair(ip, port))));
+				Change c;
+				c.mgr = state.watchers[i];
+				c.ip = state.ip;
+				c.port = state.port;
+				c.online = online;
+				changed.push_back(c);
 			}
 		}
 	}
 	for (size_t i = 0; i < changed.size(); ++i)
 	{
-		bool online = !changed[i].second.second.first.empty();
-		changed[i].first->ApplyService(changed[i].second.second.first, changed[i].second.second.second, online);
+		changed[i].mgr->ApplyService(changed[i].ip, changed[i].port, changed[i].online);
 	}
 }
 
-
-RegistryServer::RegistryServer() : _expire_ms(3000), _sweep_armed(false) {}
-RegistryServer::~RegistryServer() {}
-
-const std::string RegistryServer::GetIDString()
-{
-	return "Registry";
-}
-
-bool RegistryServer::Init()
-{
-	if (!::OI::Net::SessionManager::Init())
-	{
-		return false;
-	}
-	TryGetConfig("Registry.expire_ms", _expire_ms);
-	if (_expire_ms > 0 && !_sweep_armed)
-	{
-		::OI::Timer::BaseTimerManager::GetInstance().AddTimer(new SweepTimer(), _expire_ms);
-		_sweep_armed = true;
-	}
-	return true;
-}
-
-::OI::Net::Session* RegistryServer::CloneSession()
-{
-	return new RegistryServerSession(this);
-}
-
-void RegistryServer::OnAddSession(::OI::Net::Session* pSession)
-{
-	LOG_TRACE("RegistryServer::OnAddSession sid=%d", pSession->GetSessionID());
-}
-
-void RegistryServer::OnDelSession(const ::OI::Net::Session* pSession)
-{
-	DropSid(pSession->GetSessionID());
-	LOG_TRACE("RegistryServer::OnDelSession sid=%d", pSession->GetSessionID());
-}
-
-void RegistryServer::DropSid(sid_t sid)
-{
-	::OI::Thread::MutexGuard lock(_table_mu);
-	for (std::map<std::string, Item>::iterator it = _table.begin(); it != _table.end(); )
-	{
-		if (it->second.sid == sid)
-		{
-			std::string name = it->first;
-			it = _table.erase(it);
-			RedisStore::GetInstance().DeleteService(name);
-		}
-		else
-		{
-			++it;
-		}
-	}
-}
-
-void RegistryServer::Sweep()
-{
-	if (_expire_ms <= 0)
-	{
-		return;
-	}
-	std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
-	::OI::Thread::MutexGuard lock(_table_mu);
-	for (std::map<std::string, Item>::iterator it = _table.begin(); it != _table.end(); )
-	{
-		long long age = std::chrono::duration_cast<std::chrono::milliseconds>(now - it->second.seen).count();
-		if (age > _expire_ms)
-		{
-			std::string name = it->first;
-			it = _table.erase(it);
-			RedisStore::GetInstance().DeleteService(name);
-		}
-		else
-		{
-			++it;
-		}
-	}
-}
-
-static void ReplyCode(::OI::Net::Session* session, uint32_t id, int32_t code, const std::string& ip, const std::string& port)
-{
-	if (id == PROTO_REG_LOOKUP_RES)
-	{
-		::OI::RpcData::RegLookupRes res;
-		res.code = code;
-		res.ip = ip;
-		res.port = port;
-		session->Send(EncodeFrame(id, res));
-		return;
-	}
-	if (id == PROTO_REG_HEARTBEAT_RES)
-	{
-		::OI::RpcData::RegHeartbeatRes res;
-		res.code = code;
-		session->Send(EncodeFrame(id, res));
-		return;
-	}
-	::OI::RpcData::RegRegisterRes res;
-	res.code = code;
-	session->Send(EncodeFrame(id, res));
-}
-
-void RegistryServer::Handle(::OI::Net::Session* session, uint32_t id, ::OI::Base::BytesStream& body)
-{
-	if (id == PROTO_REG_REGISTER)
-	{
-		::OI::RpcData::RegRegister req;
-		req.deserialize(body);
-		int32_t code = OI_ERR_FAIL;
-		if (!req.name.empty() && !req.ip.empty() && !req.port.empty()
-			&& RedisStore::GetInstance().SetService(req.name, req.ip, req.port))
-		{
-			::OI::Thread::MutexGuard lock(_table_mu);
-			Item& item = _table[req.name];
-			item.ip = req.ip;
-			item.port = req.port;
-			item.sid = session->GetSessionID();
-			item.seen = std::chrono::steady_clock::now();
-			code = 0;
-		}
-		ReplyCode(session, PROTO_REG_REGISTER_RES, code, "", "");
-		return;
-	}
-	if (id == PROTO_REG_HEARTBEAT)
-	{
-		::OI::RpcData::RegHeartbeat req;
-		req.deserialize(body);
-		int32_t code = OI_ERR_FAIL;
-		{
-			::OI::Thread::MutexGuard lock(_table_mu);
-			std::map<std::string, Item>::iterator it = _table.find(req.name);
-			if (it != _table.end() && it->second.sid == session->GetSessionID()
-				&& RedisStore::GetInstance().SetService(req.name, it->second.ip, it->second.port))
-			{
-				it->second.seen = std::chrono::steady_clock::now();
-				code = 0;
-			}
-		}
-		ReplyCode(session, PROTO_REG_HEARTBEAT_RES, code, "", "");
-		return;
-	}
-	if (id == PROTO_REG_LOOKUP)
-	{
-		::OI::RpcData::RegLookup req;
-		req.deserialize(body);
-		std::string ip;
-		std::string port;
-		int32_t code = OI_ERR_FAIL;
-		if (RedisStore::GetInstance().GetService(req.name, ip, port))
-		{
-			code = 0;
-		}
-		ReplyCode(session, PROTO_REG_LOOKUP_RES, code, ip, port);
-		return;
-	}
-}
+// ---------------------------------------------------------------- RegistryClient
 
 RegistryClient::RegistryClient()
-	: _connected(false), _failed(false), _sid(INVALID_SID), _address_ready(false), _connecting(false),
-	_republish(false), _heartbeat_ms(1000), _heartbeat_armed(false), _pull_armed(false), _pull_ms(1000),
-	_expect(0), _got(false), _code(OI_ERR_FAIL)
+	: _connected(false), _connecting(false), _failed(false), _sid(INVALID_SID), _address_ready(false),
+	_svc_id(0), _published(false), _registered(false), _lost(false),
+	_heartbeat_ms(1000), _heartbeat_armed(false), _pull_ms(1000), _pull_armed(false),
+	_reg_waiting(false), _got(false), _code(OI_ERR_FAIL)
 {
 }
 
@@ -741,12 +272,8 @@ bool RegistryClient::WaitFlag(const std::atomic<bool>& flag)
 #endif
 }
 
-bool RegistryClient::Ensure()
+bool RegistryClient::Connect()
 {
-	if (_connected.load() && _sid != INVALID_SID)
-	{
-		return true;
-	}
 	if (!_address_ready)
 	{
 		std::string ip;
@@ -757,24 +284,49 @@ bool RegistryClient::Ensure()
 		if (!::OI::Base::Config::GlobalConfig().GetAs("Registry.type", type)) return false;
 		if (ip.empty() || port.empty()) return false;
 		DefaultInit(ip, port, GetSessionTypeByString(type));
-		TryGetConfig("Registry.heartbeat_ms", _heartbeat_ms);
 		_address_ready = true;
 	}
+	bool expected = false;
+	if (!_connecting.compare_exchange_strong(expected, true))
+	{
+		return true;
+	}
 	_failed = false;
-	_connecting = true;
 	if (!StartClient())
 	{
 		_connecting = false;
 		return false;
 	}
+	return true;
+}
+
+bool RegistryClient::Ensure()
+{
 	if (_connected.load())
 	{
-		_connecting = false;
 		return true;
 	}
-	bool ok = WaitFlag(_connected);
-	_connecting = false;
-	return ok;
+	if (!Connect())
+	{
+		return false;
+	}
+	return _connected.load() || WaitFlag(_connected);
+}
+
+bool RegistryClient::Send(uint32_t id, const ::OI::Rpc::Serialize& msg)
+{
+	sid_t sid = _sid.load();
+	if (sid == INVALID_SID)
+	{
+		return false;
+	}
+	return SendBytes(sid, EncodeRegFrame(id, msg));
+}
+
+void RegistryClient::SendRegister()
+{
+	::OI::RpcData::RegRegister req(_svc_name, _svc_id, _svc_ip, _svc_port);
+	Send(PROTO_REG_REGISTER, req);
 }
 
 void RegistryClient::OnAddSession(::OI::Net::Session* pSession)
@@ -784,21 +336,25 @@ void RegistryClient::OnAddSession(::OI::Net::Session* pSession)
 	_connected = true;
 	_connecting = false;
 	Notify();
-	if (_republish)
+	if (_published.load() && !_lost.load())
 	{
 		SendRegister();
 	}
-	LOG_TRACE("RegistryClient::OnAddSession sid=%d", _sid);
+	LOG_INFO("RegistryClient::OnAddSession sid=%d", pSession->GetSessionID());
 }
 
 void RegistryClient::OnDelSession(const ::OI::Net::Session* pSession)
 {
-	(void)pSession;
 	_sid = INVALID_SID;
 	_connected = false;
+	_registered = false;
 	_failed = true;
+	{
+		::OI::Thread::MutexGuard lock(_pending_mu);
+		_pending_pulls.clear();
+	}
 	Notify();
-	LOG_TRACE("RegistryClient::OnDelSession");
+	LOG_INFO("RegistryClient::OnDelSession sid=%d", pSession->GetSessionID());
 }
 
 void RegistryClient::OnConnectFailed()
@@ -809,78 +365,6 @@ void RegistryClient::OnConnectFailed()
 	LOG_TRACE("RegistryClient::OnConnectFailed");
 }
 
-void RegistryClient::SendRegister()
-{
-	if (_sid == INVALID_SID || _svc_name.empty())
-	{
-		return;
-	}
-	::OI::RpcData::RegRegister req(_svc_name, _svc_ip, _svc_port);
-	SendBytes(_sid, EncodeFrame(PROTO_REG_REGISTER, req));
-}
-
-void RegistryClient::SendHeartbeat()
-{
-	if (_sid == INVALID_SID || _svc_name.empty())
-	{
-		return;
-	}
-	::OI::RpcData::RegHeartbeat req;
-	req.name = _svc_name;
-	SendBytes(_sid, EncodeFrame(PROTO_REG_HEARTBEAT, req));
-}
-
-void RegistryClient::ArmHeartbeat()
-{
-	if (_heartbeat_armed || _heartbeat_ms <= 0)
-	{
-		return;
-	}
-	::OI::Timer::BaseTimerManager::GetInstance().AddTimer(new HeartbeatTimer(), _heartbeat_ms);
-	_heartbeat_armed = true;
-}
-
-void RegistryClient::Watch(::OI::Net::SessionManager* mgr, const std::string& name)
-{
-	if (!mgr || name.empty())
-	{
-		return;
-	}
-	ServiceTable::GetInstance().Watch(mgr, name);
-}
-
-void RegistryClient::Pull()
-{
-	ServiceTable::GetInstance().Pull();
-}
-
-void RegistryClient::Touch()
-{
-	if (_svc_name.empty())
-	{
-		return;
-	}
-	ServiceTable::GetInstance().Touch();
-	if (RedisStore::GetInstance().Enabled())
-	{
-		return;
-	}
-	if (!_connected.load())
-	{
-		if (!_connecting)
-		{
-			_failed = false;
-			_connecting = true;
-			if (!StartClient())
-			{
-				_connecting = false;
-			}
-		}
-		return;
-	}
-	SendHeartbeat();
-}
-
 void RegistryClient::OnFrame(uint32_t id, ::OI::Base::BytesStream& body)
 {
 	if (id == PROTO_REG_REGISTER_RES)
@@ -888,24 +372,20 @@ void RegistryClient::OnFrame(uint32_t id, ::OI::Base::BytesStream& body)
 		::OI::RpcData::RegRegisterRes res;
 		res.code = OI_ERR_FAIL;
 		res.deserialize(body);
-		_code = res.code;
-		if (_expect == id)
+		if (res.code == OI_OK)
 		{
-			_got = true;
-			Notify();
+			_registered = true;
 		}
-		return;
-	}
-	if (id == PROTO_REG_LOOKUP_RES)
-	{
-		::OI::RpcData::RegLookupRes res;
-		res.code = OI_ERR_FAIL;
-		res.deserialize(body);
-		_code = res.code;
-		_res_ip = res.ip;
-		_res_port = res.port;
-		if (_expect == id)
+		else if (res.code == OI_ERR_EXIST && !_reg_waiting.load())
 		{
+			_lost = true;
+			fprintf(stderr, "registry %s id=%d 已被别的进程占用，停止登记\n", _svc_name.c_str(), _svc_id);
+			fflush(stderr);
+			LOG_ERROR("registry %s id=%d taken by another process, stop register", _svc_name.c_str(), _svc_id);
+		}
+		if (_reg_waiting.load())
+		{
+			_code = res.code;
 			_got = true;
 			Notify();
 		}
@@ -916,25 +396,67 @@ void RegistryClient::OnFrame(uint32_t id, ::OI::Base::BytesStream& body)
 		::OI::RpcData::RegHeartbeatRes res;
 		res.code = OI_ERR_FAIL;
 		res.deserialize(body);
-		if (res.code != 0 && _connected.load())
+		if (res.code == OI_ERR_EXIST)
 		{
-			SendRegister();
+			_lost = true;
+			_registered = false;
+			fprintf(stderr, "registry %s id=%d 已被别的进程占用，停止登记\n", _svc_name.c_str(), _svc_id);
+			fflush(stderr);
+			LOG_ERROR("registry %s id=%d taken by another process, stop heartbeat", _svc_name.c_str(), _svc_id);
 		}
+		else if (res.code != OI_OK)
+		{
+			// registry 重启过，或 Redis 暂时不可用。下一次心跳重新登记。
+			_registered = false;
+		}
+		return;
+	}
+	if (id == PROTO_REG_PULL_RES)
+	{
+		::OI::RpcData::RegPullRes res;
+		res.code = OI_ERR_FAIL;
+		res.deserialize(body);
+		PendingPull pending;
+		pending.sync = false;
+		{
+			::OI::Thread::MutexGuard lock(_pending_mu);
+			if (_pending_pulls.empty())
+			{
+				return;
+			}
+			pending = _pending_pulls.front();
+			_pending_pulls.pop_front();
+		}
+		std::vector<ServiceInstance> list;
+		for (size_t i = 0; i < res.list.size(); ++i)
+		{
+			ServiceInstance inst;
+			inst.name = res.list[i].name;
+			inst.id = res.list[i].id;
+			inst.ip = res.list[i].ip;
+			inst.port = res.list[i].port;
+			list.push_back(inst);
+		}
+		if (pending.sync)
+		{
+			_res_list.swap(list);
+			_code = res.code;
+			_got = true;
+			Notify();
+			return;
+		}
+		// registry 自己连不上 Redis 时不知道真实情况，保持原状。
+		if (res.code == OI_OK)
+		{
+			ServiceTable::GetInstance().Apply(pending.names, list);
+		}
+		return;
 	}
 }
 
 bool RegistryClient::Lookup(const std::string& name, std::string& ip, std::string& port)
 {
-	if (name.empty())
-	{
-		return false;
-	}
-	if (RedisStore::GetInstance().GetService(name, ip, port))
-	{
-		LOG_TRACE("registry lookup %s -> %s:%s", name.c_str(), ip.c_str(), port.c_str());
-		return true;
-	}
-	if (!Configured())
+	if (name.empty() || !Configured())
 	{
 		return false;
 	}
@@ -943,34 +465,121 @@ bool RegistryClient::Lookup(const std::string& name, std::string& ip, std::strin
 		LOG_TRACE("registry lookup %s connect failed", name.c_str());
 		return false;
 	}
-	::OI::RpcData::RegLookup req;
-	req.name = name;
-	_code = OI_ERR_FAIL;
-	_res_ip.clear();
-	_res_port.clear();
+	PendingPull pending;
+	pending.sync = true;
+	pending.names.push_back(name);
 	_got = false;
-	_expect = PROTO_REG_LOOKUP_RES;
-	if (!SendBytes(_sid, EncodeFrame(PROTO_REG_LOOKUP, req)))
+	_code = OI_ERR_FAIL;
 	{
-		_expect = 0;
-		return false;
+		::OI::Thread::MutexGuard lock(_pending_mu);
+		_pending_pulls.push_back(pending);
 	}
-	if (!WaitFlag(_got))
+	::OI::RpcData::RegPull req(pending.names);
+	if (!Send(PROTO_REG_PULL, req) || !WaitFlag(_got))
 	{
-		_expect = 0;
 		LOG_TRACE("registry lookup %s timeout", name.c_str());
 		return false;
 	}
-	_expect = 0;
-	if (_code != 0 || _res_ip.empty() || _res_port.empty())
+	ServiceInstance pick;
+	if (_code != OI_OK || !ServiceTable::Pick(_res_list, name, 0, pick))
 	{
 		LOG_TRACE("registry lookup %s miss", name.c_str());
 		return false;
 	}
-	ip = _res_ip;
-	port = _res_port;
-	LOG_TRACE("registry lookup %s -> %s:%s", name.c_str(), ip.c_str(), port.c_str());
+	ip = pick.ip;
+	port = pick.port;
+	LOG_TRACE("registry lookup %s -> %d %s:%s", name.c_str(), pick.id, ip.c_str(), port.c_str());
 	return true;
+}
+
+void RegistryClient::Watch(::OI::Net::SessionManager* mgr, const std::string& name)
+{
+	if (!mgr || name.empty() || !Configured())
+	{
+		return;
+	}
+	ServiceTable::GetInstance().Watch(mgr, name);
+	ArmPull();
+}
+
+void RegistryClient::ArmPull()
+{
+	if (_pull_armed)
+	{
+		return;
+	}
+	TryGetConfig("Registry.pull_ms", _pull_ms);
+	if (_pull_ms <= 0)
+	{
+		_pull_ms = 1000;
+	}
+	::OI::Timer::BaseTimerManager::GetInstance().AddTimer(new PullTimer(), _pull_ms);
+	_pull_armed = true;
+}
+
+void RegistryClient::ArmHeartbeat()
+{
+	if (_heartbeat_armed)
+	{
+		return;
+	}
+	TryGetConfig("Registry.heartbeat_ms", _heartbeat_ms);
+	if (_heartbeat_ms <= 0)
+	{
+		_heartbeat_ms = 1000;
+	}
+	::OI::Timer::BaseTimerManager::GetInstance().AddTimer(new HeartbeatTimer(), _heartbeat_ms);
+	_heartbeat_armed = true;
+}
+
+void RegistryClient::Pull()
+{
+	std::vector<std::string> names = ServiceTable::GetInstance().Names();
+	if (names.empty())
+	{
+		return;
+	}
+	if (!_connected.load())
+	{
+		Connect();
+		return;
+	}
+	PendingPull pending;
+	pending.sync = false;
+	pending.names = names;
+	{
+		::OI::Thread::MutexGuard lock(_pending_mu);
+		_pending_pulls.push_back(pending);
+	}
+	::OI::RpcData::RegPull req(names);
+	if (!Send(PROTO_REG_PULL, req))
+	{
+		::OI::Thread::MutexGuard lock(_pending_mu);
+		if (!_pending_pulls.empty())
+		{
+			_pending_pulls.pop_back();
+		}
+	}
+}
+
+void RegistryClient::Touch()
+{
+	if (!_published.load() || _lost.load())
+	{
+		return;
+	}
+	if (!_connected.load())
+	{
+		Connect();
+		return;
+	}
+	if (!_registered.load())
+	{
+		SendRegister();
+		return;
+	}
+	::OI::RpcData::RegHeartbeat req(_svc_name, _svc_id);
+	Send(PROTO_REG_HEARTBEAT, req);
 }
 
 namespace {
@@ -1003,9 +612,21 @@ bool PublishAddress(const std::string& section, const std::string& bind_ip, cons
 
 bool RegistryClient::Publish(const std::string& section, const std::string& ip, const std::string& port)
 {
+	if (section == "Registry" || !Configured())
+	{
+		return true;
+	}
 	std::string name;
 	if (!::OI::Base::Config::GlobalConfig().GetAs("Service.name", name) || name.empty())
 	{
+		return true;
+	}
+	int32_t id = 0;
+	if (!::OI::Base::Config::GlobalConfig().GetAs("Service.id", id) || id <= 0)
+	{
+		fprintf(stderr, "registry publish %s: [Service] id 必须是正整数\n", name.c_str());
+		fflush(stderr);
+		LOG_ERROR("registry publish %s invalid id", name.c_str());
 		return false;
 	}
 	std::string advertise_ip;
@@ -1013,48 +634,51 @@ bool RegistryClient::Publish(const std::string& section, const std::string& ip, 
 	if (!PublishAddress(section, ip, port, advertise_ip, advertise_port))
 	{
 		LOG_TRACE("registry publish %s skip bind %s:%s", name.c_str(), ip.c_str(), port.c_str());
-		return false;
-	}
-	_svc_name = name;
-	_svc_ip = advertise_ip;
-	_svc_port = advertise_port;
-	if (ServiceTable::GetInstance().Publish(name, advertise_ip, advertise_port))
-	{
-		_republish = true;
-		ArmHeartbeat();
-		LOG_TRACE("registry publish %s %s:%s", name.c_str(), advertise_ip.c_str(), advertise_port.c_str());
 		return true;
 	}
-	if (RedisStore::GetInstance().Enabled())
+	if (_published.load())
 	{
+		if (_svc_ip != advertise_ip || _svc_port != advertise_port)
+		{
+			LOG_TRACE("registry publish %s keep %s:%s, skip %s:%s", name.c_str(),
+				_svc_ip.c_str(), _svc_port.c_str(), advertise_ip.c_str(), advertise_port.c_str());
+		}
+		return true;
+	}
+	_svc_name = name;
+	_svc_id = id;
+	_svc_ip = advertise_ip;
+	_svc_port = advertise_port;
+	bool got = false;
+	int32_t code = OI_ERR_FAIL;
+	if (Ensure())
+	{
+		_got = false;
+		_code = OI_ERR_FAIL;
+		_reg_waiting = true;
+		SendRegister();
+		got = WaitFlag(_got);
+		code = _code;
+		_reg_waiting = false;
+	}
+	if (got && code == OI_ERR_EXIST)
+	{
+		fprintf(stderr, "registry publish %s id=%d 已经在线，拒绝启动\n", name.c_str(), id);
+		fflush(stderr);
+		LOG_ERROR("registry publish %s id=%d already online", name.c_str(), id);
 		return false;
 	}
-	if (!Configured())
+	_published = true;
+	if (got && code == OI_OK)
 	{
-		return false;
-	}
-	if (!Ensure())
-	{
-		LOG_TRACE("registry publish %s connect failed", name.c_str());
-		return false;
-	}
-	_code = OI_ERR_FAIL;
-	_got = false;
-	_expect = PROTO_REG_REGISTER_RES;
-	SendRegister();
-	bool ok = WaitFlag(_got) && _code == 0;
-	_expect = 0;
-	if (ok)
-	{
-		_republish = true;
-		ArmHeartbeat();
-		LOG_TRACE("registry publish %s %s:%s", name.c_str(), _svc_ip.c_str(), _svc_port.c_str());
+		LOG_TRACE("registry publish %s id=%d %s:%s", name.c_str(), id, advertise_ip.c_str(), advertise_port.c_str());
 	}
 	else
 	{
-		LOG_TRACE("registry publish %s failed", name.c_str());
+		LOG_ERROR("registry publish %s id=%d not confirmed, retry on heartbeat", name.c_str(), id);
 	}
-	return ok;
+	ArmHeartbeat();
+	return true;
 }
 
 }}

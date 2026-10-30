@@ -10,13 +10,15 @@ class RegRegister : public ::OI::Rpc::RpcData
 {
 public:
     std::string name;
+    int32_t id;
     std::string ip;
     std::string port;
     
     explicit RegRegister (){}
-    RegRegister ( const std::string & l_name, const std::string & l_ip, const std::string & l_port )
+    RegRegister ( const std::string & l_name, const int32_t & l_id, const std::string & l_ip, const std::string & l_port )
     {
         name = l_name;
+        id = l_id;
         ip = l_ip;
         port = l_port;
         
@@ -24,8 +26,9 @@ public:
     virtual ::OI::Base::BytesStream& serialize(::OI::Base::BytesStream& os) const
     {
         os.WritePb(0, name);
-        os.WritePb(1, ip);
-        os.WritePb(2, port);
+        os.WritePb(1, id);
+        os.WritePb(2, ip);
+        os.WritePb(3, port);
         return os;
     }
     virtual ::OI::Base::BytesStream& deserialize(::OI::Base::BytesStream& os)
@@ -38,8 +41,9 @@ public:
             switch (field_seq)
             {
             case 0: os.ReadPb(field_size, name); break;
-            case 1: os.ReadPb(field_size, ip); break;
-            case 2: os.ReadPb(field_size, port); break;
+            case 1: os.ReadPb(field_size, id); break;
+            case 2: os.ReadPb(field_size, ip); break;
+            case 3: os.ReadPb(field_size, port); break;
             default: os.SkipPb(field_size); break;
             }
         }
@@ -49,6 +53,7 @@ public:
     {
         if (!in.isObject()) return false;
         if (in.isMember("name") && !::OI::Rpc::FromJsonValue(in["name"], name)) return false;
+        if (in.isMember("id") && !::OI::Rpc::FromJsonValue(in["id"], id)) return false;
         if (in.isMember("ip") && !::OI::Rpc::FromJsonValue(in["ip"], ip)) return false;
         if (in.isMember("port") && !::OI::Rpc::FromJsonValue(in["port"], port)) return false;
         return true;
@@ -67,6 +72,7 @@ public:
     {
         out = Json::Value(Json::objectValue);
         ::OI::Rpc::ToJsonValue(out["name"], name);
+        ::OI::Rpc::ToJsonValue(out["id"], id);
         ::OI::Rpc::ToJsonValue(out["ip"], ip);
         ::OI::Rpc::ToJsonValue(out["port"], port);
     }
@@ -78,6 +84,5 @@ public:
         builder["indentation"] = "";
         return Json::writeString(builder, out);
     }
-    virtual ::OI::Rpc::RpcData* Clone() { return new RegRegister(*this); }
 };
 }}

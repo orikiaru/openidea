@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 2.6)
 
 set(MODULE_SRCS
 	src/main.cpp
+	src/registry_server.cpp
 )
 
 add_executable(registry ${MODULE_SRCS})

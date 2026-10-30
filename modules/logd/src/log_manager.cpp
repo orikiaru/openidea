@@ -4,7 +4,6 @@
 #include "oi_file.h"
 #include "log_file_instance.h"
 #include "oi_config.h"
-#include "oi_registry.h"
 
 bool LogManager::Init()
 {
@@ -166,7 +165,6 @@ bool LogManager::CheckAndCreateRootPath()
 
 void LogManager::WriteLog(LOG_LEVEL lv, ::OI::Base::Bytes& b)
 {
-	::OI::Base::RedisStore::GetInstance().AppendLog(b.Begin(), b.Size());
 	_log_file_map[lv]->AddLog(b);
 }
 

@@ -1,12 +1,42 @@
 # 服务注册
 
-服务状态收在 `ServiceTable`。同一个服务名只留一条。登记进表的是监听段上的 `advertise_ip` 和 `advertise_port`，没有再看 `Service` 下的同名项，都没有才用监听地址。IP 和端口都可以跟 `bind` 不一样。监听地址只给本机 `bind`。`SessionManager` 仍各自存在，RPC 挂在上面；它只在状态变化时收到回调。进程按 `Registry.pull_ms` 拉取 `oi:svc:*`。连接是不是同一条，用 `ip:port` 做键。同一个名字出现新的地址，只拆掉连着旧地址的会话，再连到新地址。其他服务的会话不动。地址没变就不动。键过期或进程下线后，下一次拉取会把它标成下线。真正那台 Redis 的地址写在配置里。查不到名字时再用配置里的 IP 和端口。日志另外写入 `oi:log`。
+注册只走 `registry` 进程。应用不碰 Redis，只连 registry：启动时登记，定时报在线，定时整量拉取自己关心的名字。registry 只起一份，单线程，代码在 `modules/registry`。
 
-## 现在的样子
+## 注册空间
 
-`SessionManager::Init` 用 `GetIDString()` 当配置段名，固定读 `<名字>.ip`、`<名字>.port`、`<名字>.type`。toml 里的 `[Service] name` 没有参与发现，两端各自写死同一对地址。
+所有键都在 `oi:{project.env}:` 下面，`project` 和 `env` 只写在 `registry.toml` 的 `[Registry]`。测试环境和正式环境各起各的 registry，哪怕连同一台 Redis 也互相看不见。没写这两项，或写了字母、数字、`_`、`-` 以外的字符，registry 拒绝启动。花括号是 Redis Cluster 的哈希标签，同一空间的键落在同一个槽里。
 
-现有会话管理器：
+| 键 | 内容 |
+| --- | --- |
+| `svc` | 登记过的名字集合 |
+| `svc:<name>` | 这个名字下登记过的 id 集合 |
+| `svc:<name>:<id>` | 一份实例，值是 `ip port`，带 `expire_ms` 的过期 |
+
+## registry 怎么连 Redis
+
+用 `RedisClient`，直接连真正的 Redis，配置在 `registry.toml` 的 `[RedisClient]`，不写 `service`。每条登记、续期、撤销和整量拉取都是 `co_await CallRedis` 一段 Lua，等 Redis 的时候 poll 照转，别的连接照常收发。`timeout_ms` 要比 `expire_ms` 短，Redis 卡住时服务还来得及重新登记。
+
+Redis 连不上或卡住时，登记和续期回失败，客户端下一次心跳重来；整量拉取失败就回失败，客户端保持原状，不把对端判成下线。
+
+## 登记和在线
+
+`id` 取 `[Service] id`，必须是正整数。监听方 `StartServer` 成功后同步发一次登记，最多等 1 秒。登记的是监听段上的 `advertise_ip` 和 `advertise_port`，没有再看 `Service` 下的同名项，都没有才用监听地址。绑在 `0.0.0.0` 又没配对外地址时不登记。
+
+名字、id、地址都一样就是同一个服务，重新登记直接续上，registry 重启后服务连回来也是这样。同一空间里同名同 id、地址不一样的还在线，回 `OI_ERR_EXIST`，后起的进程拒绝启动。
+
+之后每隔 `heartbeat_ms` 报一次在线，registry 按这条连接上的登记续期。键因为停顿过期、又没人占，就重新占上。已经被别的进程占了，就停止登记、报错，不去抢。
+
+登记的那条连接一断，registry 当场撤掉它登记的键，调用方下一次拉取就看到下线。冻住的进程连接还在，靠过期判下线，最慢 `expire_ms + pull_ms`。上下线、被占都打日志。
+
+## 调用方
+
+配置里写了 `<段名>.service` 时，`SessionManager::Init` 先向 registry 查这个名字，查不到再用同一段的 ip/port。之后按 `pull_ms` 拉取关心的名字。registry 每隔 `pull_ms` 用一段 Lua 从 Redis 整量取一次，过期的 id 和空了的名字顺手摘掉，客户端来拉时直接给这份。一个名字下有多份实例时选 id 最小的，连上之后固定走它，它下线了才换。
+
+连接是不是同一条，用 `ip:port` 做键。换到新地址时只拆掉连着旧地址的会话，其他服务的会话不动。地址没变就不动。
+
+## 现有会话管理器
+
+`SessionManager::Init` 用 `GetIDString()` 当配置段名，读 `<名字>.ip`、`<名字>.port`、`<名字>.type`，查到注册就用查到的地址。
 
 | 类 | 字节流 | 为什么单独存在 |
 | --- | --- | --- |
@@ -17,17 +47,7 @@
 
 `webclient` / `webserver` 走 HTTP，不在这张表里。
 
-## 第一期：注册服务
-
-改动中等，先不拆这些类。
-
-新起一个注册进程。它自己的地址没法靠注册发现，每个进程的配置里仍留这一处，例如 `[Registry] ip/port`。表是「服务名 → 地址」。监听方 `StartServer` 成功后登记，退出或心跳断了就删。调用方配置里写 `service = "ipcserver"` 时先查地址再 `StartClient`；查不到就按现有的 `ip/port` 连，方便还没接注册的进程。
-
-要改的是 `SessionManager::Init` 和各进程的启动路径，以及 6 份 toml 里的对端地址。RPC、日志帧、RESP、`sessionid` 都不动。回声、日志、Redis 的测法只是前面多起一个注册进程。
-
-这一期是新增一个小模块和发现客户端，不是重写网络层。
-
-## 第二期：同一种字节流收成一套
+## 后续：同一种字节流收成一套
 
 `IpcClient` / `IpcServer` 可以不再各写一个子类。按服务名起一个 `ProtoClientManager` / `ProtoSessionManager`，连上、断开时要跑的测试用回调挂上。
 

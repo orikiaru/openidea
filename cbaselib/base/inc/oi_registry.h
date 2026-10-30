@@ -5,38 +5,31 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
+#include <deque>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <string>
-#include <utility>
 #include <vector>
-#include <chrono>
 
 namespace OI { namespace Base {
 
-// 服务表和日志落在 Redis。真正那台 Redis 的地址来自配置，redisserver 自己的监听地址也写进这张表。
-class RedisStore
+// 一份在线实例。id 取 [Service] id。
+struct ServiceInstance
 {
-	DECLARE_SINGLETON(RedisStore)
-	RedisStore();
-public:
-	~RedisStore();
-	bool Enabled();
-	bool SetService(const std::string& name, const std::string& ip, const std::string& port);
-	bool GetService(const std::string& name, std::string& ip, std::string& port);
-	bool DeleteService(const std::string& name);
-	bool AppendLog(const void* data, size_t n);
-	bool ListServices(std::map<std::string, std::pair<std::string, std::string> >& out);
-private:
-	bool Ensure();
-	void Close();
-	void* _ctx;
-	::OI::Thread::Mutex _mu;
-	bool _opened;
-	int32_t _expire_ms;
+	std::string name;
+	int32_t id;
+	std::string ip;
+	std::string port;
+	ServiceInstance() : id(0) {}
 };
 
-// 本进程关心的服务状态。同一个名字只留一条，变了再回调 SessionManager。
+// registry 和客户端之间的帧：PB 头里是协议号和包体长度。
+::OI::Base::Bytes EncodeRegFrame(uint32_t id, const ::OI::Rpc::Serialize& msg);
+// 把 in 里完整的帧逐个交给 on_frame，剩下的半帧留在 in。坏帧关掉会话，返回 false。
+bool ReadRegFrames(::OI::Base::Bytes& in, ::OI::Net::Session* session, const std::function<void(uint32_t, ::OI::Base::BytesStream&)>& on_frame);
+
+// 本进程关心的服务。一个名字下面可能有多份实例，选 id 最小的固定走，它下线了再换。
 class ServiceTable
 {
 	DECLARE_SINGLETON(ServiceTable)
@@ -44,71 +37,42 @@ class ServiceTable
 public:
 	~ServiceTable();
 	void Watch(::OI::Net::SessionManager* mgr, const std::string& name);
-	// 同一个名字已经由别的管理器用另一对地址登记过，就保持原来的，返回 false。
-	bool Publish(const std::string& name, const std::string& ip, const std::string& port);
-	void Pull();
-	void Touch();
+	std::vector<std::string> Names();
+	// names 是这次拉取问过的名字，list 里没有的就是下线了。
+	void Apply(const std::vector<std::string>& names, const std::vector<ServiceInstance>& list);
+	static bool Pick(const std::vector<ServiceInstance>& list, const std::string& name, int32_t current, ServiceInstance& out);
 private:
-	void ArmPull();
 	struct State
 	{
+		int32_t id;
 		std::string ip;
 		std::string port;
 		bool online;
-		bool published;
 		std::vector<::OI::Net::SessionManager*> watchers;
-		State() : online(false), published(false) {}
+		State() : id(0), online(false) {}
 	};
 	::OI::Thread::Mutex _mu;
 	std::map<std::string, State> _services;
-	bool _pull_armed;
-	int32_t _pull_ms;
 };
 
-class RegistryServer : public ::OI::Net::SessionManager
-{
-	DECLARE_SINGLETON(RegistryServer)
-	RegistryServer();
-public:
-	virtual ~RegistryServer();
-	bool Init();
-	virtual const std::string GetIDString();
-	void Handle(::OI::Net::Session* session, uint32_t id, ::OI::Base::BytesStream& body);
-	void Sweep();
-protected:
-	virtual ::OI::Net::Session* CloneSession();
-	virtual void OnAddSession(::OI::Net::Session* pSession);
-	virtual void OnDelSession(const ::OI::Net::Session* pSession);
-	void DropSid(sid_t sid);
-
-	struct Item
-	{
-		std::string ip;
-		std::string port;
-		sid_t sid;
-		std::chrono::steady_clock::time_point seen;
-	};
-	::OI::Thread::Mutex _table_mu;
-	std::map<std::string, Item> _table;
-	int32_t _expire_ms;
-	bool _sweep_armed;
-};
-
+// 连 registry 的客户端。登记、心跳、拉取都在这里，应用层只在配置里写 service。
 class RegistryClient : public ::OI::Net::SessionManager
 {
 	DECLARE_SINGLETON(RegistryClient)
 	RegistryClient();
 public:
 	virtual ~RegistryClient();
-	// 没有 [Registry] 或查不到时返回 false，调用方继续用配置里的 ip/port。
+	// 没配 [Registry] 或查不到时返回 false，调用方继续用配置里的 ip/port。
 	bool Lookup(const std::string& name, std::string& ip, std::string& port);
-	// StartServer 成功后把本进程的服务名和监听地址登记上去。
+	// StartServer 成功后登记本进程。返回 false 表示不能起：id 不对，或同名同 id 已经在线。
 	bool Publish(const std::string& section, const std::string& ip, const std::string& port);
 	void Watch(::OI::Net::SessionManager* mgr, const std::string& name);
+	// 按 heartbeat_ms 报一次在线。没连上就去连，连上了还没登记就补登记。
+	void Touch();
+	// 按 pull_ms 把关心的名字整量拉一次。
 	void Pull();
 	virtual const std::string GetIDString();
 	void OnFrame(uint32_t id, ::OI::Base::BytesStream& body);
-	void Touch();
 protected:
 	virtual ::OI::Net::Session* CloneSession();
 	virtual void OnAddSession(::OI::Net::Session* pSession);
@@ -116,38 +80,46 @@ protected:
 	virtual void OnConnectFailed();
 	bool Configured();
 	bool Ensure();
+	bool Connect();
 	bool WaitFlag(const std::atomic<bool>& flag);
 	void Notify();
+	bool Send(uint32_t id, const ::OI::Rpc::Serialize& msg);
 	void SendRegister();
-	void SendHeartbeat();
 	void ArmHeartbeat();
+	void ArmPull();
 
 	std::mutex _mu;
 	std::condition_variable _cv;
 	std::atomic<bool> _connected;
+	std::atomic<bool> _connecting;
 	std::atomic<bool> _failed;
-	sid_t _sid;
+	std::atomic<sid_t> _sid;
 	bool _address_ready;
-	bool _connecting;
+
 	std::string _svc_name;
+	int32_t _svc_id;
 	std::string _svc_ip;
 	std::string _svc_port;
-	bool _republish;
+	std::atomic<bool> _published;
+	std::atomic<bool> _registered;
+	std::atomic<bool> _lost;
 	int32_t _heartbeat_ms;
 	bool _heartbeat_armed;
-	struct WatchItem
-	{
-		::OI::Net::SessionManager* mgr;
-		std::string name;
-	};
-	std::vector<WatchItem> _watches;
-	bool _pull_armed;
 	int32_t _pull_ms;
-	uint32_t _expect;
+	bool _pull_armed;
+
+	// 回包按发出的顺序回来。同步等的那一份在 Lookup / Publish 里等。
+	struct PendingPull
+	{
+		bool sync;
+		std::vector<std::string> names;
+	};
+	::OI::Thread::Mutex _pending_mu;
+	std::deque<PendingPull> _pending_pulls;
+	std::atomic<bool> _reg_waiting;
 	std::atomic<bool> _got;
 	int32_t _code;
-	std::string _res_ip;
-	std::string _res_port;
+	std::vector<ServiceInstance> _res_list;
 };
 
 }}

@@ -137,8 +137,7 @@ __PB_SERIALIZE__        return os;
     virtual ::OI::Base::BytesStream& deserialize(::OI::Base::BytesStream& os)
     {
 __PB_DESERIALIZE__    }
-__COMPARE____JSON_METHODS__    virtual ::OI::Rpc::RpcData* Clone() { return new __CLASS_NAME__(*this); }
-};
+__COMPARE____JSON_METHODS__};
 }}
 '''
         file_data = self.DoReplace(file_data)

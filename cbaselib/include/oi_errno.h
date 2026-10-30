@@ -9,6 +9,7 @@ enum OI_ERR
 	OI_ERR_FAIL = -1,		// 发送失败或解包失败
 	OI_ERR_TIMEOUT = -2,	// 已经发出之后超时
 	OI_ERR_CONNECT = -3,	// 连接失败，或连接断开
+	OI_ERR_EXIST = -4,		// 已被占用，例如同名同 id 的服务已经在线
 };
 
 #define NET_PARSER_ERR_BEGIN (-10000)

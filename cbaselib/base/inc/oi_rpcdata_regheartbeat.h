@@ -10,16 +10,19 @@ class RegHeartbeat : public ::OI::Rpc::RpcData
 {
 public:
     std::string name;
+    int32_t id;
     
     explicit RegHeartbeat (){}
-    RegHeartbeat ( const std::string & l_name )
+    RegHeartbeat ( const std::string & l_name, const int32_t & l_id )
     {
         name = l_name;
+        id = l_id;
         
     }
     virtual ::OI::Base::BytesStream& serialize(::OI::Base::BytesStream& os) const
     {
         os.WritePb(0, name);
+        os.WritePb(1, id);
         return os;
     }
     virtual ::OI::Base::BytesStream& deserialize(::OI::Base::BytesStream& os)
@@ -32,6 +35,7 @@ public:
             switch (field_seq)
             {
             case 0: os.ReadPb(field_size, name); break;
+            case 1: os.ReadPb(field_size, id); break;
             default: os.SkipPb(field_size); break;
             }
         }
@@ -41,6 +45,7 @@ public:
     {
         if (!in.isObject()) return false;
         if (in.isMember("name") && !::OI::Rpc::FromJsonValue(in["name"], name)) return false;
+        if (in.isMember("id") && !::OI::Rpc::FromJsonValue(in["id"], id)) return false;
         return true;
     }
     bool FromJson(const std::string& text)
@@ -57,6 +62,7 @@ public:
     {
         out = Json::Value(Json::objectValue);
         ::OI::Rpc::ToJsonValue(out["name"], name);
+        ::OI::Rpc::ToJsonValue(out["id"], id);
     }
     std::string ToJson() const
     {
@@ -66,6 +72,5 @@ public:
         builder["indentation"] = "";
         return Json::writeString(builder, out);
     }
-    virtual ::OI::Rpc::RpcData* Clone() { return new RegHeartbeat(*this); }
 };
 }}

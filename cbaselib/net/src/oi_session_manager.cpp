@@ -19,8 +19,7 @@ bool SessionManager::Init()
 	TryGetConfigAndReturnFalse(GetIDString() + ".type", type);
 
 	std::string service;
-	if (GetIDString() != "Registry"
-		&& ::OI::Base::Config::GlobalConfig().GetAs(GetIDString() + ".service", service)
+	if (::OI::Base::Config::GlobalConfig().GetAs(GetIDString() + ".service", service)
 		&& !service.empty())
 	{
 		std::string found_ip;
@@ -151,12 +150,11 @@ void SessionManager::ApplyService(const std::string& ip, const std::string& port
 
 bool SessionManager::StartServer(bool async)
 {
-	bool ok = AcceptChannel::StartAccept(this, async);
-	if (ok)
+	if (!AcceptChannel::StartAccept(this, async))
 	{
-		::OI::Base::RegistryClient::GetInstance().Publish(GetIDString(), GetStrIP(), GetStrPort());
+		return false;
 	}
-	return ok;
+	return ::OI::Base::RegistryClient::GetInstance().Publish(GetIDString(), GetStrIP(), GetStrPort());
 }
 
 SESSION_TYPE SessionManager::GetSessionTypeByString(const std::string& type)
