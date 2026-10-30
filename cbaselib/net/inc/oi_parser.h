@@ -4,8 +4,6 @@
 #include "oi_thread.h"
 #include <string>
 
-namespace OI { namespace Rpc { class Protocol; } }
-
 namespace OI { namespace Net {
 
 template<class PROTOCOL>
@@ -40,17 +38,6 @@ public:
 }}
 
 namespace OI { namespace Rpc {
-
-class Protocol;
-Protocol* DecodePbFrame(::OI::Base::BytesStream& os, int32_t& parser_err, Protocol* (*get_stub)(proto_type_t));
 ::OI::Base::BytesStream EncodePbFrame(proto_type_t id, ::OI::Base::BytesStream& body);
-
-class ProtocolParser: public ::OI::Net::Parser<Protocol>
-{
-public:
-	virtual Protocol* DecodeProtocol(::OI::Base::BytesStream& os);
-	virtual ::OI::Base::BytesStream EncodeProtocol(const Protocol* proto);
-};
-
 }}
 #endif

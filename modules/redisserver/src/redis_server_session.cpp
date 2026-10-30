@@ -5,7 +5,6 @@
 
 namespace
 {
-const int64_t kMaxArgs = 1024 * 1024;
 const int64_t kMaxBulk = 512LL * 1024 * 1024;
 
 // 从 p 读一个十进制整数，到 \r\n 为止。返回下一段的起点，数据不够返回 NULL，格式错把 bad 置真。
@@ -65,7 +64,7 @@ size_t ScanCommand(const char* begin, const char* end, int64_t& argc, bool& bad)
 	{
 		return 0;
 	}
-	if (argc <= 0 || argc > kMaxArgs)
+	if (argc <= 0)
 	{
 		bad = true;
 		return 0;
@@ -145,12 +144,6 @@ void RedisServerSession::Send(const ::OI::Base::Bytes& bytes)
 	::OI::Thread::MutexGuard lock(_locker);
 	_obuff.Append(bytes);
 	AllowSend();
-}
-
-void RedisServerSession::SendProtocol(const ::OI::Rpc::Protocol* proto)
-{
-	(void)proto;
-	assert(false && "redis server speaks RESP");
 }
 
 void RedisServerSession::OnDataOut()

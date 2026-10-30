@@ -114,6 +114,9 @@ bool NetHelper::SocketConnect(NetSocket& sid, SessionManager* pMgr)
 	if (!succ)
 	{
 		LOG_ERROR("NetHelper::SocketConnect id=%s, err=%s", pMgr->GetIDString().c_str(), NetOs_StrError(errno));
+		NetOs_Close(sid.GetSocket());
+		sid.Detach();
+		pMgr->AbortSession();
 		return false;
 	}
 

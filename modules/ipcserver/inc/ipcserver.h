@@ -1,5 +1,4 @@
 #pragma once
-#include "oi_protocol.h"
 #include "oi_rpc_call.h"
 #include "oi_net.h"
 #include "oi_singleton.h"

@@ -21,14 +21,7 @@ void LogClient::OnClientConnect(::OI::Net::Session* pSession)
 
 void LogClient::OnClientDisconnect(const ::OI::Net::Session* pSession)
 {
-	LOG_TRACE("LogClient::OnClientDisconnect Will Reconnect sid=%d, errno=%d", pSession->GetSessionID(), pSession->GetError());
-	Reconnect();
-}
-
-void LogClient::OnAbortSession()
-{
-	LOG_TRACE("LogClient::OnAbortSession Will Reconnect");
-	Reconnect();
+	LOG_TRACE("LogClient::OnClientDisconnect sid=%d, errno=%d", pSession->GetSessionID(), pSession->GetError());
 }
 
 bool LogClient::SendLog(int level, const char* text, size_t text_len)

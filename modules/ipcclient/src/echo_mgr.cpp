@@ -7,6 +7,7 @@
 #include "oi_thread.h"
 #include <cstdio>
 #include <cstring>
+#include <memory>
 
 #ifdef _SINGLE_THREAD_
 static const char* kMode = "st";
@@ -214,7 +215,7 @@ static coro::Task RunOne(int n)
 }
 
 EchoMgr::EchoMgr()
-	: _on(true), _total(1000000), _timeout_ms(180000), _sid(0),
+	: _on(true), _stack(false), _total(1000000), _timeout_ms(180000), _sid(0),
 	  _done(0), _ok(0), _rpc_fail(0), _mismatch(0), _gap_differ(0),
 	  _sample_sent(0), _sample_recv(0), _sample_code(0), _have_sample(false)
 {
@@ -223,6 +224,7 @@ EchoMgr::EchoMgr()
 void EchoMgr::Load()
 {
 	TryGetConfig("Test.echo", _on);
+	TryGetConfig("Test.stack", _stack);
 	TryGetConfig("TestEcho.total", _total);
 	TryGetConfig("TestEcho.timeout_ms", _timeout_ms);
 }
@@ -246,6 +248,57 @@ void EchoMgr::ArmTimeout()
 		fflush(stdout);
 		::OI::Thread::ThreadPool::GetInstance().RequestStop(1);
 	}, _timeout_ms);
+}
+
+coro::Task EchoMgr::StackProbe()
+{
+	struct Gate
+	{
+		std::atomic<int32_t> done{0};
+		std::atomic<int32_t> ok{0};
+	};
+	auto gate = std::make_shared<Gate>();
+	TestBoard::GetInstance().Arm();
+	for (int n = 0; n < 3; ++n)
+	{
+		coro::StartTask([gate, n](coro::Token) -> coro::Task {
+			::OI::RpcData::AllEchoReq req;
+			FillAllTypes(req.data, n);
+			::OI::RpcData::AllEchoRes res;
+			int ret = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), INVALID_SID, req, res, 20);
+			if (ret == OI_OK && res.code == 1)
+			{
+				gate->ok.fetch_add(1);
+			}
+			gate->done.fetch_add(1);
+			co_return;
+		});
+	}
+	co_await coro::yield(400);
+	printf("stack holding done=%d\n", gate->done.load());
+	fflush(stdout);
+	int spins = 0;
+	while (gate->done.load() < 3 && spins++ < 400)
+	{
+		co_await coro::yield(50);
+	}
+	int ok = gate->ok.load();
+	printf("stack flush ok=%d done=%d\n", ok, gate->done.load());
+	fflush(stdout);
+	spins = 0;
+	while (IpcClient::GetInstance().IsConnect() && spins++ < 200)
+	{
+		co_await coro::yield(50);
+	}
+	co_await coro::yield(4000);
+	::OI::RpcData::AllEchoReq req;
+	FillAllTypes(req.data, 9);
+	::OI::RpcData::AllEchoRes res;
+	int ret = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), INVALID_SID, req, res, 3);
+	printf("stack offline ret=%d\n", ret);
+	fflush(stdout);
+	TestBoard::GetInstance().Done((ok == 3 && ret == OI_ERR_CONNECT) ? 0 : 1);
+	co_return;
 }
 
 void EchoMgr::Start(sid_t sid)

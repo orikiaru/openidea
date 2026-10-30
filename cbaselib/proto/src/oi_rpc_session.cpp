@@ -1,5 +1,4 @@
 #include "oi_rpc_session.h"
-#include "oi_protocol.h"
 #include "oi_rpc_call.h"
 namespace OI { namespace Rpc {
 
@@ -8,12 +7,6 @@ void ProtoSession::Send(const ::OI::Base::Bytes& bytes)
 	::OI::Thread::MutexGuard l(_locker);
 	_obuff.Append(bytes);
 	AllowSend();
-}
-
-void ProtoSession::SendProtocol(const Protocol* proto)
-{
-	::OI::Base::BytesStream os = _parser.EncodeProtocol(proto);
-	Send(os.GetUnMutableBuff());
 }
 
 void ProtoSession::OnDataIn()

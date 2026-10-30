@@ -3,11 +3,25 @@
 name = "ipcserver"
 id = 1
 
+[Redis]
+ip = "127.0.0.1"
+port = "6379"
+
+[Registry]
+ip = "127.0.0.1"
+port = "17990"
+type = "tcp"
+heartbeat_ms = 1000
+expire_ms = 3000
+pull_ms = 1000
 
 [IpcServer]
 ip = "127.0.0.1"
 port = "17981"
 type = "tcp"
+# 对外映射。IP 和端口都可以和上面的监听不一样。
+# advertise_ip = "203.0.113.10"
+# advertise_port = "27981"
 
 
 # 起服后发一次 GET 看 HTTP 客户端。host 不填就不发，压测时别打开。
@@ -18,6 +32,7 @@ path = "/"
 timeout_ms = 5000
 
 [LogClient]
+service = "logd"
 ip		= "127.0.0.1"
 port	= "19995"
 type   	= "tcp"

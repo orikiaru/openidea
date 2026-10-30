@@ -6,6 +6,18 @@
 name = "logd"
 id = 1
 
+[Registry]
+ip = "127.0.0.1"
+port = "17990"
+type = "tcp"
+heartbeat_ms = 1000
+expire_ms = 3000
+pull_ms = 1000
+
+[Redis]
+ip = "127.0.0.1"
+port = "6379"
+
 [Log]
 root_path = "./logs"
 
@@ -27,6 +39,7 @@ timer_lvs = [128,128,128,1] #每级定时器对应的间隔,最后一级只能�
 
 # ip port 必须为字符串.
 [LogClient]
+service = "logd"
 ip		= "127.0.0.1"
 port	= "19995"
 type   	= "tcp"
@@ -35,3 +48,6 @@ type   	= "tcp"
 ip		= "127.0.0.1"
 port	= "19995"
 type   	= "tcp"
+# 对外映射。IP 和端口都可以和上面的监听不一样。
+# advertise_ip = "203.0.113.10"
+# advertise_port = "29995"

@@ -40,7 +40,6 @@ public:
 	void IOEventMod(Channel* pChannel, int new_mask);
 	// close_fd 为假时只摘掉监听，套接字留给调用方关。
 	void IOEventUnRegister(Channel* pChannel, bool close_fd = true);
-
 	static void* StartThreadPollWait(void* arg);
 	void StopAndJoin();
 	// wait_ms 为 0 时只试一次已经就绪的事件，不睡。否则堵住等网络或定时器。

@@ -11,12 +11,16 @@ namespace OI { namespace Net {
 
 void ConnectChannel::DataIn()
 {
-	//对于ConnectSession来说,是IO出错了
-	//不处理
+	// libuv 遇到 POLLERR 只回调 status<0，不再报可写，监听也停了。连接被拒只能在这里收。
 	if (IsClosed())
 	{
 		return;
 	}
+	if (!CheckTcpConnect())
+	{
+		_p_session_mgr->AbortSession();
+	}
+	Close();
 }
 
 void ConnectChannel::DataOut()
@@ -30,8 +34,10 @@ void ConnectChannel::DataOut()
 	switch (s_type)
 	{
 		case SESSION_TYPE_TCP:
-			CheckTcpConnect();
-			Close();
+			if (CheckTcpConnect())
+			{
+				Close();
+			}
 			break;
 		default:
 			assert(false);
@@ -58,27 +64,24 @@ bool ConnectChannel::CheckTcpConnect()
 	//unsuccessfully  (SO_ERROR is one of the usual error codes listed here, explaining the reason for the failure).
 	//       int getsockopt(int sockfd, int level, int optname, void *optval, socklen_t *optlen);
 	int value = NetOs_GetSocketError(_socket.GetSocket());
-	bool finish = false;
+	if (value == EINPROGRESS || value == EINTR)
+	{
+		return false;
+	}
 	if (value)
 	{
-		// 待改：EINPROGRESS / EINTR 应留下等下一次可写，不要 AbortSession。
-		// DataOut 在这次调用后无条件 Close，通道会被拆掉，下次也等不到。
-		// 见 docs/sequence-diagram 里 single-thread 和 multi-thread 的 connect.md。
-		if (value == EINPROGRESS || value == EINTR)
-		{
-
-		}
 		_p_session_mgr->AbortSession();
+		return true;
 	}
-	else
+	// 交 dup 出来的 fd。原 fd 留给本通道关：同一个 fd 上旧 uv_poll 关闭时会 epoll DEL，新会话的监听会被一起删掉。
+	net_socket_t fd = NetOs_Dup(_socket.GetSocket());
+	if (fd == INVALID_SOCKET_ID)
 	{
-		finish = true;
-		// 待改：不要 Dup。复制失败会把无效句柄交进 AddSession，原 fd 还要在通道析构里关掉。
-		// 应把当前这只套接字交给会话。见 docs/sequence-diagram 里两边的 connect.md。
-		_p_session_mgr->AddSession(NetOs_Dup(_socket.GetSocket()));
+		_p_session_mgr->AbortSession();
+		return true;
 	}
-	//普通tcp连接无论建立成功或失败都关闭连接会话
-	return finish;
+	_p_session_mgr->AddSession(fd);
+	return true;
 }
 
 bool ConnectChannel::StartConnect(SessionManager* pMgr, bool async)

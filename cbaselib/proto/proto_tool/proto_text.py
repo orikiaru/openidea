@@ -165,14 +165,17 @@ def ParseRpc(lex):
             return None
     if not lex.punct("}"):
         return None
-    for need in ("id", "res_id", "request", "response"):
+    for need in ("id", "request", "response"):
         if need not in fields:
             loginfo("rpc missing", need, "name=", name)
             return None
+    if fields["request"] == fields["response"]:
+        loginfo("rpc request and response reuse the same rpcdata name=", name)
+        return None
     data = SerializeData(SerializeDataType.RPC, None)
     data.name = name
     data.id = fields["id"]
-    data.res_id = fields["res_id"]
+    data.res_id = fields.get("res_id", fields["id"])
     if "timeout" in fields:
         data.timeout = fields["timeout"]
     req = ClassMember()

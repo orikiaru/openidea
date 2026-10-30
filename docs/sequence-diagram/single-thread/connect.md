@@ -2,12 +2,7 @@
 
 `StartClient` 在主循环之前，由主线程发起。主线程就是 poll 线程，写事件当场挂上。连接完成要等 `StartWork` 里的 `PollWait`，完成回调也在主线程。
 
-下面是当前代码。完成阶段有两处待改，行为先不动。
-
-待改：
-
-- `SO_ERROR` 为 `EINPROGRESS` 或 `EINTR` 时，分支是空的，后面仍调用 `AbortSession`。`DataOut` 接着无条件 `Close`，`ConnectChannel` 被摘掉，等不到下一次可写。`ipcclient` 的 `OnAbortSession` 是空的，这次失败不会重连。Windows 上 `NetOs_GetSocketError` 还会把 `WSAEWOULDBLOCK`、`WSAEINPROGRESS` 收成 `EINPROGRESS`。HTTP 客户端的 `OnWritable` 对这些值是留下再等。
-- 成功时 `NetOs_Dup` 复制套接字再 `AddSession`，原 fd 留在 `ConnectChannel` 里，随后析构关掉。`dup` 失败得到无效句柄，`AddSession` 不检查。`connect` 立刻成功的那条路径是把原 fd 直接交出去的。异步成功也应交出这只套接字，不要复制。
+`SO_ERROR` 为 `EINPROGRESS` 或 `EINTR` 时通道留着，等下一次可写。Windows 上 `WSAEWOULDBLOCK`、`WSAEINPROGRESS` 会收成 `EINPROGRESS`。其它错误才 `AbortSession`，然后关掉这条连接通道。成功时 dup 一只 fd 交给会话，原 fd 随连接通道关掉。不能直接交原 fd：旧 uv_poll 关闭时会对这只 fd 做 epoll DEL，新会话的监听会被一起删掉。dup 失败按连接失败走 AbortSession。对端拒绝时 libuv 只回调错误、不报可写，还会停掉监听，所以 DataIn 里同样读 SO_ERROR 收尾。立刻失败时关掉 fd 并 AbortSession，走同一条重连。`connect` 立刻成功的路径同样交原 fd。
 
 ```mermaid
 sequenceDiagram
@@ -30,22 +25,30 @@ sequenceDiagram
         Note over Main: StartWork 之后 PollWait 看到可写
         Main->>Conn: DataOut
         Conn->>Os: getsockopt SO_ERROR
-        alt SO_ERROR 为 0
-            Conn->>Mgr: AddSession dup fd
+        alt SO_ERROR 为 EINPROGRESS 或 EINTR
+            Note over Conn: 不关通道，等下一次可写
+        else SO_ERROR 为 0
+            Conn->>Os: dup
+            Conn->>Mgr: AddSession dup 出来的 fd
             Mgr->>Sess: CloneSession 并只注册读
             Mgr->>Mgr: 记下 sid，按序补发挂起的字节
             Mgr->>Queue: OnClientConnect 里的 StartTask 只入队
-        else SO_ERROR 非 0
+            Conn->>Conn: Close
+            Main->>Conn: TryClose 后摘掉并 delete
+        else SO_ERROR 为其它错误
             Conn->>Mgr: AbortSession
-            Mgr->>Mgr: OnConnectFailed 然后 OnAbortSession
+            Mgr->>Mgr: OnConnectFailed
+            Conn->>Conn: Close
+            Main->>Conn: TryClose 后摘掉并 delete
         end
-        Conn->>Conn: Close
-        Main->>Conn: TryClose 后摘掉并 delete
     else connect 立刻成功
         Sock->>Mgr: AddSession 原 fd
         Mgr->>Queue: OnClientConnect 里的 StartTask 只入队
         Note over Queue: 主循环第一轮才会 resume
     else 其他错误
+        Sock->>Os: close fd
+        Sock->>Mgr: AbortSession
+        Mgr->>Mgr: OnConnectFailed
         Sock-->>Main: StartClient 返回 false
     end
 ```

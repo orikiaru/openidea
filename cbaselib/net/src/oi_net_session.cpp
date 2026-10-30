@@ -10,7 +10,7 @@ void NetSession::PassiveClose(int err)
 		Close(err);
 	}
 	//输出日志不能持有会话锁,否则会死锁的.
-	if (err && err < NET_PARSER_ERR_BEGIN)
+	if (err > 0)
 	{
 		LOG_TRACE("NetSession::PassiveClose sid=%d, system_err=%s", GetSessionID(), NetOs_StrError(err));
 	}
@@ -38,7 +38,7 @@ void NetSession::Close(int err)
 		_status = IO_ST_WILL_CLOSE;
 		_errcode = err;
 		AllowSend();
-		if (err && err < NET_PARSER_ERR_BEGIN)
+		if (err > 0)
 		{
 			//LOG_TRACE("NetSession::Close system_err=%s", strerror(err));
 			return;

@@ -7,7 +7,6 @@
 #include <netinet/in.h>
 #include <netinet/ip.h> /* superset of previous */
 #include <arpa/inet.h>
-#include "oi_protocol.h"
 #include "oi_session_manager.h"
 #include "oi_channel.h"
 namespace OI { namespace Net {

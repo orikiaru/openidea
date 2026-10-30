@@ -5,7 +5,6 @@ set(LIBRARY ${LIBNAME}_static)
 set(LIBRARY_M ${LIBNAME}_m_static)
 
 set(LIBSRC 	
-	src/oi_protocol.cpp
 	src/oi_rpc_call.cpp
 	src/oi_parser.cpp
 	src/oi_rpc_session.cpp

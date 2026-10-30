@@ -57,9 +57,10 @@ struct RedisCall::State
 	std::atomic<int32_t> gate;
 	std::atomic<int32_t> won;
 	std::atomic<int32_t> refs;
+	sid_t sid;
 	::OI::Thread::Mutex mu;
 	::OI::Thread::MutexCond cv;
-	State() : status(RedisStatus::Disconnected), ready(false), sync(false), out(NULL), deadline_ms(0), gate(0), won(0), refs(1) {}
+	State() : status(RedisStatus::Disconnected), ready(false), sync(false), out(NULL), deadline_ms(0), gate(0), won(0), refs(1), sid(INVALID_SID) {}
 };
 
 RedisClient::RedisClient() : _reader(NULL), _timeout_ms(25000), _max_pending(65536), _swept(0)
@@ -105,16 +106,18 @@ void RedisClient::OnClientConnect(::OI::Net::Session* pSession)
 
 void RedisClient::OnClientDisconnect(const ::OI::Net::Session* pSession)
 {
-	LOG_TRACE("RedisClient::OnClientDisconnect sid=%d", pSession->GetSessionID());
-	g_sid = INVALID_SID;
-	FailAll();
-	Reconnect();
-}
-
-void RedisClient::OnAbortSession()
-{
-	LOG_TRACE("RedisClient::OnAbortSession");
-	Reconnect();
+	sid_t sid = pSession->GetSessionID();
+	LOG_TRACE("RedisClient::OnClientDisconnect sid=%d", sid);
+	if (g_sid == sid)
+	{
+		g_sid = INVALID_SID;
+		if (_reader)
+		{
+			redisReaderFree(_reader);
+			_reader = NULL;
+		}
+	}
+	FailSid(sid);
 }
 
 void RedisClient::Release(RedisCall::State* st)
@@ -309,6 +312,7 @@ void RedisClient::Enqueue(RedisCall::State* st)
 		// 超时的也占着位置。满了就不再排。
 		if (_wait.size() < static_cast<size_t>(_max_pending))
 		{
+			st->sid = g_sid;
 			st->refs.fetch_add(1, std::memory_order_relaxed);
 			_wait.push_back(st);
 			queued = true;
@@ -337,6 +341,39 @@ void RedisClient::Enqueue(RedisCall::State* st)
 		Settle(st, {}, RedisStatus::SendFailed);
 		Release(st);
 		return;
+	}
+}
+
+void RedisClient::FailSid(sid_t sid)
+{
+	std::deque<RedisCall::State*> left;
+	{
+		::OI::Thread::MutexGuard lock(_wait_mu);
+		std::deque<RedisCall::State*> keep;
+		size_t swept = 0;
+		for (size_t i = 0; i < _wait.size(); ++i)
+		{
+			if (_wait[i]->sid == sid)
+			{
+				left.push_back(_wait[i]);
+				continue;
+			}
+			if (i < _swept)
+			{
+				++swept;
+			}
+			keep.push_back(_wait[i]);
+		}
+		_wait.swap(keep);
+		_swept = swept;
+	}
+	for (size_t i = 0; i < left.size(); ++i)
+	{
+		if (left[i]->won.load(std::memory_order_acquire) == 0)
+		{
+			Settle(left[i], {}, RedisStatus::Disconnected);
+		}
+		Release(left[i]);
 	}
 }
 

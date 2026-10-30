@@ -9,12 +9,6 @@ void RedisClientSession::Send(const ::OI::Base::Bytes& bytes)
 	AllowSend();
 }
 
-void RedisClientSession::SendProtocol(const ::OI::Rpc::Protocol* proto)
-{
-	(void)proto;
-	assert(false && "redis client sends RESP");
-}
-
 void RedisClientSession::OnDataIn()
 {
 	if (_ibuff.Size() == 0)

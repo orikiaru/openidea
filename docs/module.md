@@ -46,7 +46,7 @@ endforeach()
 
 ## 加一个回声协议
 
-在 `proto.xml` 增加请求和回复两个 `rpcdata`，字段号自己写上，再加一条 `rpc`，请求和回复各一个协议号。
+在 `proto.xml` 增加请求和回复两个 `rpcdata`，字段号自己写上。`rpc` 放在文件最后，一行一条，请求和回复共用一个协议号。调用号最高位是 1 表示请求，回包清掉这一位。
 
 在 `module_component.xml` 里把这条 rpc 挂到对应的 Client 和 Server 组件上。
 

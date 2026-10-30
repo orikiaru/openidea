@@ -2,7 +2,6 @@
 #define __io_session_h__
 #include "oi_lock.h"
 #include "oi_bytes.h"
-#include "oi_parser.h"
 #include <errno.h>
 #include <string>
 #include "oi_poll.h"
@@ -31,6 +30,7 @@ protected:
 	sid_t		_session_id;
 	Channel*	_p_channel;
 	SessionManager* _p_session_mgr;
+	std::string	_endpoint;
 public:
 	Session(SessionManager* pMgr);
 	virtual ~Session();
@@ -58,10 +58,10 @@ public:
 	inline int32_t GetError()const		{ return _errcode;	}
 	inline void SetSessionID(int sid) 	{ _session_id = sid;	}
 	inline int  GetSessionID() const	{ return _session_id;	}
+	void SetEndpoint(const std::string& endpoint) { _endpoint = endpoint; }
+	const std::string& GetEndpoint() const { return _endpoint; }
 
 	virtual void Send(const ::OI::Base::Bytes& bytes)	{ assert(false); };
-	virtual void SendProtocol(const ::OI::Rpc::Protocol& proto){ SendProtocol(&proto); }
-	virtual void SendProtocol(const ::OI::Rpc::Protocol* proto) = 0;
 	virtual void ActiveClose() = 0;			//外部Mgr主动关闭调用,有锁,不会回调Mgr->CloseSession
 
 protected:

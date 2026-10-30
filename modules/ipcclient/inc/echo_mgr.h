@@ -14,6 +14,7 @@ class EchoMgr
 	DECLARE_SINGLETON(EchoMgr)
 	EchoMgr();
 	bool _on;
+	bool _stack;
 	int32_t _total;
 	int32_t _timeout_ms;
 	sid_t _sid;
@@ -31,6 +32,8 @@ class EchoMgr
 	std::map<std::string, int32_t> _fields;
 public:
 	void Load();
+	bool StackOn() const { return _stack; }
+	coro::Task StackProbe();
 	void ArmTimeout();
 	void Start(sid_t sid);
 	sid_t Sid() const { return _sid; }

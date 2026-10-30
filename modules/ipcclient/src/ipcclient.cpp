@@ -15,6 +15,13 @@ bool IpcClient::Init()
 	{
 		return false;
 	}
+	EchoMgr::GetInstance().Load();
+	if (EchoMgr::GetInstance().StackOn())
+	{
+		coro::StartTask([](coro::Token) {
+			return EchoMgr::GetInstance().StackProbe();
+		});
+	}
 	RedisMgr::GetInstance().Load();
 	HoldMgr::GetInstance().Load();
 	if (!RedisMgr::GetInstance().Enabled() && !HoldMgr::GetInstance().Enabled())
@@ -50,8 +57,4 @@ void IpcClient::OnClientConnect(::OI::Net::Session* pSession)
 void IpcClient::OnClientDisconnect(const ::OI::Net::Session* pSession)
 {
 	(void)pSession;
-}
-
-void IpcClient::OnAbortSession()
-{
 }

@@ -3,6 +3,7 @@
 #include <deque>
 #include "oi_session_manager.h"
 #include "oi_rpc_session.h"
+#include "oi_rpc_call.h"
 #include "oi_log.h"
 namespace OI { namespace Rpc {
 
@@ -23,15 +24,11 @@ public:
 	virtual ::OI::Net::Session* CloneSession() { return new ProtoSession(this); }	//自定制回话类型
 	virtual void OnAddSession(::OI::Net::Session* pSession)
 	{
-		LOG_TRACE("ProtoSessionManager::OnAddSession sid=%d", pSession->GetSessionID());
+		LOG_INFO("ProtoSessionManager::OnAddSession sid=%d", pSession->GetSessionID());
 	}
 	virtual void OnDelSession(const ::OI::Net::Session* pSession)
 	{
-		LOG_TRACE("ProtoSessionManager::OnDelSession sid=%d, error=%d", pSession->GetSessionID(), pSession->GetError());
-	}
-	virtual void OnAbortSession()
-	{
-		LOG_TRACE("ProtoSessionManager::OnAbortSessionsid sid=%d", _cur_session_id);
+		LOG_INFO("ProtoSessionManager::OnDelSession sid=%d, error=%d", pSession->GetSessionID(), pSession->GetError());
 	}
 };
 
@@ -43,11 +40,18 @@ class ProtoClientManager : public ProtoSessionManager
 	bool		_conn;
 	bool		_connecting;
 	CLIENT_CONNECT_MODE _connect_mode;
+	struct HeldCall
+	{
+		uint64_t call_id;
+		::OI::Base::Bytes data;
+	};
 	std::deque<::OI::Base::Bytes> _pending;
+	std::deque<HeldCall> _held_calls;
 	size_t		_pending_bytes;
+	bool		_ever_connected;
 	::OI::Thread::SpinLock	_client_locker;
 public:
-	ProtoClientManager():_ssid(INVALID_SID),_conn(false),_connecting(false),_connect_mode(CLIENT_CONNECT_DIRECT),_pending_bytes(0) {}
+	ProtoClientManager():_ssid(INVALID_SID),_conn(false),_connecting(false),_connect_mode(CLIENT_CONNECT_DIRECT),_pending_bytes(0),_ever_connected(false) {}
 	void SetConnectMode(CLIENT_CONNECT_MODE mode) { _connect_mode = mode; }
 	CLIENT_CONNECT_MODE GetConnectMode() const { return _connect_mode; }
 	virtual void OnClientConnect(::OI::Net::Session* pSession) = 0;
@@ -64,37 +68,64 @@ public:
 		sid_t sid = INVALID_SID;
 		{
 			::OI::Thread::SpinLockGuard l(_client_locker);
-			assert(_ssid == INVALID_SID);
 			_conn = true;
 			_connecting = false;
 			_ssid = pSession->GetSessionID();
 			sid = _ssid;
 			pending.swap(_pending);
 			_pending_bytes = 0;
+			_ever_connected = true;
 		}
 		for (std::deque<::OI::Base::Bytes>::iterator it = pending.begin(); it != pending.end(); ++it)
 		{
 			SendBytes(sid, *it);
 		}
+		FlushHeldCalls(sid);
 		OnClientConnect(pSession);
 	}
 	virtual void OnConnectFailed()
 	{
-		::OI::Thread::SpinLockGuard l(_client_locker);
-		_connecting = false;
-	}
-	virtual void OnDelSession(const ::OI::Net::Session* pSession)
-	{
 		{
 			::OI::Thread::SpinLockGuard l(_client_locker);
-			_ssid = INVALID_SID;
-			_conn = false;
+			_connecting = false;
+		}
+		if (_service_down || _endpoint.empty())
+		{
+			FailHeldCalls();
+			return;
+		}
+		Reconnect();
+	}
+	virtual void OnServiceDown()
+	{
+		FailHeldCalls();
+	}
+	virtual int32_t UnavailableCode()
+	{
+		return IsConnect() ? OI_ERR_FAIL : OI_ERR_CONNECT;
+	}
+	bool TryPendCall(uint64_t call_id, const ::OI::Base::Bytes& data) override;
+	void DropPendingCall(uint64_t call_id) override;
+	void FlushHeldCalls(sid_t sid);
+	void FailHeldCalls();
+	virtual void OnDelSession(const ::OI::Net::Session* pSession)
+	{
+		bool reconnect = false;
+		{
+			::OI::Thread::SpinLockGuard l(_client_locker);
+			if (_ssid == pSession->GetSessionID())
+			{
+				_ssid = INVALID_SID;
+				_conn = false;
+				reconnect = !_service_down && !_endpoint.empty() && pSession->GetEndpoint() == _endpoint;
+			}
 		}
 		OnClientDisconnect(pSession);
+		if (reconnect)
+		{
+			Reconnect(0);
+		}
 	}
-	virtual void OnAbortSession() = 0;	//客户端必须重写
-	bool SendProtocol(const Protocol& p) { return SendProtocol(&p); }
-	bool SendProtocol(const Protocol* p);
 	bool SendRaw(const ::OI::Base::Bytes& data);
 	// 没连上先存着，连上时按顺序补发。存满 max_pending_bytes 再来的丢掉，返回 false
 	bool SendRawOrPend(const ::OI::Base::Bytes& data, size_t max_pending_bytes);

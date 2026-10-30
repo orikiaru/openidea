@@ -167,8 +167,8 @@ struct RpcProtoId;
 
 void BindRpcHandler(proto_type_t id, std::function<coro::Task(coro::Token, ::OI::Net::SessionManager*, sid_t, ::OI::Base::BytesStream)> handle);
 
-// 请求和回包的包体都以 8 字节调用号开头，后面才是 Req/Res。
-// 客户端按调用号认回包，服务端处理完就回，不用按接受顺序排队。
+// 请求和回包共用一个协议号。调用号最高位是 1 表示请求，回包清掉这一位。
+// 包体都以 8 字节调用号开头，后面才是 Req 或 Res。服务端拿这条连接的 sid 把回包送回去。
 
 // 业务任务外面这一层：解包，co_await 业务任务，再把带调用号的回包写出去。
 template<typename Req, typename Res, typename F>
@@ -180,6 +180,7 @@ coro::Task RunHandledRpc(F fn, proto_type_t res_id, coro::Token token, ::OI::Net
 	{
 		uint64_t call_id = 0;
 		body >> call_id;
+		call_id &= ~(uint64_t)RPC_REQ_MASK;
 		req.deserialize(body);
 		auto child = fn(token, mgr, sid, req, res);
 		if (child.handle)
@@ -232,7 +233,7 @@ struct RpcCallAwaiter
 	bool replied;
 
 	RpcCallAwaiter()
-		: mgr(NULL), sid(0), req(NULL), res(NULL), result(-1), timeout_ms(180000), handle(), gate(0), replied(false)
+		: mgr(NULL), sid(0), req(NULL), res(NULL), result(OI_ERR_FAIL), timeout_ms(180000), handle(), gate(0), replied(false)
 	{}
 	RpcCallAwaiter(const RpcCallAwaiter&) = delete;
 	RpcCallAwaiter(RpcCallAwaiter&& other) noexcept
@@ -250,7 +251,7 @@ struct RpcCallAwaiter
 		static const bool registered = (RegisterRpcRes(RpcProtoId<Res>::value), true);
 		(void)registered;
 		handle = h;
-		result = -1;
+		result = OI_ERR_FAIL;
 		replied = false;
 		gate.store(0, std::memory_order_relaxed);
 		uint64_t call_id = BindRpcCall(mgr, sid, RpcProtoId<Res>::value, h, &result, timeout_ms, [this](::OI::Base::BytesStream& in) {
@@ -265,12 +266,15 @@ struct RpcCallAwaiter
 			}
 		});
 		::OI::Base::BytesStream body;
-		body << call_id;
+		body << (call_id | (uint64_t)RPC_REQ_MASK);
 		req->serialize(body);
 		::OI::Base::BytesStream frame = EncodePbFrame(RpcProtoId<Req>::value, body);
-		if (!mgr->SendBytes(sid, frame.GetMutableBuff()))
+		if (mgr->TryPendCall(call_id, frame.GetMutableBuff()))
 		{
-			WakeRpcCall(call_id, -1, NULL);
+		}
+		else if (!mgr->SendBytes(sid, frame.GetMutableBuff()))
+		{
+			WakeRpcCall(call_id, mgr->UnavailableCode(), NULL);
 		}
 		int prev = gate.exchange(2, std::memory_order_acq_rel);
 		return prev != 1;
@@ -286,7 +290,7 @@ struct RpcCallAwaiter
 			}
 			catch (::OI::Base::ParserException&)
 			{
-				result = -1;
+				result = OI_ERR_FAIL;
 			}
 		}
 		return result;
@@ -301,7 +305,7 @@ RpcCallAwaiter<Req, Res> RpcCall(::OI::Net::SessionManager& mgr, sid_t sid, Req&
 	awaiter.sid = sid;
 	awaiter.req = &req;
 	awaiter.res = &res;
-	awaiter.result = -1;
+	awaiter.result = OI_ERR_FAIL;
 	awaiter.timeout_ms = static_cast<int64_t>(timeout_sec) * 1000;
 	awaiter.handle = {};
 	return awaiter;

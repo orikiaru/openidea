@@ -206,10 +206,10 @@ class SerializeData:
     #解析RPC
     def ParseRpc(self)->bool:
         self.id = self.xml_data.get("id")
-        self.res_id = self.xml_data.get("res_id")
+        self.res_id = self.xml_data.get("res_id") or self.id
         self.name = self.xml_data.get("name")
-        if(not self.id or not self.res_id or not self.name):
-            loginfo("parseprotocol error not id or res_id or name, id=", self.id, ",res_id=", self.res_id, ",name=", self.name)
+        if(not self.id or not self.name):
+            loginfo("parseprotocol error not id or name, id=", self.id, ",name=", self.name)
             return False
         timeout = self.xml_data.get("timeout")
         if(timeout):

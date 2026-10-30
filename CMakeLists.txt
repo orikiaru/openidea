@@ -36,8 +36,8 @@ endif()
 set(BASE_LIB_PATH ${CMAKE_SOURCE_DIR}/cbaselib)
 set(MODULES_PATH ${CMAKE_SOURCE_DIR}/modules)
 
-set(BASE_M_LIBS timer_m_static logger_m_static redis_m_static net_m_static proto_m_static base_m_static hiredis_static)
-set(BASE_LIBS timer_static logger_static redis_static net_static proto_static base_static hiredis_static)
+set(BASE_M_LIBS timer_m_static logger_m_static redis_m_static net_m_static proto_m_static base_m_static net_m_static timer_m_static hiredis_static)
+set(BASE_LIBS timer_static logger_static redis_static net_static proto_static base_static net_static timer_static hiredis_static)
 set(LOGD_M_LIBS timer_m_static logd_m_static net_m_static proto_m_static base_m_static )
 
 
@@ -113,7 +113,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${DEPOLY_PATH}/bin)
 set(LIBRARY_OUTPUT_PATH ${DEPOLY_PATH}/path)
 
 #增加编译模块。新模块由 xml 生成到 modules/<name>/CMakeLists.txt
-foreach(_mod logd ipcclient ipcserver redisserver webserver webclient)
+foreach(_mod logd ipcclient ipcserver redisserver webserver webclient registry)
     if(EXISTS ${MODULES_PATH}/${_mod}/CMakeLists.txt)
         add_subdirectory(${MODULES_PATH}/${_mod})
     endif()

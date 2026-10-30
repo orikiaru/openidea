@@ -1,6 +1,7 @@
 #pragma once
 #include "oi_lock.h"
 #include "oi_header.h"
+#include "oi_bytes.h"
 #include "oi_net_os.h"
 #include "oi_session.h"
 #include <map>
@@ -31,8 +32,12 @@ protected:
 	std::string 	_sip;
 	std::string 	_sport;
 	SESSION_TYPE	_session_type;		//会话管理器管理的会话类型,TCP,UDP,UNIX,FIFO
+	std::string	_service_name;
+	std::string	_endpoint;
+	bool		_service_down;
+	bool		_service_seen;
 public:
-	SessionManager() :_cur_session_id(0), _session_type(SESSION_TYPE_TCP) {}
+	SessionManager() :_cur_session_id(0), _session_type(SESSION_TYPE_TCP), _service_down(false), _service_seen(false) {}
 	virtual ~SessionManager();
 	void DefaultInit(const std::string& sip, const std::string& port, SESSION_TYPE session_type = SESSION_TYPE_TCP)
 	{
@@ -43,21 +48,13 @@ public:
 	SESSION_TYPE   GetSessionType() { return _session_type; }
 	bool StartClient(bool async = true);	//同步起Client返回值有意义
 	bool StartServer(bool async = true);	//目前不支持同步操作
+	// 定期拉到的服务列表。online 为假表示这个名字已经从列表里消失。
+	void ApplyService(const std::string& ip, const std::string& port, bool online);
+	void CloseAllSessions();
+	void CloseEndpoint(const std::string& endpoint);
+	bool HasEndpoint(const std::string& endpoint);
 
-	bool Send(sid_t sid, const ::OI::Rpc::Protocol& p)
-	{
-		return Send(sid, &p);
-	}
-	bool Send(sid_t sid, const ::OI::Rpc::Protocol* p);
 	bool SendBytes(sid_t sid, const ::OI::Base::Bytes& data);
-
-	int BroadCast(const ::OI::Rpc::Protocol& p)
-	{
-		return BroadCast(&p);
-	}
-
-	//@return BroadCount
-	int BroadCast(const ::OI::Rpc::Protocol* p);
 
 	static SESSION_TYPE GetSessionTypeByString(const std::string& type);
 
@@ -87,8 +84,14 @@ protected:
 	virtual void OnAddSession(Session* pSession) = 0;
 	virtual void OnDelSession(const Session* pSession) = 0;
 	virtual void OnSessionClosed(sid_t) {}
-	virtual void OnAbortSession() {}
 	virtual void OnConnectFailed() {}
+	virtual void OnServiceDown() {}
+public:
+	// 会话还没建立过时把调用先挂上。返回 false 表示调用方照常发送。
+	virtual int32_t UnavailableCode() { return OI_ERR_FAIL; }
+	virtual bool TryPendCall(uint64_t, const ::OI::Base::Bytes&) { return false; }
+	virtual void DropPendingCall(uint64_t) {}
+protected:
 };
 }}
 

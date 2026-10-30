@@ -16,6 +16,5 @@ private:
 	virtual ::OI::Net::Session* CloneSession() { return new LogClientSession(this); }	//自定制回话类型
 	virtual void OnClientConnect(::OI::Net::Session* pSession);
 	virtual void OnClientDisconnect(const ::OI::Net::Session* pSession);
-	virtual void OnAbortSession();
 };
 }}

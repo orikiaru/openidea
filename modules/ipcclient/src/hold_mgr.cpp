@@ -130,7 +130,7 @@ coro::Task HoldMgr::Pump()
 	::OI::Rpc::BindRpcCall(&mgr, fake_sid, response_id, {}, &result, 0, {}, [&]() { ++resumed; });
 	::OI::Rpc::FailRpcCalls(&mgr, fake_sid);
 	::OI::Rpc::FailRpcCalls(&mgr, fake_sid);
-	if (result != -3 || resumed != 1) ++bad;
+	if (result != OI_ERR_CONNECT || resumed != 1) ++bad;
 	printf("hold rpc source and disconnect bad=%d\n", bad);
 
 	::OI::RpcData::HoldReq req;
@@ -142,7 +142,7 @@ coro::Task HoldMgr::Pump()
 	if (!direct || direct.value.mark != 1) ++bad;
 	req.delay_ms = 600;
 	auto short_wait = co_await ::OI::Rpc::RpcCall<::OI::RpcData::HoldRes>(mgr, _sid, req, ::OI::Timer::Milliseconds(150));
-	if (short_wait.code != -2) ++bad;
+	if (short_wait.code != OI_ERR_TIMEOUT) ++bad;
 	co_await coro::yield(::OI::Timer::Milliseconds(700));
 	req.delay_ms = 0;
 	int ret = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), _sid, req, res, 10);
@@ -161,7 +161,7 @@ coro::Task HoldMgr::Pump()
 	ret = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), _sid, req, res, 2);
 	printf("hold rpc timeout ret=%d\n", ret);
 	fflush(stdout);
-	if (ret != -2)
+	if (ret != OI_ERR_TIMEOUT)
 	{
 		bad += 1;
 	}
@@ -217,7 +217,7 @@ coro::Task HoldMgr::Pump()
 			{
 				reply_n += 1;
 			}
-			else if (box->rets[i] == -2)
+			else if (box->rets[i] == OI_ERR_TIMEOUT)
 			{
 				timeout_n += 1;
 			}
@@ -334,7 +334,7 @@ coro::Task HoldMgr::Pump()
 	});
 	wall_begin = std::chrono::steady_clock::now();
 	auto closed = co_await ::OI::Rpc::RpcCall<::OI::RpcData::HoldRes>(mgr, _sid, req, ::OI::Timer::Seconds(10));
-	if (closed.code != -3 || WallMs(wall_begin) > 2000) ++bad;
+	if (closed.code != OI_ERR_CONNECT || WallMs(wall_begin) > 2000) ++bad;
 	printf("hold rpc disconnected code=%d wall_ms=%lld\n", closed.code, WallMs(wall_begin));
 	printf("hold done bad=%d\n", bad);
 	fflush(stdout);

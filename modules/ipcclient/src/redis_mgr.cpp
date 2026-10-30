@@ -160,6 +160,9 @@ coro::Task RedisMgr::Check()
 	{
 		++_failed;
 	}
+	// 计数和新建字段的断言依赖空键。上一轮留下的值会让 HSET 返回 0、INCR 从中间开始。
+	auto wiped = co_await ::OI::Redis::CallRedis({"DEL", "rk", "rbin", "rk-missing", "rk-exp", "rh", "rl", "rs", "rk-count"});
+	if (wiped.timeout || !wiped.reply || wiped.reply->type != REDIS_REPLY_INTEGER) ++_failed;
 	::OI::Redis::RedisResult set;
 	{
 		::OI::Redis::RedisCall call = ::OI::Redis::RedisSet("rk", "hello", set);

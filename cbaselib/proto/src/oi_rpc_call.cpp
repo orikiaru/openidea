@@ -34,119 +34,6 @@ static struct StDrainReg
 	}
 } g_st_drain_reg;
 
-rpc_id_t RpcKeeper::GetRpcID()
-{
-	::OI::Thread::SpinLockGuard l(_rid_locker);
-	//assert(s_rpc_id < RPC_REQ_MASK);
-	return s_rpc_id++ | RPC_REQ_MASK;
-}
-
-void RpcKeeper::AddStub(Rpc* pRpc)
-{
-	rpc_id_t rid = (pRpc->GetRID() & ~RPC_REQ_MASK);
-	assert(pRpc && !FindStub(rid));
-	::OI::Thread::MutexGuard l(_locker);
-	s_rpc_map[rid] = pRpc;
-	::OI::Timer::BaseTimer* pTimer = new RpcTimeoutTimer(rid);
-	s_rpc_timer_map[rid] = pTimer;
-	::OI::Timer::BaseTimerManager::GetInstance().AddTimer(pTimer, pRpc->TimeOut() * 1000);
-}
-
-Rpc* RpcKeeper::FindStub(rpc_id_t rid)
-{
-	::OI::Thread::MutexGuard l(_locker);
-	RpcMap::iterator it = s_rpc_map.find(rid);	
-	return it != s_rpc_map.end() ? it->second: NULL;
-}
-
-Rpc* RpcKeeper::FindAndRemoveStub(rpc_id_t rid)
-{
-	::OI::Thread::MutexGuard l(_locker);
-	RpcMap::iterator it = s_rpc_map.find(rid);	
-	Rpc* pRPC = NULL;
-	if(it != s_rpc_map.end())
-	{
-		pRPC = it->second;
-		s_rpc_map.erase(it);
-	}
-	RpcTimerMap::iterator tit = s_rpc_timer_map.find(rid);
-	if (tit != s_rpc_timer_map.end())
-	{
-		//如果正在触发,则等Timer自行销毁
-		//这里取巧了,因为Timer触发会走到这里,锁互斥,内存无法回收销毁
-		//所以对于Timer来说,要么从这删除,要么已经移除timer队列,其他情况的定时器不推荐这么写
-		if (::OI::Timer::BaseTimerManager::GetInstance().RemoveTimer(tit->second))
-		{
-			SAFE_DELETE(tit->second);
-		}
-		s_rpc_timer_map.erase(tit);
-	}
-	return pRPC;
-}
-
-void RpcKeeper::DestoryStub(rpc_id_t rid)
-{
-	Rpc* pRpc = NULL;
-	{
-		::OI::Thread::MutexGuard l(_locker);
-		RpcMap::iterator it = s_rpc_map.find(rid);	
-		if(it != s_rpc_map.end())
-		{
-			pRpc = it->second;
-		}
-		s_rpc_map.erase(it);
-	}
-	assert(pRpc);
-	SAFE_DELETE(pRpc);
-}
-
-Rpc::Rpc(const Rpc& that):
-	TimerProtocol(that),
-	_rid(that._rid),
-	_req(that._req->Clone()),
-	_res(that._res->Clone()) 
-{}
-
-void Rpc::Handle(::OI::Net::SessionManager* mgr, sid_t sid)
-{
-	if(IsReq())
-	{
-		DoRequest(mgr, sid);
-		ClearReq();
-		mgr->Send(sid, this);
-	}
-	else
-	{
-		if (_p_stub && _p_stub != this) //==this情况,当前只可能是rpc超时
-		{
-			_p_stub->DoResponse(mgr, sid);
-			SAFE_DELETE(_p_stub);
-		}
-		else
-		{
-			//TODO 可能需要比对数据
-		}
-	}
-}
-
-::OI::Base::BytesStream& Rpc::serialize(::OI::Base::BytesStream& os) const
-{
-	if (IsReq())
-	{
-		return serialize_req(os);
-	}
-	return serialize_res(os);
-}
-
-::OI::Base::BytesStream& Rpc::deserialize(::OI::Base::BytesStream& os)
-{
-	if (IsReq())
-	{
-		return deserialize_req(os);
-	}
-	return deserialize_res(os);
-}
-
 namespace
 {
 typedef std::function<coro::Task(coro::Token, ::OI::Net::SessionManager*, sid_t, ::OI::Base::BytesStream)> RpcHandleFn;
@@ -160,6 +47,8 @@ struct RpcCoroSlot
 	std::function<bool(::OI::Base::BytesStream&)> decode;
 	std::function<void()> resume;
 	proto_type_t res_id;
+	uint64_t call_id;
+	bool awaiting_connect;
 };
 
 struct RpcExpire
@@ -271,7 +160,13 @@ void SweepRpcCalls()
 	}
 	for (size_t i = 0; i < fired.size(); ++i)
 	{
-		FinishRpcSlot(fired[i], -2, NULL);
+		// 还没连上就到期，按连接失败返回，不占超时码。
+		int32_t code = fired[i].awaiting_connect ? OI_ERR_CONNECT : OI_ERR_TIMEOUT;
+		if (fired[i].awaiting_connect && fired[i].mgr)
+		{
+			fired[i].mgr->DropPendingCall(fired[i].call_id);
+		}
+		FinishRpcSlot(fired[i], code, NULL);
 	}
 }
 
@@ -291,6 +186,32 @@ void ArmRpcSweep(void*)
 }
 }
 
+void MarkRpcAwaitingConnect(uint64_t call_id)
+{
+	RpcCallShard& shard = ShardOf(call_id);
+	::OI::Thread::MutexGuard lock(shard.mu);
+	std::unordered_map<uint64_t, RpcCoroSlot>::iterator it = shard.slots.find(call_id);
+	if (it == shard.slots.end())
+	{
+		return;
+	}
+	it->second.awaiting_connect = true;
+}
+
+bool ClaimRpcSend(uint64_t call_id, sid_t sid)
+{
+	RpcCallShard& shard = ShardOf(call_id);
+	::OI::Thread::MutexGuard lock(shard.mu);
+	std::unordered_map<uint64_t, RpcCoroSlot>::iterator it = shard.slots.find(call_id);
+	if (it == shard.slots.end())
+	{
+		return false;
+	}
+	it->second.awaiting_connect = false;
+	it->second.sid = sid;
+	return true;
+}
+
 void RegisterRpcRes(proto_type_t res_id)
 {
 	::OI::Thread::MutexGuard lock(g_rpc_wait_lock);
@@ -302,7 +223,8 @@ uint64_t BindRpcCall(::OI::Net::SessionManager* mgr, sid_t sid, proto_type_t res
 	std::call_once(g_sweep_once, []() {
 		::OI::Net::Poll::GetInstance().CallOnLoop(ArmRpcSweep, NULL);
 	});
-	uint64_t call_id = g_call_seq.fetch_add(1, std::memory_order_relaxed);
+	// 最高位留给请求标记，槽里只存去掉标记的号。
+	uint64_t call_id = g_call_seq.fetch_add(1, std::memory_order_relaxed) & ~(uint64_t)RPC_REQ_MASK;
 	RpcCoroSlot slot;
 	slot.mgr = mgr;
 	slot.sid = sid;
@@ -311,6 +233,8 @@ uint64_t BindRpcCall(::OI::Net::SessionManager* mgr, sid_t sid, proto_type_t res
 	slot.decode = std::move(decode);
 	slot.resume = std::move(resume);
 	slot.res_id = res_id;
+	slot.call_id = call_id;
+	slot.awaiting_connect = false;
 	RpcCallShard& shard = ShardOf(call_id);
 	::OI::Thread::MutexGuard lock(shard.mu);
 	shard.slots.emplace(call_id, std::move(slot));
@@ -352,7 +276,7 @@ void FailRpcCalls(::OI::Net::SessionManager* mgr, sid_t sid)
 		}
 	}
 	// 唤醒放在锁外，应用可以立即发起新的调用。
-	for (auto& slot : failed) FinishRpcSlot(slot, -3, NULL);
+	for (auto& slot : failed) FinishRpcSlot(slot, OI_ERR_CONNECT, NULL);
 }
 
 void WatchRpc(proto_type_t id, std::function<void(::OI::Base::BytesStream&)> decode)
@@ -369,45 +293,53 @@ void BindRpcHandler(proto_type_t id, RpcHandleFn handle)
 
 bool DeliverRpc(proto_type_t id, ::OI::Base::BytesStream& body, ::OI::Net::SessionManager* mgr, sid_t sid)
 {
+	uint64_t raw = 0;
+	bool is_req = false;
+	try
+	{
+		body.StartTransaction();
+		body >> raw;
+		body.RollBack();
+		is_req = (raw & (uint64_t)RPC_REQ_MASK) != 0;
+	}
+	catch (::OI::Base::ParserException&)
+	{
+		return false;
+	}
+
 	std::function<void(::OI::Base::BytesStream&)> decode;
 	const RpcHandleFn* handle = NULL;
-	bool is_res = false;
+	if (is_req)
 	{
 		::OI::Thread::MutexGuard lock(g_rpc_wait_lock);
-		if (g_rpc_res.find(id) != g_rpc_res.end())
+		std::map<proto_type_t, std::deque<std::function<void(::OI::Base::BytesStream&)> > >::iterator it = g_rpc_wait.find(id);
+		if (it != g_rpc_wait.end() && !it->second.empty())
 		{
-			is_res = true;
+			decode = std::move(it->second.front());
+			it->second.pop_front();
+			if (it->second.empty())
+			{
+				g_rpc_wait.erase(it);
+			}
 		}
 		else
 		{
-			std::map<proto_type_t, std::deque<std::function<void(::OI::Base::BytesStream&)> > >::iterator it = g_rpc_wait.find(id);
-			if (it != g_rpc_wait.end() && !it->second.empty())
+			std::map<proto_type_t, RpcHandleFn>::iterator hit = g_rpc_handle.find(id);
+			if (hit == g_rpc_handle.end())
 			{
-				decode = std::move(it->second.front());
-				it->second.pop_front();
-				if (it->second.empty())
-				{
-					g_rpc_wait.erase(it);
-				}
+				return false;
 			}
-			else
-			{
-				std::map<proto_type_t, RpcHandleFn>::iterator hit = g_rpc_handle.find(id);
-				if (hit == g_rpc_handle.end())
-				{
-					return false;
-				}
-				// 处理函数只在启动时注册，map 节点不会再动，出锁后用指针调用。
-				handle = &hit->second;
-			}
+			// 处理函数只在启动时注册，map 节点不会再动，出锁后用指针调用。
+			handle = &hit->second;
 		}
 	}
 	try
 	{
-		if (is_res)
+		if (!is_req)
 		{
 			uint64_t call_id = 0;
 			body >> call_id;
+			call_id &= ~(uint64_t)RPC_REQ_MASK;
 			RpcCoroSlot slot;
 			if (!TakeRpcSlot(call_id, slot, mgr, sid, id))
 			{

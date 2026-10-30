@@ -1,5 +1,6 @@
 #pragma once
 #include "hiredis.h"
+#include "oi_proto_id.h"
 #include "oi_rpc_session_manager.h"
 #include "oi_singleton.h"
 #include <coroutine>
@@ -8,6 +9,9 @@
 #include <string>
 #include <vector>
 namespace OI { namespace Redis {
+
+// RESP 字节里不带这个号。号留给以后把几种定制协议放到一条连接上。
+enum { REDIS_PROTO_ID = ::OI::Base::PROTO_REDIS };
 
 enum class RedisStatus { Ok, Timeout, Disconnected, InvalidArgument, SendFailed, ServerError, ProtocolError, Busy };
 
@@ -78,10 +82,10 @@ private:
 	virtual ::OI::Net::Session* CloneSession();
 	virtual void OnClientConnect(::OI::Net::Session* pSession);
 	virtual void OnClientDisconnect(const ::OI::Net::Session* pSession);
-	virtual void OnAbortSession();
 	static void Submit(void* state);
 	void Enqueue(RedisCall::State* st);
 	void FailAll(RedisStatus status = RedisStatus::Disconnected);
+	void FailSid(sid_t sid);
 	void Settle(RedisCall::State* st, std::shared_ptr<redisReply> reply, RedisStatus status);
 	static void Release(RedisCall::State* st);
 };

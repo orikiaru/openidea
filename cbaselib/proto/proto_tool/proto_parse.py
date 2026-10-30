@@ -232,11 +232,26 @@ class ProtocolGen:
             return False
         
         if(serialize_type == SerializeDataType.PROTOCOL or serialize_type == SerializeDataType.RPC):
-            #排除同协议号
+            #排除同协议号。请求和回复共用这一个号。
             if(data.GetID() in self.proto_id_map):
                 loginfo("CheckProtocol id repeat old_name=", self.proto_id_map[data.GetID()].GetName(), ",new_name=", data.GetName())
                 return False
             self.proto_id_map[data.GetID()] = data
+        if(serialize_type == SerializeDataType.RPC):
+            req = data.GetReq()
+            res = data.GetRes()
+            if(req == res):
+                loginfo("rpc request and response reuse the same rpcdata name=", data.GetName())
+                return False
+            used = getattr(self, "rpc_payload_types", None)
+            if used is None:
+                used = set()
+                self.rpc_payload_types = used
+            if(req in used or res in used):
+                loginfo("rpcdata reused by another rpc name=", data.GetName(), ",request=", req, ",response=", res)
+                return False
+            used.add(req)
+            used.add(res)
             
         self.type_name_map[data.GetName()] = data
         return True

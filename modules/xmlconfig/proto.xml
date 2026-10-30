@@ -52,14 +52,6 @@ rpcdata AllEchoRes {
     1 int32_t code;
 }
 
-rpc AllEcho {
-    id 3001;
-    res_id 3101;
-    request AllEchoReq;
-    response AllEchoRes;
-    timeout 25;
-}
-
 rpcdata HoldReq {
     0 int32_t delay_ms;
     1 int32_t mark;
@@ -67,14 +59,6 @@ rpcdata HoldReq {
 
 rpcdata HoldRes {
     0 int32_t mark;
-}
-
-rpc Hold {
-    id 3002;
-    res_id 3102;
-    request HoldReq;
-    response HoldRes;
-    timeout 25;
 }
 
 // JSON 能表达的全量结构。结构当 map 键的字段不在这里。
@@ -103,3 +87,7 @@ rpcdata JsonAll {
     21 map<uint32_t, string> utable;
     22 map<uint64_t, string> ubig;
 }
+
+// 请求和回复共用一个协议号。调用号最高位区分请求和回包。
+rpc AllEcho { id 3001; request AllEchoReq; response AllEchoRes; timeout 25; }
+rpc Hold { id 3002; request HoldReq; response HoldRes; timeout 25; }
