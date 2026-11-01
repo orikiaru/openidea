@@ -27,9 +27,6 @@ class LogFileInstance
 	std::thread::id	_pid;
 	bool			_working;
 
-	//当前写入日志总数
-	int64_t			_write_size;
-
 
 public:
 	LogFileInstance(LogManager* p_mgr, LOG_LEVEL lv);
@@ -42,7 +39,6 @@ public:
 	void AddLog(::OI::Base::Bytes& log);
 	void WriteLog();
 	bool IsWorking() { return _working; }
-	void Dump();
 private:
 	//实际log_thread处理积压日志时,再做切换
 	FILE* GetActiveFile();

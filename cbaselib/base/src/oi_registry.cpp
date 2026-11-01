@@ -253,6 +253,10 @@ bool RegistryClient::Configured()
 
 void RegistryClient::Notify()
 {
+	// 等待方在 _mu 里查完标志才睡下。不拿这把锁就通知，可能落在查完和睡下之间，等待方要白等到超时。
+	{
+		std::lock_guard<std::mutex> lock(_mu);
+	}
 	_cv.notify_all();
 }
 
@@ -475,9 +479,27 @@ bool RegistryClient::Lookup(const std::string& name, std::string& ip, std::strin
 		_pending_pulls.push_back(pending);
 	}
 	::OI::RpcData::RegPull req(pending.names);
-	if (!Send(PROTO_REG_PULL, req) || !WaitFlag(_got))
+	bool sent = Send(PROTO_REG_PULL, req);
+	if (!sent || !WaitFlag(_got))
 	{
-		LOG_TRACE("registry lookup %s timeout", name.c_str());
+		// 同步等的只有这一份。没发出去就撤掉，免得后面的回包对错位；发出去了就改成不等，迟到的回包不能当成下一次查询的结果。
+		::OI::Thread::MutexGuard lock(_pending_mu);
+		for (std::deque<PendingPull>::iterator it = _pending_pulls.begin(); it != _pending_pulls.end(); ++it)
+		{
+			if (it->sync)
+			{
+				if (sent)
+				{
+					it->sync = false;
+				}
+				else
+				{
+					_pending_pulls.erase(it);
+				}
+				break;
+			}
+		}
+		LOG_TRACE("registry lookup %s %s", name.c_str(), sent ? "timeout" : "send failed");
 		return false;
 	}
 	ServiceInstance pick;

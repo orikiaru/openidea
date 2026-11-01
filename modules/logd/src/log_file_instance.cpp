@@ -13,7 +13,6 @@
 LogFileInstance::LogFileInstance(LogManager* p_mgr, LOG_LEVEL lv):_p_mgr(p_mgr), _lv(lv), _working(false)
 {
 	memset(_fp, 0, sizeof(_fp));
-	_write_size = 0;
 }
 
 LogFileInstance::~LogFileInstance()
@@ -115,11 +114,6 @@ std::string LogFileInstance::GetLogTiTle()
 	return _p_mgr->GetLogTitle();
 }
 
-void LogFileInstance::Dump()
-{
-	LOG_TRACE("LogFileInstance::Dump lv=%d, write_size=%ld", _lv, _write_size);
-}
-
 static void DiskFailure(const char* operation)
 {
 	const int error = errno;
@@ -189,7 +183,6 @@ void LogFileInstance::WriteLog()
 				{
 					if (fp && WriteAll(fp, tmp.Begin(), tmp.Size()))
 					{
-						_write_size += (int64_t)tmp.Size();
 						unflushed += (int64_t)tmp.Size();
 					}
 					tmp.Reserve(0);
@@ -204,9 +197,9 @@ void LogFileInstance::WriteLog()
 
 		if (tmp_logs.empty() && tmp.Size() > 0)
 		{
-			if (fp && WriteAll(fp, tmp.Begin(), tmp.Size()))
+			if (fp)
 			{
-				_write_size += (int64_t)tmp.Size();
+				WriteAll(fp, tmp.Begin(), tmp.Size());
 			}
 			tmp.Reserve(0);
 			if (fp)

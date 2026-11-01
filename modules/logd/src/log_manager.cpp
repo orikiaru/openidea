@@ -62,11 +62,6 @@ bool LogManager::OnTimer()
 		::OI::Thread::MutexGuard lock(_title_locker);
 		_log_title.assign(log_title_str, len);
 	}
-
-	for (LogFileMap::iterator it = _log_file_map.begin(); it != _log_file_map.end(); ++it)
-	{
-		it->second->Dump();
-	}
 	return true;
 }
 
