@@ -61,10 +61,7 @@ namespace OI { namespace Log
 		va_end(again);
 		tmp.Append("\n", 1);
 
-		if (lv == LOG_LEVEL::LOG_TRACE)
-		{
-			fwrite(tmp.Data(), 1, tmp.Size(), stdout);
-		}
+		fwrite(tmp.Data(), 1, tmp.Size(), stdout);
 
 		if (_logclient_init)
 		{
