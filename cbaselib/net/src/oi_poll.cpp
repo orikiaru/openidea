@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
+#include <signal.h>
 #include <assert.h>
 #include <stdlib.h>
 #include <atomic>
@@ -220,6 +221,30 @@ static void OnAsync(uv_async_t*)
 	DrainOps();
 }
 
+static const int g_quit_signums[] = {
+	SIGINT,
+	SIGTERM,
+#ifdef SIGQUIT
+	SIGQUIT,
+#endif
+};
+static uv_signal_t g_quit_signals[sizeof(g_quit_signums) / sizeof(g_quit_signums[0])];
+
+// libuv 在信号处理函数里只写管道，这里已经回到 loop，可以正常加锁、通知。
+static void OnQuitSignal(uv_signal_t*, int)
+{
+	::OI::Thread::ThreadPool::GetInstance().RequestStop(0);
+}
+
+static void StartQuitSignals()
+{
+	for (size_t i = 0; i < sizeof(g_quit_signums) / sizeof(g_quit_signums[0]); ++i)
+	{
+		uv_signal_init(&g_loop, &g_quit_signals[i]);
+		uv_signal_start(&g_quit_signals[i], OnQuitSignal, g_quit_signums[i]);
+	}
+}
+
 static void PostOp(const IoOp& op)
 {
 	::OI::Thread::MutexGuard guard(g_op_lock);
@@ -234,6 +259,7 @@ static void PrepareLoop()
 {
 	uv_loop_init(&g_loop);
 	uv_async_init(&g_loop, &g_async, OnAsync);
+	StartQuitSignals();
 	{
 		::OI::Thread::MutexGuard guard(g_op_lock);
 		g_loop_ready = true;

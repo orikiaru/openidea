@@ -39,6 +39,14 @@ bool LogManager::Init()
 	return true;
 }
 
+void LogManager::Stop()
+{
+	for (LogFileMap::iterator it = _log_file_map.begin(); it != _log_file_map.end(); ++it)
+	{
+		it->second->StopWriteThread();
+	}
+}
+
 bool LogManager::OnTimer()
 {
 	tm	_now_tm = ::OI::Timer::GetLocalTime();

@@ -28,31 +28,9 @@ static std::string GetPrioConfigString(PRIO_ENUM prio)
 	return "errno_prio";
 }
 
-
-class GeneralSignal_HandleTask : public Task
-{
-	int32_t _sig;
-public:
-	GeneralSignal_HandleTask(int sig) :Task(PRIO_ENUM::PRIO_NORMAL),_sig(sig) {}
-	void Exec()
-	{
-		if (_sig == SIGQUIT || _sig == SIGINT)
-		{
-			//TODO 友好进程关闭
-			exit(0);
-		}
-	}
-};
-
 #define DEFAULD_THREAD_COUNT 3
 bool ThreadPool::Init()
 {
-#ifndef _SINGLE_THREAD_
-	_main_thread_id = std::this_thread::get_id();
-#endif
-	//AddSigHandleTask(SIGINT, new GeneralSignal_HandleTask(SIGINT));
-	AddSigHandleTask(SIGQUIT, new GeneralSignal_HandleTask(SIGQUIT));
-
 #ifdef _SINGLE_THREAD_
 	for(int i = PRIO_NORMAL; i < PRIO_NUM; ++i)
 	{
@@ -181,37 +159,21 @@ void ThreadPool::RequestStop(int code)
 	}
 }
 
-void sig_handle(int sig_num)
-{
-	ThreadPool::GetInstance().OnSignal(sig_num);
-}
-
-void ThreadPool::OnSignal(int sig_num)
-{
-	SIG_HANDLE_MAP::iterator it = _sig_handle_map.find(sig_num);
-	if (it == _sig_handle_map.end())
-	{
-		return;
-	}
-	it->second->Exec();
-}
-
-bool ThreadPool::CreateSpecThread(std::thread::id& tid, void* (*thread_handle)(void*), void* arg)
+bool ThreadPool::CreateSpecThread(std::thread& out, void* (*thread_handle)(void*), void* arg)
 {
 #ifndef _SINGLE_THREAD_
 	InitIgnoreSig();
 	try
 	{
-		// 新线程等 tid 写好再跑。线程函数里常拿自己的 id 和 tid 比。
+		// 新线程等 out 写好再跑。线程函数里常拿自己的 id 和 out.get_id() 比。
 		std::promise<void> go;
 		std::shared_future<void> started = go.get_future().share();
 		std::thread worker([thread_handle, arg, started]() {
 			started.wait();
 			thread_handle(arg);
 		});
-		tid = worker.get_id();
+		out = std::move(worker);
 		go.set_value();
-		worker.detach();
 	}
 	catch (...)
 	{
@@ -219,7 +181,7 @@ bool ThreadPool::CreateSpecThread(std::thread::id& tid, void* (*thread_handle)(v
 	}
 	return true;
 #else
-	(void)tid;
+	(void)out;
 	(void)thread_handle;
 	(void)arg;
 	assert(false && "ThreadPool::CreateSpecThread is singlethread");
@@ -356,20 +318,6 @@ bool ThreadPool::AddTask(Task* pTask)
 	}
 #endif
 	return true;
-}
-
-void ThreadPool::AddSigHandleTask(int sig, Task* pTask)
-{
-	//来啥阻塞啥,回头在主线程的sig_wait调用pTask->Exec()
-	assert(_sig_handle_map.find(sig) == _sig_handle_map.end());
-	assert(pTask);
-
-	_sig_handle_map[sig] = pTask;
-	std::signal(sig, sig_handle);
-
-#ifndef _SINGLE_THREAD_
-	assert(_main_thread_id == std::this_thread::get_id());
-#endif
 }
 
 void ThreadPool::InitIgnoreSig()

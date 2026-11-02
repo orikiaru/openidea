@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <list>
 #include <map>
+#include <atomic>
 #include <thread>
 #include "oi_bytes.h"
 #include "oi_lock.h"
@@ -24,8 +25,10 @@ class LogFileInstance
 
 	//当前lv的日志缓存
 	LogCacheList	_logs;
-	std::thread::id	_pid;
-	bool			_working;
+	std::thread		_thread;
+	std::atomic<bool>	_working;
+	// 由 _cache_locker 保护。写线程看到后把 _logs 写完再返回。
+	bool			_quit;
 
 
 public:
@@ -35,6 +38,8 @@ public:
 	bool CreateNewFile(const char* path);
 	void OnCreateNewFile(FILE* new_file);
 	void StartWriteThread();
+	// 打退出标记并 join。返回时队列里的日志都已写盘并 fflush。
+	void StopWriteThread();
 	// 会把 log 的内容移走
 	void AddLog(::OI::Base::Bytes& log);
 	void WriteLog();

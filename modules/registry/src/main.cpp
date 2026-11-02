@@ -32,5 +32,5 @@ int main(int argc, char* argv[])
 	fflush(stdout);
 
 	::OI::Thread::ThreadPool::GetInstance().StartWork();
-	return 0;
+	return ::OI::Thread::ThreadPool::GetInstance().ExitCode();
 }

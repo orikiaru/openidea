@@ -10,7 +10,7 @@
 	#error LOG_SERVER MUST BE MULTI THREAD
 #endif
 
-LogFileInstance::LogFileInstance(LogManager* p_mgr, LOG_LEVEL lv):_p_mgr(p_mgr), _lv(lv), _working(false)
+LogFileInstance::LogFileInstance(LogManager* p_mgr, LOG_LEVEL lv):_p_mgr(p_mgr), _lv(lv), _working(false), _quit(false)
 {
 	memset(_fp, 0, sizeof(_fp));
 }
@@ -55,7 +55,20 @@ void LogFileInstance::OnCreateNewFile(FILE* new_file)
 
 void LogFileInstance::StartWriteThread()
 {
-	::OI::Thread::ThreadPool::CreateSpecThread(_pid, LogFileInstance::WriteLogThreadHandle, this);
+	::OI::Thread::ThreadPool::CreateSpecThread(_thread, LogFileInstance::WriteLogThreadHandle, this);
+}
+
+void LogFileInstance::StopWriteThread()
+{
+	{
+		::OI::Thread::MutexGuard l(_cache_locker);
+		_quit = true;
+		Active();
+	}
+	if (_thread.joinable())
+	{
+		_thread.join();
+	}
 }
 
 FILE* LogFileInstance::GetActiveFile()
@@ -140,7 +153,7 @@ static bool WriteAll(FILE* fp, const char* data, size_t size)
 
 void LogFileInstance::WriteLog()
 {
-	assert(std::this_thread::get_id() == _pid);
+	assert(std::this_thread::get_id() == _thread.get_id());
 	_working = true;
 
 	// 攒到一块再写。压力上来时大约 8MB 刷一次，队列空了把尾巴刷掉。
@@ -162,6 +175,12 @@ void LogFileInstance::WriteLog()
 		tmp_logs.swap(_logs);
 		if (tmp_logs.empty() && tmp.Size() == 0)
 		{
+			if (_quit)
+			{
+				_cache_locker.UnLock();
+				if (fflush(fp) != 0) DiskFailure("fflush");
+				return;
+			}
 			Passive();
 			_cache_locker.UnLock();
 			continue;

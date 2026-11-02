@@ -16,7 +16,6 @@
 #include <cstdint>
 
 namespace OI { namespace Thread {
-typedef std::map<int32_t, Task*> SIG_HANDLE_MAP;
 class ThreadPool
 {
 	DECLARE_SINGLETON(ThreadPool)
@@ -37,8 +36,6 @@ public:
 	}_thread_data[PRIO_NUM];
 	
 	int32_t _status;
-	SIG_HANDLE_MAP	_sig_handle_map;
-	std::thread::id	_main_thread_id;
 	bool (*_drain)() = nullptr;
 	bool (*_pending)() = nullptr;
 	void (*_after_resume)() = nullptr;
@@ -58,23 +55,23 @@ public:
 		return AddTask(new FnTask<Fn>(std::forward<F>(fn), prio));
 	}
 	void StartWork();
-	// 让工作线程把手头的任务做完后退出。主线程在 StartWork 里 join，再回到 main 析构。
+	// 打退出标记并叫醒各线程。线程看到标记自己返回，主线程在 StartWork 里 join，再回到 main 析构。
+	// SIGINT、SIGTERM、SIGQUIT 由 poll 接住后也走这里，退出码为 0。
 	void RequestStop(int code);
 	bool Stopping() const { return _stop.load(); }
 	int32_t ExitCode() const { return _exit_code; }
-	void OnSignal(int sig);
 	void SetDrain(bool (*fn)());
 	// 单线程这一轮没跑到、但已经挂进协程队列的。yield(0) 靠它留到下一轮。
 	void SetPending(bool (*fn)());
 	// 协程 resume 返回后调用。用来释放已经跑完的根协程，不在 base 里直接依赖 proto。
 	void SetAfterResume(void (*fn)());
 
-	static bool CreateSpecThread(std::thread::id& tid, void* (*thread_handle)(void*), void* arg);
+	// 线程交给 out，由调用方在退出时 join。
+	static bool CreateSpecThread(std::thread& out, void* (*thread_handle)(void*), void* arg);
 	static void InitIgnoreSig();
 	static void InitUnIgnoreSig(int sig);
 private:
 	bool AddTask(Task* pTask);
-	void AddSigHandleTask(int sig, Task* pTask);
 	void SingleThreadStartWork();
 	void MultiThreadStartWork();
 };

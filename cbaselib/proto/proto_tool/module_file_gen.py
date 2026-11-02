@@ -177,9 +177,7 @@ int main(int argc, char* argv[])
  
     //单线程在这里跑任务、定时器和协程，没有任务时进入 poll
     ThreadPool::GetInstance()->StartWork();
-    
-    //此处是走不到的.
-    return 0;
+    return ThreadPool::GetInstance()->ExitCode();
 }
         '''
         file_data = self.DoReplace(file_data)

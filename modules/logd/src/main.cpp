@@ -49,8 +49,9 @@ int main(int argc, char* argv[])
  
     //启动线程池,驱动进程逻辑
     ::OI::Thread::ThreadPool::GetInstance().StartWork();
-    
-    //此处是走不到的.
-    return 0;
+
+    //网络和工人都停了，不会再进日志。写线程把剩下的写完再退出。
+    LogManager::GetInstance().Stop();
+    return ::OI::Thread::ThreadPool::GetInstance().ExitCode();
 }
         

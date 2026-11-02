@@ -33,6 +33,8 @@ class LogManager : public ::OI::Timer::BaseTimer
 public:
 	~LogManager() {}
 	bool Init();
+	// StartWork 返回后调用。join 各级写线程，返回时日志都已落盘。
+	void Stop();
 
 	// b 的内容会被移进写盘队列
 	void WriteLog(LOG_LEVEL lv, ::OI::Base::Bytes& b);
