@@ -76,9 +76,9 @@ bool ParseU64(const std::string& sTextParam, size_t iPositionParam, size_t iEndP
 		char iCharacter = sTextParam[iIndexLocal];
 		if (iCharacter < '0' || iCharacter > '9')
 		{
-			break;
+			return false;
 		}
-		if (iValue > (UINT64_MAX - 9) / 10)
+		if (iValue > (UINT64_MAX - uint64_t(iCharacter - '0')) / 10)
 		{
 			return false;
 		}
@@ -111,7 +111,8 @@ bool ParseHex(const std::string& sTextParam, size_t iPositionParam, size_t iEndP
 		}
 		if (iD < 0)
 		{
-			break;
+			if (iCharacter == ';' && iDigits > 0) break;
+			return false;
 		}
 		if (iValue > (UINT64_MAX >> 4))
 		{
@@ -146,6 +147,7 @@ struct Call::State
 	uint64_t iContentLength;
 	int32_t iStatus;
 	int32_t iPhase;
+	unsigned iInterimResponses = 0;
 	bool bHeadersReady;
 	bool bHasLength;
 	bool bChunked;
@@ -232,22 +234,14 @@ struct Call::State
 		{
 			return false;
 		}
-		size_t iSharedPointer = sIncoming.find(' ');
-		if (iSharedPointer == std::string::npos || iSharedPointer >= iLineEnd)
-		{
-			return false;
-		}
-		size_t iCodeAt = iSharedPointer + 1;
-		while (iCodeAt < iLineEnd && sIncoming[iCodeAt] == ' ')
-		{
-			iCodeAt += 1;
-		}
+		if (iLineEnd < 12 || (sIncoming.compare(0, 9, "HTTP/1.1 ") != 0 && sIncoming.compare(0, 9, "HTTP/1.0 ") != 0)) return false;
+		if (iLineEnd > 12 && sIncoming[12] != ' ') return false;
 		uint64_t iCodeLocal = 0;
-		if (!ParseU64(sIncoming, iCodeAt, iLineEnd, iCodeLocal) || iCodeLocal == 0 || iCodeLocal > 999)
-		{
-			return false;
-		}
-		iStatus = (int32_t)iCodeLocal;
+		if (!ParseU64(sIncoming, 9, 12, iCodeLocal) || iCodeLocal < 100 || iCodeLocal > 599 || iCodeLocal == 101) return false;
+		iStatus = static_cast<int32_t>(iCodeLocal);
+		bHasLength = false;
+		bChunked = false;
+		iContentLength = 0;
 		size_t iPosition = iLineEnd + 2;
 		while (iPosition < iHeaderEndParam)
 		{
@@ -260,10 +254,12 @@ struct Call::State
 			if (iColon != std::string::npos && iColon < iEnd)
 			{
 				size_t iValue = iColon + 1;
-				while (iValue < iEnd && sIncoming[iValue] == ' ')
+				while (iValue < iEnd && (sIncoming[iValue] == ' ' || sIncoming[iValue] == '\t'))
 				{
 					iValue += 1;
 				}
+				size_t iValueEnd = iEnd;
+				while (iValueEnd > iValue && (sIncoming[iValueEnd - 1] == ' ' || sIncoming[iValueEnd - 1] == '\t')) --iValueEnd;
 				size_t iNameEnd = iColon;
 				while (iNameEnd > iPosition && sIncoming[iNameEnd - 1] == ' ')
 				{
@@ -272,7 +268,8 @@ struct Call::State
 				if (EqName(sIncoming, iPosition, iNameEnd, "content-length") && iPosition + std::strlen("content-length") == iNameEnd)
 				{
 					uint64_t iLength = 0;
-					if (!ParseU64(sIncoming, iValue, iEnd, iLength) || iLength > kMaxBody)
+					if (!ParseU64(sIncoming, iValue, iValueEnd, iLength) || (iStatus != 304 && iStatus >= 200 && iLength > kMaxBody)
+						|| (bHasLength && iContentLength != iLength))
 					{
 						return false;
 					}
@@ -281,7 +278,7 @@ struct Call::State
 				}
 				else if (EqName(sIncoming, iPosition, iNameEnd, "transfer-encoding") && iPosition + std::strlen("transfer-encoding") == iNameEnd)
 				{
-					std::string sCoding = sIncoming.substr(iValue, iEnd - iValue);
+					std::string sCoding = sIncoming.substr(iValue, iValueEnd - iValue);
 					for (size_t iIndexLocal = 0; iIndexLocal < sCoding.size(); ++iIndexLocal)
 					{
 						if (sCoding[iIndexLocal] >= 'A' && sCoding[iIndexLocal] <= 'Z')
@@ -289,21 +286,19 @@ struct Call::State
 							sCoding[iIndexLocal] = (char)(sCoding[iIndexLocal] - 'A' + 'a');
 						}
 					}
-					if (sCoding.find("chunked") != std::string::npos)
-					{
-						bChunked = true;
-					}
+					if (bChunked || sCoding != "chunked") return false;
+					bChunked = true;
 				}
 			}
 			iPosition = iEnd + 2;
 		}
-		return true;
+		return !(bHasLength && bChunked);
 	}
 
 	// 头或正文已经收齐就结束。返回 true 表示这一轮不用再读。
 	bool Consume()
 	{
-		if (!bHeadersReady)
+		while (!bHeadersReady)
 		{
 			size_t iHeaderEnd = sIncoming.find("\r\n\r\n");
 			if (iHeaderEnd == std::string::npos)
@@ -315,14 +310,25 @@ struct Call::State
 				}
 				return false;
 			}
-			if (!ParseHeaders(iHeaderEnd))
+			if (iHeaderEnd > kMaxHeader || !ParseHeaders(iHeaderEnd))
 			{
 				Fail("status");
 				return true;
 			}
+			if (iStatus < 200)
+			{
+				if (++iInterimResponses > 16) { Fail("status"); return true; }
+				sIncoming.erase(0, iHeaderEnd + 4);
+				continue;
+			}
 			bHeadersReady = true;
 			iHeaderBytes = iHeaderEnd + 4;
 			iChunkPosition = iHeaderBytes;
+		}
+		if (iStatus == 204 || iStatus == 304)
+		{
+			Complete();
+			return true;
 		}
 		if (bChunked)
 		{
@@ -341,7 +347,7 @@ struct Call::State
 		return true;
 	}
 
-	// 有 chunked 时不看 Content-Length。chunk_pos 停在下一个 chunk 的长度行。
+	// chunk_pos 停在下一个 chunk 的长度行；冲突的长度字段已在头解析阶段拒绝。
 	bool ConsumeChunks()
 	{
 		for (;;)
@@ -390,6 +396,11 @@ struct Call::State
 			if (sIncoming.size() < iDataAt + (size_t)iSize + 2)
 			{
 				return false;
+			}
+			if (sIncoming.compare(iDataAt + static_cast<size_t>(iSize), 2, "\r\n") != 0)
+			{
+				Fail("chunk");
+				return true;
 			}
 			sBody.append(sIncoming, iDataAt, (size_t)iSize);
 			iChunkPosition = iDataAt + (size_t)iSize + 2;

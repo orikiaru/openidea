@@ -2,6 +2,7 @@
 
 #include <list>
 #include <utility>
+#include <memory>
 namespace OI { namespace Thread {
 enum PRIO_ENUM
 {
@@ -29,8 +30,8 @@ public:
 	FnTask(F fnFunctionParam, PRIO_ENUM iPriorityParam = PRIO_NORMAL) : Task(iPriorityParam), m_fnFunction(std::move(fnFunctionParam)) {}
 	void Exec()
 	{
+		std::unique_ptr<FnTask> pSelf(this);
 		m_fnFunction();
-		delete this;
 	}
 };
 

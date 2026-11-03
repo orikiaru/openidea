@@ -1,4 +1,7 @@
 #include "hold_mgr.h"
+#include "oi_http.h"
+#include "oi_rpcdata_jsonall.h"
+#include <limits>
 #include "oi_config.h"
 #include "oi_rpcdata_holdreq.h"
 #include "oi_rpcdata_holdres.h"
@@ -89,9 +92,149 @@ static coro::Task RaceOne(sid_t iSessionIdParam, int32_t iIndexParam, int32_t iM
 	co_return;
 }
 
+// Run with the existing Test.hold switch in both thread modes.
+template<typename T>
+static int CheckJsonInteger()
+{
+	int iBad = 0;
+	T stValue{};
+	const Json::Value stMinimum = std::is_signed_v<T>
+		? Json::Value(static_cast<Json::Int64>((std::numeric_limits<T>::min)())) : Json::Value(Json::UInt64(0));
+	const Json::Value stMaximum(static_cast<Json::UInt64>((std::numeric_limits<T>::max)()));
+	if (!OI::Rpc::FromJsonValue(stMinimum, stValue) || stValue != (std::numeric_limits<T>::min)()) ++iBad;
+	if (!OI::Rpc::FromJsonValue(stMaximum, stValue) || stValue != (std::numeric_limits<T>::max)()) ++iBad;
+	std::vector<Json::Value> vInvalid{Json::Value(1.0), Json::Value(true), Json::Value("1"), Json::Value()};
+	if constexpr (std::is_signed_v<T>)
+	{
+		vInvalid.emplace_back(static_cast<Json::UInt64>((std::numeric_limits<T>::max)()) + 1);
+		if constexpr (sizeof(T) < sizeof(int64_t)) vInvalid.emplace_back(static_cast<Json::Int64>((std::numeric_limits<T>::min)()) - 1);
+	}
+	else
+	{
+		vInvalid.emplace_back(-1);
+		if constexpr (sizeof(T) < sizeof(uint64_t)) vInvalid.emplace_back(static_cast<Json::UInt64>((std::numeric_limits<T>::max)()) + 1);
+	}
+	for (const auto& stInput : vInvalid)
+	{
+		stValue = 7;
+		if (OI::Rpc::FromJsonValue(stInput, stValue) || stValue != 7) ++iBad;
+	}
+	return iBad;
+}
+
+static int CheckJsonDecoding()
+{
+	int iBad = CheckJsonInteger<int8_t>() + CheckJsonInteger<uint8_t>()
+		+ CheckJsonInteger<int16_t>() + CheckJsonInteger<uint16_t>()
+		+ CheckJsonInteger<int32_t>() + CheckJsonInteger<uint32_t>()
+		+ CheckJsonInteger<int64_t>() + CheckJsonInteger<uint64_t>();
+	Json::Value stInput(Json::objectValue);
+	stInput[std::string(40, '0') + "1"] = 1;
+	std::map<int32_t, int32_t> mSigned;
+	if (!OI::Rpc::FromJsonValue(stInput, mSigned) || mSigned != std::map<int32_t, int32_t>{{1, 1}}) ++iBad;
+	const std::vector<std::string> vInvalidKeys{"", "2147483648", "-2147483649", "1x", " 1", "+1", std::string("1\0x", 3)};
+	for (const auto& sKey : vInvalidKeys)
+	{
+		stInput = Json::Value(Json::objectValue);
+		stInput[sKey] = 2;
+		if (OI::Rpc::FromJsonValue(stInput, mSigned) || mSigned != std::map<int32_t, int32_t>{{1, 1}}) ++iBad;
+	}
+	std::map<uint64_t, int32_t> mUnsigned{{3, 7}};
+	for (const auto& sKey : std::vector<std::string>{"-1", "18446744073709551616", "1x"})
+	{
+		stInput = Json::Value(Json::objectValue);
+		stInput[sKey] = 2;
+		if (OI::Rpc::FromJsonValue(stInput, mUnsigned) || mUnsigned != std::map<uint64_t, int32_t>{{3, 7}}) ++iBad;
+	}
+	stInput = Json::Value(Json::objectValue);
+	stInput["18446744073709551615"] = 2;
+	if (!OI::Rpc::FromJsonValue(stInput, mUnsigned) || mUnsigned.count(UINT64_MAX) != 1) ++iBad;
+	std::vector<int8_t> vValues{7};
+	Json::Value stArray(Json::arrayValue);
+	stArray.append(1); stArray.append(128);
+	if (OI::Rpc::FromJsonValue(stArray, vValues) || vValues != std::vector<int8_t>{7}) ++iBad;
+	std::map<std::string, int8_t> mValues{{"old", 7}};
+	stInput = Json::Value(Json::objectValue);
+	stInput["a"] = 1; stInput["b"] = 128;
+	if (OI::Rpc::FromJsonValue(stInput, mValues) || mValues != std::map<std::string, int8_t>{{"old", 7}}) ++iBad;
+	OI::RpcData::JsonAll stOriginal;
+	stOriginal.iInt8 = 7; stOriginal.sMessage = "unchanged"; stOriginal.vNumbers = {3, 4};
+	const std::string sBefore = stOriginal.ToJson();
+	stInput = Json::Value(Json::objectValue);
+	stInput["c"] = 1; stInput["u8"] = 256;
+	if (stOriginal.FromJson(stInput) || stOriginal.ToJson() != sBefore) ++iBad;
+	stInput = Json::Value(Json::objectValue);
+	stInput["c"] = 2;
+	if (!stOriginal.FromJson(stInput) || stOriginal.iInt8 != 2 || stOriginal.sMessage != "unchanged" || stOriginal.vNumbers != std::vector<int32_t>{3, 4}) ++iBad;
+	return iBad;
+}
+
 coro::Task HoldMgr::Pump()
 {
-	int iBadLocal = 0;
+	int iBadLocal = CheckJsonDecoding();
+	printf("hold json validation bad=%d\n", iBadLocal);
+	// 异常必须释放闭包；随后继续执行普通任务，不能终止工作线程。
+	for (int iKind = 0; iKind < 2; ++iKind)
+	{
+		auto pOwner = std::make_shared<int>(1);
+		std::weak_ptr<int> pWeak = pOwner;
+		if (!OI::Thread::ThreadPool::GetInstance().AddTask([pOwner, iKind]() {
+			if (iKind == 0) throw std::runtime_error("ordinary task regression");
+			throw 7;
+		})) ++iBadLocal;
+		pOwner.reset();
+		const auto stDeadline = std::chrono::steady_clock::now() + OI::Timer::Seconds(3);
+		while (!pWeak.expired() && std::chrono::steady_clock::now() < stDeadline) co_await coro::yield(1);
+		if (!pWeak.expired()) ++iBadLocal;
+	}
+	auto pOrdinary = std::make_shared<std::atomic<bool>>(false);
+	if (!OI::Thread::ThreadPool::GetInstance().AddTask([pOrdinary]() { pOrdinary->store(true); })) ++iBadLocal;
+	const auto stTaskDeadline = std::chrono::steady_clock::now() + OI::Timer::Seconds(3);
+	while (!pOrdinary->load() && std::chrono::steady_clock::now() < stTaskDeadline) co_await coro::yield(1);
+	if (!pOrdinary->load()) ++iBadLocal;
+	printf("hold task exceptions bad=%d\n", iBadLocal);
+
+	bool bEncodingRegression = false;
+	TryGetConfig("Regression.encoding_failure", bEncodingRegression);
+	if (bEncodingRegression)
+	{
+		OI::RpcData::HoldReq stRequest;
+		stRequest.iMark = -2147483600;
+		OI::RpcData::HoldRes stResponse;
+		stResponse.iMark = 91;
+		int32_t iResult = co_await OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequest, stResponse, OI::Timer::Seconds(2));
+		if (iResult != OI_ERR_FAIL || stResponse.iMark != 91) ++iBadLocal;
+		stRequest.iMark = 92;
+		iResult = co_await OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequest, stResponse, OI::Timer::Seconds(2));
+		if (iResult != 0 || stResponse.iMark != 92) ++iBadLocal;
+		printf("hold server encoding bad=%d\n", iBadLocal);
+	}
+	int32_t iHttpPort = 0;
+	TryGetConfig("Regression.http_port", iHttpPort);
+	if (iHttpPort > 0)
+	{
+		OI::Http::Client stHttp("127.0.0.1", iHttpPort, 1000);
+		struct HttpCase { const char* pPath; int iStatus; bool bFail; const char* pBody; };
+		const std::vector<HttpCase> vCases{
+			{"good", 200, false, "ok"}, {"interim", 200, false, "ok"},
+			{"fragmented", 200, false, "ok"}, {"204", 204, false, ""}, {"304", 304, false, ""},
+			{"chunk-good", 200, false, "ok"}, {"length-junk", 200, true, ""},
+			{"length-overflow", 200, true, ""}, {"length-conflict", 200, true, ""},
+			{"te-cl", 200, true, ""}, {"chunk-separator", 200, true, ""},
+			{"chunk-junk", 200, true, ""}, {"truncated", 200, true, ""}, {"only-interim", 100, true, ""},
+			{"good", 200, false, "ok"}};
+		for (const auto& stCase : vCases)
+		{
+			auto stResult = co_await stHttp.Get(std::string("/") + stCase.pPath, {});
+			if (stResult.bFail != stCase.bFail || (!stCase.bFail && (stResult.iStatus != stCase.iStatus || stResult.sBody != stCase.pBody)))
+			{
+				++iBadLocal;
+				printf("http regression path=%s status=%d fail=%d error=%s\n", stCase.pPath, stResult.iStatus, stResult.bFail, stResult.sError.c_str());
+			}
+		}
+		printf("hold http framing bad=%d\n", iBadLocal);
+	}
+
 	// 发送预算必须跨会话/通道缓冲连续计数，真正写出才恢复额度。
 	struct BufferedSession : OI::Net::NetSession
 	{

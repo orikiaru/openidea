@@ -31,7 +31,7 @@ public:
 	bool OnTimer()
 	{
 		// Update 已在有序工作线程上，且已释放时间轮锁；直接执行，不能受普通任务限额影响。
-		std::unique_ptr<FnTimer> stSelf(this);
+		std::unique_ptr<FnTimer> pSelf(this);
 		m_fnFunction();
 		return END_TIMER;
 	}

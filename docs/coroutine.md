@@ -170,3 +170,5 @@ OI_RPC_BIND(Hold, HandleHold);
 `OI_RPC_HANDLER(Name, Function)` 用于协程函数声明或定义，提供 `stRequest`（const 引用）和 `stResponse` 参数，函数体用 `co_return int32_t`。`OI_RPC_SYNC_HANDLER` 用于同步处理，函数体用 `return int32_t`。`OI_RPC_CONTEXT_HANDLER` 额外提供 `stContext`，按需访问 iToken、stManager 和 iSessionId。头文件声明可写 `OI_RPC_HANDLER(Hold, HandleHold);`。宏本身不加 static，文件内部函数可自行加 static。
 
 `OI_RPC_BIND(Name, Function)` 使用请求关联的响应类型注册，不增加运行时包装层。也可传函数对象或 lambda；实例成员函数需绑定对象，且对象必须活到所有请求处理结束。原模板接口仍可直接使用，不按 NameReq/NameRes 命名的协议可用模板注册。
+
+普通任务回调抛异常时，闭包仍会释放，调度器捕获并报告异常后继续处理后续任务；可通过 `OI::Thread::SetTaskErrorHandler` 设置线程安全处理器，默认输出 stderr。处理器自身抛异常也不会穿透工作线程。服务端响应编码失败会丢弃半包，重新发送 `OI_ERR_FAIL` 的无响应体回执；无法编码或发送失败回执时关闭连接，避免调用方只靠超时发现错误。

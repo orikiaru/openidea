@@ -10,6 +10,25 @@
 #include "oi_thread.h"
 
 namespace OI { namespace Thread {
+namespace { std::atomic<TaskErrorHandler> g_fnTaskErrorHandler{nullptr}; }
+void SetTaskErrorHandler(TaskErrorHandler fnHandlerParam) { g_fnTaskErrorHandler.store(fnHandlerParam); }
+void ReportTaskError(std::exception_ptr stErrorParam) noexcept
+{
+	if (auto fnHandler = g_fnTaskErrorHandler.load())
+	{
+		try { fnHandler(stErrorParam); return; }
+		catch (...) { fprintf(stderr, "task error handler threw\n"); }
+	}
+	try { std::rethrow_exception(stErrorParam); }
+	catch (const std::exception& stError) { fprintf(stderr, "task failed: %s\n", stError.what()); }
+	catch (...) { fprintf(stderr, "task failed: unknown exception\n"); }
+}
+static void ExecuteTask(Task* pTaskParam) noexcept
+{
+	try { pTaskParam->Exec(); }
+	catch (...) { ReportTaskError(std::current_exception()); }
+}
+
 static std::string GetPrioConfigString(PRIO_ENUM iPriorityParam)
 {
 	switch (iPriorityParam)
@@ -127,7 +146,7 @@ static void WorkerMain(ThreadPool::ThreadData* pDataParam)
 		}
 		else
 		{
-			pTask->Exec();
+			ExecuteTask(pTask);
 		}
 	}
 }
@@ -234,7 +253,7 @@ void ThreadPool::PumpOnce()
 			{
 				break;
 			}
-			pTask->Exec();
+			ExecuteTask(pTask);
 		}
 	}
 	if (fnDrain)

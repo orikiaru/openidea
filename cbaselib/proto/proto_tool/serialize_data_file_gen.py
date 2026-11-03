@@ -168,8 +168,10 @@ __COMPARE____JSON_METHODS__};
         lines.append("    bool FromJson(const Json::Value& in)")
         lines.append("    {")
         lines.append("        if (!in.isObject()) return false;")
+        lines.append("        %s decoded(*this);" % self.class_name)
         for m in self.data.members:
-            lines.append('        if (in.isMember("%s") && !::OI::Rpc::FromJsonValue(in["%s"], %s)) return false;' % (m.json_name or m.name, m.json_name or m.name, m.name))
+            lines.append('        if (in.isMember("%s") && !::OI::Rpc::FromJsonValue(in["%s"], decoded.%s)) return false;' % (m.json_name or m.name, m.json_name or m.name, m.name))
+        lines.append("        *this = std::move(decoded);")
         lines.append("        return true;")
         lines.append("    }")
         lines.append("    bool FromJson(const std::string& text)")

@@ -45,3 +45,9 @@ Hold 同时验证连接前原始发送缓存不得超过连接的发送额度，
 协议字段规则检查：`python3 tools/test_field_names.py`。C++ 类成员、普通函数参数和局部变量命名检查使用 libclang，先在独立 Python 虚拟环境 `pip install libclang`，再运行 `python tools/check_field_names.py --build-dir ~/openidea-build-gcc13`。扫描编译数据库中的自有 C++ 单元，包含单、多线程库；第三方和系统兼容头排除。编译错误也会导致检查失败，不能带错跳过。
 
 类的私有成员使用 `m_` + 类型前缀，普通参数使用类型前缀和 `Param` 后缀，局部变量按类型命名并避免遮蔽成员。结构体成员保持现状；生成协议代码的参数和局部变量不参与改名，第三方代码排除。
+
+Hold 内置 JSON 边界回归（`hold json validation bad=0`）：覆盖有符号/无符号 8/16/32/64 位上下界、溢出和类型拒绝，长整数键、非法键、容器失败保留原值、生成对象失败回滚与缺失字段保持。命名检查测试覆盖带属性的 class/struct 模板；扫描在启用断言时进行。
+
+客户端测试按进程只启动一次，服务发现切换或重连不得重复登记测试等待。回声回归同时核对启动日志仅出现一次。
+
+Hold 新增普通任务异常释放/继续执行、服务端半包编码异常转标准错误回执并继续下一次 RPC、HTTP 真实 TCP 分帧回归。脚本仅在临时配置注入 `[Regression] encoding_failure=true` 与 `http_port`，原始 TCP 夹具和测试进程一同清理；可使用 `--case hold` 单独复测，单、多线程均需通过。

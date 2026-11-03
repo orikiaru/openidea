@@ -11,6 +11,8 @@ import re
 import resource
 import shutil
 import socket
+import socketserver
+import threading
 import struct
 import subprocess
 import tempfile
@@ -36,12 +38,56 @@ def reset_connections():
             s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
 
 
+class RawHttpRegression(socketserver.BaseRequestHandler):
+    # 原始 TCP 回包夹具：库级 HTTP 服务通常不会生成这些畸形报文。
+    def handle(self):
+        self.request.settimeout(3)
+        try:
+            request = b""
+            while b"\r\n\r\n" not in request and len(request) < 8192:
+                part = self.request.recv(8192)
+                if not part: return
+                request += part
+            path = request.split(b" ")[1].strip(b"/")
+            ok = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"
+            chunk = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+            wires = {
+                b"good": ok,
+                b"interim": b"HTTP/1.1 100 Continue\r\n\r\n" + ok,
+                b"204": b"HTTP/1.1 204 No Content\r\n\r\n",
+                b"304": b"HTTP/1.1 304 Not Modified\r\nContent-Length: 123\r\n\r\n",
+                b"chunk-good": chunk + b"2;name=value\r\nok\r\n0\r\nX-Test: done\r\n\r\n",
+                b"length-junk": b"HTTP/1.1 200 OK\r\nContent-Length: 1x\r\n\r\na",
+                b"length-overflow": b"HTTP/1.1 200 OK\r\nContent-Length: 18446744073709551616\r\n\r\n",
+                b"length-conflict": b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\nok",
+                b"te-cl": b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n",
+                b"chunk-separator": chunk + b"1\r\naXX0\r\n\r\n",
+                b"chunk-junk": chunk + b"1x\r\na\r\n0\r\n\r\n",
+                b"truncated": b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\na",
+                b"only-interim": b"HTTP/1.1 100 Continue\r\n\r\n",
+            }
+            if path == b"fragmented":
+                self.request.sendall(b"HTTP/1.1 103 Early Hints\r\nLink: </test>\r\n\r\nHTTP/1.1 200")
+                self.request.settimeout(0.02)
+                try: self.request.recv(1)
+                except socket.timeout: pass
+                self.request.sendall(b" OK\r\nContent-Length: 2\r\n\r\nok")
+            else:
+                self.request.sendall(wires[path])
+            if path in (b"204", b"304"):
+                self.request.recv(1)  # 客户端必须在无正文响应完成后主动关闭，不依赖服务端 EOF。
+        except (OSError, IndexError, KeyError):
+            return
+
+
 def run(case, args):
     mode = "hold" if case.startswith("clock-") else ("echo" if case in ("reset", "registry") else case)
     mode = "log" if case == "disk-full" else mode
     mode = "redis" if case == "redis-limit" else mode
     procs = []
     handles = []
+    http_fixture = None
+    http_thread = None
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     with tempfile.TemporaryDirectory(prefix="oi-regression-") as tmp:
         root = Path(tmp)
@@ -99,6 +145,14 @@ def run(case, args):
             raise RuntimeError("start timeout: " + str(path))
 
         try:
+            if mode == "hold":
+                http_fixture = socketserver.ThreadingTCPServer(("127.0.0.1", 0), RawHttpRegression)
+                http_fixture.daemon_threads = True
+                http_thread = threading.Thread(target=http_fixture.serve_forever, kwargs={"poll_interval": 0.05})
+                http_thread.start()
+                for name in ("ipcclient", "ipcserver"):
+                    with (cfg / (name + ".toml")).open("a", encoding="utf-8") as config:
+                        config.write("\n[Regression]\nencoding_failure = true\nhttp_port = %d\n" % http_fixture.server_address[1])
             logd, logpath = start("logd")
             # 日志服没有 ready 文本，端口探测只用来确认监听，不发送日志。
             deadline = time.monotonic() + 10
@@ -159,6 +213,7 @@ def run(case, args):
             assert client.returncode == 0, (case, client.returncode)
             if mode == "echo":
                 assert "ok=1000000 mismatch=0 rpc_fail=0" in text
+                assert text.count("ipc client connect sid=") == 1, "echo test started more than once"
             elif mode == "redis":
                 assert "redis integrity ok" in text
                 if case == "redis-limit":
@@ -166,6 +221,10 @@ def run(case, args):
                 else:
                     assert re.search(r"redis stress .*bad=0", text)
             elif mode == "hold":
+                assert "hold json validation bad=0" in text
+                assert "hold task exceptions bad=0" in text
+                assert "hold server encoding bad=0" in text
+                assert "hold http framing bad=0" in text
                 assert "hold rpc standardized reply bad=0" in text
                 assert "hold done bad=0" in text
             elif mode == "log":
@@ -196,6 +255,10 @@ def run(case, args):
                         stuck.append(str(proc.args))
                         proc.kill()
                         proc.wait()
+            if http_fixture is not None:
+                http_fixture.shutdown()
+                http_fixture.server_close()
+                http_thread.join()
             for handle in handles:
                 handle.close()
             if stuck:

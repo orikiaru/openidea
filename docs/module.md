@@ -79,3 +79,5 @@ endforeach()
 字段名与 JSON 键可以分开：`0 int32_t iCount json count;` 的 C++ 字段为 `iCount`，JSON 仍使用 `count`。省略 `json` 时 JSON 键就是字段名。XML 输入对应 `<member name="iCount" type="int32_t" seq="0" json="count"/>`。同一结构中 JSON 名称不能重复。
 
 这次只修改 C++ 字段名：字段编号、类型、顺序和已有 JSON 键保持不变，配置键不改。生成后的头文件不要手工修；修改协议源后重新执行 cmake。
+
+JSON 解码约定：整数只接受 JSON 整数 token，拒绝小数（包括 `1.0`）、越界和负数转无符号；整数 map 键必须完整匹配十进制整数，不接受空白、加号、尾随字符或溢出。生成的 `FromJson` 返回 false 时保留原对象，成功时更新提供的字段，缺失字段保持原值；容器成功后整体替换。保证覆盖普通验证失败，不把内存分配异常伪装为 false。

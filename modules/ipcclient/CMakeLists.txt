@@ -41,3 +41,12 @@ else()
 		target_link_libraries(ipcclient PUBLIC pthread)
 	endif()
 endif()
+
+# Hold regressions cover generated JSON decoding and its error guarantees.
+target_link_libraries(ipcclient PUBLIC jsoncpp_static)
+
+if(SINGLE_THREAD)
+    target_link_libraries(ipcclient PUBLIC http_static)
+else()
+    target_link_libraries(ipcclient PUBLIC http_m_static)
+endif()

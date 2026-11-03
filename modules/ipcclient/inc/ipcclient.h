@@ -2,11 +2,13 @@
 #include "oi_rpc_call.h"
 #include "oi_net.h"
 #include "oi_singleton.h"
+#include <atomic>
 
 class IpcClient : public ::OI::Rpc::ProtoClientManager
 {
 	DECLARE_SINGLETON(IpcClient)
 	IpcClient() {}
+	std::atomic<bool> m_bTestsStarted{false};
 public:
 	virtual ~IpcClient();
 	bool Init();

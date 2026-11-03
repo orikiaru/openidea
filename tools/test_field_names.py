@@ -11,7 +11,16 @@ from serialize_data_parse import SerializeData, SerializeDataType
 from serialize_data_file_gen import SerializeDataFileGen
 
 
+from check_field_names import class_key
+
+
 class FieldNamesTest(unittest.TestCase):
+    def test_attributed_template_class(self):
+        self.assertEqual(class_key("template < typename T > class [ [ nodiscard ] ] Result {".split()), "class")
+        self.assertEqual(class_key("template < class T > struct [ [ nodiscard ] ] Result {".split()), "struct")
+        self.assertEqual(class_key("template < class T = Box < int >> class Result {".split()), "class")
+
+
     def test_prefixes(self):
         for typ, name in [("int32_t", "iCount"), ("uint64_t", "iTaskId"),
                           ("bool", "bIsActive"), ("string", "sName"),
@@ -28,7 +37,7 @@ class FieldNamesTest(unittest.TestCase):
         generated = SerializeDataFileGen(data).GenDataFile()
         self.assertIn("os.WritePb(7, iCount)", generated)
         self.assertIn("os.WritePb(20, sName)", generated)
-        self.assertIn('FromJsonValue(in["count"], iCount)', generated)
+        self.assertIn('FromJsonValue(in["count"], decoded.iCount)', generated)
         self.assertIn('ToJsonValue(out["count"], iCount)', generated)
         self.assertIn('ToJsonValue(out["sName"], sName)', generated)
         self.assertNotIn('out["iCount"]', generated)

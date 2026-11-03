@@ -347,11 +347,40 @@ coro::Task RunHandledRpc(F fnFunctionParam, proto_type_t iResponseIdParam, coro:
 		iRetcode = OI_ERR_FAIL;
 		coro::ReportTaskError(iTokenParam, std::current_exception());
 	}
-	::OI::Base::BytesStream stOutput;
-	stOutput << iCallIdLocal << iRetcode;
-	if (iRetcode == 0) stResponseLocal.serialize(stOutput);
-	::OI::Base::BytesStream stFrame = EncodePbFrame(iResponseIdParam, stOutput);
-	if (!pManagerParam->SendBytes(iSessionIdParam, stFrame.GetMutableBuff())) pManagerParam->CloseSession(iSessionIdParam);
+	::OI::Base::BytesStream stFrame;
+	try
+	{
+		::OI::Base::BytesStream stOutput;
+		stOutput << iCallIdLocal << iRetcode;
+		if (iRetcode == 0) stResponseLocal.serialize(stOutput);
+		stFrame = EncodePbFrame(iResponseIdParam, stOutput);
+	}
+	catch (...)
+	{
+		coro::ReportTaskError(iTokenParam, std::current_exception());
+		// 丢弃已经写入的半包，重新构造只有调用号和错误码的回执。
+		try
+		{
+			::OI::Base::BytesStream stFailure;
+			stFailure << iCallIdLocal << int32_t(OI_ERR_FAIL);
+			stFrame = EncodePbFrame(iResponseIdParam, stFailure);
+		}
+		catch (...)
+		{
+			coro::ReportTaskError(iTokenParam, std::current_exception());
+			pManagerParam->CloseSession(iSessionIdParam);
+			co_return;
+		}
+	}
+	try
+	{
+		if (!pManagerParam->SendBytes(iSessionIdParam, stFrame.GetMutableBuff())) pManagerParam->CloseSession(iSessionIdParam);
+	}
+	catch (...)
+	{
+		coro::ReportTaskError(iTokenParam, std::current_exception());
+		pManagerParam->CloseSession(iSessionIdParam);
+	}
 	co_return;
 }
 
@@ -499,20 +528,20 @@ RpcCallAwaiter<Req, Res> RpcCall(::OI::Net::SessionManager& stManagerParam, sid_
 template<typename Res>
 class [[nodiscard]] RpcResult
 {
-	int32_t iReturnCode;
-	Res stResponse;
+	int32_t m_iReturnCode;
+	Res m_stResponse;
 	void Check() const
 	{
-		if (iReturnCode != 0) throw std::logic_error("RPC failed: check GetRet() before GetRes()");
+		if (m_iReturnCode != 0) throw std::logic_error("RPC failed: check GetRet() before GetRes()");
 	}
 public:
-	RpcResult(int32_t iReturnCodeParam, Res stResponseParam) : iReturnCode(iReturnCodeParam), stResponse(std::move(stResponseParam)) {}
-	int32_t GetRet() const noexcept { return iReturnCode; }
-	explicit operator bool() const noexcept { return iReturnCode == 0; }
-	Res& GetRes() & { Check(); return stResponse; }
-	const Res& GetRes() const & { Check(); return stResponse; }
-	Res GetRes() && { Check(); return std::move(stResponse); }
-	Res GetRes() const && { Check(); return stResponse; }
+	RpcResult(int32_t iReturnCodeParam, Res stResponseParam) : m_iReturnCode(iReturnCodeParam), m_stResponse(std::move(stResponseParam)) {}
+	int32_t GetRet() const noexcept { return m_iReturnCode; }
+	explicit operator bool() const noexcept { return m_iReturnCode == 0; }
+	Res& GetRes() & { Check(); return m_stResponse; }
+	const Res& GetRes() const & { Check(); return m_stResponse; }
+	Res GetRes() && { Check(); return std::move(m_stResponse); }
+	Res GetRes() const && { Check(); return m_stResponse; }
 };
 
 // 输出引用仅在成功解包后更新，错误时保留调用方原值。

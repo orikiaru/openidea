@@ -7,6 +7,7 @@
 #include <string.h>
 #include <exception>
 #include <type_traits>
+#include <utility>
 
 namespace OI { namespace Rpc { class Serialize; } }
 namespace OI { namespace Base {
@@ -163,9 +164,9 @@ public:
 	template<typename T>
 	void ReadPb(uint32_t iSizeParam, std::vector<T>& stValueParam)
 	{
-		T stElem;
+		T stElem{};
 		ReadPb(iSizeParam, stElem);
-		stValueParam.push_back(stElem);
+		stValueParam.push_back(std::move(stElem));
 	}
 	template<typename K, typename V>
 	BytesStream& WritePb(uint32_t iSequenceParam, const std::map<K, V>& stValueParam)

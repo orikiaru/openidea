@@ -1,9 +1,10 @@
 #pragma once
 #include "oi_bytes.h"
 #include "json/json.h"
-#include <cerrno>
+#include <charconv>
+#include <limits>
+#include <type_traits>
 #include <cstdint>
-#include <cstdlib>
 #include <map>
 #include <string>
 #include <utility>
@@ -34,54 +35,43 @@ inline bool FromJsonValue(const Json::Value& stInputParam, bool& bOutputParam)
 	bOutputParam = stInputParam.asBool();
 	return true;
 }
-inline bool FromJsonValue(const Json::Value& stInputParam, int8_t& iOutputParam)
+// 只接受整数 token，先检查目标范围，避免截断和有符号/无符号溢出。
+template<typename T>
+std::enable_if_t<std::is_integral_v<T> && !std::is_same_v<T, bool>, bool>
+FromJsonValue(const Json::Value& stInputParam, T& stOutputParam)
 {
-	if (!stInputParam.isIntegral()) return false;
-	iOutputParam = static_cast<int8_t>(stInputParam.asInt());
+	if (stInputParam.type() == Json::intValue)
+	{
+		const auto iValue = stInputParam.asInt64();
+		if constexpr (std::is_signed_v<T>)
+		{
+			if (iValue < (std::numeric_limits<T>::min)() || iValue > (std::numeric_limits<T>::max)()) return false;
+		}
+		else if (iValue < 0 || static_cast<Json::UInt64>(iValue) > (std::numeric_limits<T>::max)()) return false;
+		stOutputParam = static_cast<T>(iValue);
+		return true;
+	}
+	if (stInputParam.type() == Json::uintValue)
+	{
+		const auto iValue = stInputParam.asUInt64();
+		if (iValue > static_cast<Json::UInt64>((std::numeric_limits<T>::max)())) return false;
+		stOutputParam = static_cast<T>(iValue);
+		return true;
+	}
+	return false;
+}
+
+// 在字符串有效期内完整解析整数键，不依赖 errno 或区域设置。
+template<typename T>
+bool ParseJsonIntegerKey(const std::string& sKeyParam, T& stOutputParam)
+{
+	T stValue{};
+	const auto stParsed = std::from_chars(sKeyParam.data(), sKeyParam.data() + sKeyParam.size(), stValue);
+	if (stParsed.ec != std::errc{} || stParsed.ptr != sKeyParam.data() + sKeyParam.size()) return false;
+	stOutputParam = stValue;
 	return true;
 }
-inline bool FromJsonValue(const Json::Value& stInputParam, uint8_t& iOutputParam)
-{
-	if (!stInputParam.isIntegral()) return false;
-	iOutputParam = static_cast<uint8_t>(stInputParam.asUInt());
-	return true;
-}
-inline bool FromJsonValue(const Json::Value& stInputParam, int16_t& iOutputParam)
-{
-	if (!stInputParam.isIntegral()) return false;
-	iOutputParam = static_cast<int16_t>(stInputParam.asInt());
-	return true;
-}
-inline bool FromJsonValue(const Json::Value& stInputParam, uint16_t& iOutputParam)
-{
-	if (!stInputParam.isIntegral()) return false;
-	iOutputParam = static_cast<uint16_t>(stInputParam.asUInt());
-	return true;
-}
-inline bool FromJsonValue(const Json::Value& stInputParam, int32_t& iOutputParam)
-{
-	if (!stInputParam.isIntegral()) return false;
-	iOutputParam = static_cast<int32_t>(stInputParam.asInt());
-	return true;
-}
-inline bool FromJsonValue(const Json::Value& stInputParam, uint32_t& iOutputParam)
-{
-	if (!stInputParam.isIntegral()) return false;
-	iOutputParam = static_cast<uint32_t>(stInputParam.asUInt());
-	return true;
-}
-inline bool FromJsonValue(const Json::Value& stInputParam, int64_t& iOutputParam)
-{
-	if (!stInputParam.isIntegral()) return false;
-	iOutputParam = static_cast<int64_t>(stInputParam.asInt64());
-	return true;
-}
-inline bool FromJsonValue(const Json::Value& stInputParam, uint64_t& iOutputParam)
-{
-	if (!stInputParam.isUInt64() && !stInputParam.isIntegral()) return false;
-	iOutputParam = static_cast<uint64_t>(stInputParam.asUInt64());
-	return true;
-}
+
 inline bool FromJsonValue(const Json::Value& stInputParam, float& fOutputParam)
 {
 	if (!stInputParam.isNumeric()) return false;
@@ -113,13 +103,15 @@ template<typename T>
 bool FromJsonValue(const Json::Value& stInputParam, std::vector<T>& stOutputParam)
 {
 	if (!stInputParam.isArray()) return false;
-	stOutputParam.clear();
+	std::vector<T> vDecoded;
+	vDecoded.reserve(stInputParam.size());
 	for (Json::ArrayIndex iIndexLocal = 0; iIndexLocal < stInputParam.size(); ++iIndexLocal)
 	{
 		T stElem{};
 		if (!FromJsonValue(stInputParam[iIndexLocal], stElem)) return false;
-		stOutputParam.push_back(std::move(stElem));
+		vDecoded.push_back(std::move(stElem));
 	}
+	stOutputParam.swap(vDecoded);
 	return true;
 }
 
@@ -139,13 +131,14 @@ template<typename V>
 bool FromJsonValue(const Json::Value& stInputParam, std::map<std::string, V>& stOutputParam)
 {
 	if (!stInputParam.isObject()) return false;
-	stOutputParam.clear();
+	std::map<std::string, V> mDecoded;
 	for (auto it = stInputParam.begin(); it != stInputParam.end(); ++it)
 	{
 		V stVal{};
 		if (!FromJsonValue(*it, stVal)) return false;
-		stOutputParam[it.name()] = std::move(stVal);
+		mDecoded[it.name()] = std::move(stVal);
 	}
+	stOutputParam.swap(mDecoded);
 	return true;
 }
 
@@ -165,17 +158,16 @@ template<typename V>
 bool FromJsonValue(const Json::Value& stInputParam, std::map<int32_t, V>& stOutputParam)
 {
 	if (!stInputParam.isObject()) return false;
-	stOutputParam.clear();
+	std::map<int32_t, V> mDecoded;
 	for (auto it = stInputParam.begin(); it != stInputParam.end(); ++it)
 	{
-		char* pEnd = NULL;
-		int64_t iKey = std::strtoll(it.name().c_str(), &pEnd, 10);
-		if (pEnd == it.name().c_str() || *pEnd != '\0') return false;
-		if (iKey < INT32_MIN || iKey > INT32_MAX) return false;
+		int32_t iKey{};
+		if (!ParseJsonIntegerKey(it.name(), iKey)) return false;
 		V stVal{};
 		if (!FromJsonValue(*it, stVal)) return false;
-		stOutputParam[static_cast<int32_t>(iKey)] = std::move(stVal);
+		mDecoded[iKey] = std::move(stVal);
 	}
+	stOutputParam.swap(mDecoded);
 	return true;
 }
 
@@ -195,20 +187,16 @@ template<typename U, typename V>
 bool FromJsonUnsignedKeyMap(const Json::Value& stInputParam, std::map<U, V>& stOutputParam)
 {
 	if (!stInputParam.isObject()) return false;
-	stOutputParam.clear();
+	std::map<U, V> mDecoded;
 	for (auto it = stInputParam.begin(); it != stInputParam.end(); ++it)
 	{
-		const std::string& sNameLocal = it.name();
-		if (sNameLocal.empty() || sNameLocal[0] == '-') return false;
-		char* pEnd = NULL;
-		errno = 0;
-		unsigned long long iKey = std::strtoull(sNameLocal.c_str(), &pEnd, 10);
-		if (pEnd == sNameLocal.c_str() || *pEnd != '\0' || errno == ERANGE) return false;
-		if (iKey > static_cast<unsigned long long>(static_cast<U>(-1))) return false;
+		U stKey{};
+		if (!ParseJsonIntegerKey(it.name(), stKey)) return false;
 		V stVal{};
 		if (!FromJsonValue(*it, stVal)) return false;
-		stOutputParam[static_cast<U>(iKey)] = std::move(stVal);
+		mDecoded[stKey] = std::move(stVal);
 	}
+	stOutputParam.swap(mDecoded);
 	return true;
 }
 

@@ -23,10 +23,13 @@ def owned(path):
 
 def prefix(typ):
     from clang.cindex import TypeKind as K
+    declared_name = re.sub(r"^const ", "", typ.spelling)
     typ = typ.get_canonical()
     if typ.kind in (K.LVALUEREFERENCE, K.RVALUEREFERENCE):
         return prefix(typ.get_pointee())
     name = re.sub(r"^const ", "", typ.spelling)
+    if not name.startswith("std::") and declared_name.startswith("std::") and "<" in declared_name:
+        name = declared_name
     if name.startswith("std::atomic<"):
         return prefix(typ.get_template_argument_type(0))
     if typ.kind == K.POINTER:
@@ -42,6 +45,17 @@ def prefix(typ):
     if name.startswith("std::function<") or "lambda at " in name: return {"fn"}
     if typ.kind == K.UNEXPOSED: return {"st", "fn"}
     return {"st"}
+
+
+def class_key(tokens):
+    """Read the record keyword outside template parameters; attributes may follow it."""
+    depth = 0
+    for token in tokens:
+        if token == "<": depth += 1
+        elif token in (">", ">>"): depth = max(0, depth - len(token))
+        elif depth == 0 and token in ("class", "struct", "union"):
+            return token
+    return None
 
 
 def inspect(command):
@@ -85,7 +99,7 @@ def inspect(command):
         generated = file and ("/modules/include/" in file or "/oi_rpcdata_" in file)
         if file and node.spelling and not generated and (is_field or is_variable):
             allowed = prefix(node.type)
-            is_class = parent.kind == c.CursorKind.CLASS_DECL or (parent.kind == c.CursorKind.CLASS_TEMPLATE and re.search(r"\bclass\s+" + re.escape(parent.spelling) + r"\b", " ".join(t.spelling for t in parent.get_tokens())))
+            is_class = parent.kind == c.CursorKind.CLASS_DECL or (parent.kind == c.CursorKind.CLASS_TEMPLATE and class_key(t.spelling for t in parent.get_tokens()) == "class")
             if is_field and not is_class:
                 for child in node.get_children(): walk(child, in_function)
                 return

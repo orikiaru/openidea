@@ -1,5 +1,6 @@
 #pragma once
 #include <atomic>
+#include <exception>
 #include <coroutine>
 #include <deque>
 #include <map>
@@ -15,6 +16,11 @@
 #include <cstdint>
 
 namespace OI { namespace Thread {
+// 普通任务异常在调度入口隔离；处理器不得抛异常，nullptr 恢复 stderr 报告。
+using TaskErrorHandler = void (*)(std::exception_ptr);
+void SetTaskErrorHandler(TaskErrorHandler fnHandlerParam);
+void ReportTaskError(std::exception_ptr stErrorParam) noexcept;
+
 class ThreadPool
 {
 	DECLARE_SINGLETON(ThreadPool)

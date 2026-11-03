@@ -44,10 +44,41 @@ static OI_RPC_HANDLER(Hold, HandleHold)
 	co_return 0;
 }
 
+// 仅由回归配置启用，在写入部分响应后注入序列化异常。
+struct EncodingFailureResponse : OI::RpcData::HoldRes
+{
+	bool bThrow = false;
+	OI::Base::BytesStream& serialize(OI::Base::BytesStream& stOutputParam) const override
+	{
+		if (bThrow)
+		{
+			stOutputParam << int32_t(123);
+			throw std::runtime_error("injected server response encoding failure");
+		}
+		return HoldRes::serialize(stOutputParam);
+	}
+};
+static OI::Rpc::RpcTask HandleEncodingRegression(const OI::RpcData::HoldReq& stRequestParam, EncodingFailureResponse& stResponseParam)
+{
+	int32_t iResult = co_await HandleHold(stRequestParam, stResponseParam);
+	stResponseParam.bThrow = stRequestParam.iMark == -2147483600;
+	co_return iResult;
+}
+
 bool IpcServer::Init()
 {
 	OI_RPC_BIND(AllEcho, HandleAllEcho);
 	OI_RPC_BIND(Hold, HandleHold);
+	bool bEncodingRegression = false;
+	TryGetConfig("Regression.encoding_failure", bEncodingRegression);
+	if (bEncodingRegression)
+	{
+		OI::Rpc::BindRpcHandler(OI::Rpc::RpcProtoId<OI::RpcData::HoldReq>::iValue,
+			[](coro::Token iTokenParam, OI::Net::SessionManager* pManagerParam, sid_t iSessionIdParam, OI::Base::BytesStream stBodyParam) {
+				return OI::Rpc::RunHandledRpc<OI::RpcData::HoldReq, EncodingFailureResponse>(HandleEncodingRegression,
+					OI::Rpc::RpcProtoId<OI::RpcData::HoldRes>::iValue, iTokenParam, pManagerParam, iSessionIdParam, std::move(stBodyParam));
+			});
+	}
 	return ::OI::Net::SessionManager::Init();
 }
 
