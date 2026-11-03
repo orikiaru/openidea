@@ -6,6 +6,10 @@
 #include "oi_session.h"
 #include <map>
 #include <string>
+#include <memory>
+#include <vector>
+#include <coroutine>
+namespace coro { void Schedule(std::coroutine_handle<> stHandleParam); }
 namespace OI { namespace Net {
 
 class Session;
@@ -24,6 +28,11 @@ class SessionManager;
 
 class SessionManager
 {
+	struct ConnectWait;
+	std::vector<std::weak_ptr<ConnectWait>> m_vConnectWaiters;
+	void FinishConnectWaiters(bool bResultParam);
+	bool StartConnect();
+	void BeginConnect(const std::shared_ptr<ConnectWait>& pWaitParam);
 protected:
 	typedef std::map<sid_t, Session*> SessionMap;
 	SessionMap 	mSessionMap;
@@ -41,6 +50,19 @@ protected:
 	bool		bServiceDown;
 	bool		bServiceSeen;
 public:
+	// 等待连接的 awaiter；只挂起调用协程，完成后进入框架调度队列。
+	class ConnectAwaiter
+	{
+		std::shared_ptr<ConnectWait> m_pWait;
+		bool Suspend(std::coroutine_handle<> stHandleParam, void (*fnScheduleParam)(std::coroutine_handle<>));
+	public:
+		explicit ConnectAwaiter(SessionManager* pManagerParam);
+		ConnectAwaiter(const ConnectAwaiter&) = delete;
+		ConnectAwaiter(ConnectAwaiter&&) = default;
+		bool await_ready() const noexcept { return false; }
+		bool await_suspend(std::coroutine_handle<> stHandleParam) { return Suspend(stHandleParam, coro::Schedule); }
+		bool await_resume() const noexcept;
+	};
 	SessionManager() :iCurrentSessionId(0), iSessionType(SESSION_TYPE_TCP), bServiceDown(false), bServiceSeen(false) {}
 	virtual ~SessionManager();
 	void DefaultInit(const std::string& sSipParam, const std::string& sPortParam, SESSION_TYPE iSessionTypeParam = SESSION_TYPE_TCP)
@@ -50,7 +72,8 @@ public:
 	const std::string& GetStrIP()	{ return sIpAddress; }
 	const std::string& GetStrPort() { return sPort; }
 	SESSION_TYPE   GetSessionType() { return iSessionType; }
-	bool StartClient(bool bAsyncParam = true);	//同步起Client返回值有意义
+	// 调用即启动；忽略结果为异步启动，co_await 等待连接成功/失败。
+	ConnectAwaiter StartClient() { return ConnectAwaiter(this); }
 	bool StartServer(bool bAsyncParam = true);	//目前不支持同步操作
 	// 定期拉到的服务列表。online 为假表示这个名字已经从列表里消失。
 	void ApplyService(const std::string& sIpParam, const std::string& sPortParam, bool bOnlineParam);

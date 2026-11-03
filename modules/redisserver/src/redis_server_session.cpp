@@ -151,18 +151,24 @@ void RedisServerSession::OnDataOut()
 {
 }
 
-void RedisServerSession::ResumeRead()
+bool RedisServerSession::ResumeRead()
 {
-	if (IsClosed()) return;
+	if (IsClosed()) return false;
 	m_bReadPaused = false;
 	// 内核可能已经没数据；必须先消费会话中留下的完整命令。
-	OnDataIn();
+	const size_t iConsumed = ProcessInput(1);
 	if (!m_bReadPaused && !IsClosed()) AllowRead();
+	return iConsumed != 0;
 }
 
 void RedisServerSession::OnDataIn()
 {
-	if (m_bReadPaused || IsClosed()) return;
+	ProcessInput(32);
+}
+
+size_t RedisServerSession::ProcessInput(size_t iBudgetParam)
+{
+	if (m_bReadPaused || IsClosed()) return 0;
 	// 只切出完整命令的边界，原样转给上游，不拆成参数再编一遍。
 	const char* pBegin = stInputBuffer.Begin();
 	const char* pEnd = pBegin + stInputBuffer.Size();
@@ -200,6 +206,15 @@ void RedisServerSession::OnDataIn()
 			if (IsClosed()) break;
 		}
 		pPointer += iNumber;
+		if (--iBudgetParam == 0 && pPointer < pEnd)
+		{
+			m_bReadPaused = true;
+			ForbidRead();
+			m_pOwner->Pause(m_iLink, GetSessionID());
+			break;
+		}
 	}
-	stInputBuffer.Erase(0, (size_t)(pPointer - pBegin));
+	const size_t iConsumed = static_cast<size_t>(pPointer - pBegin);
+	stInputBuffer.Erase(0, iConsumed);
+	return iConsumed;
 }

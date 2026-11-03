@@ -200,7 +200,12 @@ static void ApplyOp(const IoOp& stOperationParam)
 
 static void DrainOps()
 {
-	for (;;)
+	size_t iRemaining;
+	{
+		::OI::Thread::MutexGuard stGuard(g_op_lock);
+		iRemaining = g_ops.size();
+	}
+	while (iRemaining-- > 0)
 	{
 		IoOp stOperation;
 		{
@@ -349,6 +354,11 @@ void Poll::CallOnLoop(void (*fnFunctionParam)(void*), void* pArgumentParam)
 		}
 		return;
 	}
+	PostOnLoop(fnFunctionParam, pArgumentParam);
+}
+
+void Poll::PostOnLoop(void (*fnFunctionParam)(void*), void* pArgumentParam)
+{
 	IoOp stOperation;
 	stOperation.iType = IO_OP_CALL;
 	stOperation.pChannel = NULL;

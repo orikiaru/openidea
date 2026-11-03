@@ -3,6 +3,7 @@
 #include "oi_log.h"
 #include "oi_poll.h"
 #include "oi_config.h"
+#include "oi_net_session.h"
 #include <stdexcept>
 #include "test_board.h"
 #include <cstring>
@@ -102,6 +103,70 @@ static coro::Task RedisPressureRegression(bool bOversizedParam)
 	TestBoard::GetInstance().Done(pBad->load() ? 1 : 0);
 }
 
+// 两条真实下游连接共享一条上游；生命周期覆盖整个测试进程。
+class RedisFairPeer : public OI::Net::SessionManager
+{
+	class ReplySession : public OI::Net::NetSession
+	{
+		RedisFairPeer* m_pOwner;
+	public:
+		explicit ReplySession(RedisFairPeer* pOwnerParam) : NetSession(pOwnerParam), m_pOwner(pOwnerParam) {}
+		void OnDataOut() override {}
+		void OnDataIn() override
+		{
+			while (stInputBuffer.Size() >= 7)
+			{
+				const std::string sExpected = std::string("$1\r\n") + m_pOwner->m_sLabel + "\r\n";
+				if (std::memcmp(stInputBuffer.Begin(), sExpected.data(), 7) != 0) ++m_pOwner->m_iBad;
+				stInputBuffer.Erase(0, 7);
+				++m_pOwner->m_iReplies;
+				if (m_pOwner->m_pOther) m_pOwner->m_iOtherAtReply = m_pOwner->m_pOther->m_iReplies.load();
+			}
+		}
+	};
+	std::string m_sLabel;
+	RedisFairPeer* m_pOther;
+	std::atomic<int> m_iReplies{0}, m_iBad{0}, m_iOtherAtReply{0};
+	std::atomic<sid_t> m_iSid{INVALID_SID};
+	OI::Net::Session* CloneSession() override { return new ReplySession(this); }
+	void OnAddSession(OI::Net::Session* pSessionParam) override { m_iSid = pSessionParam->GetSessionID(); }
+	void OnDelSession(const OI::Net::Session*) override { m_iSid = INVALID_SID; }
+public:
+	RedisFairPeer(std::string sLabelParam, RedisFairPeer* pOtherParam) : m_sLabel(std::move(sLabelParam)), m_pOther(pOtherParam)
+	{ DefaultInit("127.0.0.1", "16379"); }
+	bool SendCommands(int iCountParam)
+	{
+		OI::Base::Bytes stWire;
+		const std::string sCommand = std::string("*2\r\n$4\r\nECHO\r\n$1\r\n") + m_sLabel + "\r\n";
+		for (int iIndex = 0; iIndex < iCountParam; ++iIndex) stWire.Append(sCommand.data(), sCommand.size());
+		return SendBytes(m_iSid.load(), stWire);
+	}
+	int Replies() const { return m_iReplies.load(); }
+	int Bad() const { return m_iBad.load(); }
+	int OtherAtReply() const { return m_iOtherAtReply.load(); }
+};
+
+static coro::Task RedisFairnessRegression()
+{
+	static RedisFairPeer stFirst("A", nullptr), stSecond("B", &stFirst);
+	int iBad = 0;
+	if (!(co_await stFirst.StartClient()) || !stFirst.SendCommands(64)) ++iBad;
+	co_await coro::yield(100);
+	if (!(co_await stSecond.StartClient()) || !stSecond.SendCommands(1)) ++iBad;
+	LOG_TRACE("redis fairness ready"); fflush(stdout);
+	const auto stDeadline = std::chrono::steady_clock::now() + OI::Timer::Seconds(8);
+	while (stFirst.Replies() == 0 && std::chrono::steady_clock::now() < stDeadline) co_await coro::yield(1);
+	const auto stStart = std::chrono::steady_clock::now();
+	while ((stFirst.Replies() != 64 || stSecond.Replies() != 1) && std::chrono::steady_clock::now() < stDeadline) co_await coro::yield(1);
+	const auto iElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - stStart).count();
+	if (stFirst.Replies() != 64 || stSecond.Replies() != 1 || iElapsed > 1500) ++iBad;
+	iBad += stFirst.Bad() + stSecond.Bad();
+	stFirst.CloseAllSessions(); stSecond.CloseAllSessions();
+	LOG_TRACE("redis fairness done first=%d second=%d other_at_reply=%d elapsed_ms=%lld bad=%d", stFirst.Replies(), stSecond.Replies(), stSecond.OtherAtReply(), static_cast<long long>(iElapsed), iBad);
+	fflush(stdout);
+	TestBoard::GetInstance().Done(iBad ? 1 : 0);
+}
+
 coro::Task RedisMgr::Pump()
 {
 	int iSpins = 0;
@@ -121,7 +186,9 @@ coro::Task RedisMgr::Pump()
 		co_await coro::yield(50);
 	}
 
-	bool bShutdown = false, bPressure = false, bOversized = false;
+	bool bShutdown = false, bPressure = false, bOversized = false, bFairness = false;
+	TryGetConfig("Regression.redis_fairness", bFairness);
+	if (bFairness) { co_await RedisFairnessRegression(); co_return; }
 	TryGetConfig("Regression.redis_shutdown", bShutdown);
 	TryGetConfig("Regression.redis_pressure", bPressure);
 	TryGetConfig("Regression.redis_oversized", bOversized);

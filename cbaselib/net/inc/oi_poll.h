@@ -34,6 +34,8 @@ public:
 	::uv_loop_s* Loop();
 	// 已经在 poll 线程就直接执行，否则丢进 libuv 再执行。定时器轮子只能在这条线程上改。
 	void CallOnLoop(void (*fnFunctionParam)(void*), void* pArgumentParam);
+	// 始终排队；本批回调中新投的调用留到下次唤醒，避免重入和饿死 IO。
+	void PostOnLoop(void (*fnFunctionParam)(void*), void* pArgumentParam);
 
 	void IOEventRegister(Channel* pChannelParam, bool bAllowReadParam = true, bool bAllowWriteParam = false);
 	void IOEventMod(Channel* pChannelParam, int iNewMaskParam);

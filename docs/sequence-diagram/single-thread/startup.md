@@ -35,4 +35,4 @@ sequenceDiagram
     Note over Main: SingleThreadStartWork 堵在主循环里
 ```
 
-`ipcclient` 在 `StartClient` 之前，若开了 Redis 或 Hold，会先把 `RedisClient` 连上。HTTP 探测在 `ipcserver` 听上之后用 `StartTask` 拉起，不等它。句柄进单线程队列，要等主循环开始才会跑。
+`ipcclient` 在 `StartClient` 之前，若开了 Redis 或 Hold，会先发起 `RedisClient` 建连。HTTP 探测在 `ipcserver` 听上之后用 `StartTask` 拉起，不等它。句柄进单线程队列，要等主循环开始才会跑。

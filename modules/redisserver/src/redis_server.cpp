@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <algorithm>
 
 namespace
 {
@@ -309,7 +310,11 @@ void RedisServer::OnAddSession(::OI::Net::Session* pSessionParam)
 
 void RedisServer::OnDelSession(const ::OI::Net::Session* pSessionParam)
 {
-	for (auto& stLink : m_vLinks) stLink.vPaused.erase(pSessionParam->GetSessionID());
+	for (auto& stLink : m_vLinks)
+	{
+		stLink.vPaused.erase(pSessionParam->GetSessionID());
+		std::erase(stLink.vReady, pSessionParam->GetSessionID());
+	}
 	LOG_TRACE("RedisServer::OnDelSession sid=%d", pSessionParam->GetSessionID());
 }
 
@@ -364,34 +369,45 @@ void RedisServer::Pause(int32_t iLinkParam, sid_t iSessionIdParam)
 	auto& stLink = m_vLinks.at(static_cast<size_t>(iLinkParam));
 	if (stLink.vPaused.insert(iSessionIdParam).second)
 	{
+		stLink.vReady.push_back(iSessionIdParam);
 		LOG_TRACE("redis pressure pause link=%d pending=%zu bytes=%zu", iLinkParam, stLink.vPending.size(), stLink.iPendingBytes);
 		fflush(stdout);
 	}
+	if (!stLink.bResuming) ArmResume(&stLink);
 }
 
 void RedisServer::ReleaseCredit(RedisLink* pLinkParam)
 {
 	pLinkParam->iPendingBytes -= pLinkParam->vPending.front().iBytes;
 	pLinkParam->vPending.pop_front();
+	ArmResume(pLinkParam);
+}
+
+void RedisServer::ArmResume(RedisLink* pLinkParam)
+{
 	if (::OI::Thread::ThreadPool::GetInstance().StopRequested()
 		|| pLinkParam->bResumeArmed || pLinkParam->vPaused.empty()
 		|| pLinkParam->iPendingBytes > m_iMaxPendingBytes / 2
 		|| pLinkParam->vPending.size() > m_iMaxPendingCommands / 2) return;
 	pLinkParam->bResumeArmed = true;
-	::OI::Timer::BaseTimerManager::GetInstance().AddTimer([pLinkParam]() {
-		::OI::Net::Poll::GetInstance().CallOnLoop([](void* pArgumentParam) {
-			RedisServer::GetInstance().Resume(static_cast<RedisLink*>(pArgumentParam));
-		}, pLinkParam);
-	}, 1);
+	OI::Net::Poll::GetInstance().PostOnLoop([](void* pArgumentParam) {
+		RedisServer::GetInstance().Resume(static_cast<RedisLink*>(pArgumentParam));
+	}, pLinkParam);
 }
 
 void RedisServer::Resume(RedisLink* pLinkParam)
 {
 	pLinkParam->bResumeArmed = false;
-	std::set<sid_t> vReady;
-	vReady.swap(pLinkParam->vPaused);
-	for (const auto& iSessionId : vReady)
+	pLinkParam->bResuming = true;
+	bool bProgress = false;
+	size_t iRemaining = pLinkParam->vReady.size();
+	while (iRemaining-- > 0 && !pLinkParam->vReady.empty())
 	{
+		// 额度满时保留队首；恢复者每次只发一条，然后排到队尾。
+		if (pLinkParam->vPending.size() >= m_iMaxPendingCommands || pLinkParam->iPendingBytes >= m_iMaxPendingBytes) break;
+		const sid_t iSessionId = pLinkParam->vReady.front();
+		pLinkParam->vReady.pop_front();
+		pLinkParam->vPaused.erase(iSessionId);
 		RedisServerSession* pSession = nullptr;
 		{
 			::OI::Thread::MutexGuard stLock(stLocker);
@@ -404,10 +420,20 @@ void RedisServer::Resume(RedisLink* pLinkParam)
 		}
 		if (pSession)
 		{
-			pSession->ResumeRead();
+			const bool bConsumed = pSession->ResumeRead();
 			pSession->Release();
+			bProgress = bProgress || bConsumed;
+			if (!bConsumed && pLinkParam->vPaused.contains(iSessionId))
+			{
+				// 大请求额度尚不足时保留优先权，不能被后续小请求永久挤占。
+				std::erase(pLinkParam->vReady, iSessionId);
+				pLinkParam->vReady.push_front(iSessionId);
+				break;
+			}
 		}
 	}
+	pLinkParam->bResuming = false;
+	if (bProgress) ArmResume(pLinkParam);
 }
 
 bool RedisServer::Issue(int32_t iLinkParam, sid_t iSessionIdParam, const char* pCmdParam, size_t iLengthParam)
@@ -426,6 +452,7 @@ bool RedisServer::Issue(int32_t iLinkParam, sid_t iSessionIdParam, const char* p
 		if (!SendBytes(iSessionIdParam, stError)) CloseSession(iSessionIdParam);
 		return true;
 	}
+	if (!stLink.bResuming && !stLink.vPaused.empty()) return false;
 	if (stLink.vPending.size() >= m_iMaxPendingCommands || iLengthParam > m_iMaxPendingBytes - stLink.iPendingBytes) return false;
 	stLink.vPending.push_back(RedisPending{iSessionIdParam, iLengthParam});
 	stLink.iPendingBytes += iLengthParam;

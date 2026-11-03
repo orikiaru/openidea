@@ -14,6 +14,7 @@
 #include "rpc_ids.h"
 #include "oi_redis.h"
 #include "oi_poll.h"
+#include "oi_net_session.h"
 #include "test_board.h"
 #include <atomic>
 #include <chrono>
@@ -226,6 +227,68 @@ public:
 	}
 };
 
+class ClientConnectProbe : public OI::Net::SessionManager
+{
+	class ProbeSession : public OI::Net::NetSession
+	{
+	public:
+		explicit ProbeSession(ClientConnectProbe* pOwnerParam) : NetSession(pOwnerParam) {}
+		void OnDataIn() override { stInputBuffer.Clear(); }
+		void OnDataOut() override {}
+	};
+	std::atomic<int> m_iConnections{0};
+	OI::Net::Session* CloneSession() override { return new ProbeSession(this); }
+	void OnAddSession(OI::Net::Session*) override { ++m_iConnections; }
+	void OnDelSession(const OI::Net::Session*) override {}
+public:
+	explicit ClientConnectProbe(const std::string& sPortParam) { DefaultInit("127.0.0.1", sPortParam); }
+	int Connections() const { return m_iConnections.load(); }
+};
+
+static coro::TaskResult<int> CheckClientConnect()
+{
+	static ClientConnectProbe stGood("17981"), stRefused("0");
+	int iBad = 0;
+	static ClientConnectProbe stEager("17981"), stDelayedAwait("17981");
+	stEager.StartClient();
+	auto stConnecting = stDelayedAwait.StartClient();
+	const auto stDeadline = std::chrono::steady_clock::now() + OI::Timer::Seconds(3);
+	while ((stEager.Connections() != 1 || stDelayedAwait.Connections() != 1) && std::chrono::steady_clock::now() < stDeadline) co_await coro::yield(1);
+	if (stEager.Connections() != 1 || stDelayedAwait.Connections() != 1 || !(co_await stConnecting)) ++iBad;
+	if (!(co_await stConnecting)) ++iBad;
+	stEager.CloseAllSessions(); stDelayedAwait.CloseAllSessions();
+	if (!(co_await stGood.StartClient()) || stGood.Connections() != 1) ++iBad;
+	if (!(co_await stGood.StartClient()) || stGood.Connections() != 1) ++iBad;
+	if (co_await stRefused.StartClient()) ++iBad;
+	struct Result { std::atomic<bool> bDone{false}; int iBad = 0; bool bReturned = false; };
+	auto pResult = std::make_shared<Result>();
+	OI::Net::Poll::GetInstance().PostOnLoop([](void* pArgumentParam) {
+		auto* pState = static_cast<Result*>(pArgumentParam);
+		OI::Net::Poll::GetInstance().PostOnLoop([](void* pNestedParam) {
+			auto* pNested = static_cast<Result*>(pNestedParam);
+			if (!pNested->bReturned) ++pNested->iBad;
+			pNested->bDone = true;
+		}, pState);
+		pState->bReturned = true;
+	}, pResult.get());
+	while (!pResult->bDone.load()) co_await coro::yield(1);
+	static ClientConnectProbe stAwait("17981"), stAwaitRefused("0");
+	coro::TaskScope stConnectTasks;
+	auto pBad = std::make_shared<std::atomic<int>>(0);
+	for (int iIndex = 0; iIndex < 32; ++iIndex)
+	{
+		stConnectTasks.Start([pBad](coro::Token, coro::StopToken) -> coro::Task {
+			if (!(co_await stAwait.StartClient())) ++*pBad;
+		});
+	}
+	co_await stConnectTasks.Join();
+	if (stAwait.Connections() != 1 || !(co_await stAwait.StartClient())) ++iBad;
+	if (co_await stAwaitRefused.StartClient()) ++iBad;
+	stAwait.CloseAllSessions();
+	stGood.CloseAllSessions();
+	co_return iBad + pResult->iBad + pBad->load();
+}
+
 static coro::TaskResult<int> CheckConnectionIsolation()
 {
 	int iBad = 0;
@@ -276,6 +339,8 @@ coro::Task HoldMgr::Pump()
 {
 	int iBadLocal = CheckBinaryBool();
 	printf("hold binary bool bad=%d\n", iBadLocal);
+	iBadLocal += co_await CheckClientConnect();
+	printf("hold coroutine connect bad=%d\n", iBadLocal);
 	iBadLocal += co_await CheckConnectionIsolation();
 	printf("hold connection isolation bad=%d\n", iBadLocal);
 	bool bRegistryChecks = false;

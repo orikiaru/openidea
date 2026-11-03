@@ -172,3 +172,16 @@ OI_RPC_BIND(Hold, HandleHold);
 `OI_RPC_BIND(Name, Function)` 使用请求关联的响应类型注册，不增加运行时包装层。也可传函数对象或 lambda；实例成员函数需绑定对象，且对象必须活到所有请求处理结束。原模板接口仍可直接使用，不按 NameReq/NameRes 命名的协议可用模板注册。
 
 普通任务回调抛异常时，闭包仍会释放，调度器捕获并报告异常后继续处理后续任务；可通过 `OI::Thread::SetTaskErrorHandler` 设置线程安全处理器，默认输出 stderr。处理器自身抛异常也不会穿透工作线程。服务端响应编码失败会丢弃半包，重新发送 `OI_ERR_FAIL` 的无响应体回执；无法编码或发送失败回执时关闭连接，避免调用方只靠超时发现错误。
+
+## 等待建连
+
+`StartClient()` 统一为立即启动、可等待的接口，不再接受布尔参数：
+
+```cpp
+client.StartClient(); // 不等待：调用时就发起非阻塞建连，忽略临时对象不会取消连接。
+if (!(co_await client.StartClient())) co_return; // 等建连成功，再处理后续逻辑。
+```
+
+已有连接时返回成功；并发调用等待同一代连接，不重复创建 socket。失败、服务地址切换、停止入口后返回 false。等待只挂起协程，完成排回现有调度队列，不直接 resume。可以先 `auto connecting = client.StartClient();`，之后再 `co_await connecting`；即便连接先完成也不会丢唤醒。返回对象仅可移动，不可复制；同一对象完成后可再次 await，但不能由多个协程同时 await 同一个对象（并发调用分别使用 StartClient 返回的对象）。
+
+管理器必须覆盖网络操作和等待者的生命周期；全局停止前仍按 TaskScope 约定 Join。接口不提供单独连接超时参数，失败时间由网络连接结果决定。旧 `StartClient(false)` 同步入口和独立 `Connect()` 入口已移除，应用等待建连统一使用 `co_await StartClient()`。

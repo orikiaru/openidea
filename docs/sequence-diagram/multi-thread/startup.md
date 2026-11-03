@@ -40,4 +40,4 @@ sequenceDiagram
     Main->>Main: 等到 RequestStop
 ```
 
-`ipcclient` 在 `StartClient` 之前，若开了 Redis 或 Hold，会先把 `RedisClient` 连上。HTTP 探测在 `ipcserver` 听上之后用 `StartTask` 拉起。此时工人可能还没起来，句柄先留在 `normal` 队列里，工人起来后谓词里能看到。
+`ipcclient` 在 `StartClient` 之前，若开了 Redis 或 Hold，会先发起 `RedisClient` 建连。HTTP 探测在 `ipcserver` 听上之后用 `StartTask` 拉起。此时工人可能还没起来，句柄先留在 `normal` 队列里，工人起来后谓词里能看到。

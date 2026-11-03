@@ -11,6 +11,7 @@
 #include "oi_config.h"
 #include "oi_log.h"
 #include "oi_poll.h"
+#include "oi_thread.h"
 #include "oi_timer_manager.h"
 #include <chrono>
 #include <cstdio>
@@ -293,11 +294,12 @@ bool RegistryClient::Connect()
 		return true;
 	}
 	bFailed = false;
-	if (!StartClient())
+	if (OI::Thread::ThreadPool::GetInstance().StopRequested())
 	{
 		bConnecting = false;
 		return false;
 	}
+	StartClient();
 	return true;
 }
 

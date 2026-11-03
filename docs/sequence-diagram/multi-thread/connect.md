@@ -16,7 +16,9 @@ sequenceDiagram
     participant Sess as ProtoSession
     participant Worker as normal 工人
 
-    Main->>Conn: StartConnect
+    Main->>Mgr: StartClient 返回可等待对象
+    Mgr->>Poll: CallOnLoop 发起非阻塞建连
+    Poll->>Conn: StartConnect
     Conn->>Sock: CreateSocket 非阻塞 TCP
     Conn->>Sock: SocketConnect
     Sock->>Os: connect
@@ -30,7 +32,7 @@ sequenceDiagram
             Note over Conn: 不关通道，等下一次可写
         else SO_ERROR 为 0
             Conn->>Os: dup
-            Conn->>Mgr: AddSession dup 出来的 fd
+            Conn->>Mgr: CompleteConnect 校验代次，接管 dup 出来的 fd
             Mgr->>Sess: CloneSession 并只注册读
             Mgr->>Mgr: 记下 sid，按序补发挂起的字节
             Mgr->>Worker: OnClientConnect 里 PostCoroutine
@@ -43,15 +45,17 @@ sequenceDiagram
             Poll->>Conn: TryClose 后摘掉并 delete
         end
     else connect 立刻成功
-        Sock->>Mgr: AddSession 原 fd
+        Sock->>Mgr: CompleteConnect 校验代次，接管原 fd
         Mgr->>Worker: OnClientConnect 里 PostCoroutine
         Note over Worker: 工人还没拉起时句柄先留在队列里
     else 其他错误
         Sock->>Os: close fd
         Sock->>Mgr: AbortSession
         Mgr->>Mgr: OnConnectFailed
-        Sock-->>Main: StartClient 返回 false
+        Mgr->>Worker: 等待协程入队，await 结果为 false
     end
 ```
 
 `ipcclient` 的 `OnClientConnect` 里再 `Start` 回声、日志和 Hold。
+
+`StartClient()` 不等待也会启动连接；`co_await StartClient()` 等待同一代连接的结果，成功 true，失败 false。回调先于 await 到达时保留结果，后续 await 不丢唤醒；无布尔模式参数。

@@ -18,6 +18,8 @@ struct RedisLink
 {
 	std::deque<RedisPending> vPending;
 	std::set<sid_t> vPaused;
+	std::deque<sid_t> vReady;
+	bool bResuming = false;
 	size_t iPendingBytes = 0;
 	bool bResumeArmed = false;
 	redisAsyncContext* pAsyncContext;
@@ -39,6 +41,7 @@ class RedisServer : public ::OI::Net::SessionManager
 	size_t m_iMaxPendingBytes = 64 * 1024 * 1024;
 	size_t m_iMaxPendingCommands = 65536;
 	void Resume(RedisLink* pLinkParam);
+	void ArmResume(RedisLink* pLinkParam);
 public:
 	virtual ~RedisServer();
 	virtual const std::string GetIDString() { return "RedisServer"; }

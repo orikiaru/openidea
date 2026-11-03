@@ -49,50 +49,84 @@ bool SessionManager::Init()
 	return true;
 }
 
-bool SessionManager::StartClient(bool bAsyncParam)
+struct SessionManager::ConnectWait
 {
-	if (::OI::Thread::ThreadPool::GetInstance().StopRequested()) return false;
-	// 把检查、建连和状态发布放在同一执行域；工人线程不直接操作连接状态。
-	if (!Poll::GetInstance().InLoopThread())
+	OI::Thread::Mutex stMutex;
+	bool bDone = false;
+	bool bResult = false;
+	std::atomic<int> iGate{0};
+	std::coroutine_handle<> stHandle;
+	void (*fnSchedule)(std::coroutine_handle<>) = nullptr;
+	void Finish(bool bResultParam)
 	{
-		if (bAsyncParam)
 		{
-			Poll::GetInstance().CallOnLoop([](void* pArgumentParam) {
-				static_cast<SessionManager*>(pArgumentParam)->StartClient();
-			}, this);
-			return true;
+			OI::Thread::MutexGuard stLock(stMutex);
+			if (bDone) return;
+			bResult = bResultParam;
+			bDone = true;
 		}
-		struct ConnectRequest
-		{
-			SessionManager* pManager;
-			::OI::Thread::Mutex stMutex;
-			::OI::Thread::MutexCond stCondition;
-			bool bDone = false;
-			bool bResult = false;
-		} stRequest{this, {}, {}, false, false};
-		::OI::Thread::MutexGuard stLock(stRequest.stMutex);
-		Poll::GetInstance().CallOnLoop([](void* pArgumentParam) {
-			auto* pRequest = static_cast<ConnectRequest*>(pArgumentParam);
-			const bool bResult = pRequest->pManager->StartClient(false);
-			::OI::Thread::MutexGuard stGuard(pRequest->stMutex);
-			pRequest->bResult = bResult;
-			pRequest->bDone = true;
-			pRequest->stCondition.Signal();
-		}, &stRequest);
-		while (!stRequest.bDone) stRequest.stCondition.Wait(stRequest.stMutex);
-		return stRequest.bResult;
+		// 回调先到只发布结果；调用方已挂起才排队恢复，禁止直接 resume。
+		if (iGate.exchange(1, std::memory_order_acq_rel) == 2) fnSchedule(stHandle);
 	}
-	if (bServiceDown)
-	{
-		return false;
-	}
+};
+
+SessionManager::ConnectAwaiter::ConnectAwaiter(SessionManager* pManagerParam)
+	: m_pWait(std::make_shared<ConnectWait>())
+{
+	pManagerParam->BeginConnect(m_pWait);
+}
+
+bool SessionManager::ConnectAwaiter::Suspend(std::coroutine_handle<> stHandleParam, void (*fnScheduleParam)(std::coroutine_handle<>))
+{
+	// 局部引用保活，发布挂起后工人可以立即恢复并销毁 awaiter。
+	auto pWait = m_pWait;
+	OI::Thread::MutexGuard stLock(pWait->stMutex);
+	// 已完成对象可以再次 await；不能把完成门重新改成挂起状态。
+	if (pWait->bDone) return false;
+	pWait->stHandle = stHandleParam;
+	pWait->fnSchedule = fnScheduleParam;
+	return pWait->iGate.exchange(2, std::memory_order_acq_rel) != 1;
+}
+
+bool SessionManager::ConnectAwaiter::await_resume() const noexcept { return m_pWait->bResult; }
+
+void SessionManager::FinishConnectWaiters(bool bResultParam)
+{
+	auto vWaiters = std::move(m_vConnectWaiters);
+	m_vConnectWaiters.clear();
+	for (const auto& pWeak : vWaiters)
+		if (auto pWait = pWeak.lock()) pWait->Finish(bResultParam);
+}
+
+void SessionManager::BeginConnect(const std::shared_ptr<ConnectWait>& pWaitParam)
+{
+	if (OI::Thread::ThreadPool::GetInstance().StopRequested()) { pWaitParam->Finish(false); return; }
+	struct ConnectRequest { SessionManager* pManager; std::shared_ptr<ConnectWait> pWait; };
+	auto pRequest = std::make_unique<ConnectRequest>(ConnectRequest{this, pWaitParam});
+	Poll::GetInstance().CallOnLoop([](void* pArgumentParam) {
+		std::unique_ptr<ConnectRequest> pHeld(static_cast<ConnectRequest*>(pArgumentParam));
+		auto* pManager = pHeld->pManager;
+		if (!pManager->StartConnect()) { pHeld->pWait->Finish(false); return; }
+		if (!pManager->bConnectPending) { pHeld->pWait->Finish(true); return; }
+		// 不 await 的临时对象不会取消建连；尾部过期占位摊销 O(1) 清理。
+		auto& vWaiters = pManager->m_vConnectWaiters;
+		while (!vWaiters.empty() && vWaiters.back().expired()) vWaiters.pop_back();
+		vWaiters.push_back(pHeld->pWait);
+	}, pRequest.get());
+	pRequest.release();
+}
+
+bool SessionManager::StartConnect()
+{
+	assert(Poll::GetInstance().InLoopThread());
+	if (OI::Thread::ThreadPool::GetInstance().StopRequested()) return false;
+	if (bServiceDown) return false;
 	if (bConnectPending || HasEndpoint(sIpAddress + ":" + sPort)) return true;
 	bConnectPending = true;
 	const uint64_t iGeneration = ++iConnectGeneration;
-	const bool bStarted = ConnectChannel::StartConnect(this, bAsyncParam);
+	const bool bStarted = ConnectChannel::StartConnect(this, true);
 	if (!bStarted) AbortSession(iGeneration);
 	return bStarted;
-
 }
 
 void SessionManager::CloseEndpoint(const std::string& sEndpointParam)
@@ -170,6 +204,7 @@ void SessionManager::ApplyService(const std::string& sIpParam, const std::string
 		{
 			return;
 		}
+		FinishConnectWaiters(false);
 		++iConnectGeneration;
 		bConnectPending = false;
 		bServiceDown = true;
@@ -189,6 +224,7 @@ void SessionManager::ApplyService(const std::string& sIpParam, const std::string
 	{
 		return;
 	}
+	FinishConnectWaiters(false);
 	++iConnectGeneration;
 	bConnectPending = false;
 	std::string sPrevious = sEndpoint;
@@ -308,12 +344,14 @@ void SessionManager::CompleteConnect(net_socket_t iDescriptorParam, uint64_t iGe
 	}
 	bConnectPending = false;
 	AddSession(iDescriptorParam);
+	FinishConnectWaiters(true);
 }
 
 void SessionManager::AbortSession(uint64_t iGenerationParam)
 {
 	if (iGenerationParam != iConnectGeneration || !bConnectPending) return;
 	bConnectPending = false;
+	FinishConnectWaiters(false);
 	{
 		::OI::Thread::MutexGuard stLock(stLocker);
 		++iCurrentSessionId;
