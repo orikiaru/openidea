@@ -23,27 +23,31 @@ const std::string IpcServer::GetIDString()
     return "IpcServer";
 }
 
+static OI_RPC_SYNC_HANDLER(AllEcho, HandleAllEcho)
+{
+	res.data = req.data;
+	res.code = 1;
+	return 0;
+}
+
+static OI_RPC_HANDLER(Hold, HandleHold)
+{
+	if (req.delay_ms < 0)
+	{
+		co_return 1001; // 业务错误：延迟不能为负，回执不带响应体。
+	}
+	if (req.delay_ms > 0)
+	{
+		co_await coro::yield(req.delay_ms);
+	}
+	res.mark = req.mark;
+	co_return 0;
+}
+
 bool IpcServer::Init()
 {
-	::OI::Rpc::HandleRpc<::OI::RpcData::AllEchoReq, ::OI::RpcData::AllEchoRes>([](coro::Token token, ::OI::Net::SessionManager* mgr, sid_t sid, ::OI::RpcData::AllEchoReq& req, ::OI::RpcData::AllEchoRes& res) -> coro::Task {
-		(void)token;
-		(void)mgr;
-		(void)sid;
-		res.data = req.data;
-		res.code = 1;
-		co_return;
-	});
-	::OI::Rpc::HandleRpc<::OI::RpcData::HoldReq, ::OI::RpcData::HoldRes>([](coro::Token token, ::OI::Net::SessionManager* mgr, sid_t sid, ::OI::RpcData::HoldReq& req, ::OI::RpcData::HoldRes& res) -> coro::Task {
-		(void)token;
-		(void)mgr;
-		(void)sid;
-		if (req.delay_ms > 0)
-		{
-			co_await coro::yield(req.delay_ms);
-		}
-		res.mark = req.mark;
-		co_return;
-	});
+	OI_RPC_BIND(AllEcho, HandleAllEcho);
+	OI_RPC_BIND(Hold, HandleHold);
 	return ::OI::Net::SessionManager::Init();
 }
 

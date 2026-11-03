@@ -159,6 +159,7 @@ def run(case, args):
                 else:
                     assert re.search(r"redis stress .*bad=0", text)
             elif mode == "hold":
+                assert "hold rpc standardized reply bad=0" in text
                 assert "hold done bad=0" in text
             elif mode == "log":
                 size = bytes_on_disk(logs)

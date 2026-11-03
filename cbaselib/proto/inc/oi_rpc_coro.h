@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <chrono>
 #include <limits>
 #include <stdexcept>
@@ -103,7 +104,6 @@ struct TaskState
 	TaskState() : uid(0), continuation(), detached(false), ready(false) {}
 	std::suspend_always initial_suspend() noexcept { return {}; }
 	TaskFinalSuspend final_suspend() noexcept { return {}; }
-	void return_void() {}
 	void unhandled_exception() noexcept
 	{
 		error = std::current_exception();
@@ -111,21 +111,35 @@ struct TaskState
 	}
 };
 
-// 一条任务。Start 丢进队列；co_await 就是调用它，跑完回到调用方。
-struct [[nodiscard]] Task
+// 有返回值和无返回值任务共用同一套调度与完成门，不增加包装协程。
+template<typename T>
+struct TaskReturn
 {
-	struct promise_type : TaskState
+	std::optional<T> result;
+	void return_value(T value) { result.emplace(std::move(value)); }
+};
+template<>
+struct TaskReturn<void>
+{
+	void return_void() noexcept {}
+};
+
+// 一条任务。Start 丢进队列；co_await 就是调用它，跑完回到调用方。
+template<typename T = void>
+struct [[nodiscard]] BasicTask
+{
+	struct promise_type : TaskState, TaskReturn<T>
 	{
-		Task get_return_object()
+		BasicTask get_return_object()
 		{
-			return Task{std::coroutine_handle<promise_type>::from_promise(*this)};
+			return BasicTask{std::coroutine_handle<promise_type>::from_promise(*this)};
 		}
 	};
 	std::coroutine_handle<promise_type> handle;
-	explicit Task(std::coroutine_handle<promise_type> h) : handle(h) {}
-	Task(Task&& other) noexcept : handle(other.handle) { other.handle = {}; }
-	Task(const Task&) = delete;
-	~Task() { if (handle) handle.destroy(); }
+	explicit BasicTask(std::coroutine_handle<promise_type> h) : handle(h) {}
+	BasicTask(BasicTask&& other) noexcept : handle(other.handle) { other.handle = {}; }
+	BasicTask(const BasicTask&) = delete;
+	~BasicTask() { if (handle) handle.destroy(); }
 	Token Start()
 	{
 		if (handle.promise().uid == 0)
@@ -154,8 +168,20 @@ struct [[nodiscard]] Task
 		handle.resume();
 		return !handle.promise().ready.exchange(true, std::memory_order_acq_rel);
 	}
-	void await_resume() const { if (handle && handle.promise().error) std::rethrow_exception(handle.promise().error); }
+	T await_resume()
+	{
+		if (handle && handle.promise().error) std::rethrow_exception(handle.promise().error);
+		if constexpr (!std::is_void_v<T>)
+		{
+			if (!handle || !handle.promise().result) throw std::logic_error("Task has no result");
+			return std::move(*handle.promise().result);
+		}
+	}
 };
+
+using Task = BasicTask<void>;
+template<typename T>
+using TaskResult = BasicTask<T>;
 
 template<typename F>
 Token StartTask(F&& fn)
@@ -257,41 +283,75 @@ public:
 }
 
 namespace OI { namespace Rpc {
+// 标准服务端协程：co_return 0 成功，正数为业务错误。
+using RpcTask = coro::TaskResult<int32_t>;
+
+// 仅需要连接信息的处理函数接收上下文；生命周期覆盖本次处理协程。
+struct RpcContext
+{
+	coro::Token token;
+	::OI::Net::SessionManager& manager;
+	sid_t sid;
+};
+
 template<typename T>
 struct RpcProtoId;
 
 void BindRpcHandler(proto_type_t id, std::function<coro::Task(coro::Token, ::OI::Net::SessionManager*, sid_t, ::OI::Base::BytesStream)> handle);
 
 // 请求和回包共用一个协议号。调用号最高位是 1 表示请求，回包清掉这一位。
-// 包体都以 8 字节调用号开头，后面才是 Req 或 Res。服务端拿这条连接的 sid 把回包送回去。
+// 请求：调用号 + Req；回执：调用号 + int32_t retcode + 成功时的 Res。
+// 0 成功，负数保留给框架错误，正数用于业务错误。失败不序列化 Res。
 
 // 业务任务外面这一层：解包，co_await 业务任务，再把带调用号的回包写出去。
 template<typename Req, typename Res, typename F>
 coro::Task RunHandledRpc(F fn, proto_type_t res_id, coro::Token token, ::OI::Net::SessionManager* mgr, sid_t sid, ::OI::Base::BytesStream body)
 {
-	Req req;
-	Res res;
+	uint64_t call_id = 0;
+	try { body >> call_id; }
+	catch (::OI::Base::ParserException&) { co_return; }
+	call_id &= ~(uint64_t)RPC_REQ_MASK;
+	Req req{};
+	Res res{};
+	int32_t retcode = 0;
 	try
 	{
-		uint64_t call_id = 0;
-		body >> call_id;
-		call_id &= ~(uint64_t)RPC_REQ_MASK;
 		req.deserialize(body);
-		auto child = fn(token, mgr, sid, req, res);
-		if (child.handle)
+		RpcContext context{token, *mgr, sid};
+		auto invoke = [&]() {
+			if constexpr (std::is_invocable_v<F&, Req&, Res&>)
+				return fn(req, res);
+			else if constexpr (std::is_invocable_v<F&, const RpcContext&, Req&, Res&>)
+				return fn(context, req, res);
+			else
+				return fn(token, mgr, sid, req, res); // 兼容已有五参数回调。
+		};
+		using Return = decltype(invoke());
+		if constexpr (std::is_same_v<Return, int32_t>)
 		{
-			child.handle.promise().uid = token;
+			retcode = invoke();
 		}
-		co_await child;
-		::OI::Base::BytesStream out;
-		out << call_id;
-		res.serialize(out);
-		::OI::Base::BytesStream frame = EncodePbFrame(res_id, out);
-		if (!mgr->SendBytes(sid, frame.GetMutableBuff())) mgr->CloseSession(sid);
+		else
+		{
+			static_assert(std::is_same_v<Return, RpcTask> || std::is_same_v<Return, coro::Task>,
+				"RPC handler must return RpcTask, int32_t or legacy coro::Task");
+			auto child = invoke();
+			if (child.handle) child.handle.promise().uid = token;
+			if constexpr (std::is_same_v<Return, coro::Task>) co_await child;
+			else retcode = co_await child;
+		}
 	}
-	catch (::OI::Base::ParserException&)
+	catch (::OI::Base::ParserException&) { retcode = OI_ERR_FAIL; }
+	catch (...)
 	{
+		retcode = OI_ERR_FAIL;
+		coro::ReportTaskError(token, std::current_exception());
 	}
+	::OI::Base::BytesStream out;
+	out << call_id << retcode;
+	if (retcode == 0) res.serialize(out);
+	::OI::Base::BytesStream frame = EncodePbFrame(res_id, out);
+	if (!mgr->SendBytes(sid, frame.GetMutableBuff())) mgr->CloseSession(sid);
 	co_return;
 }
 
@@ -302,6 +362,13 @@ void HandleRpc(F fn)
 	BindRpcHandler(RpcProtoId<Req>::value, [fn, res_id](coro::Token token, ::OI::Net::SessionManager* mgr, sid_t sid, ::OI::Base::BytesStream body) -> coro::Task {
 		return RunHandledRpc<Req, Res>(fn, res_id, token, mgr, sid, std::move(body));
 	});
+}
+
+// 请求类型已关联响应，无需在注册处重复指定。
+template<typename Req, typename F>
+void HandleRpc(F fn)
+{
+	HandleRpc<Req, typename RpcProtoId<Req>::Response>(std::move(fn));
 }
 
 // 返回调用号。回包、超时或 WakeRpcCall 三者只有一个会触发 decode/resume。
@@ -383,15 +450,20 @@ struct [[nodiscard]] RpcCallAwaiter
 		int prev = gate.exchange(2, std::memory_order_acq_rel);
 		return prev != 1;
 	}
-	int await_resume()
+	int32_t await_resume()
 	{
 		if (submission_error) std::rethrow_exception(submission_error);
 		if (replied)
 		{
 			try
 			{
-				res->deserialize(reply);
-				result = 0;
+				reply >> result;
+				if (result == 0)
+				{
+					Res decoded{};
+					decoded.deserialize(reply);
+					*res = std::move(decoded);
+				}
 			}
 			catch (::OI::Base::ParserException&)
 			{
@@ -425,12 +497,31 @@ RpcCallAwaiter<Req, Res> RpcCall(::OI::Net::SessionManager& mgr, sid_t sid, Req&
 }
 
 template<typename Res>
-struct [[nodiscard]] RpcResult
+class [[nodiscard]] RpcResult
 {
-	int code;
-	Res value;
-	explicit operator bool() const { return code == 0; }
+	int32_t _ret;
+	Res _res;
+	void Check() const
+	{
+		if (_ret != 0) throw std::logic_error("RPC failed: check GetRet() before GetRes()");
+	}
+public:
+	RpcResult(int32_t ret, Res res) : _ret(ret), _res(std::move(res)) {}
+	int32_t GetRet() const noexcept { return _ret; }
+	explicit operator bool() const noexcept { return _ret == 0; }
+	Res& GetRes() & { Check(); return _res; }
+	const Res& GetRes() const & { Check(); return _res; }
+	Res GetRes() && { Check(); return std::move(_res); }
+	Res GetRes() const && { Check(); return _res; }
 };
+
+// 输出引用仅在成功解包后更新，错误时保留调用方原值。
+template<typename Req>
+auto RpcCall(ProtoClientManager& mgr, Req& req, typename RpcProtoId<Req>::Response& res,
+	std::chrono::milliseconds timeout = ::OI::Timer::Seconds(180))
+{
+	return RpcCall(mgr, mgr.ConnectedSid(), req, res, timeout);
+}
 
 // 拥有请求和响应，应用不必跨挂起维护输出引用。
 template<typename Req, typename Res>
@@ -481,3 +572,14 @@ auto RpcCall(ProtoClientManager& mgr, Req req,
 }
 
 }}
+
+// 业务命名约定：协议 Name 对应生成的 NameReq / NameRes。
+// 可用于函数声明或定义；req/res/context 是宏提供的参数名。
+#define OI_RPC_HANDLER(Name, Function) \
+	::OI::Rpc::RpcTask Function(const ::OI::RpcData::Name##Req& req, ::OI::RpcData::Name##Res& res)
+#define OI_RPC_SYNC_HANDLER(Name, Function) \
+	int32_t Function(const ::OI::RpcData::Name##Req& req, ::OI::RpcData::Name##Res& res)
+#define OI_RPC_CONTEXT_HANDLER(Name, Function) \
+	::OI::Rpc::RpcTask Function(const ::OI::Rpc::RpcContext& context, const ::OI::RpcData::Name##Req& req, ::OI::RpcData::Name##Res& res)
+#define OI_RPC_BIND(Name, ...) \
+	::OI::Rpc::HandleRpc<::OI::RpcData::Name##Req>((__VA_ARGS__))

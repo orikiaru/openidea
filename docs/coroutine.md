@@ -1,6 +1,6 @@
 # 协程
 
-业务只用一条 `coro::Task`。单线程和多线程走同一个挂起、唤醒路径，差别在句柄放进哪条队列。
+无返回值任务用 `coro::Task`，有返回值用 `coro::TaskResult<T>`；RPC 服务端用其别名 `OI::Rpc::RpcTask` 返回 `int32_t` 状态码。单线程和多线程走同一个挂起、唤醒路径，差别在句柄放进哪条队列。
 
 ## 怎么写
 
@@ -33,10 +33,10 @@
 `HandleRpc` 包一层：解包，`co_await` 业务任务，再把回包写出去。请求和回包的包体都以 8 字节调用号开头，客户端按调用号认回包，所以回包不用按接受顺序排队，处理完就发。
 
 ```cpp
-HandleRpc<AllEchoReq, AllEchoRes>([](coro::Token, SessionManager*, sid_t, AllEchoReq& req, AllEchoRes& res) -> coro::Task {
+HandleRpc<AllEchoReq>([](const AllEchoReq& req, AllEchoRes& res) -> OI::Rpc::RpcTask {
     res.data = req.data;
     res.code = 1;
-    co_return;
+    co_return 0;
 });
 ```
 
@@ -58,13 +58,14 @@ coro::StartTask([n](coro::Token) {
 int ret = co_await RpcCall(mgr, sid, req, res);
 ```
 
-`ret == OI_OK` 是回包已解出，`OI_ERR_TIMEOUT` 是超时，`OI_ERR_CONNECT` 是连接失败或连接断开，`OI_ERR_FAIL` 是发送失败或解包失败。这条会话还没建立过时，调用先挂起，后面的调用按顺序堆着；连上后补发。连接失败，或在连上之前超时，直接返回 `OI_ERR_CONNECT`。已经连上之后的超时仍是 `OI_ERR_TIMEOUT`。等待绑定管理器、会话和回复协议号；其他连接的回包不会消费等待项。断连时框架自动结束该连接的 RPC，不需要业务额外清理。
+`ret == OI_OK` 是服务端返回成功且响应已解出，`OI_ERR_TIMEOUT` 是超时，`OI_ERR_CONNECT` 是连接失败或连接断开，`OI_ERR_FAIL` 是发送失败或解包失败。这条会话还没建立过时，调用先挂起，后面的调用按顺序堆着；连上后补发。连接失败，或在连上之前超时，直接返回 `OI_ERR_CONNECT`。已经连上之后的超时仍是 `OI_ERR_TIMEOUT`。等待绑定管理器、会话和回复协议号；其他连接的回包不会消费等待项。断连时框架自动结束该连接的 RPC，不需要业务额外清理。
 
 新代码可直接取得结果，请求由等待对象按值持有：
 
 ```cpp
 auto result = co_await RpcCall<AllEchoRes>(mgr, sid, req, OI::Timer::Seconds(10));
-if (result) { /* result.value 是响应，result.code 是传输结果 */ }
+if (result.GetRet() != 0) { co_return; }
+auto& res = result.GetRes();
 ```
 
 直接 await 普通 `Task` 不受 `StartTask` 闭包保活保护；不要直接 await 临时的带捕获协程 lambda。
@@ -107,9 +108,65 @@ RPC 超时桶采用可直接摘除的链表节点。回包、限流、发送失�
 
 ```cpp
 auto result = co_await OI::Rpc::RpcCall(client, req, OI::Timer::Seconds(3));
-if (result) { /* result.value 是自动配对的响应 */ }
+if (result.GetRet() != 0) { co_return; }
+auto& res = result.GetRes(); // 自动配对的响应类型
 ```
 
 连接管理器在调用时取当前会话号，首次连接前仍按原规则排队。需要指定会话时使用 `RpcCall(manager, sid, req, duration)`。旧的显式响应模板、输出引用接口均保留；新接口只接受明确的时长类型。创建等待对象时复制请求，调用方可用 `std::move(req)` 交出大请求以避免复制。未使用的任务或 RPC 等待对象会产生 nodiscard 编译诊断。
 
 多线程工作线程在同一优先级普通任务等待时，最多连续执行 32 次协程恢复后取一次普通任务，防止持续 yield(0) 的协程饿死普通任务。单线程同步适配器与主循环共用 PumpOnce，推进普通任务、协程和 IO；不要从网络回调中使用同步适配器。
+
+## 标准 RPC 回执
+
+请求包体为 `uint64_t call_id + Req`，回执为 `uint64_t call_id + int32_t retcode`，只有 `retcode == 0` 才跟随序列化的 `Res`。这是线格式变更，客户端和服务端必须一起升级，不能与旧版混用。
+
+`0` 表示成功，负数保留给框架错误（超时、断连、发送/解码失败等），正数用于业务错误。客户端先读取状态码，非零时不解析响应体。输出引用只在成功解包后更新，任何错误都保留调用方原值。
+
+两种客户端接口共用相同回执和完成机制：
+
+```cpp
+auto result = co_await RpcCall(client, req);
+if (result.GetRet() != 0) { co_return; }
+auto& res = result.GetRes();
+
+// 或者由调用方提供响应对象：
+Response output;
+int32_t ret = co_await RpcCall(client, req, output);
+```
+
+`GetRet()` 返回 `int32_t`。`GetRes()` 在成功时返回引用，结果对象必须仍然存活；也可 `auto res = result.GetRes()` 复制响应，或 `auto res = std::move(result).GetRes()` 转移响应。错误时访问响应抛出 `std::logic_error`，不会把默认响应伪装成成功。结果字段通过这两个方法访问。
+
+服务端推荐只接收 `(req, res)`，注册只写请求类型 `HandleRpc<Req>`，响应类型自动配对。需要连接信息时接收 `(const RpcContext&, req, res)`，上下文包含 `token`、`manager` 引用和 `sid`，仅在本次处理期间有效。旧五参数 `(token, mgr, sid, req, res)` 继续兼容。协程处理函数返回 `OI::Rpc::RpcTask`，用 `co_return int32_t` 返回状态码；同步处理函数直接返回 `int32_t`。原来的 `coro::Task` 处理函数继续兼容，正常结束视为成功：
+
+```cpp
+HandleRpc<HoldReq>([](const HoldReq& req, HoldRes& res) -> OI::Rpc::RpcTask {
+    if (req.delay_ms < 0) {
+        co_return 1001;
+    }
+    res.mark = req.mark;
+    co_return 0;
+});
+```
+
+`RpcTask` 是 `coro::TaskResult<int32_t>` 的别名，与无返回值 `coro::Task` 共用同一套帧、调度和完成门，不增加包装层。带返回值的任务也支持嵌套 `co_await`、`StartTask` 和异常传播。请求解码异常或处理函数异常返回 `OI_ERR_FAIL`，处理函数异常还会交给任务错误处理器。等待登记/发送时的本地 C++ 异常仍按原约定从 `co_await` 抛出。
+
+## 应用层推荐：命名函数 + 宏注册
+
+协议名与生成类型按 `NameReq / NameRes` 对应。宏隐藏框架名字空间和固定参数类型，业务函数名自由指定，注册处只注入函数名：
+
+```cpp
+static OI_RPC_HANDLER(Hold, HandleHold)
+{
+    if (req.delay_ms < 0) co_return 1001;
+    if (req.delay_ms > 0) co_await coro::yield(req.delay_ms);
+    res.mark = req.mark;
+    co_return 0;
+}
+
+// 组件初始化时注册一次。
+OI_RPC_BIND(Hold, HandleHold);
+```
+
+`OI_RPC_HANDLER(Name, Function)` 用于协程函数声明或定义，提供 `req`（const 引用）和 `res` 参数，函数体用 `co_return int32_t`。`OI_RPC_SYNC_HANDLER` 用于同步处理，函数体用 `return int32_t`。`OI_RPC_CONTEXT_HANDLER` 额外提供 `context`，按需访问 token、manager 和 sid。头文件声明可写 `OI_RPC_HANDLER(Hold, HandleHold);`。宏本身不加 static，文件内部函数可自行加 static。
+
+`OI_RPC_BIND(Name, Function)` 使用请求关联的响应类型注册，不增加运行时包装层。也可传函数对象或 lambda；实例成员函数需绑定对象，且对象必须活到所有请求处理结束。原模板接口仍可直接使用，不按 NameReq/NameRes 命名的协议可用模板注册。

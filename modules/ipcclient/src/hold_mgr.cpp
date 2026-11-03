@@ -206,6 +206,35 @@ coro::Task HoldMgr::Pump()
 		session->Release();
 	}
 	printf("hold preconnect send budget bad=%d\n", bad);
+	// 可选上下文跨挂起保持有效，旧五参数无返回值处理函数仍可注册。
+	{
+		using Req = OI::RpcData::HoldReq;
+		using Res = OI::RpcData::HoldRes;
+		auto body = []() {
+			OI::Base::BytesStream bytes;
+			bytes << (uint64_t(1) | uint64_t(RPC_REQ_MASK));
+			Req req;
+			req.mark = 73;
+			req.serialize(bytes);
+			return bytes;
+		};
+		int callbacks = 0;
+		auto context_handler = [&](const OI::Rpc::RpcContext& context, const Req& req, Res&) -> OI::Rpc::RpcTask {
+			co_await coro::yield(0);
+			if (context.token != 88 || &context.manager != &pending || context.sid != 77 || req.mark != 73) ++bad;
+			++callbacks;
+			co_return 1001;
+		};
+		co_await OI::Rpc::RunHandledRpc<Req, Res>(context_handler, OI::Rpc::RpcProtoId<Res>::value, 88, &pending, 77, body());
+		auto legacy_handler = [&](coro::Token token, OI::Net::SessionManager* manager, sid_t sid, Req&, Res&) -> coro::Task {
+			if (token != 88 || manager != &pending || sid != 77) ++bad;
+			++callbacks;
+			co_return;
+		};
+		co_await OI::Rpc::RunHandledRpc<Req, Res>(legacy_handler, OI::Rpc::RpcProtoId<Res>::value, 88, &pending, 77, body());
+		if (callbacks != 2) ++bad;
+	}
+
 	pending.SetPendingCallLimits(1, 8);
 	OI::Base::BytesStream frame;
 	frame << uint64_t(1);
@@ -324,10 +353,48 @@ coro::Task HoldMgr::Pump()
 	req.delay_ms = 0;
 	req.mark = 1;
 	auto direct = co_await ::OI::Rpc::RpcCall(mgr, req, ::OI::Timer::Seconds(10));
-	if (!direct || direct.value.mark != 1) ++bad;
+	if (!direct || direct.GetRes().mark != 1) ++bad;
+	static_assert(std::is_same_v<decltype(direct.GetRet()), int32_t>);
+	req.delay_ms = -1;
+	auto failed = co_await ::OI::Rpc::RpcCall(mgr, req);
+	if (failed.GetRet() != 1001 || failed) ++bad;
+	bool guarded = false;
+	try { (void)failed.GetRes(); }
+	catch (const std::logic_error&) { guarded = true; }
+	if (!guarded) ++bad;
+	res.mark = 876;
+	int32_t business_ret = co_await ::OI::Rpc::RpcCall(mgr, req, res);
+	if (business_ret != 1001 || res.mark != 876) ++bad;
+	req.delay_ms = 0;
+	business_ret = co_await ::OI::Rpc::RpcCall(mgr, req, res, ::OI::Timer::Seconds(10));
+	if (business_ret != 0 || res.mark != 1) ++bad;
+	// 缺状态码和截断响应都应返回框架错误，不能覆盖应用已有响应。
+	for (int malformed = 0; malformed < 2; ++malformed)
+	{
+		res.mark = 876;
+		auto broken = ::OI::Rpc::RpcCall(mgr, req, res);
+		broken.replied = true;
+		if (malformed) broken.reply << int32_t(0) << uint8_t(1);
+		if (broken.await_resume() != OI_ERR_FAIL || res.mark != 876) ++bad;
+	}
+	auto value_task = []() -> coro::TaskResult<int32_t> {
+		co_await coro::yield(0);
+		co_return 77;
+	};
+	if (co_await value_task() != 77) ++bad;
+	auto throwing_task = []() -> coro::TaskResult<int32_t> {
+		co_await coro::yield(0);
+		throw std::runtime_error("result task test");
+		co_return 0;
+	};
+	bool propagated = false;
+	try { (void)co_await throwing_task(); }
+	catch (const std::runtime_error&) { propagated = true; }
+	if (!propagated) ++bad;
+	printf("hold rpc standardized reply bad=%d\n", bad);
 	req.delay_ms = 600;
 	auto short_wait = co_await ::OI::Rpc::RpcCall<::OI::RpcData::HoldRes>(mgr, _sid, req, ::OI::Timer::Milliseconds(150));
-	if (short_wait.code != OI_ERR_TIMEOUT) ++bad;
+	if (short_wait.GetRet() != OI_ERR_TIMEOUT) ++bad;
 	co_await coro::yield(::OI::Timer::Milliseconds(700));
 	req.delay_ms = 0;
 	int ret = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), _sid, req, res, 10);
@@ -516,8 +583,8 @@ coro::Task HoldMgr::Pump()
 	});
 	wall_begin = std::chrono::steady_clock::now();
 	auto closed = co_await ::OI::Rpc::RpcCall<::OI::RpcData::HoldRes>(mgr, _sid, req, ::OI::Timer::Seconds(10));
-	if (closed.code != OI_ERR_CONNECT || WallMs(wall_begin) > 2000) ++bad;
-	printf("hold rpc disconnected code=%d wall_ms=%lld\n", closed.code, WallMs(wall_begin));
+	if (closed.GetRet() != OI_ERR_CONNECT || WallMs(wall_begin) > 2000) ++bad;
+	printf("hold rpc disconnected code=%d wall_ms=%lld\n", closed.GetRet(), WallMs(wall_begin));
 	printf("hold done bad=%d\n", bad);
 	fflush(stdout);
 	TestBoard::GetInstance().Done(bad == 0 ? 0 : 1);
