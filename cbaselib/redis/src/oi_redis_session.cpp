@@ -2,12 +2,7 @@
 #include "oi_redis.h"
 namespace OI { namespace Redis {
 
-void RedisClientSession::Send(const ::OI::Base::Bytes& bytes)
-{
-	::OI::Thread::MutexGuard lock(_locker);
-	_obuff.Append(bytes);
-	AllowSend();
-}
+
 
 void RedisClientSession::OnDataIn()
 {

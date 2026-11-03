@@ -510,9 +510,21 @@ void Poll::IOEventUnRegister(Channel* p, bool close_fd)
 	PostOp(op);
 }
 
+namespace { [[maybe_unused]] thread_local unsigned g_poll_depth = 0; }
+
+bool Poll::InPollCallback() const
+{
+#ifdef _SINGLE_THREAD_
+	return g_poll_depth != 0;
+#else
+	return InLoopThread();
+#endif
+}
+
 void Poll::PollWait(int wait_ms)
 {
 #ifdef _SINGLE_THREAD_
+	struct Guard { Guard() { ++g_poll_depth; } ~Guard() { --g_poll_depth; } } guard;
 	uv_run(&g_loop, wait_ms == 0 ? UV_RUN_NOWAIT : UV_RUN_ONCE);
 #else
 	(void)wait_ms;

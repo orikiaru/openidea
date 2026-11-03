@@ -56,6 +56,8 @@ public:
 		return AddTask(new FnTask<Fn>(std::forward<F>(fn), prio));
 	}
 	void StartWork();
+	// 单线程主循环及同步适配器共用：普通任务、协程、IO 都必须推进。
+	void PumpOnce();
 	// 打退出标记并叫醒各线程。线程看到标记自己返回，主线程在 StartWork 里 join，再回到 main 析构。
 	// SIGINT、SIGTERM、SIGQUIT 由 poll 接住后也走这里，退出码为 0。
 	void RequestStop(int code);

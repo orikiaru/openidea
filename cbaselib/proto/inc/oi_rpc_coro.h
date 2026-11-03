@@ -4,6 +4,7 @@
 #include "oi_parser.h"
 #include "oi_rpc_call.h"
 #include "oi_session_manager.h"
+#include "oi_rpc_session_manager.h"
 #include "oi_lock.h"
 #include "oi_duration.h"
 #include <atomic>
@@ -111,7 +112,7 @@ struct TaskState
 };
 
 // 一条任务。Start 丢进队列；co_await 就是调用它，跑完回到调用方。
-struct Task
+struct [[nodiscard]] Task
 {
 	struct promise_type : TaskState
 	{
@@ -286,7 +287,7 @@ coro::Task RunHandledRpc(F fn, proto_type_t res_id, coro::Token token, ::OI::Net
 		out << call_id;
 		res.serialize(out);
 		::OI::Base::BytesStream frame = EncodePbFrame(res_id, out);
-		mgr->SendBytes(sid, frame.GetMutableBuff());
+		if (!mgr->SendBytes(sid, frame.GetMutableBuff())) mgr->CloseSession(sid);
 	}
 	catch (::OI::Base::ParserException&)
 	{
@@ -310,8 +311,9 @@ bool WakeRpcCall(uint64_t call_id, int32_t code, ::OI::Base::BytesStream* body);
 
 // 发出请求后挂起。回包或超时回调里 Schedule 回来。回包可能比挂起先到。
 template<typename Req, typename Res>
-struct RpcCallAwaiter
+struct [[nodiscard]] RpcCallAwaiter
 {
+	static_assert(RpcProtoId<Req>::value == RpcProtoId<Res>::value, "RPC request/response protocol mismatch");
 	::OI::Net::SessionManager* mgr;
 	sid_t sid;
 	Req* req;
@@ -323,6 +325,7 @@ struct RpcCallAwaiter
 	// 回包原样留到 await_resume 再解，解包跑在工人上，不占 IO 线程。
 	::OI::Base::BytesStream reply;
 	bool replied;
+	std::exception_ptr submission_error;
 
 	RpcCallAwaiter()
 		: mgr(NULL), sid(0), req(NULL), res(NULL), result(OI_ERR_FAIL), timeout_ms(180000), handle(), gate(0), replied(false)
@@ -331,7 +334,7 @@ struct RpcCallAwaiter
 	RpcCallAwaiter(RpcCallAwaiter&& other) noexcept
 		: mgr(other.mgr), sid(other.sid), req(other.req), res(other.res), result(other.result),
 		  timeout_ms(other.timeout_ms), handle(other.handle), gate(other.gate.load(std::memory_order_relaxed)),
-		  replied(false)
+		  replied(false), submission_error(std::move(other.submission_error))
 	{
 		other.handle = nullptr;
 	}
@@ -343,6 +346,7 @@ struct RpcCallAwaiter
 		handle = h;
 		result = OI_ERR_FAIL;
 		replied = false;
+		submission_error = nullptr;
 		gate.store(0, std::memory_order_relaxed);
 		uint64_t call_id = BindRpcCall(mgr, sid, RpcProtoId<Res>::value, h, &result, timeout_ms, [this](::OI::Base::BytesStream& in) {
 			reply = std::move(in);
@@ -355,22 +359,33 @@ struct RpcCallAwaiter
 				coro::Schedule(handle);
 			}
 		});
-		::OI::Base::BytesStream body;
-		body << (call_id | (uint64_t)RPC_REQ_MASK);
-		req->serialize(body);
-		::OI::Base::BytesStream frame = EncodePbFrame(RpcProtoId<Req>::value, body);
-		if (mgr->TryPendCall(call_id, frame.GetMutableBuff()))
+		try
 		{
+			::OI::Base::BytesStream body;
+			body << (call_id | (uint64_t)RPC_REQ_MASK);
+			req->serialize(body);
+			::OI::Base::BytesStream frame = EncodePbFrame(RpcProtoId<Req>::value, body);
+			if (mgr->TryPendCall(call_id, frame.GetMutableBuff()))
+			{
+			}
+			else if (!mgr->SendBytes(sid, frame.GetMutableBuff()))
+			{
+				WakeRpcCall(call_id, mgr->UnavailableCode(), NULL);
+			}
 		}
-		else if (!mgr->SendBytes(sid, frame.GetMutableBuff()))
+		catch (...)
 		{
-			WakeRpcCall(call_id, mgr->UnavailableCode(), NULL);
+			// 不直接从 await_suspend 抛出：超时/断连可能已取走等待项，正在使用 this。
+			// 先完成等待，再由同一 gate 确认回调已结束，最后在 await_resume 重抛。
+			submission_error = std::current_exception();
+			WakeRpcCall(call_id, OI_ERR_FAIL, nullptr);
 		}
 		int prev = gate.exchange(2, std::memory_order_acq_rel);
 		return prev != 1;
 	}
 	int await_resume()
 	{
+		if (submission_error) std::rethrow_exception(submission_error);
 		if (replied)
 		{
 			try
@@ -419,7 +434,7 @@ struct [[nodiscard]] RpcResult
 
 // 拥有请求和响应，应用不必跨挂起维护输出引用。
 template<typename Req, typename Res>
-struct RpcValueAwaiter : RpcCallAwaiter<Req, Res>
+struct [[nodiscard]] RpcValueAwaiter : RpcCallAwaiter<Req, Res>
 {
 	Req request;
 	Res response{};
@@ -448,4 +463,21 @@ RpcValueAwaiter<Req, Res> RpcCall(::OI::Net::SessionManager& mgr, sid_t sid, Req
 {
 	return RpcValueAwaiter<Req, Res>(mgr, sid, std::move(req), timeout);
 }
+// 自动配对响应类型；保留显式 Res 和输出引用接口供旧代码使用。
+template<typename Req>
+auto RpcCall(::OI::Net::SessionManager& mgr, sid_t sid, Req req,
+	std::chrono::milliseconds timeout = ::OI::Timer::Seconds(180))
+	-> RpcValueAwaiter<Req, typename RpcProtoId<Req>::Response>
+{
+	return {mgr, sid, std::move(req), timeout};
+}
+
+template<typename Req>
+auto RpcCall(ProtoClientManager& mgr, Req req,
+	std::chrono::milliseconds timeout = ::OI::Timer::Seconds(180))
+	-> RpcValueAwaiter<Req, typename RpcProtoId<Req>::Response>
+{
+	return {mgr, mgr.ConnectedSid(), std::move(req), timeout};
+}
+
 }}

@@ -11,6 +11,36 @@
 #include "oi_channel.h"
 namespace OI { namespace Net {
 
+bool Session::Send(const ::OI::Base::Bytes& bytes)
+{
+	::OI::Thread::MutexGuard lock(_locker);
+	if (IsClosed() || _queued_bytes > _max_send_queue_bytes
+		|| bytes.Size() > _max_send_queue_bytes - _queued_bytes) return false;
+	_obuff.Append(bytes);
+	_queued_bytes += bytes.Size();
+	AllowSend();
+	return true;
+}
+
+void Session::SetSendQueueLimit(size_t bytes)
+{
+	::OI::Thread::MutexGuard lock(_locker);
+	_max_send_queue_bytes = bytes;
+}
+
+size_t Session::PendingSendBytes()
+{
+	::OI::Thread::MutexGuard lock(_locker);
+	return _queued_bytes;
+}
+
+void Session::OnBytesSent(size_t bytes)
+{
+	::OI::Thread::MutexGuard lock(_locker);
+	assert(bytes <= _queued_bytes);
+	_queued_bytes -= bytes;
+}
+
 void Session::SwapInBuff(::OI::Base::Bytes& inBuff)
 {
 	//ibuff处理在io线程,无需加锁.
@@ -53,8 +83,8 @@ void Session::SendDrained()
 }
 
 bool Session::IsClosed()
-{ 
-	return _status != IO_ST_CONNECTED;  
+{
+	return _status.load(std::memory_order_acquire) != IO_ST_CONNECTED;
 }
 
 

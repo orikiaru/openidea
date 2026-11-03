@@ -20,9 +20,11 @@ class Session
 	friend class Poll;
 	friend class NetChannel;
 protected:
-	int32_t 	_status;
-	int32_t		_errcode;
+	std::atomic<int32_t> _status;
+	std::atomic<int32_t> _errcode;
 
+	size_t _queued_bytes = 0;
+	size_t _max_send_queue_bytes = 64 * 1024 * 1024;
 	::OI::Base::Bytes		_obuff;
 	::OI::Base::Bytes		_ibuff;
 	::OI::Thread::Mutex		_locker;
@@ -61,13 +63,16 @@ public:
 
 public:
 	//向外SessionManager暴露的接口
-	inline int32_t GetError()const		{ return _errcode;	}
+	inline int32_t GetError()const		{ return _errcode.load(std::memory_order_acquire);	}
 	inline void SetSessionID(int sid) 	{ _session_id = sid;	}
 	inline int  GetSessionID() const	{ return _session_id;	}
 	void SetEndpoint(const std::string& endpoint) { _endpoint = endpoint; }
 	const std::string& GetEndpoint() const { return _endpoint; }
 
-	virtual void Send(const ::OI::Base::Bytes& bytes)	{ assert(false); };
+	bool Send(const ::OI::Base::Bytes& bytes);
+	void SetSendQueueLimit(size_t bytes);
+	size_t PendingSendBytes();
+	void OnBytesSent(size_t bytes);
 	virtual void ActiveClose() = 0;			//外部Mgr主动关闭调用,有锁,不会回调Mgr->CloseSession
 
 protected:

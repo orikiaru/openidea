@@ -24,6 +24,7 @@ public:
 	~Poll();
 
 	bool Init();
+	bool InPollCallback() const;
 
 	bool InLoopThread() const
 	{

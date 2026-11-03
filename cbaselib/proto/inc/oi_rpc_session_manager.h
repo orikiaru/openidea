@@ -63,6 +63,11 @@ public:
 	virtual void OnClientConnect(::OI::Net::Session* pSession) = 0;
 	virtual void OnClientDisconnect(const ::OI::Net::Session* pSession) = 0;
 
+	sid_t ConnectedSid()
+	{
+		::OI::Thread::SpinLockGuard lock(_client_locker);
+		return _conn ? _ssid : INVALID_SID;
+	}
 	bool IsConnect()
 	{
 		::OI::Thread::SpinLockGuard lock(_client_locker);
@@ -70,7 +75,6 @@ public:
 	}
 	virtual void OnAddSession(::OI::Net::Session* pSession)
 	{
-		std::deque<::OI::Base::Bytes> pending;
 		sid_t sid = INVALID_SID;
 		{
 			::OI::Thread::SpinLockGuard l(_client_locker);
@@ -78,13 +82,15 @@ public:
 			_connecting = false;
 			_ssid = pSession->GetSessionID();
 			sid = _ssid;
-			pending.swap(_pending);
-			_pending_bytes = 0;
+			// 与新发送共用客户端锁；先发送连接前缓存，不能让新数据抢占它的额度。
+			// 待发总量已受发送额度限制；若连接恰好关闭，保留尚未接纳的部分等重连。
+			while (!_pending.empty())
+			{
+				if (!SendBytes(sid, _pending.front())) break;
+				_pending_bytes -= _pending.front().Size();
+				_pending.pop_front();
+			}
 			_ever_connected = true;
-		}
-		for (std::deque<::OI::Base::Bytes>::iterator it = pending.begin(); it != pending.end(); ++it)
-		{
-			SendBytes(sid, *it);
 		}
 		FlushHeldCalls(sid);
 		OnClientConnect(pSession);

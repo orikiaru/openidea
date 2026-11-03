@@ -24,12 +24,7 @@ class RegistryClientSession : public ::OI::Net::NetSession
 {
 public:
 	explicit RegistryClientSession(::OI::Net::SessionManager* mgr) : ::OI::Net::NetSession(mgr) {}
-	virtual void Send(const ::OI::Base::Bytes& bytes)
-	{
-		::OI::Thread::MutexGuard lock(_locker);
-		_obuff.Append(bytes);
-		AllowSend();
-	}
+
 	virtual void OnDataOut() {}
 	virtual void OnDataIn()
 	{

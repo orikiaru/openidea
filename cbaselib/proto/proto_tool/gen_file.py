@@ -69,6 +69,9 @@ class GenFile:
         lines = []
         lines.append("#pragma once")
         lines.append("#include \"oi_header.h\"")
+        for p in self.proto_parse.serialize_datas:
+            if p.GetType() == SerializeDataType.RPC:
+                lines.append('#include "oi_rpcdata_%s.h"' % p.GetRes().lower())
         lines.append("namespace OI { namespace Rpc {")
         lines.append("template<typename T> struct RpcProtoId;")
         lines.append("}}")
@@ -83,7 +86,7 @@ class GenFile:
         for p in self.proto_parse.serialize_datas:
             if(p.GetType() != SerializeDataType.RPC):
                 continue
-            lines.append("template<> struct RpcProtoId<::OI::RpcData::%s> { static const proto_type_t value = %s; };" % (p.GetReq(), p.GetID()))
+            lines.append("template<> struct RpcProtoId<::OI::RpcData::%s> { using Response = ::OI::RpcData::%s; static const proto_type_t value = %s; };" % (p.GetReq(), p.GetRes(), p.GetID()))
             lines.append("template<> struct RpcProtoId<::OI::RpcData::%s> { static const proto_type_t value = %s; };" % (p.GetRes(), p.GetResID()))
         lines.append("}}")
         lines.append("")

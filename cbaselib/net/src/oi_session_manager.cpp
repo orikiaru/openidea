@@ -9,10 +9,16 @@
 #include "oi_tcp_channel.h"
 #include <stdio.h>
 #include <vector>
+#include <memory>
+#include <limits>
 namespace OI { namespace Net {
 
 bool SessionManager::Init()
 {
+	int64_t send_limit = 64 * 1024 * 1024;
+	TryGetConfig(GetIDString() + ".max_send_queue_bytes", send_limit);
+	if (send_limit <= 0 || (uint64_t)send_limit > (std::numeric_limits<size_t>::max)()) return false;
+	_max_send_queue_bytes = (size_t)send_limit;
 	std::string ip, port, type;
 	TryGetConfigAndReturnFalse(GetIDString() + ".ip", ip);
 	TryGetConfigAndReturnFalse(GetIDString() + ".port", port);
@@ -196,13 +202,14 @@ bool SessionManager::SendBytes(sid_t sid, const ::OI::Base::Bytes& data)
 		pSession = it->second;
 		pSession->AddRef();
 	}
-	pSession->Send(data);
-	pSession->Release();
-	return true;
+	auto release = [](Session* session) { session->Release(); };
+	std::unique_ptr<Session, decltype(release)> held(pSession, release);
+	return pSession->Send(data);
 }
 
 void SessionManager::AddSession(Session* pSession)
 {
+	pSession->SetSendQueueLimit(_max_send_queue_bytes);
 	int sid = 0;
 	{
 		{

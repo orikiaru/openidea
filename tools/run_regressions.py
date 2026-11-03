@@ -63,6 +63,8 @@ def run(case, args):
                     text = replace(text, "max_task_count", "1")
                     # Hold 的迟到回包晚 5 秒；后续 PING 的预算必须覆盖这段排队。
                     text = replace(text, "timeout_ms", "8000")
+                if mode == "log":
+                    text = text.replace("[LogClient]", "[LogClient]\nmax_send_queue_bytes = 262144")
                 if case == "disk-full":
                     text = replace(text, "bytes", "131072")
             (cfg / (name + ".toml")).write_text(text, encoding="utf-8")

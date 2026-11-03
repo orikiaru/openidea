@@ -9,6 +9,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <uv.h>
 
 RedisMgr::RedisMgr()
 	: _on(false), _tasks(8), _sync(2), _seconds(10), _timeout_ms(25000), _failed(0), _done(0), _ops(0), _bad(0)
@@ -144,17 +145,23 @@ coro::Task RedisMgr::Check()
 	auto error = co_await ::OI::Redis::CallRedis({"OI_UNKNOWN_COMMAND"});
 	if (error.status != ::OI::Redis::RedisStatus::ServerError || !error.reply || error.timeout) ++_failed;
 
-#ifndef _SINGLE_THREAD_
 	std::atomic<int32_t> sync_guard(0);
 	::OI::Net::Poll::GetInstance().CallOnLoop([](void* arg) {
-		int32_t checked = -1;
-		try { ::OI::Redis::RedisPingSync(); }
-		catch (const std::logic_error&) { checked = 1; }
-		((std::atomic<int32_t>*)arg)->store(checked, std::memory_order_release);
+		auto timer = new uv_timer_t{};
+		timer->data = arg;
+		uv_timer_init(OI::Net::Poll::GetInstance().Loop(), timer);
+		uv_timer_start(timer, [](uv_timer_t* timer) {
+			int32_t checked = -1;
+			try { OI::Redis::RedisPingSync(); }
+			catch (const std::logic_error&) { checked = 1; }
+			static_cast<std::atomic<int32_t>*>(timer->data)->store(checked, std::memory_order_release);
+			uv_close(reinterpret_cast<uv_handle_t*>(timer), [](uv_handle_t* handle) {
+				delete reinterpret_cast<uv_timer_t*>(handle);
+			});
+		}, 1, 0);
 	}, &sync_guard);
 	while (sync_guard.load(std::memory_order_acquire) == 0) co_await coro::yield(10);
 	if (sync_guard.load() != 1) ++_failed;
-#endif
 	::OI::Redis::RedisResult synced = ::OI::Redis::RedisPingSync();
 	if (!StatusIs(synced, "PONG"))
 	{

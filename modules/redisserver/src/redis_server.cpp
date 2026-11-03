@@ -203,7 +203,7 @@ void OnReply(redisAsyncContext*, void* reply, void* priv)
 		AppendReply(out, (redisReply*)reply);
 		freeReplyObject(reply);
 	}
-	RedisServer::GetInstance().SendBytes(sid, out);
+	if (!RedisServer::GetInstance().SendBytes(sid, out)) RedisServer::GetInstance().CloseSession(sid);
 }
 
 void OnConnect(redisAsyncContext* c, int status)
@@ -346,12 +346,12 @@ void RedisServer::Issue(int32_t link, sid_t sid, const char* cmd, size_t len)
 	if (link < 0 || link >= (int)_links.size() || !_links[(size_t)link].ac || len == 0)
 	{
 		AppendErr(err, "ERR redis down");
-		SendBytes(sid, err);
+		if (!SendBytes(sid, err)) CloseSession(sid);
 		return;
 	}
 	if (redisAsyncFormattedCommand(_links[(size_t)link].ac, OnReply, (void*)(intptr_t)sid, cmd, len) != REDIS_OK)
 	{
 		AppendErr(err, "ERR redis down");
-		SendBytes(sid, err);
+		if (!SendBytes(sid, err)) CloseSession(sid);
 	}
 }

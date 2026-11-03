@@ -1,6 +1,7 @@
 #include "oi_rpc_session_manager.h"
 #include "oi_base.h"
 #include "oi_rpc_coro.h"
+#include <algorithm>
 namespace OI { namespace Rpc {
 
 bool ProtoClientManager::SendRaw(const ::OI::Base::Bytes& data)
@@ -31,7 +32,8 @@ bool ProtoClientManager::SendRawOrPend(const ::OI::Base::Bytes& data, size_t max
 		}
 		else
 		{
-			if (_pending_bytes + data.Size() > max_pending_bytes)
+			max_pending_bytes = (std::min)(max_pending_bytes, _max_send_queue_bytes);
+			if (_pending_bytes > max_pending_bytes || data.Size() > max_pending_bytes - _pending_bytes)
 			{
 				return false;
 			}
@@ -54,7 +56,12 @@ bool ProtoClientManager::TryPendCall(uint64_t call_id, const ::OI::Base::Bytes& 
 			// 先标记再入队；超时回调会在本锁释放后删除。已经超时则不再留副本。
 			if (!MarkRpcAwaitingConnect(call_id)) return true;
 			_held_calls.push_back(HeldCall{call_id, data});
-			_held_index.emplace(call_id, std::prev(_held_calls.end()));
+			try { _held_index.emplace(call_id, std::prev(_held_calls.end())); }
+			catch (...)
+			{
+				_held_calls.pop_back();
+				throw;
+			}
 			_held_bytes += data.Size();
 			return true;
 		}

@@ -107,12 +107,7 @@ class RegistryServerSession : public ::OI::Net::NetSession
 {
 public:
 	explicit RegistryServerSession(::OI::Net::SessionManager* mgr) : ::OI::Net::NetSession(mgr) {}
-	virtual void Send(const ::OI::Base::Bytes& bytes)
-	{
-		::OI::Thread::MutexGuard lock(_locker);
-		_obuff.Append(bytes);
-		AllowSend();
-	}
+
 	virtual void OnDataOut() {}
 	virtual void OnDataIn()
 	{
@@ -297,7 +292,7 @@ void RegistryServer::PutSnapshot(const Binding& b)
 
 void RegistryServer::Reply(sid_t sid, uint32_t id, const ::OI::Rpc::Serialize& msg)
 {
-	SendBytes(sid, ::OI::Base::EncodeRegFrame(id, msg));
+	if (!SendBytes(sid, ::OI::Base::EncodeRegFrame(id, msg))) CloseSession(sid);
 }
 
 void RegistryServer::StartReload()

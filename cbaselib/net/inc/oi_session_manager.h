@@ -27,6 +27,7 @@ class SessionManager
 protected:
 	typedef std::map<sid_t, Session*> SessionMap;
 	SessionMap 	_session_map;
+	size_t _max_send_queue_bytes = 64 * 1024 * 1024;
 	sid_t	   	_cur_session_id;
 	::OI::Thread::Mutex   	_locker;
 	std::string 	_sip;

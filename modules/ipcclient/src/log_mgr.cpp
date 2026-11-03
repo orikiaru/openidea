@@ -43,20 +43,19 @@ coro::Task LogMgr::Pump()
 	{
 		payload.back() = '\n';
 	}
-	int64_t prev = _sent.fetch_add(_line);
-	if (prev < _bytes)
+	for (;;)
 	{
-		if (!::OI::Log::LogClient::GetInstance().SendLog(LOG_INFO, payload.data(), payload.size()))
+		int64_t prev = _sent.fetch_add(_line);
+		if (prev >= _bytes)
 		{
+			// 结束探测也要归还额度，不能把未发送的占位计入成功字节数。
 			_sent.fetch_sub(_line);
-			// 还没连上且待发已满。让出一轮给 poll，不进时间轮：一跳 50 毫秒，等不起。
-			co_await coro::yield(0);
+			break;
 		}
-		// 下一条不等这条写完。单线程先 poll 把缓冲发出去，再跑新挂上的。
-		coro::StartTask([](coro::Token) {
-			return LogMgr::GetInstance().Pump();
-		});
-		co_return;
+		if (!::OI::Log::LogClient::GetInstance().SendLog(LOG_INFO, payload.data(), payload.size()))
+			_sent.fetch_sub(_line);
+		// 同一协程复用 payload；每条后让出，让 poll 排空缓冲并给其他业务运行机会。
+		co_await coro::yield(0);
 	}
 	if (_done.fetch_add(1) + 1 == _tasks)
 	{

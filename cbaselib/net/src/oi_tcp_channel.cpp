@@ -63,6 +63,7 @@ void TCP_Channel::DataOut()
 		if (write_num > 0)
 		{
 			_obuff.Erase(0, write_num);
+			_p_session->OnBytesSent((size_t)write_num);
 			continue;
 		}
 		else if (write_num == -1 && errno == EAGAIN)

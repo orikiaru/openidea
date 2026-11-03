@@ -2,12 +2,7 @@
 #include "oi_rpc_call.h"
 namespace OI { namespace Rpc {
 
-void ProtoSession::Send(const ::OI::Base::Bytes& bytes)
-{
-	::OI::Thread::MutexGuard l(_locker);
-	_obuff.Append(bytes);
-	AllowSend();
-}
+
 
 void ProtoSession::OnDataIn()
 {

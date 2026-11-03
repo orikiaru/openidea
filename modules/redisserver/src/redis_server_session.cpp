@@ -139,12 +139,7 @@ RedisServerSession::~RedisServerSession()
 {
 }
 
-void RedisServerSession::Send(const ::OI::Base::Bytes& bytes)
-{
-	::OI::Thread::MutexGuard lock(_locker);
-	_obuff.Append(bytes);
-	AllowSend();
-}
+
 
 void RedisServerSession::OnDataOut()
 {

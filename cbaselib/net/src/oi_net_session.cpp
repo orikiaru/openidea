@@ -35,8 +35,8 @@ void NetSession::Close(int err)
 {
 	if (_status == IO_ST_CONNECTED)
 	{
-		_status = IO_ST_WILL_CLOSE;
-		_errcode = err;
+		_errcode.store(err, std::memory_order_relaxed);
+		_status.store(IO_ST_WILL_CLOSE, std::memory_order_release);
 		AllowSend();
 		if (err > 0)
 		{

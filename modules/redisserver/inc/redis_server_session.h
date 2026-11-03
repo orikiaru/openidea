@@ -11,7 +11,6 @@ public:
 	RedisServerSession(RedisServer* owner);
 	virtual ~RedisServerSession();
 	void Bind(int32_t link) { _link = link; }
-	virtual void Send(const ::OI::Base::Bytes& bytes);
 	virtual void OnDataIn();
 	virtual void OnDataOut();
 };

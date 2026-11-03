@@ -173,28 +173,21 @@ RedisCall RedisClient::Call(std::vector<std::string> args, RedisResult* out)
 
 RedisResult RedisClient::CallSync(std::vector<std::string> args)
 {
-#ifndef _SINGLE_THREAD_
-	// 回包和超时都在 poll 上完成，不能在这里阻塞 poll 等自己。
-	if (::OI::Net::Poll::GetInstance().InLoopThread())
-	{
-		throw std::logic_error("CallRedisSync cannot run on the poll thread; use co_await CallRedis");
-	}
-#endif
+	// 两种模式都禁止在 libuv 回调中同步等待，不能重入事件循环。
+	if (::OI::Net::Poll::GetInstance().InPollCallback())
+		throw std::logic_error("CallRedisSync cannot run in a poll callback; use co_await CallRedis");
 	RedisCall::State* st = new RedisCall::State();
 	st->args = std::move(args);
 	st->sync = true;
 	::OI::Net::Poll::GetInstance().CallOnLoop(Submit, st);
 #ifdef _SINGLE_THREAD_
-	// 同步等回包。先把已经挂上的协程跑一轮，再 poll；没有别人在等就堵住。
-	while (!st->ready)
+	while (!st->ready && !::OI::Thread::ThreadPool::GetInstance().Stopping())
 	{
-		coro::StScheduler::Poll();
-		if (st->ready)
-		{
-			break;
-		}
-		::OI::Net::Poll::GetInstance().PollWait(coro::StScheduler::Queued() ? 0 : 1);
+		// 同步调用也可能来自定时回调；不能依赖该回调返回后才能继续推进的时间轮。
+		SweepTimeout(nullptr);
+		if (!st->ready) ::OI::Thread::ThreadPool::GetInstance().PumpOnce();
 	}
+	if (!st->ready) Settle(st, {}, RedisStatus::Disconnected);
 #else
 	{
 		::OI::Thread::MutexGuard lock(st->mu);

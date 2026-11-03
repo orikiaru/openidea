@@ -84,6 +84,7 @@ static void WorkerMain(ThreadPool::ThreadData* p_data)
 {
 	ThreadPool::InitIgnoreSig();
 	assert(p_data);
+	unsigned coro_streak = 0;
 	for (;;)
 	{
 		Task* pTask = NULL;
@@ -100,14 +101,16 @@ static void WorkerMain(ThreadPool::ThreadData* p_data)
 			{
 				return;
 			}
-			if (p_data->_coro_count > 0)
+			if (p_data->_coro_count > 0 && (p_data->_task_count == 0 || coro_streak < 32))
 			{
 				coro = p_data->_coros.front();
 				p_data->_coros.pop_front();
 				p_data->_coro_count--;
+				if (coro_streak < 32) ++coro_streak;
 			}
 			else
 			{
+				coro_streak = 0;
 				pTask = p_data->_task_list.front();
 				p_data->_task_list.pop_front();
 				p_data->_task_count--;
@@ -216,47 +219,51 @@ void ThreadPool::SetAfterResume(void (*fn)())
 	_after_resume = fn;
 }
 
+void ThreadPool::PumpOnce()
+{
+#ifdef _SINGLE_THREAD_
+	// 普通 Task 也只跑此刻队列里的。执行中再投的留到 poll 之后，避免自己把 poll 饿死。
+	for (int i = PRIO_NUM - 1; i >= PRIO_NORMAL; --i)
+	{
+		ThreadData& thread_data = _thread_data[i];
+		unsigned int n = thread_data._task_count;
+		for (unsigned int k = 0; k < n; ++k)
+		{
+			Task* pTask = FetchTask(&thread_data);
+			if (!pTask)
+			{
+				break;
+			}
+			pTask->Exec();
+		}
+	}
+	if (_drain)
+	{
+		_drain();
+	}
+	bool pending = _pending && _pending();
+	if (!pending)
+	{
+		for (int i = PRIO_NORMAL; i < PRIO_NUM; ++i)
+		{
+			if (_thread_data[i]._task_count)
+			{
+				pending = true;
+				break;
+			}
+		}
+	}
+	// 队列里还有下一轮，就只试一次网络；谁都不跑了才堵住等。
+	::OI::Net::Poll::GetInstance().PollWait(pending ? 0 : 1000);
+#else
+	assert(false && "PumpOnce is single-thread only");
+#endif
+}
+
 void ThreadPool::SingleThreadStartWork()
 {
-	//屏蔽一些危险信号
 	InitIgnoreSig();
-
-	while (!Stopping())
-	{
-		// 普通 Task 也只跑此刻队列里的。执行中再投的留到 poll 之后，避免自己把 poll 饿死。
-		for (int i = PRIO_NUM - 1; i >= PRIO_NORMAL; --i)
-		{
-			ThreadData& thread_data = _thread_data[i];
-			unsigned int n = thread_data._task_count;
-			for (unsigned int k = 0; k < n; ++k)
-			{
-				Task* pTask = FetchTask(&thread_data);
-				if (!pTask)
-				{
-					break;
-				}
-				pTask->Exec();
-			}
-		}
-		if (_drain)
-		{
-			_drain();
-		}
-		bool pending = _pending && _pending();
-		if (!pending)
-		{
-			for (int i = PRIO_NORMAL; i < PRIO_NUM; ++i)
-			{
-				if (_thread_data[i]._task_count)
-				{
-					pending = true;
-					break;
-				}
-			}
-		}
-		// 队列里还有下一轮，就只试一次网络；谁都不跑了才堵住等。
-		::OI::Net::Poll::GetInstance().PollWait(pending ? 0 : 1000);
-	}
+	while (!Stopping()) PumpOnce();
 }
 
 void ThreadPool::MultiThreadStartWork()

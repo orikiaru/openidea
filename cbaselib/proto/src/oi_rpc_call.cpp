@@ -38,6 +38,13 @@ namespace
 {
 typedef std::function<coro::Task(coro::Token, ::OI::Net::SessionManager*, sid_t, ::OI::Base::BytesStream)> RpcHandleFn;
 
+struct RpcExpire
+{
+	int64_t deadline_ms;
+	uint64_t call_id;
+};
+using RpcExpireBuckets = std::map<int64_t, std::list<RpcExpire>>;
+
 struct RpcCoroSlot
 {
 	::OI::Net::SessionManager* mgr;
@@ -49,22 +56,30 @@ struct RpcCoroSlot
 	proto_type_t res_id;
 	uint64_t call_id;
 	bool awaiting_connect;
+	bool has_expiry = false;
+	RpcExpireBuckets::iterator expiry_bucket;
+	std::list<RpcExpire>::iterator expiry;
 };
 
-struct RpcExpire
-{
-	int64_t deadline_ms;
-	uint64_t call_id;
-};
-
-// 等回包的调用按调用号分片，发请求的工人之间不抢同一把锁。
-// 超时按时长分桶，同一桶里先登记的先到期，扫的时候只看队头。
+// 同时长按登记顺序排队；槽直接持有索引，请求结束时 O(1) 摘除对应节点。
 struct RpcCallShard
 {
 	::OI::Thread::Mutex mu;
 	std::unordered_map<uint64_t, RpcCoroSlot> slots;
-	std::map<int64_t, std::deque<RpcExpire> > expire;
+	RpcExpireBuckets expire;
 };
+
+// 调用者持分片锁。删除空桶，避免动态超时参数让桶本身无限增长。
+void RemoveRpcExpiry(RpcCallShard& shard, RpcCoroSlot& slot)
+{
+	if (!slot.has_expiry) return;
+	auto bucket = slot.expiry_bucket;
+	bucket->second.erase(slot.expiry);
+	if (bucket->second.empty()) shard.expire.erase(bucket);
+	slot.has_expiry = false;
+	slot.expiry = {};
+	slot.expiry_bucket = {};
+}
 
 const uint64_t kCallShards = 64;
 const int kSweepMs = 200;
@@ -121,6 +136,7 @@ bool TakeRpcSlot(uint64_t call_id, RpcCoroSlot& out, ::OI::Net::SessionManager* 
 	}
 	// 来源或协议错误不能消费其他连接的等待项。
 	if (mgr && (it->second.mgr != mgr || it->second.sid != sid || it->second.res_id != res_id)) return false;
+	RemoveRpcExpiry(shard, it->second);
 	out = std::move(it->second);
 	shard.slots.erase(it);
 	return true;
@@ -136,7 +152,7 @@ void SweepRpcCalls()
 		::OI::Thread::MutexGuard lock(shard.mu);
 		for (auto bit = shard.expire.begin(); bit != shard.expire.end(); )
 		{
-			std::deque<RpcExpire>& q = bit->second;
+			std::list<RpcExpire>& q = bit->second;
 			while (!q.empty())
 			{
 				std::unordered_map<uint64_t, RpcCoroSlot>::iterator it = shard.slots.find(q.front().call_id);
@@ -149,6 +165,9 @@ void SweepRpcCalls()
 				{
 					break;
 				}
+				it->second.has_expiry = false; // 本轮在桶内直接摘除，避免使外层迭代器失效。
+				it->second.expiry = {};
+				it->second.expiry_bucket = {};
 				fired.push_back(std::move(it->second));
 				shard.slots.erase(it);
 				q.pop_front();
@@ -179,6 +198,19 @@ void ArmRpcSweep(void*)
 {
 	::OI::Timer::BaseTimerManager::GetInstance().AddTimer(new RpcSweepTimer(), kSweepMs);
 }
+}
+
+RpcWaitStats GetRpcWaitStats()
+{
+	RpcWaitStats stats{};
+	for (auto& shard : g_call_shards)
+	{
+		::OI::Thread::MutexGuard lock(shard.mu);
+		stats.calls += shard.slots.size();
+		stats.buckets += shard.expire.size();
+		for (const auto& bucket : shard.expire) stats.expirations += bucket.second.size();
+	}
+	return stats;
 }
 
 bool MarkRpcAwaitingConnect(uint64_t call_id)
@@ -227,13 +259,33 @@ uint64_t BindRpcCall(::OI::Net::SessionManager* mgr, sid_t sid, proto_type_t res
 	slot.awaiting_connect = false;
 	RpcCallShard& shard = ShardOf(call_id);
 	::OI::Thread::MutexGuard lock(shard.mu);
-	shard.slots.emplace(call_id, std::move(slot));
-	if (timeout_ms > 0)
+	auto inserted = shard.slots.emplace(call_id, std::move(slot)).first;
+	try
 	{
-		RpcExpire e;
-		e.deadline_ms = NowMs() + timeout_ms;
-		e.call_id = call_id;
-		shard.expire[timeout_ms].push_back(e);
+		if (timeout_ms > 0)
+		{
+			auto bucket = shard.expire.try_emplace(timeout_ms).first;
+			try
+			{
+				const int64_t now = NowMs();
+				const int64_t max_time = (std::numeric_limits<int64_t>::max)();
+				bucket->second.push_back({timeout_ms > max_time - now ? max_time : now + timeout_ms, call_id});
+			}
+			catch (...)
+			{
+				if (bucket->second.empty()) shard.expire.erase(bucket);
+				throw;
+			}
+			inserted->second.expiry_bucket = bucket;
+			inserted->second.expiry = std::prev(bucket->second.end());
+			inserted->second.has_expiry = true;
+		}
+	}
+	catch (...)
+	{
+		// 登记失败必须在放锁前撤销：调用者还没有拿到调用号，不能自行清理。
+		shard.slots.erase(inserted);
+		throw;
 	}
 	return call_id;
 }
@@ -259,6 +311,7 @@ void FailRpcCalls(::OI::Net::SessionManager* mgr, sid_t sid)
 		{
 			if (it->second.mgr == mgr && it->second.sid == sid)
 			{
+				RemoveRpcExpiry(shard, it->second);
 				failed.push_back(std::move(it->second));
 				it = shard.slots.erase(it);
 			}
