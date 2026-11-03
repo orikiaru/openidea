@@ -1,8 +1,9 @@
 #include "oi_redis_session.h"
 #include "oi_redis.h"
-namespace OI { namespace Redis {
-
-
+namespace OI
+{
+namespace Redis
+{
 
 void RedisClientSession::OnDataIn()
 {
@@ -17,4 +18,5 @@ void RedisClientSession::OnDataIn()
 void RedisClientSession::OnDataOut()
 {
 }
-}}
+}
+}

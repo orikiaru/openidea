@@ -17,7 +17,8 @@ class LogMgr
 	std::atomic<int64_t> m_iSent;
 	std::atomic<int32_t> m_iDone;
 	std::chrono::steady_clock::time_point m_stStart;
-public:
+
+  public:
 	void Load();
 	void Start();
 	coro::Task Pump();

@@ -9,24 +9,55 @@
 #include "oi_header.h"
 #include "oi_thread.h"
 
-namespace OI { namespace Thread {
-namespace { std::atomic<TaskErrorHandler> g_fnTaskErrorHandler{nullptr}; }
-void SetTaskErrorHandler(TaskErrorHandler fnHandlerParam) { g_fnTaskErrorHandler.store(fnHandlerParam); }
+namespace OI
+{
+namespace Thread
+{
+namespace
+{
+std::atomic<TaskErrorHandler> g_fnTaskErrorHandler{nullptr};
+}
+void SetTaskErrorHandler(TaskErrorHandler fnHandlerParam)
+{
+	g_fnTaskErrorHandler.store(fnHandlerParam);
+}
 void ReportTaskError(std::exception_ptr stErrorParam) noexcept
 {
 	if (auto fnHandler = g_fnTaskErrorHandler.load())
 	{
-		try { fnHandler(stErrorParam); return; }
-		catch (...) { fprintf(stderr, "task error handler threw\n"); }
+		try
+		{
+			fnHandler(stErrorParam);
+			return;
+		}
+		catch (...)
+		{
+			fprintf(stderr, "task error handler threw\n");
+		}
 	}
-	try { std::rethrow_exception(stErrorParam); }
-	catch (const std::exception& stError) { fprintf(stderr, "task failed: %s\n", stError.what()); }
-	catch (...) { fprintf(stderr, "task failed: unknown exception\n"); }
+	try
+	{
+		std::rethrow_exception(stErrorParam);
+	}
+	catch (const std::exception& stError)
+	{
+		fprintf(stderr, "task failed: %s\n", stError.what());
+	}
+	catch (...)
+	{
+		fprintf(stderr, "task failed: unknown exception\n");
+	}
 }
 static void ExecuteTask(Task* pTaskParam) noexcept
 {
-	try { pTaskParam->Exec(); }
-	catch (...) { ReportTaskError(std::current_exception()); }
+	try
+	{
+		pTaskParam->Exec();
+	}
+	catch (...)
+	{
+		ReportTaskError(std::current_exception());
+	}
 }
 
 static std::string GetPrioConfigString(PRIO_ENUM iPriorityParam)
@@ -61,13 +92,13 @@ bool ThreadPool::Init()
 		iMaxTaskCount = (uint32_t)iMaxTaskCountLocal;
 	}
 #ifdef _SINGLE_THREAD_
-	for(int iIndexLocal = PRIO_NORMAL; iIndexLocal < PRIO_NUM; ++iIndexLocal)
+	for (int iIndexLocal = PRIO_NORMAL; iIndexLocal < PRIO_NUM; ++iIndexLocal)
 	{
 		ThreadData& stThreadData = vThreadData[iIndexLocal];
 		stThreadData.iThreadCount = 1;
 	}
 #else
-	for(int iIndexLocal = PRIO_NORMAL; iIndexLocal < PRIO_NUM; ++iIndexLocal)
+	for (int iIndexLocal = PRIO_NORMAL; iIndexLocal < PRIO_NUM; ++iIndexLocal)
 	{
 		ThreadData& stThreadData = vThreadData[iIndexLocal];
 
@@ -79,7 +110,6 @@ bool ThreadPool::Init()
 		{
 			stThreadData.iThreadCount = 1;
 		}
-
 	}
 #endif
 	return true;
@@ -89,11 +119,11 @@ Task* FetchTask(ThreadPool::ThreadData* pDataParam)
 {
 	assert(pDataParam);
 	Task* pTask = NULL;
-	if(pDataParam->iTaskCount)
+	if (pDataParam->iTaskCount)
 	{
 		pTask = pDataParam->vTaskList.front();
 		pDataParam->vTaskList.pop_front();
-		pDataParam->iTaskCount --;
+		pDataParam->iTaskCount--;
 	}
 
 	return pTask;
@@ -111,7 +141,8 @@ static void WorkerMain(ThreadPool::ThreadData* pDataParam)
 		{
 			std::unique_lock<std::mutex> stLock(pDataParam->stMutex);
 			pDataParam->iIdleThreadCount++;
-			pDataParam->stCondition.wait(stLock, [&]() {
+			pDataParam->stCondition.wait(stLock, [&]()
+			{
 				return pDataParam->iTaskCount > 0 || pDataParam->iCoroutineCount > 0 || ThreadPool::GetInstance().Stopping();
 			});
 			pDataParam->iIdleThreadCount--;
@@ -125,7 +156,10 @@ static void WorkerMain(ThreadPool::ThreadData* pDataParam)
 				stCoroutine = pDataParam->vCoroutines.front();
 				pDataParam->vCoroutines.pop_front();
 				pDataParam->iCoroutineCount--;
-				if (iCoroutineStreak < 32) ++iCoroutineStreak;
+				if (iCoroutineStreak < 32)
+				{
+					++iCoroutineStreak;
+				}
 			}
 			else
 			{
@@ -178,8 +212,17 @@ void ThreadPool::PostCoroutine(std::coroutine_handle<> stHandleParam)
 bool ThreadPool::AddStopHandler(void (*fnHandlerParam)())
 {
 	::OI::Thread::MutexGuard stLock(m_stStopHandlerMutex);
-	if (!fnHandlerParam || m_bStopRequested.load()) return false;
-	for (const auto& fnHandler : m_vStopHandlers) if (fnHandler == fnHandlerParam) return true;
+	if (!fnHandlerParam || m_bStopRequested.load())
+	{
+		return false;
+	}
+	for (const auto& fnHandler : m_vStopHandlers)
+	{
+		if (fnHandler == fnHandlerParam)
+		{
+			return true;
+		}
+	}
 	m_vStopHandlers.push_back(fnHandlerParam);
 	return true;
 }
@@ -188,10 +231,14 @@ void ThreadPool::RequestStop(int iCodeParam)
 {
 	{
 		::OI::Thread::MutexGuard stLock(m_stStopHandlerMutex);
-		if (m_bStopRequested.exchange(true)) return;
+		if (m_bStopRequested.exchange(true))
+		{
+			return;
+		}
 		iExitCode = iCodeParam;
 	}
-	::OI::Net::Poll::GetInstance().CallOnLoop([](void* pArgumentParam) {
+	::OI::Net::Poll::GetInstance().CallOnLoop([](void* pArgumentParam)
+	{
 		static_cast<ThreadPool*>(pArgumentParam)->FinishStop();
 	}, this);
 }
@@ -201,8 +248,14 @@ void ThreadPool::FinishStop()
 	// 请求停止后不再接受注册；回调与网络完成串行，不能靠已停工人的超时任务解锁。
 	for (const auto& fnHandler : m_vStopHandlers)
 	{
-		try { fnHandler(); }
-		catch (...) { ReportTaskError(std::current_exception()); }
+		try
+		{
+			fnHandler();
+		}
+		catch (...)
+		{
+			ReportTaskError(std::current_exception());
+		}
 	}
 	{
 		std::lock_guard<std::mutex> stLock(stStopMutex);
@@ -212,7 +265,9 @@ void ThreadPool::FinishStop()
 	for (int iIndexLocal = PRIO_NORMAL; iIndexLocal < PRIO_NUM; ++iIndexLocal)
 	{
 		// 与 wait 的谓词检查握手，避免检查 false 后、真正入睡前漏掉通知。
-		{ std::lock_guard<std::mutex> stLock(vThreadData[iIndexLocal].stMutex); }
+		{
+			std::lock_guard<std::mutex> stLock(vThreadData[iIndexLocal].stMutex);
+		}
 		vThreadData[iIndexLocal].stCondition.notify_all();
 	}
 }
@@ -226,7 +281,8 @@ bool ThreadPool::CreateSpecThread(std::thread& stOutputParam, void* (*fnThreadHa
 		// 新线程等 out 写好再跑。线程函数里常拿自己的 id 和 out.get_id() 比。
 		std::promise<void> stGo;
 		std::shared_future<void> stStarted = stGo.get_future().share();
-		std::thread stWorker([fnThreadHandleParam, pArgumentParam, stStarted]() {
+		std::thread stWorker([fnThreadHandleParam, pArgumentParam, stStarted]()
+		{
 			stStarted.wait();
 			fnThreadHandleParam(pArgumentParam);
 		});
@@ -306,7 +362,10 @@ void ThreadPool::PumpOnce()
 void ThreadPool::SingleThreadStartWork()
 {
 	InitIgnoreSig();
-	while (!Stopping()) PumpOnce();
+	while (!Stopping())
+	{
+		PumpOnce();
+	}
 }
 
 void ThreadPool::MultiThreadStartWork()
@@ -326,12 +385,17 @@ void ThreadPool::MultiThreadStartWork()
 
 	{
 		std::unique_lock<std::mutex> stLock(stStopMutex);
-		stStopCondition.wait(stLock, [&]() { return bStop.load(); });
+		stStopCondition.wait(stLock, [&]()
+		{
+			return bStop.load();
+		});
 	}
 	for (int iIndexLocal = PRIO_NORMAL; iIndexLocal < PRIO_NUM; ++iIndexLocal)
 	{
 		// 与 wait 的谓词检查握手，避免检查 false 后、真正入睡前漏掉通知。
-		{ std::lock_guard<std::mutex> stLock(vThreadData[iIndexLocal].stMutex); }
+		{
+			std::lock_guard<std::mutex> stLock(vThreadData[iIndexLocal].stMutex);
+		}
 		vThreadData[iIndexLocal].stCondition.notify_all();
 	}
 	for (size_t iIndexLocal = 0; iIndexLocal < vWorkers.size(); ++iIndexLocal)
@@ -359,24 +423,24 @@ bool ThreadPool::AddTask(Task* pTaskParam)
 	assert(iPriorityLocal >= PRIO_NORMAL && iPriorityLocal < PRIO_NUM);
 #ifdef _SINGLE_THREAD_
 	ThreadData& stThreadData = vThreadData[iPriorityLocal];
-	if(stThreadData.iTaskCount >= iMaxTaskCount)
+	if (stThreadData.iTaskCount >= iMaxTaskCount)
 	{
 		SAFE_DELETE(pTaskParam);
 		return false;
 	}
-	stThreadData.iTaskCount ++;
+	stThreadData.iTaskCount++;
 	stThreadData.vTaskList.push_back(pTaskParam);
 #else
 	ThreadData& stThreadData = vThreadData[iPriorityLocal];
 	std::lock_guard<std::mutex> stLock(stThreadData.stMutex);
-	if(stThreadData.iTaskCount >= iMaxTaskCount)
+	if (stThreadData.iTaskCount >= iMaxTaskCount)
 	{
 		SAFE_DELETE(pTaskParam);
 		return false;
 	}
-	stThreadData.iTaskCount ++;
+	stThreadData.iTaskCount++;
 	stThreadData.vTaskList.push_back(pTaskParam);
-	if(stThreadData.iTaskCount == 1)
+	if (stThreadData.iTaskCount == 1)
 	{
 		stThreadData.stCondition.notify_all();
 	}
@@ -394,16 +458,10 @@ void ThreadPool::InitIgnoreSig()
 #endif
 }
 
-
 void ThreadPool::InitUnIgnoreSig(int iSigParam)
 {
 	std::signal(iSigParam, SIG_DFL);
 }
 
-
-
-
-
-
-
-}}
+}
+}

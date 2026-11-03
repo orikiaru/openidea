@@ -107,6 +107,8 @@ def run(case, args):
             text = (REPO / "deploy/config" / (name + ".toml")).read_text(encoding="utf-8-sig")
             if name == "logd":
                 text = replace(text, "root_path", '"' + str(logs) + '"')
+            if name == "redisserver" and case == "redis":
+                text = replace(text, "connections", "1")
             if name == "redisserver" and pressure:
                 text = replace(text, "connections", "1")
                 maximum_bytes = 1024**2 if case.endswith("bytes") else 8 * 1024**2
@@ -288,11 +290,13 @@ def run(case, args):
                 if case == "redis-limit":
                     assert "redis pending limit bad=0" in text
                 else:
+                    assert "redis script isolation bad=0" in text
                     assert re.search(r"redis stress .*bad=0", text)
             elif mode == "hold":
                 assert "hold binary bool bad=0" in text
                 assert "hold connection isolation bad=0" in text
                 assert "hold coroutine connect bad=0" in text
+                assert "hold reentrant connect first=1 retry=0 connections=1 bad=0" in text
                 assert "hold registry pairing bad=0" in text
                 assert re.search(r"hold http release before=\d+ after=\d+ bad=0", text)
                 assert "hold json validation bad=0" in text

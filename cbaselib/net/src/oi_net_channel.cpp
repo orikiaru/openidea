@@ -1,9 +1,13 @@
 #include "oi_net_channel.h"
 #include "oi_session.h"
 #include "oi_net_os.h"
-namespace OI { namespace Net {
+namespace OI
+{
+namespace Net
+{
 
-NetChannel::NetChannel(NetSocket stTextParam, Session* pSessionParam):Channel(stTextParam, pSessionParam)
+NetChannel::NetChannel(NetSocket stTextParam, Session* pSessionParam)
+    : Channel(stTextParam, pSessionParam)
 {
 	NetOs_SetNonblock(stSocket.GetSocket());
 	NetOs_SetNoDelay(stSocket.GetSocket());
@@ -36,4 +40,5 @@ void NetChannel::Destroy()
 	}
 	delete this;
 }
-}}
+}
+}

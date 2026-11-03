@@ -3,24 +3,37 @@
 #include "oi_thread.h"
 #include <string>
 
-namespace OI { namespace Net {
+namespace OI
+{
+namespace Net
+{
 
-template<class PROTOCOL>
+template <class PROTOCOL>
 class Parser
 {
-protected:
+  protected:
 	int32_t iParserError;
-public:
-	Parser():iParserError(PARSER_ERR_SUCCESS){}
-	int32_t	GetError()	{	return iParserError;	}
+
+  public:
+	Parser()
+	    : iParserError(PARSER_ERR_SUCCESS)
+	{
+	}
+	int32_t GetError()
+	{
+		return iParserError;
+	}
 	virtual PROTOCOL* DecodeProtocol(::OI::Base::BytesStream& stOutputStreamParam) = 0;
 	virtual ::OI::Base::BytesStream EncodeProtocol(const PROTOCOL* pProtoParam) = 0;
-	virtual ::OI::Base::BytesStream EncodeProtocol(const PROTOCOL& stProtoParam) {return EncodeProtocol(&stProtoParam);}
+	virtual ::OI::Base::BytesStream EncodeProtocol(const PROTOCOL& stProtoParam)
+	{
+		return EncodeProtocol(&stProtoParam);
+	}
 };
 
-class JBytesParser: public Parser<::OI::Base::Bytes>
+class JBytesParser : public Parser<::OI::Base::Bytes>
 {
-public:
+  public:
 	virtual ::OI::Base::Bytes* DecodeProtocol(::OI::Base::BytesStream& stObuffParam)
 	{
 		::OI::Base::Bytes* pPointer = new ::OI::Base::Bytes();
@@ -34,8 +47,13 @@ public:
 	}
 };
 
-}}
+}
+}
 
-namespace OI { namespace Rpc {
+namespace OI
+{
+namespace Rpc
+{
 ::OI::Base::BytesStream EncodePbFrame(proto_type_t iIdParam, ::OI::Base::BytesStream& stBodyParam);
-}}
+}
+}

@@ -7,13 +7,17 @@
 class IpcClient : public ::OI::Rpc::ProtoClientManager
 {
 	DECLARE_SINGLETON(IpcClient)
-	IpcClient() {}
+	IpcClient()
+	{
+	}
 	std::atomic<bool> m_bTestsStarted{false};
-public:
+
+  public:
 	virtual ~IpcClient();
 	bool Init();
 	virtual const std::string GetIDString();
-private:
+
+  private:
 	virtual void OnClientConnect(::OI::Net::Session* pSessionParam);
 	virtual void OnClientDisconnect(const ::OI::Net::Session* pSessionParam);
 };

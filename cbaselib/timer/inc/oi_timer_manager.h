@@ -17,17 +17,24 @@
 #include <utility>
 #include <memory>
 #include <chrono>
-namespace OI { namespace Timer {
+namespace OI
+{
+namespace Timer
+{
 
 typedef std::deque<TimerLevel> TimerLevelVector;
 
 // 到点后在时间轮工作线程放锁执行。lambda 是 ()，要用的数据自己捕获。
-template<typename F>
+template <typename F>
 class FnTimer : public BaseTimer
 {
 	F m_fnFunction;
-public:
-	explicit FnTimer(F fnFunctionParam) : m_fnFunction(std::move(fnFunctionParam)) {}
+
+  public:
+	explicit FnTimer(F fnFunctionParam)
+	    : m_fnFunction(std::move(fnFunctionParam))
+	{
+	}
 	bool OnTimer()
 	{
 		// Update 已在有序工作线程上，且已释放时间轮锁；直接执行，不能受普通任务限额影响。
@@ -41,18 +48,34 @@ class BaseTimerManager
 {
 	DECLARE_SINGLETON(BaseTimerManager)
 	BaseTimerManager();
-public:
+
+  public:
 	bool Init();
 	// libuv 定时器到点。只把 Update 丢进任务队列，不在 poll 回调里跑时间轮
 	void OnSignal();
 	// 定时器实际触发。单线程在主循环取到任务后执行，多线程在有序队列线程执行
 	void Update();
 
-	timer_tick_t GetCurTick()				{	return m_iCurrentTick;	}
-	const struct timeval& GetCurTickTime()	{	return m_stCurrentTimeValue;		}
-	time_t		GetTime()					{	return m_iCurrentTime; }
-	const tm&	GetTm()						{	return m_stCurrentCalendarTime; }
-	int			GetTickOffsetMS()			{	return m_iTickOffsetMilliseconds; }
+	timer_tick_t GetCurTick()
+	{
+		return m_iCurrentTick;
+	}
+	const struct timeval& GetCurTickTime()
+	{
+		return m_stCurrentTimeValue;
+	}
+	time_t GetTime()
+	{
+		return m_iCurrentTime;
+	}
+	const tm& GetTm()
+	{
+		return m_stCurrentCalendarTime;
+	}
+	int GetTickOffsetMS()
+	{
+		return m_iTickOffsetMilliseconds;
+	}
 
 	uint32_t milling2tick(int iMillisecondParam)
 	{
@@ -64,7 +87,7 @@ public:
 
 	void AddTimer(BaseTimer* pTimerParam, int iMillisecondParam);
 
-	template<typename F>
+	template <typename F>
 	typename std::enable_if<!std::is_base_of<BaseTimer, typename std::remove_pointer<typename std::decay<F>::type>::type>::value, void>::type
 	AddTimer(F fnFunctionParam, int iMillisecondParam)
 	{
@@ -79,7 +102,8 @@ public:
 		return pTimerParam->GetTimerLevel()->RemoveTimer(this, pTimerParam);
 	}
 	std::string GenTraceLog();
-private:
+
+  private:
 	// 相对延时只用单调时钟；系统校时只影响日历快照。
 	int64_t TicksFromNow(int iMillisecondParam) const;
 
@@ -94,7 +118,7 @@ private:
 	//取出最低一级本 tick 到点的定时器
 	void try_run_timer(TimerList& vDueParam);
 
-private:
+  private:
 	friend class TimerLevel;
 	::OI::Thread::Mutex m_stWheelMutex;
 
@@ -102,18 +126,19 @@ private:
 	std::chrono::steady_clock::time_point m_stLastTickMonotonic;
 
 	// 最近一次 Update 的日历时间，独立于相对定时。
-	struct timeval		m_stCurrentTimeValue;
+	struct timeval m_stCurrentTimeValue;
 
 	//当前tick数
-	timer_tick_t		m_iCurrentTick;
+	timer_tick_t m_iCurrentTick;
 	//每tick的时间间隔
-	uint32_t			m_iTickOffsetMilliseconds;
+	uint32_t m_iTickOffsetMilliseconds;
 	//timer层级数
-	size_t				m_iTimerLevelCount;
+	size_t m_iTimerLevelCount;
 	//当前timer层级数组,0代表与tick同步的定时器列表
-	TimerLevelVector	m_vTimerLevels;		//分级的timer
+	TimerLevelVector m_vTimerLevels; //分级的timer
 
-	time_t				m_iCurrentTime;
-	struct tm			m_stCurrentCalendarTime;
+	time_t m_iCurrentTime;
+	struct tm m_stCurrentCalendarTime;
 };
-}}
+}
+}

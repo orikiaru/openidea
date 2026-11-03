@@ -5,6 +5,7 @@ class WebServer
 {
 	DECLARE_SINGLETON(WebServer)
 	WebServer() = default;
-public:
+
+  public:
 	bool Run();
 };

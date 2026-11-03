@@ -9,10 +9,14 @@ class RedisServerSession : public ::OI::Net::NetSession
 	int32_t m_iLink;
 	bool m_bReadPaused = false;
 	size_t ProcessInput(size_t iBudgetParam);
-public:
+
+  public:
 	RedisServerSession(RedisServer* pOwnerParam);
 	virtual ~RedisServerSession();
-	void Bind(int32_t iLinkParam) { m_iLink = iLinkParam; }
+	void Bind(int32_t iLinkParam)
+	{
+		m_iLink = iLinkParam;
+	}
 	bool ResumeRead();
 	virtual void OnDataIn();
 	virtual void OnDataOut();

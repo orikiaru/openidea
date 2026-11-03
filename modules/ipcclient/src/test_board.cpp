@@ -1,7 +1,8 @@
 #include "test_board.h"
 #include "oi_thread.h"
 
-TestBoard::TestBoard() : m_iLeft(0), m_iCode(0)
+TestBoard::TestBoard()
+    : m_iLeft(0), m_iCode(0)
 {
 }
 

@@ -6,7 +6,10 @@
 #include <vector>
 #include <time.h>
 #include "oi_header.h"
-namespace OI { namespace Timer {
+namespace OI
+{
+namespace Timer
+{
 
 class BaseTimer;
 class BaseTimerManager;
@@ -27,11 +30,11 @@ class BaseTimer
 		friend class BaseTimer;
 		friend class TimerLevel;
 		friend class BaseTimerManager;
-		struct timeval	m_stTriggerTimestamp;	//触发时戳
-		int32_t			m_iOffsetMilliseconds;		//间隔ms数
-		timer_tick_t	m_iTriggerTick;	//偏移基础tick数
-		TimerLevel*		m_pCurrentLevel;		//当前所处的timer_lv
-		uint32_t		m_iLevelTick;	//所在timer_lv的offset
+		struct timeval m_stTriggerTimestamp; //触发时戳
+		int32_t m_iOffsetMilliseconds;       //间隔ms数
+		timer_tick_t m_iTriggerTick;         //偏移基础tick数
+		TimerLevel* m_pCurrentLevel;         //当前所处的timer_lv
+		uint32_t m_iLevelTick;               //所在timer_lv的offset
 
 		TimerData()
 		{
@@ -44,7 +47,7 @@ class BaseTimer
 	};
 
 	friend class BaseTimerManager;
-	TimerData m_stData;		//标记定时器所在定时器管理器的位置,只由TimerManager控制,外部不可操作
+	TimerData m_stData; //标记定时器所在定时器管理器的位置,只由TimerManager控制,外部不可操作
 	void InitData(BaseTimerManager* pMgrParam, int iMillsecParam, int64_t iTicksParam);
 	TimerLevel* GetTimerLevel()
 	{
@@ -63,13 +66,14 @@ class BaseTimer
 		return m_stData.m_stTriggerTimestamp;
 	}
 
-public:
-	BaseTimer() {}
-	virtual ~BaseTimer() {}
+  public:
+	BaseTimer()
+	{
+	}
+	virtual ~BaseTimer()
+	{
+	}
 	virtual bool OnTimer() = 0;
 };
-}}
-
-
-
-
+}
+}

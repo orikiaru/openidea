@@ -2,20 +2,25 @@
 #include <fcntl.h>
 #include "oi_poll.h"
 #include "oi_session.h"
-#include <sys/types.h>          /* See NOTES */
+#include <sys/types.h> /* See NOTES */
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/ip.h> /* superset of previous */
 #include <arpa/inet.h>
 #include "oi_session_manager.h"
 #include "oi_channel.h"
-namespace OI { namespace Net {
+namespace OI
+{
+namespace Net
+{
 
 bool Session::Send(const ::OI::Base::Bytes& stBytesParam)
 {
 	::OI::Thread::MutexGuard stLock(stLocker);
-	if (IsClosed() || iQueuedBytes > iMaxSendQueueBytes
-		|| stBytesParam.Size() > iMaxSendQueueBytes - iQueuedBytes) return false;
+	if (IsClosed() || iQueuedBytes > iMaxSendQueueBytes || stBytesParam.Size() > iMaxSendQueueBytes - iQueuedBytes)
+	{
+		return false;
+	}
 	stOutputBuffer.Append(stBytesParam);
 	iQueuedBytes += stBytesParam.Size();
 	AllowSend();
@@ -87,7 +92,6 @@ bool Session::IsClosed()
 	return iStatus.load(std::memory_order_acquire) != IO_ST_CONNECTED;
 }
 
-
 void Session::AllowSend()
 {
 	if (pChannel)
@@ -120,14 +124,9 @@ void Session::ForbidRead()
 	}
 }
 
-Session::Session(SessionManager* pMgrParam):iStatus(IO_ST_CONNECTED)
-	, iErrorCode(0)
-	, iSessionId(0)
-	, pChannel(NULL)
-	, pSessionManager(pMgrParam)
-	, iReferences(1)
+Session::Session(SessionManager* pMgrParam)
+    : iStatus(IO_ST_CONNECTED), iErrorCode(0), iSessionId(0), pChannel(NULL), pSessionManager(pMgrParam), iReferences(1)
 {
-
 }
 
 Session::~Session()
@@ -147,6 +146,5 @@ void Session::DetachChannel()
 	::OI::Thread::MutexGuard stLock(stLocker);
 	pChannel = NULL;
 }
-}}
-
-
+}
+}

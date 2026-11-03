@@ -1,7 +1,9 @@
 #include "oi_timer_helper.h"
 #include "oi_timer_manager.h"
 
-namespace OI { namespace Timer
+namespace OI
+{
+namespace Timer
 {
 namespace
 {
@@ -265,4 +267,5 @@ bool CrossYear(const TimeMark& stSavedParam, time_t iNowTimestampParam)
 {
 	return CrossYear(stSavedParam.iTimestamp, iNowTimestampParam, stSavedParam.iOffsetSeconds);
 }
-}}
+}
+}

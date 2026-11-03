@@ -29,8 +29,14 @@ typedef struct pthread_t
 {
 	HANDLE handle;
 	DWORD id;
-	bool operator==(const pthread_t& other) const { return id == other.id; }
-	bool operator!=(const pthread_t& other) const { return id != other.id; }
+	bool operator==(const pthread_t& other) const
+	{
+		return id == other.id;
+	}
+	bool operator!=(const pthread_t& other) const
+	{
+		return id != other.id;
+	}
 } pthread_t;
 
 typedef struct sigset_t
@@ -48,15 +54,60 @@ typedef struct sigset_t
 #define SIG_UNBLOCK 1
 #endif
 
-inline int sigemptyset(sigset_t* set) { if (set) set->mask = 0; return 0; }
-inline int sigaddset(sigset_t* set, int sig) { if (set) set->mask |= sig; return 0; }
-inline int pthread_sigmask(int, const sigset_t*, sigset_t*) { return 0; }
-inline int sigprocmask(int how, const sigset_t* set, sigset_t* old) { return pthread_sigmask(how, set, old); }
-inline int sigwait(const sigset_t*, int* sig) { if (sig) *sig = 0; Sleep(1000); return 0; }
+inline int sigemptyset(sigset_t* set)
+{
+	if (set)
+	{
+		set->mask = 0;
+	}
+	return 0;
+}
+inline int sigaddset(sigset_t* set, int sig)
+{
+	if (set)
+	{
+		set->mask |= sig;
+	}
+	return 0;
+}
+inline int pthread_sigmask(int, const sigset_t*, sigset_t*)
+{
+	return 0;
+}
+inline int sigprocmask(int how, const sigset_t* set, sigset_t* old)
+{
+	return pthread_sigmask(how, set, old);
+}
+inline int sigwait(const sigset_t*, int* sig)
+{
+	if (sig)
+	{
+		*sig = 0;
+	}
+	Sleep(1000);
+	return 0;
+}
 
-inline int pthread_mutexattr_init(pthread_mutexattr_t* attr) { if (attr) attr->type = PTHREAD_MUTEX_NORMAL; return 0; }
-inline int pthread_mutexattr_settype(pthread_mutexattr_t* attr, int type) { if (attr) attr->type = type; return 0; }
-inline int pthread_mutexattr_destroy(pthread_mutexattr_t*) { return 0; }
+inline int pthread_mutexattr_init(pthread_mutexattr_t* attr)
+{
+	if (attr)
+	{
+		attr->type = PTHREAD_MUTEX_NORMAL;
+	}
+	return 0;
+}
+inline int pthread_mutexattr_settype(pthread_mutexattr_t* attr, int type)
+{
+	if (attr)
+	{
+		attr->type = type;
+	}
+	return 0;
+}
+inline int pthread_mutexattr_destroy(pthread_mutexattr_t*)
+{
+	return 0;
+}
 
 inline int pthread_mutex_init(pthread_mutex_t* mutex, const pthread_mutexattr_t*)
 {
@@ -73,8 +124,16 @@ inline int pthread_mutex_destroy(pthread_mutex_t* mutex)
 	}
 	return 0;
 }
-inline int pthread_mutex_lock(pthread_mutex_t* mutex) { EnterCriticalSection(&mutex->cs); return 0; }
-inline int pthread_mutex_unlock(pthread_mutex_t* mutex) { LeaveCriticalSection(&mutex->cs); return 0; }
+inline int pthread_mutex_lock(pthread_mutex_t* mutex)
+{
+	EnterCriticalSection(&mutex->cs);
+	return 0;
+}
+inline int pthread_mutex_unlock(pthread_mutex_t* mutex)
+{
+	LeaveCriticalSection(&mutex->cs);
+	return 0;
+}
 inline int pthread_mutex_trylock(pthread_mutex_t* mutex)
 {
 	return TryEnterCriticalSection(&mutex->cs) ? 0 : EBUSY;
@@ -85,22 +144,52 @@ inline int pthread_cond_init(pthread_cond_t* cond, const void*)
 	InitializeConditionVariable(&cond->cv);
 	return 0;
 }
-inline int pthread_cond_destroy(pthread_cond_t*) { return 0; }
-inline int pthread_cond_signal(pthread_cond_t* cond) { WakeConditionVariable(&cond->cv); return 0; }
-inline int pthread_cond_broadcast(pthread_cond_t* cond) { WakeAllConditionVariable(&cond->cv); return 0; }
+inline int pthread_cond_destroy(pthread_cond_t*)
+{
+	return 0;
+}
+inline int pthread_cond_signal(pthread_cond_t* cond)
+{
+	WakeConditionVariable(&cond->cv);
+	return 0;
+}
+inline int pthread_cond_broadcast(pthread_cond_t* cond)
+{
+	WakeAllConditionVariable(&cond->cv);
+	return 0;
+}
 inline int pthread_cond_wait(pthread_cond_t* cond, pthread_mutex_t* mutex)
 {
 	SleepConditionVariableCS(&cond->cv, &mutex->cs, INFINITE);
 	return 0;
 }
 
-inline int pthread_spin_init(pthread_spinlock_t* lock, int) { return pthread_mutex_init(lock, 0); }
-inline int pthread_spin_destroy(pthread_spinlock_t* lock) { return pthread_mutex_destroy(lock); }
-inline int pthread_spin_lock(pthread_spinlock_t* lock) { return pthread_mutex_lock(lock); }
-inline int pthread_spin_unlock(pthread_spinlock_t* lock) { return pthread_mutex_unlock(lock); }
-inline int pthread_spin_trylock(pthread_spinlock_t* lock) { return pthread_mutex_trylock(lock); }
+inline int pthread_spin_init(pthread_spinlock_t* lock, int)
+{
+	return pthread_mutex_init(lock, 0);
+}
+inline int pthread_spin_destroy(pthread_spinlock_t* lock)
+{
+	return pthread_mutex_destroy(lock);
+}
+inline int pthread_spin_lock(pthread_spinlock_t* lock)
+{
+	return pthread_mutex_lock(lock);
+}
+inline int pthread_spin_unlock(pthread_spinlock_t* lock)
+{
+	return pthread_mutex_unlock(lock);
+}
+inline int pthread_spin_trylock(pthread_spinlock_t* lock)
+{
+	return pthread_mutex_trylock(lock);
+}
 
-inline int pthread_yield(void) { SwitchToThread(); return 0; }
+inline int pthread_yield(void)
+{
+	SwitchToThread();
+	return 0;
+}
 
 struct pthread_start_s
 {

@@ -37,10 +37,12 @@ bool WebServer::Run()
 	}
 
 	httplib::Server stSvr;
-	stSvr.Get("/health", [](const httplib::Request&, httplib::Response& stResponseParam) {
+	stSvr.Get("/health", [](const httplib::Request&, httplib::Response& stResponseParam)
+	{
 		stResponseParam.set_content("ok", "text/plain");
 	});
-	stSvr.Get("/query", [](const httplib::Request& stRequestParam, httplib::Response& stResponseParam) {
+	stSvr.Get("/query", [](const httplib::Request& stRequestParam, httplib::Response& stResponseParam)
+	{
 		if (!stRequestParam.has_param("text"))
 		{
 			stResponseParam.status = 400;
@@ -50,7 +52,8 @@ bool WebServer::Run()
 		stOutput["text"] = stRequestParam.get_param_value("text");
 		stResponseParam.set_content(DumpJson(stOutput), "application/json");
 	});
-	stSvr.Post("/json", [](const httplib::Request& stRequestParam, httplib::Response& stResponseParam) {
+	stSvr.Post("/json", [](const httplib::Request& stRequestParam, httplib::Response& stResponseParam)
+	{
 		Json::Value stBody;
 		if (!ParseJson(stRequestParam.body, stBody) || !stBody.isObject())
 		{
@@ -60,7 +63,8 @@ bool WebServer::Run()
 		stBody["ok"] = true;
 		stResponseParam.set_content(DumpJson(stBody), "application/json");
 	});
-	stSvr.Post("/rpcjson", [](const httplib::Request& stRequestParam, httplib::Response& stResponseParam) {
+	stSvr.Post("/rpcjson", [](const httplib::Request& stRequestParam, httplib::Response& stResponseParam)
+	{
 		::OI::RpcData::JsonAll stDataLocal;
 		if (!stDataLocal.FromJson(stRequestParam.body))
 		{
@@ -70,7 +74,8 @@ bool WebServer::Run()
 		stDataLocal.iGap += 1;
 		stResponseParam.set_content(stDataLocal.ToJson(), "application/json");
 	});
-	stSvr.Post("/bin", [](const httplib::Request& stRequestParam, httplib::Response& stResponseParam) {
+	stSvr.Post("/bin", [](const httplib::Request& stRequestParam, httplib::Response& stResponseParam)
+	{
 		stResponseParam.set_content(stRequestParam.body.data(), stRequestParam.body.size(), "application/octet-stream");
 	});
 

@@ -2,7 +2,10 @@
 #include "oi_session.h"
 #include "oi_poll.h"
 #include "oi_net_os.h"
-namespace OI { namespace Net {
+namespace OI
+{
+namespace Net
+{
 
 Channel::~Channel()
 {
@@ -54,4 +57,5 @@ void Channel::ForbidRead()
 		Poll::GetInstance().IOEventMod(this, iEventMask);
 	}
 }
-}}
+}
+}

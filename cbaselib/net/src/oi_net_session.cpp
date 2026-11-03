@@ -2,7 +2,10 @@
 #include "oi_session_manager.h"
 #include "oi_log.h"
 #include "oi_net_os.h"
-namespace OI { namespace Net {
+namespace OI
+{
+namespace Net
+{
 void NetSession::PassiveClose(int iErrorParam)
 {
 	{
@@ -55,4 +58,5 @@ void NetSession::OnClose()
 		pSessionManager->DelSession(this);
 	}
 }
-}}
+}
+}

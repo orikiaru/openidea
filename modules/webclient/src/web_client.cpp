@@ -143,19 +143,7 @@ static coro::Task Run()
 	else
 	{
 		::OI::RpcData::JsonAll stBack;
-		bool bSame = stBack.FromJson(stRpc.sBody)
-			&& stBack.iInt8 == stSent.iInt8 && stBack.iInt16 == stSent.iInt16 && stBack.iInt32 == stSent.iInt32
-			&& stBack.iInt64 == stSent.iInt64 && stBack.iAlternateInt64 == stSent.iAlternateInt64
-			&& stBack.fFloat == stSent.fFloat && stBack.dDouble == stSent.dDouble
-			&& stBack.stRawData.Size() == stSent.stRawData.Size()
-			&& (stSent.stRawData.Size() == 0 || std::memcmp(stBack.stRawData.Data(), stSent.stRawData.Data(), stSent.stRawData.Size()) == 0)
-			&& stBack.sMessage == stSent.sMessage && stBack.vNumbers == stSent.vNumbers && stBack.vWords == stSent.vWords
-			&& stBack.stChild.iNumber == stSent.stChild.iNumber && stBack.stChild.sText == stSent.stChild.sText
-			&& stBack.vChildren.size() == stSent.vChildren.size()
-			&& stBack.mTable == stSent.mTable && stBack.mNamed.size() == stSent.mNamed.size()
-			&& stBack.iUnsigned8 == stSent.iUnsigned8 && stBack.iUnsigned16 == stSent.iUnsigned16 && stBack.iUnsigned32 == stSent.iUnsigned32 && stBack.iUnsigned64 == stSent.iUnsigned64
-			&& stBack.vUnsignedNumbers == stSent.vUnsignedNumbers && stBack.iGap == stSent.iGap + 1
-			&& stBack.mUnsignedTable == stSent.mUnsignedTable && stBack.mLargeUnsignedTable == stSent.mLargeUnsignedTable;
+		bool bSame = stBack.FromJson(stRpc.sBody) && stBack.iInt8 == stSent.iInt8 && stBack.iInt16 == stSent.iInt16 && stBack.iInt32 == stSent.iInt32 && stBack.iInt64 == stSent.iInt64 && stBack.iAlternateInt64 == stSent.iAlternateInt64 && stBack.fFloat == stSent.fFloat && stBack.dDouble == stSent.dDouble && stBack.stRawData.Size() == stSent.stRawData.Size() && (stSent.stRawData.Size() == 0 || std::memcmp(stBack.stRawData.Data(), stSent.stRawData.Data(), stSent.stRawData.Size()) == 0) && stBack.sMessage == stSent.sMessage && stBack.vNumbers == stSent.vNumbers && stBack.vWords == stSent.vWords && stBack.stChild.iNumber == stSent.stChild.iNumber && stBack.stChild.sText == stSent.stChild.sText && stBack.vChildren.size() == stSent.vChildren.size() && stBack.mTable == stSent.mTable && stBack.mNamed.size() == stSent.mNamed.size() && stBack.iUnsigned8 == stSent.iUnsigned8 && stBack.iUnsigned16 == stSent.iUnsigned16 && stBack.iUnsigned32 == stSent.iUnsigned32 && stBack.iUnsigned64 == stSent.iUnsigned64 && stBack.vUnsignedNumbers == stSent.vUnsignedNumbers && stBack.iGap == stSent.iGap + 1 && stBack.mUnsignedTable == stSent.mUnsignedTable && stBack.mLargeUnsignedTable == stSent.mLargeUnsignedTable;
 		if (bSame)
 		{
 			for (size_t iIndexLocal = 0; iIndexLocal < stSent.vChildren.size(); ++iIndexLocal)
@@ -202,11 +190,11 @@ static coro::Task Run()
 	}
 
 	printf("web query=%d text=%s json_n=%d json_s=%s json_ok=%d rpc=%d bin=%d bad=%d\n",
-		sGotTextGottext == sText ? 1 : 0, sGotTextGottext.c_str(), iGotNumber, sGotTextGots.c_str(), bGotOk ? 1 : 0, iRpcOk, iBinOk, iBadLocal);
+	    sGotTextGottext == sText ? 1 : 0, sGotTextGottext.c_str(), iGotNumber, sGotTextGots.c_str(), bGotOk ? 1 : 0, iRpcOk, iBinOk, iBadLocal);
 	if (iBadLocal != 0)
 	{
 		printf("web err query=%s json=%s rpc=%s bin=%s\n",
-			stGot.sError.c_str(), stJs.sError.c_str(), stRpc.sError.c_str(), stRaw.sError.c_str());
+		    stGot.sError.c_str(), stJs.sError.c_str(), stRpc.sError.c_str(), stRaw.sError.c_str());
 	}
 	fflush(stdout);
 	::OI::Thread::ThreadPool::GetInstance().RequestStop(iBadLocal == 0 ? 0 : 1);
@@ -214,7 +202,8 @@ static coro::Task Run()
 
 void WebClient::Start()
 {
-	coro::StartTask([](coro::Token) {
+	coro::StartTask([](coro::Token)
+	{
 		return Run();
 	});
 }

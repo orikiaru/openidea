@@ -3,9 +3,17 @@
 
 class LogServerSession : public ::OI::Net::NetSession
 {
-public:
-	LogServerSession(::OI::Net::SessionManager* pMgrParam) :NetSession(pMgrParam) {}
-	virtual ~LogServerSession() {}
+  public:
+	LogServerSession(::OI::Net::SessionManager* pMgrParam)
+	    : NetSession(pMgrParam)
+	{
+	}
+	virtual ~LogServerSession()
+	{
+	}
 	void OnDataIn();
-	void OnDataOut() { assert(false && u8"logserver不需要回信"); }
+	void OnDataOut()
+	{
+		assert(false && u8"logserver不需要回信");
+	}
 };

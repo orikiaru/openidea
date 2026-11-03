@@ -7,12 +7,19 @@
 #include <stdexcept>
 #include <utility>
 
-namespace OI { namespace Base {
+namespace OI
+{
+namespace Base
+{
 char Bytes::m_iEmptyCharacter = 0;
 
-Bytes::Bytes() : m_pMemory(NULL), m_iCapacity(0), m_iHead(0), m_iSize(0) {}
+Bytes::Bytes()
+    : m_pMemory(NULL), m_iCapacity(0), m_iHead(0), m_iSize(0)
+{
+}
 
-Bytes::Bytes(const char* pDataParam, size_t iLengthParam) : m_pMemory(NULL), m_iCapacity(0), m_iHead(0), m_iSize(0)
+Bytes::Bytes(const char* pDataParam, size_t iLengthParam)
+    : m_pMemory(NULL), m_iCapacity(0), m_iHead(0), m_iSize(0)
 {
 	if (iLengthParam == 0)
 	{
@@ -24,7 +31,8 @@ Bytes::Bytes(const char* pDataParam, size_t iLengthParam) : m_pMemory(NULL), m_i
 	m_iSize = iLengthParam;
 }
 
-Bytes::Bytes(const Bytes& stOtherParam) : m_pMemory(NULL), m_iCapacity(0), m_iHead(0), m_iSize(0)
+Bytes::Bytes(const Bytes& stOtherParam)
+    : m_pMemory(NULL), m_iCapacity(0), m_iHead(0), m_iSize(0)
 {
 	if (stOtherParam.m_iSize > 0)
 	{
@@ -50,7 +58,8 @@ Bytes& Bytes::operator=(const Bytes& stOtherParam)
 	return *this;
 }
 
-Bytes::Bytes(Bytes&& stOtherParam) : m_pMemory(stOtherParam.m_pMemory), m_iCapacity(stOtherParam.m_iCapacity), m_iHead(stOtherParam.m_iHead), m_iSize(stOtherParam.m_iSize)
+Bytes::Bytes(Bytes&& stOtherParam)
+    : m_pMemory(stOtherParam.m_pMemory), m_iCapacity(stOtherParam.m_iCapacity), m_iHead(stOtherParam.m_iHead), m_iSize(stOtherParam.m_iSize)
 {
 	stOtherParam.m_pMemory = NULL;
 	stOtherParam.m_iCapacity = 0;
@@ -309,4 +318,5 @@ size_t Bytes::Replace(size_t iOffsetParam, const void* pDataParam, size_t iLengt
 	memcpy(Mutable() + iOffsetParam, pDataParam, iLengthParam);
 	return iLengthParam;
 }
-}}
+}
+}

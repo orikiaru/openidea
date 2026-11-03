@@ -18,9 +18,13 @@ class RedisMgr
 	std::atomic<int64_t> m_iOperations;
 	std::atomic<int32_t> m_iBad;
 	std::chrono::steady_clock::time_point m_stStart;
-public:
+
+  public:
 	void Load();
-	bool Enabled() const { return m_bEnabled; }
+	bool Enabled() const
+	{
+		return m_bEnabled;
+	}
 	void Start();
 	void NoteDone();
 	void SyncStress(int iIdParam);

@@ -1,14 +1,16 @@
 #pragma once
 
 #include "oi_socket.h"
-namespace OI { namespace Net {
+namespace OI
+{
+namespace Net
+{
 
 class SessionManager;
 
-
 class NetHelper
 {
-public:
+  public:
 	static bool CreateSocket(NetSocket& stSocketParam, SessionManager* pMgrParam, bool bAsyncParam);
 	static bool SocketBind(NetSocket& stSessionIdParam, SessionManager* pMgrParam);
 	static bool SocketListen(NetSocket& stSessionIdParam, SessionManager* pMgrParam);
@@ -18,4 +20,5 @@ public:
 	static int SocketAcceptOne(NetSocket& stSessionIdParam, SessionManager* pMgrParam);
 	static NetAddr GetNetAddr(SessionManager* pMgrParam);
 };
-}}
+}
+}

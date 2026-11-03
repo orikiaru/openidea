@@ -12,7 +12,10 @@
 #include <string>
 #include <vector>
 
-namespace OI { namespace Base {
+namespace OI
+{
+namespace Base
+{
 
 // 一份在线实例。id 取 [Service] id。
 struct ServiceInstance
@@ -21,7 +24,10 @@ struct ServiceInstance
 	int32_t iId;
 	std::string sIp;
 	std::string sPort;
-	ServiceInstance() : iId(0) {}
+	ServiceInstance()
+	    : iId(0)
+	{
+	}
 };
 
 // registry 和客户端之间的帧：PB 头里是协议号和包体长度。
@@ -34,14 +40,16 @@ class ServiceTable
 {
 	DECLARE_SINGLETON(ServiceTable)
 	ServiceTable();
-public:
+
+  public:
 	~ServiceTable();
 	void Watch(::OI::Net::SessionManager* pManagerParam, const std::string& sNameParam);
 	std::vector<std::string> Names();
 	// names 是这次拉取问过的名字，list 里没有的就是下线了。
 	void Apply(const std::vector<std::string>& vNamesParam, const std::vector<ServiceInstance>& vListParam);
 	static bool Pick(const std::vector<ServiceInstance>& vListParam, const std::string& sNameParam, int32_t iCurrentParam, ServiceInstance& stOutputParam);
-private:
+
+  private:
 	struct State
 	{
 		int32_t iId;
@@ -49,7 +57,10 @@ private:
 		std::string sPort;
 		bool bOnline;
 		std::vector<::OI::Net::SessionManager*> vWatchers;
-		State() : iId(0), bOnline(false) {}
+		State()
+		    : iId(0), bOnline(false)
+		{
+		}
 	};
 	::OI::Thread::Mutex m_stMutex;
 	std::map<std::string, State> m_mServices;
@@ -60,7 +71,8 @@ class RegistryClient : public ::OI::Net::SessionManager
 {
 	DECLARE_SINGLETON(RegistryClient)
 	RegistryClient();
-public:
+
+  public:
 	virtual ~RegistryClient();
 	// 没配 [Registry] 或查不到时返回 false，调用方继续用配置里的 ip/port。
 	bool Lookup(const std::string& sNameParam, std::string& sIpParam, std::string& sPortParam);
@@ -73,7 +85,8 @@ public:
 	void Pull();
 	virtual const std::string GetIDString();
 	void OnFrame(sid_t iSessionIdParam, uint32_t iIdParam, ::OI::Base::BytesStream& stBodyParam);
-protected:
+
+  protected:
 	virtual ::OI::Net::Session* CloneSession();
 	virtual void OnAddSession(::OI::Net::Session* pSessionParam);
 	virtual void OnDelSession(const ::OI::Net::Session* pSessionParam);
@@ -123,4 +136,5 @@ protected:
 	std::vector<ServiceInstance> vResponseList;
 };
 
-}}
+}
+}

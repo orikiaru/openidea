@@ -10,7 +10,8 @@ class TestBoard
 	TestBoard();
 	std::atomic<int32_t> m_iLeft;
 	std::atomic<int32_t> m_iCode;
-public:
+
+  public:
 	void Arm();
 	void Done(int iCodeParam);
 };

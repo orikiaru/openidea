@@ -21,7 +21,10 @@
 #include "oi_thread.h"
 #include "oi_header.h"
 #include "oi_net_os.h"
-namespace OI { namespace Net {
+namespace OI
+{
+namespace Net
+{
 
 static const void* POLL_PENDING = (void*)1;
 static const void* POLL_DROPPED = (void*)2;
@@ -227,10 +230,10 @@ static void OnAsync(uv_async_t*)
 }
 
 static const int g_quit_signums[] = {
-	SIGINT,
-	SIGTERM,
+    SIGINT,
+    SIGTERM,
 #ifdef SIGQUIT
-	SIGQUIT,
+    SIGQUIT,
 #endif
 };
 static uv_signal_t g_quit_signals[sizeof(g_quit_signums) / sizeof(g_quit_signums[0])];
@@ -520,7 +523,10 @@ void Poll::IOEventUnRegister(Channel* pPointerParam, bool bCloseDescriptorParam)
 	PostOp(stOperation);
 }
 
-namespace { [[maybe_unused]] thread_local unsigned g_poll_depth = 0; }
+namespace
+{
+[[maybe_unused]] thread_local unsigned g_poll_depth = 0;
+}
 
 bool Poll::InPollCallback() const
 {
@@ -534,10 +540,21 @@ bool Poll::InPollCallback() const
 void Poll::PollWait(int iWaitMillisecondsParam)
 {
 #ifdef _SINGLE_THREAD_
-	struct Guard { Guard() { ++g_poll_depth; } ~Guard() { --g_poll_depth; } } stGuard;
+	struct Guard
+	{
+		Guard()
+		{
+			++g_poll_depth;
+		}
+		~Guard()
+		{
+			--g_poll_depth;
+		}
+	} stGuard;
 	uv_run(&g_loop, iWaitMillisecondsParam == 0 ? UV_RUN_NOWAIT : UV_RUN_ONCE);
 #else
 	(void)iWaitMillisecondsParam;
 #endif
 }
-}}
+}
+}

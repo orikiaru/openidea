@@ -2,25 +2,31 @@
 #include <thread>
 #include "oi_singleton.h"
 struct uv_loop_s;
-namespace OI { namespace Net {
+namespace OI
+{
+namespace Net
+{
 
 class Channel;
 
 enum IO_EVENT_MASK
 {
-	IO_EV_READ 	= 0x001,
-	IO_EV_WRITE	= 0x004,
-	IO_EV_ERR	= 0x008,
-	IO_EV_REG	= IO_EV_READ | IO_EV_WRITE,
+	IO_EV_READ = 0x001,
+	IO_EV_WRITE = 0x004,
+	IO_EV_ERR = 0x008,
+	IO_EV_REG = IO_EV_READ | IO_EV_WRITE,
 };
 
 class Poll
 {
 	DECLARE_SINGLETON(Poll)
-	Poll() {}
-	std::thread::id	m_stLoopThread;
-	std::thread		m_stThread;
-public:
+	Poll()
+	{
+	}
+	std::thread::id m_stLoopThread;
+	std::thread m_stThread;
+
+  public:
 	~Poll();
 
 	bool Init();
@@ -51,4 +57,5 @@ public:
 	void ArmTick(unsigned iRepeatMillisecondsParam, void (*fnFunctionParam)());
 };
 
-}}
+}
+}

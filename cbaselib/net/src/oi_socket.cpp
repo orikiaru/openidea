@@ -1,4 +1,4 @@
-#include <sys/types.h>          /* See NOTES */
+#include <sys/types.h> /* See NOTES */
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/ip.h> /* superset of previous */
@@ -6,16 +6,19 @@
 #include <unistd.h>
 #include <fcntl.h>
 
-
 #include <stdlib.h>
 #include <string.h>
 #include "oi_socket.h"
 #include "oi_session_manager.h"
 #include "oi_net_helper.h"
 #include "oi_log.h"
-namespace OI { namespace Net {
+namespace OI
+{
+namespace Net
+{
 
-NetAddr::NetAddr():m_iProtocolType(AF_UNSPEC)
+NetAddr::NetAddr()
+    : m_iProtocolType(AF_UNSPEC)
 {
 }
 
@@ -26,38 +29,39 @@ bool NetAddr::Init(SessionManager* pMgrParam)
 	m_iProtocolType = AF_INET;
 	switch (m_iProtocolType)
 	{
-		case AF_INET:
+	case AF_INET:
+	{
+		sockaddr_in stAddr;
+		memset(&stAddr, 0, sizeof(stAddr));
+		stAddr.sin_family = AF_INET;
+		char* pEnd = NULL;
+		long iPortNumber = strtol(sPortLocal.c_str(), &pEnd, 10);
+		if (sPortLocal.empty() || *pEnd != '\0' || iPortNumber < 0 || iPortNumber > 65535)
 		{
-			sockaddr_in stAddr;
-			memset(&stAddr, 0, sizeof(stAddr));
-			stAddr.sin_family = AF_INET;
-			char* pEnd = NULL;
-			long iPortNumber = strtol(sPortLocal.c_str(), &pEnd, 10);
-			if (sPortLocal.empty() || *pEnd != '\0' || iPortNumber < 0 || iPortNumber > 65535)
-			{
-				LOG_ERROR("NetAddr::Init bad port=%s id=%s", sPortLocal.c_str(), pMgrParam->GetIDString().c_str());
-				return false;
-			}
-			stAddr.sin_port = htons((uint16_t)iPortNumber);
-			// 只收点分 IPv4。解析失败不能按 255.255.255.255 去连。
-			if (inet_pton(AF_INET, sIpLocal.c_str(), &stAddr.sin_addr) != 1)
-			{
-				LOG_ERROR("NetAddr::Init bad ip=%s id=%s", sIpLocal.c_str(), pMgrParam->GetIDString().c_str());
-				return false;
-			}
-			m_stAddressData.Clear();
-			m_stAddressData.Append(&stAddr, sizeof(stAddr));
-		}break;
-		//TODO AF_INET6
-		default:
-		{
-			assert(false);
+			LOG_ERROR("NetAddr::Init bad port=%s id=%s", sPortLocal.c_str(), pMgrParam->GetIDString().c_str());
 			return false;
-		}break;
+		}
+		stAddr.sin_port = htons((uint16_t)iPortNumber);
+		// 只收点分 IPv4。解析失败不能按 255.255.255.255 去连。
+		if (inet_pton(AF_INET, sIpLocal.c_str(), &stAddr.sin_addr) != 1)
+		{
+			LOG_ERROR("NetAddr::Init bad ip=%s id=%s", sIpLocal.c_str(), pMgrParam->GetIDString().c_str());
+			return false;
+		}
+		m_stAddressData.Clear();
+		m_stAddressData.Append(&stAddr, sizeof(stAddr));
+	}
+	break;
+	//TODO AF_INET6
+	default:
+	{
+		assert(false);
+		return false;
+	}
+	break;
 	}
 	return true;
 }
-
 
 bool NetAddr::IsValidAttr() const
 {
@@ -76,15 +80,16 @@ socklen_t NetAddr::NetAttrLen()
 
 enum NET_SOCKET_MASK
 {
-	NSM_INIT	= 0x0001,
-	NSM_ASYNC	= 0x0002,
-	NSM_BIND	= 0x0004,
-	NSM_LISTEN	= 0x0008,
+	NSM_INIT = 0x0001,
+	NSM_ASYNC = 0x0002,
+	NSM_BIND = 0x0004,
+	NSM_LISTEN = 0x0008,
 	NSM_CONNECT = 0x0010,
-	NSM_ACCEPT	= 0x0020,
+	NSM_ACCEPT = 0x0020,
 };
 
-NetSocket::NetSocket():m_iSocketDescriptor(INVALID_SOCKET_ID),m_iMask(0)
+NetSocket::NetSocket()
+    : m_iSocketDescriptor(INVALID_SOCKET_ID), m_iMask(0)
 {
 }
 
@@ -115,7 +120,6 @@ void NetSocket::SetListen()
 {
 	assert(!IsListen());
 	m_iMask |= NSM_LISTEN;
-
 }
 
 bool NetSocket::IsConnect()
@@ -133,7 +137,6 @@ bool NetSocket::IsAccept()
 {
 	return m_iMask & NSM_ACCEPT;
 }
-
 
 void NetSocket::SetAccept()
 {
@@ -193,4 +196,5 @@ NetAddr NetSocket::GetNetAddr(SessionManager* pMgrParam)
 {
 	return NetHelper::GetNetAddr(pMgrParam);
 }
-}}
+}
+}

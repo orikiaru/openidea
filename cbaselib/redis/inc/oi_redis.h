@@ -8,12 +8,28 @@
 #include <memory>
 #include <string>
 #include <vector>
-namespace OI { namespace Redis {
+namespace OI
+{
+namespace Redis
+{
 
 // RESP 字节里不带这个号。号留给以后把几种定制协议放到一条连接上。
-enum { REDIS_PROTO_ID = ::OI::Base::PROTO_REDIS };
+enum
+{
+	REDIS_PROTO_ID = ::OI::Base::PROTO_REDIS
+};
 
-enum class RedisStatus { Ok, Timeout, Disconnected, InvalidArgument, SendFailed, ServerError, ProtocolError, Busy };
+enum class RedisStatus
+{
+	Ok,
+	Timeout,
+	Disconnected,
+	InvalidArgument,
+	SendFailed,
+	ServerError,
+	ProtocolError,
+	Busy
+};
 
 // reply 共享 hiredis 回执，错误回执也保留，方便业务读取错误文本。
 struct RedisResult
@@ -21,8 +37,14 @@ struct RedisResult
 	std::shared_ptr<redisReply> pReply;
 	bool bTimeout;
 	RedisStatus iStatus;
-	RedisResult() : bTimeout(false), iStatus(RedisStatus::Disconnected) {}
-	explicit operator bool() const { return iStatus == RedisStatus::Ok; }
+	RedisResult()
+	    : bTimeout(false), iStatus(RedisStatus::Disconnected)
+	{
+	}
+	explicit operator bool() const
+	{
+		return iStatus == RedisStatus::Ok;
+	}
 };
 
 class RedisClient;
@@ -32,20 +54,25 @@ class RedisCall
 	friend class RedisClient;
 	struct State;
 	State* m_pState;
-public:
+
+  public:
 	RedisCall(std::vector<std::string> vArgumentsParam, RedisResult* pOutputParam);
 	RedisCall(RedisCall&& stOtherParam) noexcept;
 	RedisCall(const RedisCall&) = delete;
 	RedisCall& operator=(const RedisCall&) = delete;
 	~RedisCall();
-	bool await_ready() const noexcept { return false; }
-	template<typename Promise>
+	bool await_ready() const noexcept
+	{
+		return false;
+	}
+	template <typename Promise>
 	bool await_suspend(std::coroutine_handle<Promise> stHandleParam)
 	{
 		return Suspend(stHandleParam);
 	}
 	RedisResult await_resume();
-private:
+
+  private:
 	bool Suspend(std::coroutine_handle<> stHandleParam);
 };
 
@@ -63,9 +90,13 @@ class RedisClient : public ::OI::Rpc::ProtoClientManager
 	std::deque<RedisCall::State*> m_vWait;
 	// _wait 前面这么多条已经判过超时
 	size_t m_iSwept;
-public:
+
+  public:
 	virtual ~RedisClient();
-	virtual const std::string GetIDString() { return "RedisClient"; }
+	virtual const std::string GetIDString()
+	{
+		return "RedisClient";
+	}
 	virtual bool Init();
 	RedisCall Call(std::vector<std::string> vArgumentsParam, RedisResult* pOutputParam);
 	// 阻塞到回执或超时。多线程不能在 poll 线程上调。
@@ -79,7 +110,8 @@ public:
 	void Feed(sid_t iSessionIdParam, const char* pDataParam, size_t iSizeParam);
 	// poll 线程上周期调用，把到期还没回执的调用按超时结掉
 	static void SweepTimeout(void*);
-private:
+
+  private:
 	virtual ::OI::Net::Session* CloneSession();
 	virtual void OnClientConnect(::OI::Net::Session* pSessionParam);
 	virtual void OnClientDisconnect(const ::OI::Net::Session* pSessionParam);
@@ -106,5 +138,6 @@ inline RedisResult CallRedisSync(std::vector<std::string> vArgumentsParam)
 	return RedisClient::GetInstance().CallSync(std::move(vArgumentsParam));
 }
 
-}}
+}
+}
 #include "oi_redis_cmd.h"

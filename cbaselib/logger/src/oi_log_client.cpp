@@ -2,7 +2,10 @@
 #include "oi_config.h"
 #include "oi_log_frame.h"
 #include "string.h"
-namespace OI { namespace Log {
+namespace OI
+{
+namespace Log
+{
 
 LogClient::~LogClient()
 {
@@ -40,4 +43,5 @@ bool LogClient::SendLog(int iLevelParam, const char* pTextParam, size_t iTextLen
 	const size_t iItemIndexMaxPending = 4 * 1024 * 1024;
 	return SendRawOrPend(stFrame, iItemIndexMaxPending);
 }
-}}
+}
+}

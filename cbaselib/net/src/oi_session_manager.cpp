@@ -12,13 +12,19 @@
 #include <vector>
 #include <memory>
 #include <limits>
-namespace OI { namespace Net {
+namespace OI
+{
+namespace Net
+{
 
 bool SessionManager::Init()
 {
 	int64_t iSendLimit = 64 * 1024 * 1024;
 	TryGetConfig(GetIDString() + ".max_send_queue_bytes", iSendLimit);
-	if (iSendLimit <= 0 || (uint64_t)iSendLimit > (std::numeric_limits<size_t>::max)()) return false;
+	if (iSendLimit <= 0 || (uint64_t)iSendLimit > (std::numeric_limits<size_t>::max)())
+	{
+		return false;
+	}
 	iMaxSendQueueBytes = (size_t)iSendLimit;
 	std::string sIpLocal, sPortLocal, sType;
 	TryGetConfigAndReturnFalse(GetIDString() + ".ip", sIpLocal);
@@ -26,8 +32,7 @@ bool SessionManager::Init()
 	TryGetConfigAndReturnFalse(GetIDString() + ".type", sType);
 
 	std::string sService;
-	if (::OI::Base::Config::GlobalConfig().GetAs(GetIDString() + ".service", sService)
-		&& !sService.empty())
+	if (::OI::Base::Config::GlobalConfig().GetAs(GetIDString() + ".service", sService) && !sService.empty())
 	{
 		std::string sFoundIp;
 		std::string sFoundPort;
@@ -61,17 +66,23 @@ struct SessionManager::ConnectWait
 	{
 		{
 			OI::Thread::MutexGuard stLock(stMutex);
-			if (bDone) return;
+			if (bDone)
+			{
+				return;
+			}
 			bResult = bResultParam;
 			bDone = true;
 		}
 		// 回调先到只发布结果；调用方已挂起才排队恢复，禁止直接 resume。
-		if (iGate.exchange(1, std::memory_order_acq_rel) == 2) fnSchedule(stHandle);
+		if (iGate.exchange(1, std::memory_order_acq_rel) == 2)
+		{
+			fnSchedule(stHandle);
+		}
 	}
 };
 
 SessionManager::ConnectAwaiter::ConnectAwaiter(SessionManager* pManagerParam)
-	: m_pWait(std::make_shared<ConnectWait>())
+    : m_pWait(std::make_shared<ConnectWait>())
 {
 	pManagerParam->BeginConnect(m_pWait);
 }
@@ -82,51 +93,83 @@ bool SessionManager::ConnectAwaiter::Suspend(std::coroutine_handle<> stHandlePar
 	auto pWait = m_pWait;
 	OI::Thread::MutexGuard stLock(pWait->stMutex);
 	// 已完成对象可以再次 await；不能把完成门重新改成挂起状态。
-	if (pWait->bDone) return false;
+	if (pWait->bDone)
+	{
+		return false;
+	}
 	pWait->stHandle = stHandleParam;
 	pWait->fnSchedule = fnScheduleParam;
 	return pWait->iGate.exchange(2, std::memory_order_acq_rel) != 1;
 }
 
-bool SessionManager::ConnectAwaiter::await_resume() const noexcept { return m_pWait->bResult; }
+bool SessionManager::ConnectAwaiter::await_resume() const noexcept
+{
+	return m_pWait->bResult;
+}
 
 void SessionManager::FinishConnectWaiters(bool bResultParam)
 {
 	auto vWaiters = std::move(m_vConnectWaiters);
 	m_vConnectWaiters.clear();
 	for (const auto& pWeak : vWaiters)
-		if (auto pWait = pWeak.lock()) pWait->Finish(bResultParam);
+	{
+		if (auto pWait = pWeak.lock())
+		{
+			pWait->Finish(bResultParam);
+		}
+	}
 }
 
 void SessionManager::BeginConnect(const std::shared_ptr<ConnectWait>& pWaitParam)
 {
-	if (OI::Thread::ThreadPool::GetInstance().StopRequested()) { pWaitParam->Finish(false); return; }
-	struct ConnectRequest { SessionManager* pManager; std::shared_ptr<ConnectWait> pWait; };
+	if (OI::Thread::ThreadPool::GetInstance().StopRequested())
+	{
+		pWaitParam->Finish(false);
+		return;
+	}
+	struct ConnectRequest
+	{
+		SessionManager* pManager;
+		std::shared_ptr<ConnectWait> pWait;
+	};
 	auto pRequest = std::make_unique<ConnectRequest>(ConnectRequest{this, pWaitParam});
-	Poll::GetInstance().CallOnLoop([](void* pArgumentParam) {
+	Poll::GetInstance().CallOnLoop([](void* pArgumentParam)
+	{
 		std::unique_ptr<ConnectRequest> pHeld(static_cast<ConnectRequest*>(pArgumentParam));
-		auto* pManager = pHeld->pManager;
-		if (!pManager->StartConnect()) { pHeld->pWait->Finish(false); return; }
-		if (!pManager->bConnectPending) { pHeld->pWait->Finish(true); return; }
-		// 不 await 的临时对象不会取消建连；尾部过期占位摊销 O(1) 清理。
-		auto& vWaiters = pManager->m_vConnectWaiters;
-		while (!vWaiters.empty() && vWaiters.back().expired()) vWaiters.pop_back();
-		vWaiters.push_back(pHeld->pWait);
+		pHeld->pManager->StartConnect(pHeld->pWait);
 	}, pRequest.get());
 	pRequest.release();
 }
 
-bool SessionManager::StartConnect()
+void SessionManager::StartConnect(const std::shared_ptr<ConnectWait>& pWaitParam)
 {
 	assert(Poll::GetInstance().InLoopThread());
-	if (OI::Thread::ThreadPool::GetInstance().StopRequested()) return false;
-	if (bServiceDown) return false;
-	if (bConnectPending || HasEndpoint(sIpAddress + ":" + sPort)) return true;
+	if (OI::Thread::ThreadPool::GetInstance().StopRequested() || bServiceDown)
+	{
+		pWaitParam->Finish(false);
+		return;
+	}
+	if (!bConnectPending && HasEndpoint(sIpAddress + ":" + sPort))
+	{
+		pWaitParam->Finish(true);
+		return;
+	}
+	// 当前列表只属于当前未完成的代次。必须先登记，再启动可能立即完成的 connect。
+	while (!m_vConnectWaiters.empty() && m_vConnectWaiters.back().expired())
+	{
+		m_vConnectWaiters.pop_back();
+	}
+	m_vConnectWaiters.push_back(pWaitParam);
+	if (bConnectPending)
+	{
+		return;
+	}
 	bConnectPending = true;
 	const uint64_t iGeneration = ++iConnectGeneration;
-	const bool bStarted = ConnectChannel::StartConnect(this, true);
-	if (!bStarted) AbortSession(iGeneration);
-	return bStarted;
+	if (!ConnectChannel::StartConnect(this, true))
+	{
+		AbortSession(iGeneration);
+	}
 }
 
 void SessionManager::CloseEndpoint(const std::string& sEndpointParam)
@@ -185,9 +228,16 @@ void SessionManager::ApplyService(const std::string& sIpParam, const std::string
 {
 	if (!Poll::GetInstance().InLoopThread())
 	{
-		struct ServiceChange { SessionManager* pManager; std::string sIp; std::string sPort; bool bOnline; };
+		struct ServiceChange
+		{
+			SessionManager* pManager;
+			std::string sIp;
+			std::string sPort;
+			bool bOnline;
+		};
 		auto pChange = std::make_unique<ServiceChange>(ServiceChange{this, sIpParam, sPortParam, bOnlineParam});
-		Poll::GetInstance().CallOnLoop([](void* pArgumentParam) {
+		Poll::GetInstance().CallOnLoop([](void* pArgumentParam)
+		{
 			std::unique_ptr<ServiceChange> pHeld(static_cast<ServiceChange*>(pArgumentParam));
 			pHeld->pManager->ApplyService(pHeld->sIp, pHeld->sPort, pHeld->bOnline);
 		}, pChange.get());
@@ -273,8 +323,8 @@ SessionManager::~SessionManager()
 }
 
 const std::string SessionManager::GetIDString()
-{ 
-	return "SessionManager"; 
+{
+	return "SessionManager";
 }
 
 bool SessionManager::SendBytes(sid_t iSessionIdParam, const ::OI::Base::Bytes& stDataParam)
@@ -291,7 +341,10 @@ bool SessionManager::SendBytes(sid_t iSessionIdParam, const ::OI::Base::Bytes& s
 		pSessionLocal = stIterator->second;
 		pSessionLocal->AddRef();
 	}
-	auto fnRelease = [](Session* pSessionParam) { pSessionParam->Release(); };
+	auto fnRelease = [](Session* pSessionParam)
+	{
+		pSessionParam->Release();
+	};
 	std::unique_ptr<Session, decltype(fnRelease)> pHeld(pSessionLocal, fnRelease);
 	return pSessionLocal->Send(stDataParam);
 }
@@ -342,21 +395,34 @@ void SessionManager::CompleteConnect(net_socket_t iDescriptorParam, uint64_t iGe
 		NetOs_Close(iDescriptorParam);
 		return;
 	}
+	// OnAddSession 可以重入并发起下一代连接，不能在它返回后取走当前列表。
+	auto vWaiters = std::move(m_vConnectWaiters);
+	m_vConnectWaiters.clear();
 	bConnectPending = false;
 	AddSession(iDescriptorParam);
-	FinishConnectWaiters(true);
+	for (const auto& pWeak : vWaiters)
+	{
+		if (auto pWait = pWeak.lock())
+		{
+			pWait->Finish(true);
+		}
+	}
 }
 
 void SessionManager::AbortSession(uint64_t iGenerationParam)
 {
-	if (iGenerationParam != iConnectGeneration || !bConnectPending) return;
+	if (iGenerationParam != iConnectGeneration || !bConnectPending)
+	{
+		return;
+	}
 	bConnectPending = false;
 	FinishConnectWaiters(false);
 	{
 		::OI::Thread::MutexGuard stLock(stLocker);
 		++iCurrentSessionId;
 	}
-	LOG_ERROR("SessionManager::AbortSession id=%s endpoint=%s", GetIDString().c_str(), sEndpoint.c_str());	OnConnectFailed();
+	LOG_ERROR("SessionManager::AbortSession id=%s endpoint=%s", GetIDString().c_str(), sEndpoint.c_str());
+	OnConnectFailed();
 }
 
 void SessionManager::CloseSession(sid_t iSessionIdParam)
@@ -374,7 +440,10 @@ void SessionManager::CloseSession(sid_t iSessionIdParam)
 		}
 	}
 	// 逻辑断开立即结束等待；唤醒放在管理器锁外。
-	if (bClosedLocal) OnSessionClosed(iSessionIdParam);
+	if (bClosedLocal)
+	{
+		OnSessionClosed(iSessionIdParam);
+	}
 }
 
 void SessionManager::DelSession(const Session* pSessionParam)
@@ -387,4 +456,5 @@ void SessionManager::DelSession(const Session* pSessionParam)
 	//已经解绑,此时有Session锁
 	OnDelSession(pSessionParam);
 }
-}}
+}
+}

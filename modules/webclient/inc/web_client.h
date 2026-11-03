@@ -5,6 +5,7 @@ class WebClient
 {
 	DECLARE_SINGLETON(WebClient)
 	WebClient() = default;
-public:
+
+  public:
 	void Start();
 };

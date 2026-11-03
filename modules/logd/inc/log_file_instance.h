@@ -11,27 +11,26 @@ class LogManager;
 class LogFileInstance
 {
 	LogManager* m_pManager;
-	LOG_LEVEL	m_iLevel;
+	LOG_LEVEL m_iLevel;
 
 	//文件锁
-	::OI::Thread::Mutex		m_stFileLocker;
+	::OI::Thread::Mutex m_stFileLocker;
 	//日志文件handle
-	FILE*		m_vFiles[2];
+	FILE* m_vFiles[2];
 
 	typedef std::list<::OI::Base::Bytes> LogCacheList;
 	//缓存锁
-	::OI::Thread::Mutex			m_stCacheLocker;
-	::OI::Thread::MutexCond		m_stCacheCondition;
+	::OI::Thread::Mutex m_stCacheLocker;
+	::OI::Thread::MutexCond m_stCacheCondition;
 
 	//当前lv的日志缓存
-	LogCacheList	m_vLogs;
-	std::thread		m_stThread;
-	std::atomic<bool>	m_bWorking;
+	LogCacheList m_vLogs;
+	std::thread m_stThread;
+	std::atomic<bool> m_bWorking;
 	// 由 _cache_locker 保护。写线程看到后把 _logs 写完再返回。
-	bool			m_bQuit;
+	bool m_bQuit;
 
-
-public:
+  public:
 	LogFileInstance(LogManager* pManagerParam, LOG_LEVEL iLevelParam);
 	~LogFileInstance();
 	//跨天需要更换文件指针
@@ -43,8 +42,12 @@ public:
 	// 会把 log 的内容移走
 	void AddLog(::OI::Base::Bytes& stLogParam);
 	void WriteLog();
-	bool IsWorking() { return m_bWorking; }
-private:
+	bool IsWorking()
+	{
+		return m_bWorking;
+	}
+
+  private:
 	//实际log_thread处理积压日志时,再做切换
 	FILE* GetActiveFile();
 	//激活当前日志文件对应线程

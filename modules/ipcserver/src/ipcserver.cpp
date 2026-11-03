@@ -15,12 +15,11 @@
 
 IpcServer::~IpcServer()
 {
-
 }
 
 const std::string IpcServer::GetIDString()
 {
-    return "IpcServer";
+	return "IpcServer";
 }
 
 static OI_RPC_SYNC_HANDLER(AllEcho, HandleAllEcho)
@@ -74,10 +73,11 @@ bool IpcServer::Init()
 	if (bEncodingRegression)
 	{
 		OI::Rpc::BindRpcHandler(OI::Rpc::RpcProtoId<OI::RpcData::HoldReq>::iValue,
-			[](coro::Token iTokenParam, OI::Net::SessionManager* pManagerParam, sid_t iSessionIdParam, OI::Base::BytesStream stBodyParam) {
-				return OI::Rpc::RunHandledRpc<OI::RpcData::HoldReq, EncodingFailureResponse>(HandleEncodingRegression,
-					OI::Rpc::RpcProtoId<OI::RpcData::HoldRes>::iValue, iTokenParam, pManagerParam, iSessionIdParam, std::move(stBodyParam));
-			});
+		    [](coro::Token iTokenParam, OI::Net::SessionManager* pManagerParam, sid_t iSessionIdParam, OI::Base::BytesStream stBodyParam)
+		{
+			return OI::Rpc::RunHandledRpc<OI::RpcData::HoldReq, EncodingFailureResponse>(HandleEncodingRegression,
+			    OI::Rpc::RpcProtoId<OI::RpcData::HoldRes>::iValue, iTokenParam, pManagerParam, iSessionIdParam, std::move(stBodyParam));
+		});
 	}
 	return ::OI::Net::SessionManager::Init();
 }
@@ -105,8 +105,8 @@ static coro::Task HttpProbe(std::string sHostParam, int32_t iPortParam, std::str
 	::OI::Http::Response stResponseLocal = co_await stCli.Get(sPathParam, {});
 	long long iMillisecondsLocal = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - stBegin).count();
 	printf("http probe host=%s port=%d path=%s status=%d bytes=%zu ms=%lld fail=%d err=%s title=%s\n",
-		sHostParam.c_str(), iPortParam, sPathParam.c_str(), stResponseLocal.iStatus, stResponseLocal.sBody.size(), iMillisecondsLocal, stResponseLocal.bFail ? 1 : 0,
-		stResponseLocal.sError.c_str(), HtmlTitle(stResponseLocal.sBody).c_str());
+	    sHostParam.c_str(), iPortParam, sPathParam.c_str(), stResponseLocal.iStatus, stResponseLocal.sBody.size(), iMillisecondsLocal, stResponseLocal.bFail ? 1 : 0,
+	    stResponseLocal.sError.c_str(), HtmlTitle(stResponseLocal.sBody).c_str());
 	fflush(stdout);
 }
 
@@ -124,7 +124,8 @@ void IpcServer::StartHttpProbe()
 	{
 		return;
 	}
-	coro::StartTask([sHostLocal, iPortLocal, sPath, iTimeoutMillisecondsLocal](coro::Token) {
+	coro::StartTask([sHostLocal, iPortLocal, sPath, iTimeoutMillisecondsLocal](coro::Token)
+	{
 		return HttpProbe(sHostLocal, iPortLocal, sPath, iTimeoutMillisecondsLocal);
 	});
 }

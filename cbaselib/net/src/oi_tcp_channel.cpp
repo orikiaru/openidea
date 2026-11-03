@@ -1,7 +1,10 @@
 #include "oi_tcp_channel.h"
 #include "oi_session.h"
 #include "oi_net_os.h"
-namespace OI { namespace Net {
+namespace OI
+{
+namespace Net
+{
 
 void TCP_Channel::DataIn()
 {
@@ -52,8 +55,6 @@ peer_close:
 	return;
 }
 
-
-
 void TCP_Channel::DataOut()
 {
 	pSession->SwapOutBuff(stOutputBuffer);
@@ -86,4 +87,5 @@ write_fault:
 	pSession->PassiveClose(errno);
 	return;
 }
-}}
+}
+}

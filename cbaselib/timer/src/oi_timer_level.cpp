@@ -1,7 +1,10 @@
 #include "oi_timer_level.h"
 #include "oi_timer_manager.h"
 #include "oi_lock.h"
-namespace OI { namespace Timer {
+namespace OI
+{
+namespace Timer
+{
 
 void TimerLevel::RunTick(BaseTimerManager* pMgrParam, TimerList* pDueParam)
 {
@@ -31,4 +34,5 @@ void TimerLevel::RunTick(BaseTimerManager* pMgrParam, TimerList* pDueParam)
 		pMgrParam->add_timer(pTimer);
 	}
 }
-}}
+}
+}

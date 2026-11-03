@@ -2,7 +2,10 @@
 #include "oi_base.h"
 #include "oi_rpc_coro.h"
 #include <algorithm>
-namespace OI { namespace Rpc {
+namespace OI
+{
+namespace Rpc
+{
 
 bool ProtoClientManager::SendRaw(const ::OI::Base::Bytes& stDataParam)
 {
@@ -49,14 +52,22 @@ bool ProtoClientManager::TryPendCall(uint64_t iCallIdParam, const ::OI::Base::By
 {
 	{
 		::OI::Thread::SpinLockGuard stLock(m_stClientLocker);
-		if (m_bEverConnected || (m_bConnected && m_iSessionId != INVALID_SID)) return false;
-		if (m_vHeldCalls.size() < m_iHeldMaxCount && m_iHeldBytes <= m_iHeldMaxBytes
-			&& stDataParam.Size() <= m_iHeldMaxBytes - m_iHeldBytes)
+		if (m_bEverConnected || (m_bConnected && m_iSessionId != INVALID_SID))
+		{
+			return false;
+		}
+		if (m_vHeldCalls.size() < m_iHeldMaxCount && m_iHeldBytes <= m_iHeldMaxBytes && stDataParam.Size() <= m_iHeldMaxBytes - m_iHeldBytes)
 		{
 			// 先标记再入队；超时回调会在本锁释放后删除。已经超时则不再留副本。
-			if (!MarkRpcAwaitingConnect(iCallIdParam)) return true;
+			if (!MarkRpcAwaitingConnect(iCallIdParam))
+			{
+				return true;
+			}
 			m_vHeldCalls.push_back(HeldCall{iCallIdParam, stDataParam});
-			try { m_mHeldIndex.emplace(iCallIdParam, std::prev(m_vHeldCalls.end())); }
+			try
+			{
+				m_mHeldIndex.emplace(iCallIdParam, std::prev(m_vHeldCalls.end()));
+			}
 			catch (...)
 			{
 				m_vHeldCalls.pop_back();
@@ -75,7 +86,10 @@ void ProtoClientManager::DropPendingCall(uint64_t iCallIdParam)
 {
 	::OI::Thread::SpinLockGuard stLock(m_stClientLocker);
 	auto stIterator = m_mHeldIndex.find(iCallIdParam);
-	if (stIterator == m_mHeldIndex.end()) return;
+	if (stIterator == m_mHeldIndex.end())
+	{
+		return;
+	}
 	m_iHeldBytes -= stIterator->second->stData.Size();
 	m_vHeldCalls.erase(stIterator->second);
 	m_mHeldIndex.erase(stIterator);
@@ -121,6 +135,11 @@ void ProtoClientManager::FailHeldCalls()
 }
 
 void ProtoClientManager::Reconnect(int iMillisecondParam)
-{	::OI::Timer::BaseTimerManager::GetInstance().AddTimer([this]() { StartClient(); }, iMillisecondParam > 0 ? iMillisecondParam : 1);
+{
+	::OI::Timer::BaseTimerManager::GetInstance().AddTimer([this]()
+	{
+		StartClient();
+	}, iMillisecondParam > 0 ? iMillisecondParam : 1);
 }
-}}
+}
+}

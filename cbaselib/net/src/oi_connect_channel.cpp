@@ -7,7 +7,10 @@
 #include "oi_session_manager.h"
 #include "oi_log.h"
 #include "oi_net_os.h"
-namespace OI { namespace Net {
+namespace OI
+{
+namespace Net
+{
 
 void ConnectChannel::DataIn()
 {
@@ -33,15 +36,15 @@ void ConnectChannel::DataOut()
 	SESSION_TYPE iTextType = m_pSessionManager->GetSessionType();
 	switch (iTextType)
 	{
-		case SESSION_TYPE_TCP:
-			if (CheckTcpConnect())
-			{
-				Close();
-			}
-			break;
-		default:
-			assert(false);
-			break;
+	case SESSION_TYPE_TCP:
+		if (CheckTcpConnect())
+		{
+			Close();
+		}
+		break;
+	default:
+		assert(false);
+		break;
 	};
 }
 
@@ -58,9 +61,9 @@ bool ConnectChannel::TryClose()
 
 bool ConnectChannel::CheckTcpConnect()
 {
-	//The  socket  is  nonblocking  and  the connection cannot be completed immediately.  
-	//It is possible to select(2) or poll(2) for completion by selecting the socket for writing.  After select(2)indicates writability, 
-	//use getsockopt(2) to read the SO_ERROR option at level SOL_SOCKET to determine whether connect() completed successfully (SO_ERROR is zero) or  
+	//The  socket  is  nonblocking  and  the connection cannot be completed immediately.
+	//It is possible to select(2) or poll(2) for completion by selecting the socket for writing.  After select(2)indicates writability,
+	//use getsockopt(2) to read the SO_ERROR option at level SOL_SOCKET to determine whether connect() completed successfully (SO_ERROR is zero) or
 	//unsuccessfully  (SO_ERROR is one of the usual error codes listed here, explaining the reason for the failure).
 	//       int getsockopt(int sockfd, int level, int optname, void *optval, socklen_t *optlen);
 	int iValue = NetOs_GetSocketError(stSocket.GetSocket());
@@ -96,7 +99,6 @@ bool ConnectChannel::StartConnect(SessionManager* pMgrParam, bool bAsyncParam)
 		assert(false);
 	}
 	return false;
-
 }
 
 bool ConnectChannel::StartTcpConnect(SessionManager* pMgrParam, bool bAsyncParam)
@@ -109,4 +111,5 @@ bool ConnectChannel::StartTcpConnect(SessionManager* pMgrParam, bool bAsyncParam
 
 	return stText.SocketConnect(pMgrParam);
 }
-}}
+}
+}

@@ -5,7 +5,10 @@
 #include <utility>
 #include <vector>
 
-namespace OI { namespace Http {
+namespace OI
+{
+namespace Http
+{
 
 // status 为 0 表示没拿到 HTTP 状态行。fail 为真是连接、超时或报文不完整。
 struct Response
@@ -14,7 +17,10 @@ struct Response
 	std::string sBody;
 	bool bFail;
 	std::string sError;
-	Response() : iStatus(0), bFail(true) {}
+	Response()
+	    : iStatus(0), bFail(true)
+	{
+	}
 };
 
 class HttpChannel;
@@ -26,13 +32,24 @@ class Call
 	friend class HttpChannel;
 	struct State;
 	State* m_pState;
-	explicit Call(State* pStateParam) : m_pState(pStateParam) {}
-public:
-	Call(Call&& stOtherParam) noexcept : m_pState(stOtherParam.m_pState) { stOtherParam.m_pState = nullptr; }
+	explicit Call(State* pStateParam)
+	    : m_pState(pStateParam)
+	{
+	}
+
+  public:
+	Call(Call&& stOtherParam) noexcept
+	    : m_pState(stOtherParam.m_pState)
+	{
+		stOtherParam.m_pState = nullptr;
+	}
 	Call(const Call&) = delete;
 	Call& operator=(const Call&) = delete;
 	~Call();
-	bool await_ready() const noexcept { return false; }
+	bool await_ready() const noexcept
+	{
+		return false;
+	}
 	void await_suspend(std::coroutine_handle<> stHandleParam) noexcept;
 	Response await_resume();
 };
@@ -44,10 +61,12 @@ class Client
 	std::string m_sHost;
 	int32_t m_iPort;
 	int32_t m_iTimeoutMilliseconds;
-public:
+
+  public:
 	Client(const std::string& sHostParam, int32_t iPortParam, int32_t iTimeoutMillisecondsParam = 5000);
 	Call Get(const std::string& sPathParam, const std::vector<std::pair<std::string, std::string>>& vQueryParam);
 	Call Post(const std::string& sPathParam, const std::string& sBodyParam, const std::string& sContentTypeParam);
 };
 
-}}
+}
+}

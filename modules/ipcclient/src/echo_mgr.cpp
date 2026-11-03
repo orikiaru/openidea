@@ -121,18 +121,66 @@ static void PoisonAllTypes(::OI::RpcData::AllTypesData& stDataParam)
 static bool DiffAllTypes(const ::OI::RpcData::AllTypesData& stSentParam, const ::OI::RpcData::AllTypesData& stRecvParam)
 {
 	bool bSame = true;
-	if (stSentParam.iInt8 != stRecvParam.iInt8) { EchoMgr::GetInstance().Note("c"); bSame = false; }
-	if (stSentParam.iInt16 != stRecvParam.iInt16) { EchoMgr::GetInstance().Note("s"); bSame = false; }
-	if (stSentParam.iInt32 != stRecvParam.iInt32) { EchoMgr::GetInstance().Note("i"); bSame = false; }
-	if (stSentParam.iInt64 != stRecvParam.iInt64) { EchoMgr::GetInstance().Note("l"); bSame = false; }
-	if (stSentParam.iAlternateInt64 != stRecvParam.iAlternateInt64) { EchoMgr::GetInstance().Note("i64"); bSame = false; }
-	if (stSentParam.fFloat != stRecvParam.fFloat) { EchoMgr::GetInstance().Note("f"); bSame = false; }
-	if (stSentParam.dDouble != stRecvParam.dDouble) { EchoMgr::GetInstance().Note("d"); bSame = false; }
-	if (!SameBytes(stSentParam.stRawData, stRecvParam.stRawData)) { EchoMgr::GetInstance().Note("raw"); bSame = false; }
-	if (stSentParam.sMessage != stRecvParam.sMessage) { EchoMgr::GetInstance().Note("msg"); bSame = false; }
-	if (stSentParam.vNumbers != stRecvParam.vNumbers) { EchoMgr::GetInstance().Note("nums"); bSame = false; }
-	if (stSentParam.vWords != stRecvParam.vWords) { EchoMgr::GetInstance().Note("words"); bSame = false; }
-	if (!SameInner(stSentParam.stChild, stRecvParam.stChild)) { EchoMgr::GetInstance().Note("child"); bSame = false; }
+	if (stSentParam.iInt8 != stRecvParam.iInt8)
+	{
+		EchoMgr::GetInstance().Note("c");
+		bSame = false;
+	}
+	if (stSentParam.iInt16 != stRecvParam.iInt16)
+	{
+		EchoMgr::GetInstance().Note("s");
+		bSame = false;
+	}
+	if (stSentParam.iInt32 != stRecvParam.iInt32)
+	{
+		EchoMgr::GetInstance().Note("i");
+		bSame = false;
+	}
+	if (stSentParam.iInt64 != stRecvParam.iInt64)
+	{
+		EchoMgr::GetInstance().Note("l");
+		bSame = false;
+	}
+	if (stSentParam.iAlternateInt64 != stRecvParam.iAlternateInt64)
+	{
+		EchoMgr::GetInstance().Note("i64");
+		bSame = false;
+	}
+	if (stSentParam.fFloat != stRecvParam.fFloat)
+	{
+		EchoMgr::GetInstance().Note("f");
+		bSame = false;
+	}
+	if (stSentParam.dDouble != stRecvParam.dDouble)
+	{
+		EchoMgr::GetInstance().Note("d");
+		bSame = false;
+	}
+	if (!SameBytes(stSentParam.stRawData, stRecvParam.stRawData))
+	{
+		EchoMgr::GetInstance().Note("raw");
+		bSame = false;
+	}
+	if (stSentParam.sMessage != stRecvParam.sMessage)
+	{
+		EchoMgr::GetInstance().Note("msg");
+		bSame = false;
+	}
+	if (stSentParam.vNumbers != stRecvParam.vNumbers)
+	{
+		EchoMgr::GetInstance().Note("nums");
+		bSame = false;
+	}
+	if (stSentParam.vWords != stRecvParam.vWords)
+	{
+		EchoMgr::GetInstance().Note("words");
+		bSame = false;
+	}
+	if (!SameInner(stSentParam.stChild, stRecvParam.stChild))
+	{
+		EchoMgr::GetInstance().Note("child");
+		bSame = false;
+	}
 	if (stSentParam.vChildren.size() != stRecvParam.vChildren.size())
 	{
 		EchoMgr::GetInstance().Note("children");
@@ -150,7 +198,11 @@ static bool DiffAllTypes(const ::OI::RpcData::AllTypesData& stSentParam, const :
 			}
 		}
 	}
-	if (stSentParam.mTable != stRecvParam.mTable) { EchoMgr::GetInstance().Note("table"); bSame = false; }
+	if (stSentParam.mTable != stRecvParam.mTable)
+	{
+		EchoMgr::GetInstance().Note("table");
+		bSame = false;
+	}
 	if (stSentParam.mNamed.size() != stRecvParam.mNamed.size())
 	{
 		EchoMgr::GetInstance().Note("named");
@@ -169,13 +221,41 @@ static bool DiffAllTypes(const ::OI::RpcData::AllTypesData& stSentParam, const :
 			}
 		}
 	}
-	if (stSentParam.iUnsigned8 != stRecvParam.iUnsigned8) { EchoMgr::GetInstance().Note("u8"); bSame = false; }
-	if (stSentParam.iUnsigned16 != stRecvParam.iUnsigned16) { EchoMgr::GetInstance().Note("u16"); bSame = false; }
-	if (stSentParam.iUnsigned32 != stRecvParam.iUnsigned32) { EchoMgr::GetInstance().Note("u32"); bSame = false; }
-	if (stSentParam.iUnsigned64 != stRecvParam.iUnsigned64) { EchoMgr::GetInstance().Note("u64"); bSame = false; }
-	if (stSentParam.vUnsignedNumbers != stRecvParam.vUnsignedNumbers) { EchoMgr::GetInstance().Note("unums"); bSame = false; }
-	if (stSentParam.mUnsignedTable != stRecvParam.mUnsignedTable) { EchoMgr::GetInstance().Note("utable"); bSame = false; }
-	if (stSentParam.mLargeUnsignedTable != stRecvParam.mLargeUnsignedTable) { EchoMgr::GetInstance().Note("ubig"); bSame = false; }
+	if (stSentParam.iUnsigned8 != stRecvParam.iUnsigned8)
+	{
+		EchoMgr::GetInstance().Note("u8");
+		bSame = false;
+	}
+	if (stSentParam.iUnsigned16 != stRecvParam.iUnsigned16)
+	{
+		EchoMgr::GetInstance().Note("u16");
+		bSame = false;
+	}
+	if (stSentParam.iUnsigned32 != stRecvParam.iUnsigned32)
+	{
+		EchoMgr::GetInstance().Note("u32");
+		bSame = false;
+	}
+	if (stSentParam.iUnsigned64 != stRecvParam.iUnsigned64)
+	{
+		EchoMgr::GetInstance().Note("u64");
+		bSame = false;
+	}
+	if (stSentParam.vUnsignedNumbers != stRecvParam.vUnsignedNumbers)
+	{
+		EchoMgr::GetInstance().Note("unums");
+		bSame = false;
+	}
+	if (stSentParam.mUnsignedTable != stRecvParam.mUnsignedTable)
+	{
+		EchoMgr::GetInstance().Note("utable");
+		bSame = false;
+	}
+	if (stSentParam.mLargeUnsignedTable != stRecvParam.mLargeUnsignedTable)
+	{
+		EchoMgr::GetInstance().Note("ubig");
+		bSame = false;
+	}
 	if (stSentParam.mKeyed.size() != stRecvParam.mKeyed.size())
 	{
 		EchoMgr::GetInstance().Note("keyed");
@@ -215,9 +295,9 @@ static coro::Task RunOne(int iNumberParam)
 }
 
 EchoMgr::EchoMgr()
-	: m_bEnabled(true), m_bStack(false), m_iTotal(1000000), m_iTimeoutMilliseconds(180000), m_iSessionId(0),
-	  m_iDone(0), m_iOk(0), m_iRpcFail(0), m_iMismatch(0), m_iGapDiffer(0),
-	  m_iSampleSent(0), m_iSampleReceived(0), m_iSampleCode(0), m_bHaveSample(false)
+    : m_bEnabled(true), m_bStack(false), m_iTotal(1000000), m_iTimeoutMilliseconds(180000), m_iSessionId(0),
+      m_iDone(0), m_iOk(0), m_iRpcFail(0), m_iMismatch(0), m_iGapDiffer(0),
+      m_iSampleSent(0), m_iSampleReceived(0), m_iSampleCode(0), m_bHaveSample(false)
 {
 }
 
@@ -243,7 +323,8 @@ void EchoMgr::NoteGap()
 
 void EchoMgr::ArmTimeout()
 {
-	::OI::Timer::BaseTimerManager::GetInstance().AddTimer([]() {
+	::OI::Timer::BaseTimerManager::GetInstance().AddTimer([]()
+	{
 		printf("ipc timeout done=%d ok=%d\n", EchoMgr::GetInstance().Done(), EchoMgr::GetInstance().Ok());
 		fflush(stdout);
 		::OI::Thread::ThreadPool::GetInstance().RequestStop(1);
@@ -261,7 +342,8 @@ coro::Task EchoMgr::StackProbe()
 	TestBoard::GetInstance().Arm();
 	for (int iNumber = 0; iNumber < 3; ++iNumber)
 	{
-		coro::StartTask([pGate, iNumber](coro::Token) -> coro::Task {
+		coro::StartTask([pGate, iNumber](coro::Token) -> coro::Task
+		{
 			::OI::RpcData::AllEchoReq stRequestLocal;
 			FillAllTypes(stRequestLocal.stData, iNumber);
 			::OI::RpcData::AllEchoRes stResponseLocal;
@@ -313,7 +395,8 @@ void EchoMgr::Start(sid_t iSessionIdParam)
 	printf("ipc client connect sid=%d mode=%s total=%d\n", m_iSessionId, kMode, m_iTotal);
 	fflush(stdout);
 	TestBoard::GetInstance().Arm();
-	coro::StartTask([](coro::Token) {
+	coro::StartTask([](coro::Token)
+	{
 		return EchoMgr::GetInstance().Pump(0);
 	});
 }
@@ -332,14 +415,16 @@ coro::Task EchoMgr::Pump(int iIndexParam)
 	}
 	for (int iNumber = iIndexParam; iNumber < iEnd; ++iNumber)
 	{
-		coro::StartTask([iNumber](coro::Token) {
+		coro::StartTask([iNumber](coro::Token)
+		{
 			return RunOne(iNumber);
 		});
 	}
 	// 下一批不等这一批的回包。单线程主循环会先 poll，再捞这些新挂上的。
 	if (iEnd < m_iTotal)
 	{
-		coro::StartTask([iEnd](coro::Token) {
+		coro::StartTask([iEnd](coro::Token)
+		{
 			return EchoMgr::GetInstance().Pump(iEnd);
 		});
 	}
@@ -373,7 +458,8 @@ void EchoMgr::OnResult(int iNumberParam, const ::OI::RpcData::AllEchoReq& stRequ
 		return;
 	}
 	long long iMillisecondsLocal = std::chrono::duration_cast<std::chrono::milliseconds>(
-		std::chrono::steady_clock::now() - m_stStart).count();
+	    std::chrono::steady_clock::now() - m_stStart)
+	                                   .count();
 	if (iMillisecondsLocal < 1)
 	{
 		iMillisecondsLocal = 1;
@@ -381,9 +467,9 @@ void EchoMgr::OnResult(int iNumberParam, const ::OI::RpcData::AllEchoReq& stRequ
 	int iOkLocal = m_iOk.load();
 	int iRpcFail = m_iRpcFail.load();
 	printf("ipc mode=%s total=%d ok=%d mismatch=%d rpc_fail=%d ms=%lld rate=%d/s\n",
-		kMode, m_iTotal, iOkLocal, m_iMismatch, iRpcFail, iMillisecondsLocal, (int)(m_iTotal * 1000LL / iMillisecondsLocal));
+	    kMode, m_iTotal, iOkLocal, m_iMismatch, iRpcFail, iMillisecondsLocal, (int)(m_iTotal * 1000LL / iMillisecondsLocal));
 	printf("sample gap_sent=%d gap_recv=%d code=%d gap_differ=%d\n",
-		m_iSampleSent, m_iSampleReceived, m_iSampleCode, m_iGapDiffer);
+	    m_iSampleSent, m_iSampleReceived, m_iSampleCode, m_iGapDiffer);
 	printf("fields");
 	for (const auto& [sName, iCount] : m_mFields)
 	{

@@ -7,40 +7,67 @@
 #include <cstdint>
 #include <assert.h>
 
-namespace OI { namespace Thread {
+namespace OI
+{
+namespace Thread
+{
 #ifdef _SINGLE_THREAD_
 
 class SpinLock
 {
-public:
-	void Lock(){}
-	void UnLock(){}
+  public:
+	void Lock()
+	{
+	}
+	void UnLock()
+	{
+	}
 };
 
 class Mutex
 {
-public:
-	void Lock(){}
-	void UnLock(){}
+  public:
+	void Lock()
+	{
+	}
+	void UnLock()
+	{
+	}
 };
 
-template<class T>
+template <class T>
 class LockGuard
 {
-public:
-	LockGuard(T&){}
-	~LockGuard(){}
+  public:
+	LockGuard(T&)
+	{
+	}
+	~LockGuard()
+	{
+	}
 };
 
 class MutexCond
 {
-public:
-	MutexCond() {}
-	void Wait(Mutex&) {}
-	void Signal() {}
-	void Broadcast() {}
-	void Signal(Mutex&) {}
-	void Broadcast(Mutex&) {}
+  public:
+	MutexCond()
+	{
+	}
+	void Wait(Mutex&)
+	{
+	}
+	void Signal()
+	{
+	}
+	void Broadcast()
+	{
+	}
+	void Signal(Mutex&)
+	{
+	}
+	void Broadcast(Mutex&)
+	{
+	}
 };
 
 #else
@@ -48,8 +75,12 @@ public:
 class SpinLock
 {
 	std::atomic<int32_t> m_iLockState;
-public:
-	SpinLock() : m_iLockState(0) {}
+
+  public:
+	SpinLock()
+	    : m_iLockState(0)
+	{
+	}
 	void Lock()
 	{
 		int iSpins = 0;
@@ -74,9 +105,16 @@ class Mutex
 {
 	friend class MutexCond;
 	std::recursive_mutex m_stMutex;
-public:
-	void Lock() { m_stMutex.lock(); }
-	void UnLock() { m_stMutex.unlock(); }
+
+  public:
+	void Lock()
+	{
+		m_stMutex.lock();
+	}
+	void UnLock()
+	{
+		m_stMutex.unlock();
+	}
 	void TryLock()
 	{
 		int iSpins = 0;
@@ -96,26 +134,42 @@ public:
 class MutexCond
 {
 	std::condition_variable_any m_stConditionVariable;
-public:
+
+  public:
 	void Wait(Mutex& stLockerParam)
 	{
 		m_stConditionVariable.wait(stLockerParam.m_stMutex);
 	}
-	void Signal() { m_stConditionVariable.notify_one(); }
-	void Broadcast() { m_stConditionVariable.notify_all(); }
+	void Signal()
+	{
+		m_stConditionVariable.notify_one();
+	}
+	void Broadcast()
+	{
+		m_stConditionVariable.notify_all();
+	}
 };
 
-template<class T>
+template <class T>
 class LockGuard
 {
 	T* m_pLock;
-public:
-	LockGuard(T& stLockParam) : m_pLock(&stLockParam) { m_pLock->Lock(); }
-	~LockGuard() { m_pLock->UnLock(); }
+
+  public:
+	LockGuard(T& stLockParam)
+	    : m_pLock(&stLockParam)
+	{
+		m_pLock->Lock();
+	}
+	~LockGuard()
+	{
+		m_pLock->UnLock();
+	}
 };
 
 #endif
 
 typedef LockGuard<SpinLock> SpinLockGuard;
 typedef LockGuard<Mutex> MutexGuard;
-}}
+}
+}

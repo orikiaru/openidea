@@ -3,7 +3,10 @@
 #include <string.h>
 #include "oi_rpc.h"
 
-namespace OI { namespace Base {
+namespace OI
+{
+namespace Base
+{
 //暂不处理大小端问题，默认小端
 
 // 长度前缀是 4 字节，最高位为 1 的长度对端按非法处理。
@@ -31,12 +34,12 @@ static size_t ReadLenPrefix(BytesStream& stOutputStreamParam)
 	return (size_t)iSize;
 }
 
-BytesStream& BytesStream::operator<< (const std::string& sFirstParam)
+BytesStream& BytesStream::operator<<(const std::string& sFirstParam)
 {
 	WriteLenPrefixed(*this, sFirstParam.data(), sFirstParam.size());
 	return *this;
 }
-BytesStream& BytesStream::operator>> (std::string& sFirstParam)
+BytesStream& BytesStream::operator>>(std::string& sFirstParam)
 {
 	size_t iSize = ReadLenPrefix(*this);
 	sFirstParam.assign(GetCurPtr(), iSize);
@@ -44,13 +47,13 @@ BytesStream& BytesStream::operator>> (std::string& sFirstParam)
 	return *this;
 }
 
-BytesStream& BytesStream::operator<< (const Bytes& stFirstParam)
+BytesStream& BytesStream::operator<<(const Bytes& stFirstParam)
 {
 	WriteLenPrefixed(*this, stFirstParam.Data(), stFirstParam.Size());
 	return *this;
 }
 // 覆盖 a 原有内容，和 ReadPb 一致。
-BytesStream& BytesStream::operator>> (Bytes& stFirstParam)
+BytesStream& BytesStream::operator>>(Bytes& stFirstParam)
 {
 	size_t iSize = ReadLenPrefix(*this);
 	stFirstParam.Clear();
@@ -59,20 +62,19 @@ BytesStream& BytesStream::operator>> (Bytes& stFirstParam)
 	return *this;
 }
 
-
-BytesStream& BytesStream::operator<< (const BytesStream& stFirstParam)
+BytesStream& BytesStream::operator<<(const BytesStream& stFirstParam)
 {
 	Append(stFirstParam);
 	return *this;
 }
 
-BytesStream& BytesStream::operator<< (const ::OI::Rpc::Serialize& stFirstParam)
+BytesStream& BytesStream::operator<<(const ::OI::Rpc::Serialize& stFirstParam)
 {
 	stFirstParam.serialize(*this);
 	return *this;
 }
 
-BytesStream& BytesStream::operator>> (::OI::Rpc::Serialize& stFirstParam)
+BytesStream& BytesStream::operator>>(::OI::Rpc::Serialize& stFirstParam)
 {
 	stFirstParam.deserialize(*this);
 	return *this;
@@ -225,4 +227,5 @@ void BytesStream::ReadPb(uint32_t iSizeParam, ::OI::Rpc::Serialize& stValueParam
 	}
 	m_iCurrentPosition += iSizeParam;
 }
-}}
+}
+}

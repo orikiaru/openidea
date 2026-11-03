@@ -7,25 +7,33 @@
 #include "oi_lock.h"
 #include "oi_timer.h"
 #include <assert.h>
-namespace OI { namespace Timer {
+namespace OI
+{
+namespace Timer
+{
 class TimerLevel;
-typedef std::list<BaseTimer*>	TimerList;
-typedef std::vector<TimerList>	TimerListVector;
+typedef std::list<BaseTimer*> TimerList;
+typedef std::vector<TimerList> TimerListVector;
 
 //只能通过TimerManager驱动,所以均为私有
 class TimerLevel
 {
 	friend class BaseTimerManager;
-	uint32_t		m_iMaxTick;					//当前等级的timer的tick数
-	uint32_t		m_iLevelOffsetTick;			//当前等级基础偏移tick数,第一级就是1，第二集就是1*lv[0]._max_tick =====
-	uint32_t		m_iOffset;					//当前数组偏移量
-	TimerListVector m_vTimerTickDatas;			//定时器队列
-	::OI::Thread::Mutex		m_stLocker;
-public:
-	TimerLevel():m_iMaxTick(0),m_iOffset(0) {}
+	uint32_t m_iMaxTick;               //当前等级的timer的tick数
+	uint32_t m_iLevelOffsetTick;       //当前等级基础偏移tick数,第一级就是1，第二集就是1*lv[0]._max_tick =====
+	uint32_t m_iOffset;                //当前数组偏移量
+	TimerListVector m_vTimerTickDatas; //定时器队列
+	::OI::Thread::Mutex m_stLocker;
+
+  public:
+	TimerLevel()
+	    : m_iMaxTick(0), m_iOffset(0)
+	{
+	}
 	TimerLevel(const TimerLevel&) = delete;
 	TimerLevel& operator=(const TimerLevel&) = delete;
-private:
+
+  private:
 	void Init(uint32_t iMaxTickParam, uint32_t iLevelOffsetTickParam)
 	{
 		assert(iLevelOffsetTickParam > 0);
@@ -35,7 +43,7 @@ private:
 		m_iMaxTick = iMaxTickParam;
 		for (uint32_t iIndexLocal = 0; iIndexLocal < iMaxTickParam; ++iIndexLocal)
 		{
-			m_vTimerTickDatas.push_back(TimerList());	//初始化定时器队列
+			m_vTimerTickDatas.push_back(TimerList()); //初始化定时器队列
 		}
 	}
 
@@ -77,4 +85,5 @@ private:
 		return m_iOffset == 0;
 	}
 };
-}}
+}
+}

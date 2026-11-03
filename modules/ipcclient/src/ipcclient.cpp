@@ -18,7 +18,8 @@ bool IpcClient::Init()
 	EchoMgr::GetInstance().Load();
 	if (EchoMgr::GetInstance().StackOn())
 	{
-		coro::StartTask([](coro::Token) {
+		coro::StartTask([](coro::Token)
+		{
 			return EchoMgr::GetInstance().StackProbe();
 		});
 	}
@@ -48,7 +49,10 @@ const std::string IpcClient::GetIDString()
 void IpcClient::OnClientConnect(::OI::Net::Session* pSessionParam)
 {
 	// 服务发现切换或重连可能建立多个会话；每个进程只启动一次测试。
-	if (m_bTestsStarted.exchange(true)) return;
+	if (m_bTestsStarted.exchange(true))
+	{
+		return;
+	}
 	EchoMgr::GetInstance().Load();
 	LogMgr::GetInstance().Load();
 	EchoMgr::GetInstance().Start(pSessionParam->GetSessionID());

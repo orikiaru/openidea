@@ -16,17 +16,20 @@ class RegistryServer : public ::OI::Net::SessionManager
 {
 	DECLARE_SINGLETON(RegistryServer)
 	RegistryServer();
-public:
+
+  public:
 	virtual ~RegistryServer();
 	bool Init();
 	virtual const std::string GetIDString();
 	void Handle(::OI::Net::Session* pSessionParam, uint32_t iIdParam, ::OI::Base::BytesStream& stBodyParam);
 	void StartReload();
-protected:
+
+  protected:
 	virtual ::OI::Net::Session* CloneSession();
 	virtual void OnAddSession(::OI::Net::Session* pSessionParam);
 	virtual void OnDelSession(const ::OI::Net::Session* pSessionParam);
-private:
+
+  private:
 	struct Binding
 	{
 		std::string sName;
@@ -35,7 +38,13 @@ private:
 		std::string sPort;
 		std::string sValue;
 	};
-	enum { REG_FAIL = -1, REG_TAKEN = 0, REG_OK = 1, REG_RENEWED = 2 };
+	enum
+	{
+		REG_FAIL = -1,
+		REG_TAKEN = 0,
+		REG_OK = 1,
+		REG_RENEWED = 2
+	};
 	coro::Task Boot();
 	coro::Task Reload();
 	coro::Task Register(sid_t iSessionIdParam, Binding stSecondParam);
@@ -50,7 +59,7 @@ private:
 	void DropSnapshot(const std::string& sNameParam, int32_t iIdParam);
 
 	std::set<sid_t> m_vAlive;
-	std::map<sid_t, std::vector<Binding> > m_mBindings;
+	std::map<sid_t, std::vector<Binding>> m_mBindings;
 	std::vector<::OI::Base::ServiceInstance> m_vSnapshot;
 	bool m_bSnapshotOk;
 	bool m_bReloading;

@@ -30,15 +30,28 @@ class EchoMgr
 	int32_t m_iSampleCode;
 	bool m_bHaveSample;
 	std::map<std::string, int32_t> m_mFields;
-public:
+
+  public:
 	void Load();
-	bool StackOn() const { return m_bStack; }
+	bool StackOn() const
+	{
+		return m_bStack;
+	}
 	coro::Task StackProbe();
 	void ArmTimeout();
 	void Start(sid_t iSessionIdParam);
-	sid_t Sid() const { return m_iSessionId; }
-	int32_t Done() const { return m_iDone.load(); }
-	int32_t Ok() const { return m_iOk.load(); }
+	sid_t Sid() const
+	{
+		return m_iSessionId;
+	}
+	int32_t Done() const
+	{
+		return m_iDone.load();
+	}
+	int32_t Ok() const
+	{
+		return m_iOk.load();
+	}
 	void Note(const char* pNameParam);
 	void NoteGap();
 	void OnResult(int iNumberParam, const ::OI::RpcData::AllEchoReq& stRequestParam, const ::OI::RpcData::AllEchoRes& stResponseParam, int iReturnCodeParam, bool bSameParam);

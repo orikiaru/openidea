@@ -1,12 +1,17 @@
 #pragma once
 #include "oi_bytes_stream.h"
 
-namespace OI { namespace Rpc {
+namespace OI
+{
+namespace Rpc
+{
 class Serialize
 {
-public:
-	virtual ~Serialize() {}
-	virtual ::OI::Base::BytesStream& serialize(::OI::Base::BytesStream& stOutputStreamParam)  const = 0;
+  public:
+	virtual ~Serialize()
+	{
+	}
+	virtual ::OI::Base::BytesStream& serialize(::OI::Base::BytesStream& stOutputStreamParam) const = 0;
 	virtual ::OI::Base::BytesStream& deserialize(::OI::Base::BytesStream& stOutputStreamParam) = 0;
 	virtual void Encode(::OI::Base::BytesStream& stOutputStreamParam) const
 	{
@@ -30,8 +35,9 @@ public:
 
 class RpcData : public Serialize
 {
-public:
+  public:
 	virtual ::OI::Base::BytesStream& serialize(::OI::Base::BytesStream& stOutputStreamParam) const = 0;
 	virtual ::OI::Base::BytesStream& deserialize(::OI::Base::BytesStream& stOutputStreamParam) = 0;
 };
-}}
+}
+}

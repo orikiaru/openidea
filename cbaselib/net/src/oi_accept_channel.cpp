@@ -1,4 +1,4 @@
-#include <sys/types.h>          /* See NOTES */
+#include <sys/types.h> /* See NOTES */
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/ip.h> /* superset of previous */
@@ -11,7 +11,10 @@
 #include "oi_poll.h"
 #include "oi_net_os.h"
 #include "oi_log.h"
-namespace OI { namespace Net {
+namespace OI
+{
+namespace Net
+{
 
 void AcceptChannel::DataIn()
 {
@@ -52,7 +55,6 @@ bool AcceptChannel::StartAccept(SessionManager* pMgrParam, bool bAsyncParam)
 		printf("SessionManager::StartServer not support session_type=%d\n", iSessionTypeLocal);
 		return false;
 	}
-
 }
 
 bool AcceptChannel::StartTcpAccept(SessionManager* pMgrParam, bool bAsyncParam)
@@ -80,5 +82,5 @@ bool AcceptChannel::StartTcpAccept(SessionManager* pMgrParam, bool bAsyncParam)
 	Poll::GetInstance().IOEventRegister(pChannelLocal, true, true);
 	return true;
 }
-}}
-
+}
+}

@@ -2,7 +2,10 @@
 #include "oi_bytes.h"
 #include <stdint.h>
 #include <string.h>
-namespace OI { namespace Log {
+namespace OI
+{
+namespace Log
+{
 
 // 进程间日志帧，小端：
 // uint32 payload_len | uint8 level | payload_len-1 字节正文
@@ -34,4 +37,5 @@ inline uint32_t ReadLogFrameLen(const char* pPointerParam)
 	const uint8_t* pU = (const uint8_t*)pPointerParam;
 	return (uint32_t)pU[0] | ((uint32_t)pU[1] << 8) | ((uint32_t)pU[2] << 16) | ((uint32_t)pU[3] << 24);
 }
-}}
+}
+}

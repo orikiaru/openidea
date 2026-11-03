@@ -3,7 +3,7 @@
 #include <netinet/ip.h> /* superset of previous */
 #include <arpa/inet.h>
 #include <unistd.h>
-#include <sys/types.h>          /* See NOTES */
+#include <sys/types.h> /* See NOTES */
 #include <sys/socket.h>
 
 #include "oi_net_helper.h"
@@ -12,8 +12,10 @@
 #include "oi_socket.h"
 #include "oi_connect_channel.h"
 #include "oi_net_os.h"
-namespace OI { namespace Net {
-
+namespace OI
+{
+namespace Net
+{
 
 bool NetHelper::CreateSocket(NetSocket& stNetSocketParam, SessionManager* pMgrParam, bool bAsyncParam)
 {
@@ -171,11 +173,11 @@ int NetHelper::SocketAcceptOne(NetSocket& stSessionIdParam, SessionManager* pMgr
 	return iAccpetCount;
 }
 
-
 NetAddr NetHelper::GetNetAddr(SessionManager* pMgrParam)
 {
 	NetAddr stAddr;
 	stAddr.Init(pMgrParam);
 	return stAddr;
 }
-}}
+}
+}

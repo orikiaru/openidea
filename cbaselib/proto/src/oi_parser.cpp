@@ -1,5 +1,8 @@
 #include "oi_parser.h"
-namespace OI { namespace Rpc {
+namespace OI
+{
+namespace Rpc
+{
 
 ::OI::Base::BytesStream EncodePbFrame(proto_type_t iIdParam, ::OI::Base::BytesStream& stBodyParam)
 {
@@ -17,5 +20,5 @@ namespace OI { namespace Rpc {
 	stOutputStream.WritePbRaw((uint32_t)iIdParam, pData, iSize);
 	return stOutputStream;
 }
-}}
-
+}
+}

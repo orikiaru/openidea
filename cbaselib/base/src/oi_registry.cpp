@@ -16,20 +16,30 @@
 #include <chrono>
 #include <cstdio>
 
-namespace OI { namespace Base {
+namespace OI
+{
+namespace Base
+{
 
-namespace {
+namespace
+{
 const int kWaitMs = 1000;
 
 class RegistryClientSession : public ::OI::Net::NetSession
 {
-public:
-	explicit RegistryClientSession(::OI::Net::SessionManager* pManagerParam) : ::OI::Net::NetSession(pManagerParam) {}
+  public:
+	explicit RegistryClientSession(::OI::Net::SessionManager* pManagerParam)
+	    : ::OI::Net::NetSession(pManagerParam)
+	{
+	}
 
-	virtual void OnDataOut() {}
+	virtual void OnDataOut()
+	{
+	}
 	virtual void OnDataIn()
 	{
-		ReadRegFrames(stInputBuffer, this, [iSessionIdLocal = GetSessionID()](uint32_t iIdParam, ::OI::Base::BytesStream& stBodyParam) {
+		ReadRegFrames(stInputBuffer, this, [iSessionIdLocal = GetSessionID()](uint32_t iIdParam, ::OI::Base::BytesStream& stBodyParam)
+		{
 			RegistryClient::GetInstance().OnFrame(iSessionIdLocal, iIdParam, stBodyParam);
 		});
 	}
@@ -37,7 +47,7 @@ public:
 
 class HeartbeatTimer : public ::OI::Timer::BaseTimer
 {
-public:
+  public:
 	bool OnTimer()
 	{
 		RegistryClient::GetInstance().Touch();
@@ -47,7 +57,7 @@ public:
 
 class PullTimer : public ::OI::Timer::BaseTimer
 {
-public:
+  public:
 	bool OnTimer()
 	{
 		RegistryClient::GetInstance().Pull();
@@ -114,8 +124,12 @@ bool ReadRegFrames(::OI::Base::Bytes& stInputParam, ::OI::Net::Session* pSession
 
 // ---------------------------------------------------------------- ServiceTable
 
-ServiceTable::ServiceTable() {}
-ServiceTable::~ServiceTable() {}
+ServiceTable::ServiceTable()
+{
+}
+ServiceTable::~ServiceTable()
+{
+}
 
 bool ServiceTable::Pick(const std::vector<ServiceInstance>& vListParam, const std::string& sNameParam, int32_t iCurrentParam, ServiceInstance& stOutputParam)
 {
@@ -222,14 +236,16 @@ void ServiceTable::Apply(const std::vector<std::string>& vNamesParam, const std:
 // ---------------------------------------------------------------- RegistryClient
 
 RegistryClient::RegistryClient()
-	: bConnected(false), bConnecting(false), bFailed(false), iSessionId(INVALID_SID), bAddressReady(false),
-	iServiceId(0), bPublished(false), bRegistered(false), bLost(false),
-	iHeartbeatMilliseconds(1000), bHeartbeatArmed(false), iPullMilliseconds(1000), bPullArmed(false),
-	bRegistrationWaiting(false), bGot(false), iCode(OI_ERR_FAIL)
+    : bConnected(false), bConnecting(false), bFailed(false), iSessionId(INVALID_SID), bAddressReady(false),
+      iServiceId(0), bPublished(false), bRegistered(false), bLost(false),
+      iHeartbeatMilliseconds(1000), bHeartbeatArmed(false), iPullMilliseconds(1000), bPullArmed(false),
+      bRegistrationWaiting(false), bGot(false), iCode(OI_ERR_FAIL)
 {
 }
 
-RegistryClient::~RegistryClient() {}
+RegistryClient::~RegistryClient()
+{
+}
 
 const std::string RegistryClient::GetIDString()
 {
@@ -267,7 +283,10 @@ bool RegistryClient::WaitFlag(const std::atomic<bool>& bFlagParam)
 	return bFlagParam.load();
 #else
 	std::unique_lock<std::mutex> stLock(stMutex);
-	stConditionVariable.wait_until(stLock, stDeadline, [&]() { return bFlagParam.load() || bFailed.load(); });
+	stConditionVariable.wait_until(stLock, stDeadline, [&]()
+	{
+		return bFlagParam.load() || bFailed.load();
+	});
 	return bFlagParam.load();
 #endif
 }
@@ -275,16 +294,31 @@ bool RegistryClient::WaitFlag(const std::atomic<bool>& bFlagParam)
 bool RegistryClient::Connect()
 {
 	::OI::Thread::MutexGuard stPendingLock(stPendingMutex);
-	if (bConnected.load()) return true;
+	if (bConnected.load())
+	{
+		return true;
+	}
 	if (!bAddressReady)
 	{
 		std::string sIpLocal;
 		std::string sPortLocal;
 		std::string sType;
-		if (!::OI::Base::Config::GlobalConfig().GetAs("Registry.ip", sIpLocal)) return false;
-		if (!::OI::Base::Config::GlobalConfig().GetAs("Registry.port", sPortLocal)) return false;
-		if (!::OI::Base::Config::GlobalConfig().GetAs("Registry.type", sType)) return false;
-		if (sIpLocal.empty() || sPortLocal.empty()) return false;
+		if (!::OI::Base::Config::GlobalConfig().GetAs("Registry.ip", sIpLocal))
+		{
+			return false;
+		}
+		if (!::OI::Base::Config::GlobalConfig().GetAs("Registry.port", sPortLocal))
+		{
+			return false;
+		}
+		if (!::OI::Base::Config::GlobalConfig().GetAs("Registry.type", sType))
+		{
+			return false;
+		}
+		if (sIpLocal.empty() || sPortLocal.empty())
+		{
+			return false;
+		}
 		DefaultInit(sIpLocal, sPortLocal, GetSessionTypeByString(sType));
 		bAddressReady = true;
 	}
@@ -351,7 +385,10 @@ void RegistryClient::OnAddSession(::OI::Net::Session* pSessionParam)
 void RegistryClient::OnDelSession(const ::OI::Net::Session* pSessionParam)
 {
 	::OI::Thread::MutexGuard stPendingLock(stPendingMutex);
-	if (iSessionId.load() != pSessionParam->GetSessionID()) return;
+	if (iSessionId.load() != pSessionParam->GetSessionID())
+	{
+		return;
+	}
 	iSessionId = INVALID_SID;
 	bConnected = false;
 	bRegistered = false;
@@ -376,7 +413,10 @@ void RegistryClient::OnFrame(sid_t iSessionIdParam, uint32_t iIdParam, ::OI::Bas
 {
 	// 回包消费、同步结果发布与超时撤销共用同一把锁。
 	::OI::Thread::MutexGuard stPendingLock(stPendingMutex);
-	if (iSessionIdParam != iSessionId.load()) return;
+	if (iSessionIdParam != iSessionId.load())
+	{
+		return;
+	}
 	if (iIdParam == PROTO_REG_REGISTER_RES)
 	{
 		::OI::RpcData::RegRegisterRes stResponseLocal;
@@ -487,9 +527,19 @@ bool RegistryClient::Lookup(const std::string& sNameParam, std::string& sIpParam
 		bGot = false;
 		iCode = OI_ERR_FAIL;
 		vPendingPulls.push_back(stPending);
-		try { bSent = Send(PROTO_REG_PULL, stRequestLocal); }
-		catch (...) { vPendingPulls.pop_back(); throw; }
-		if (!bSent) vPendingPulls.pop_back();
+		try
+		{
+			bSent = Send(PROTO_REG_PULL, stRequestLocal);
+		}
+		catch (...)
+		{
+			vPendingPulls.pop_back();
+			throw;
+		}
+		if (!bSent)
+		{
+			vPendingPulls.pop_back();
+		}
 	}
 	if (!bSent || !WaitFlag(bGot))
 	{
@@ -576,10 +626,23 @@ void RegistryClient::Pull()
 	stPending.vNames = vNamesLocal;
 	::OI::RpcData::RegPull stRequestLocal(vNamesLocal);
 	::OI::Thread::MutexGuard stLock(stPendingMutex);
-	if (!bConnected.load()) return;
+	if (!bConnected.load())
+	{
+		return;
+	}
 	vPendingPulls.push_back(stPending);
-	try { if (!Send(PROTO_REG_PULL, stRequestLocal)) vPendingPulls.pop_back(); }
-	catch (...) { vPendingPulls.pop_back(); throw; }
+	try
+	{
+		if (!Send(PROTO_REG_PULL, stRequestLocal))
+		{
+			vPendingPulls.pop_back();
+		}
+	}
+	catch (...)
+	{
+		vPendingPulls.pop_back();
+		throw;
+	}
 }
 
 void RegistryClient::Touch()
@@ -602,7 +665,8 @@ void RegistryClient::Touch()
 	Send(PROTO_REG_HEARTBEAT, stRequestLocal);
 }
 
-namespace {
+namespace
+{
 bool TakeAdvertise(const std::string& sKeyParam, std::string& sValueParam)
 {
 	std::string sConfigured;
@@ -662,7 +726,7 @@ bool RegistryClient::Publish(const std::string& sSectionParam, const std::string
 		if (sServiceIp != sAdvertiseIp || sServicePort != sAdvertisePort)
 		{
 			LOG_TRACE("registry publish %s keep %s:%s, skip %s:%s", sNameLocal.c_str(),
-				sServiceIp.c_str(), sServicePort.c_str(), sAdvertiseIp.c_str(), sAdvertisePort.c_str());
+			    sServiceIp.c_str(), sServicePort.c_str(), sAdvertiseIp.c_str(), sAdvertisePort.c_str());
 		}
 		return true;
 	}
@@ -708,4 +772,5 @@ bool RegistryClient::Publish(const std::string& sSectionParam, const std::string
 	return true;
 }
 
-}}
+}
+}

@@ -1,7 +1,10 @@
 #pragma once
 #include <stdint.h>
 
-namespace OI { namespace Base {
+namespace OI
+{
+namespace Base
+{
 
 // 定制协议的号。生成出来的 rpc 号只做 req/res 映射，和这里撞了也不是同一条协议。
 enum ProtoId
@@ -17,4 +20,5 @@ enum ProtoId
 	PROTO_REG_PULL_RES = 9,
 };
 
-}}
+}
+}

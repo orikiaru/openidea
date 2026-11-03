@@ -20,42 +20,43 @@
 #error registry must be built single-threaded
 #endif
 
-namespace {
+namespace
+{
 
 // 键不在就占上，同一个地址就更新。地址不一样不动它。
 const char* kRegisterLua =
-	"local v = redis.call('GET', KEYS[1]) "
-	"if v and v ~= ARGV[1] then return 0 end "
-	"redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2]) "
-	"redis.call('SADD', KEYS[2], ARGV[3]) redis.call('SADD', KEYS[3], ARGV[4]) return 1";
+    "local v = redis.call('GET', KEYS[1]) "
+    "if v and v ~= ARGV[1] then return 0 end "
+    "redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2]) "
+    "redis.call('SADD', KEYS[2], ARGV[3]) redis.call('SADD', KEYS[3], ARGV[4]) return 1";
 
 // 还是自己的就延长。过期了没人占就重新占上。被别人占了不动它。
 const char* kRefreshLua =
-	"local v = redis.call('GET', KEYS[1]) "
-	"if v == ARGV[1] then redis.call('PEXPIRE', KEYS[1], ARGV[2]) "
-	"  redis.call('SADD', KEYS[2], ARGV[3]) redis.call('SADD', KEYS[3], ARGV[4]) return 1 end "
-	"if v then return 0 end "
-	"redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2]) "
-	"redis.call('SADD', KEYS[2], ARGV[3]) redis.call('SADD', KEYS[3], ARGV[4]) return 2";
+    "local v = redis.call('GET', KEYS[1]) "
+    "if v == ARGV[1] then redis.call('PEXPIRE', KEYS[1], ARGV[2]) "
+    "  redis.call('SADD', KEYS[2], ARGV[3]) redis.call('SADD', KEYS[3], ARGV[4]) return 1 end "
+    "if v then return 0 end "
+    "redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2]) "
+    "redis.call('SADD', KEYS[2], ARGV[3]) redis.call('SADD', KEYS[3], ARGV[4]) return 2";
 
 const char* kWithdrawLua =
-	"if redis.call('GET', KEYS[1]) == ARGV[1] then redis.call('DEL', KEYS[1]) redis.call('SREM', KEYS[2], ARGV[2]) end "
-	"return 1";
+    "if redis.call('GET', KEYS[1]) == ARGV[1] then redis.call('DEL', KEYS[1]) redis.call('SREM', KEYS[2], ARGV[2]) end "
+    "return 1";
 
 // 一次取回整个空间。过期的 id、空了的名字顺手摘掉。
 const char* kListAllLua =
-	"local out = {} "
-	"for _, n in ipairs(redis.call('SMEMBERS', KEYS[1])) do "
-	"  local set = ARGV[1] .. n "
-	"  local alive = 0 "
-	"  for _, id in ipairs(redis.call('SMEMBERS', set)) do "
-	"    local v = redis.call('GET', set .. ':' .. id) "
-	"    if v then table.insert(out, n) table.insert(out, id) table.insert(out, v) alive = alive + 1 "
-	"    else redis.call('SREM', set, id) end "
-	"  end "
-	"  if alive == 0 then redis.call('SREM', KEYS[1], n) end "
-	"end "
-	"return out";
+    "local out = {} "
+    "for _, n in ipairs(redis.call('SMEMBERS', KEYS[1])) do "
+    "  local set = ARGV[1] .. n "
+    "  local alive = 0 "
+    "  for _, id in ipairs(redis.call('SMEMBERS', set)) do "
+    "    local v = redis.call('GET', set .. ':' .. id) "
+    "    if v then table.insert(out, n) table.insert(out, id) table.insert(out, v) alive = alive + 1 "
+    "    else redis.call('SREM', set, id) end "
+    "  end "
+    "  if alive == 0 then redis.call('SREM', KEYS[1], n) end "
+    "end "
+    "return out";
 
 bool ValidSpacePart(const std::string& sTextParam)
 {
@@ -105,13 +106,19 @@ std::string StrOf(const redisReply* pRParam)
 
 class RegistryServerSession : public ::OI::Net::NetSession
 {
-public:
-	explicit RegistryServerSession(::OI::Net::SessionManager* pManagerParam) : ::OI::Net::NetSession(pManagerParam) {}
+  public:
+	explicit RegistryServerSession(::OI::Net::SessionManager* pManagerParam)
+	    : ::OI::Net::NetSession(pManagerParam)
+	{
+	}
 
-	virtual void OnDataOut() {}
+	virtual void OnDataOut()
+	{
+	}
 	virtual void OnDataIn()
 	{
-		::OI::Base::ReadRegFrames(stInputBuffer, this, [this](uint32_t iIdParam, ::OI::Base::BytesStream& stBodyParam) {
+		::OI::Base::ReadRegFrames(stInputBuffer, this, [this](uint32_t iIdParam, ::OI::Base::BytesStream& stBodyParam)
+		{
 			RegistryServer::GetInstance().Handle(this, iIdParam, stBodyParam);
 		});
 	}
@@ -119,7 +126,7 @@ public:
 
 class ReloadTimer : public ::OI::Timer::BaseTimer
 {
-public:
+  public:
 	bool OnTimer()
 	{
 		RegistryServer::GetInstance().StartReload();
@@ -128,8 +135,13 @@ public:
 };
 }
 
-RegistryServer::RegistryServer() : m_bSnapshotOk(false), m_bReloading(false), m_iPullMilliseconds(1000), m_iExpireMilliseconds(3000) {}
-RegistryServer::~RegistryServer() {}
+RegistryServer::RegistryServer()
+    : m_bSnapshotOk(false), m_bReloading(false), m_iPullMilliseconds(1000), m_iExpireMilliseconds(3000)
+{
+}
+RegistryServer::~RegistryServer()
+{
+}
 
 const std::string RegistryServer::GetIDString()
 {
@@ -145,7 +157,7 @@ bool RegistryServer::LoadSpace()
 	if (!ValidSpacePart(sProject) || !ValidSpacePart(sEnvironment))
 	{
 		fprintf(stderr, "registry space invalid: [Registry] project=\"%s\" env=\"%s\"，只能用字母、数字、_、-，且不能为空\n",
-			sProject.c_str(), sEnvironment.c_str());
+		    sProject.c_str(), sEnvironment.c_str());
 		fflush(stderr);
 		return false;
 	}
@@ -162,8 +174,8 @@ std::string RegistryServer::Key(const std::string& sTailParam) const
 // 登记和续期共用：三个键是实例、id 集合、名字集合。
 std::vector<std::string> RegistryServer::EvalArgs(const char* pLuaParam, const Binding& stSecondParam) const
 {
-	return { "EVAL", pLuaParam, "3", Key("svc:" + stSecondParam.sName + ":" + std::to_string(stSecondParam.iId)), Key("svc:" + stSecondParam.sName), Key("svc"),
-		stSecondParam.sValue, std::to_string(m_iExpireMilliseconds), std::to_string(stSecondParam.iId), stSecondParam.sName };
+	return {"EVAL", pLuaParam, "3", Key("svc:" + stSecondParam.sName + ":" + std::to_string(stSecondParam.iId)), Key("svc:" + stSecondParam.sName), Key("svc"),
+	    stSecondParam.sValue, std::to_string(m_iExpireMilliseconds), std::to_string(stSecondParam.iId), stSecondParam.sName};
 }
 
 bool RegistryServer::Init()
@@ -193,7 +205,8 @@ bool RegistryServer::Init()
 		return false;
 	}
 	::OI::Redis::RedisClient::GetInstance().StartClient();
-	coro::StartTask([this](coro::Token) {
+	coro::StartTask([this](coro::Token)
+	{
 		return Boot();
 	});
 	LOG_TRACE("registry space=%s", m_sSpace.c_str());
@@ -241,7 +254,8 @@ void RegistryServer::OnDelSession(const ::OI::Net::Session* pSessionParam)
 			Binding stSecond = vList[iIndexLocal];
 			DropSnapshot(stSecond.sName, stSecond.iId);
 			LOG_TRACE("registry offline %s id=%d (connection closed)", stSecond.sName.c_str(), stSecond.iId);
-			coro::StartTask([this, stSecond](coro::Token) {
+			coro::StartTask([this, stSecond](coro::Token)
+			{
 				return Withdraw(stSecond);
 			});
 		}
@@ -292,7 +306,10 @@ void RegistryServer::PutSnapshot(const Binding& stSecondParam)
 
 void RegistryServer::Reply(sid_t iSessionIdParam, uint32_t iIdParam, const ::OI::Rpc::Serialize& stMessageParam)
 {
-	if (!SendBytes(iSessionIdParam, ::OI::Base::EncodeRegFrame(iIdParam, stMessageParam))) CloseSession(iSessionIdParam);
+	if (!SendBytes(iSessionIdParam, ::OI::Base::EncodeRegFrame(iIdParam, stMessageParam)))
+	{
+		CloseSession(iSessionIdParam);
+	}
 }
 
 void RegistryServer::StartReload()
@@ -302,7 +319,8 @@ void RegistryServer::StartReload()
 		return;
 	}
 	m_bReloading = true;
-	coro::StartTask([this](coro::Token) {
+	coro::StartTask([this](coro::Token)
+	{
 		return Reload();
 	});
 }
@@ -328,8 +346,7 @@ coro::Task RegistryServer::Reload()
 		const redisReply* pName = pArr->element[iIndexLocal];
 		const redisReply* pId = pArr->element[iIndexLocal + 1];
 		const redisReply* pValue = pArr->element[iIndexLocal + 2];
-		if (!pName || !pId || !pValue || pName->type != REDIS_REPLY_STRING
-			|| pId->type != REDIS_REPLY_STRING || pValue->type != REDIS_REPLY_STRING)
+		if (!pName || !pId || !pValue || pName->type != REDIS_REPLY_STRING || pId->type != REDIS_REPLY_STRING || pValue->type != REDIS_REPLY_STRING)
 		{
 			continue;
 		}
@@ -483,7 +500,8 @@ void RegistryServer::Handle(::OI::Net::Session* pSessionParam, uint32_t iIdParam
 		stSecond.sIp = stRequestLocal.sIp;
 		stSecond.sPort = stRequestLocal.sPort;
 		stSecond.sValue = stRequestLocal.sIp + " " + stRequestLocal.sPort;
-		coro::StartTask([this, iSessionIdLocal, stSecond](coro::Token) {
+		coro::StartTask([this, iSessionIdLocal, stSecond](coro::Token)
+		{
 			return Register(iSessionIdLocal, stSecond);
 		});
 		return;
@@ -502,7 +520,8 @@ void RegistryServer::Handle(::OI::Net::Session* pSessionParam, uint32_t iIdParam
 			return;
 		}
 		Binding stSecond = *pFound;
-		coro::StartTask([this, iSessionIdLocal, stSecond](coro::Token) {
+		coro::StartTask([this, iSessionIdLocal, stSecond](coro::Token)
+		{
 			return Refresh(iSessionIdLocal, stSecond);
 		});
 		return;

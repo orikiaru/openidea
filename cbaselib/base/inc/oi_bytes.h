@@ -3,7 +3,10 @@
 #include <stddef.h>
 #include <string>
 
-namespace OI { namespace Base {
+namespace OI
+{
+namespace Base
+{
 // 连续字节缓冲。
 // 容量和有效长度分开：Begin() 在 [0, Capacity()) 内可写，Size() 才是有效数据。
 // 这样 read/aio 可以先 Reserve，再往 Begin() 里写，写完 Commit。
@@ -19,7 +22,8 @@ class Bytes
 	void Grow(size_t iNeedParam);
 	char* Mutable();
 	bool Overlaps(const void* pDataParam) const;
-public:
+
+  public:
 	Bytes();
 	Bytes(const char* pDataParam, size_t iLengthParam);
 	Bytes(const Bytes& stOtherParam);
@@ -58,8 +62,14 @@ public:
 	// 指向有效数据的末尾，这个位置本身不能读
 	char* End();
 
-	size_t Size() const { return m_iSize; }
-	size_t Capacity() const { return m_iCapacity - m_iHead; }
+	size_t Size() const
+	{
+		return m_iSize;
+	}
+	size_t Capacity() const
+	{
+		return m_iCapacity - m_iHead;
+	}
 
 	// n 大于当前有效长度时只扩容，不改 Size()。
 	// n 更小时把 Size() 收到 n，容量保留，避免写缓冲反复缩容。
@@ -69,4 +79,5 @@ public:
 	void Swap(Bytes& stOtherParam);
 	void Clear();
 };
-}}
+}
+}

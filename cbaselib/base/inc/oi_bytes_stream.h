@@ -9,8 +9,17 @@
 #include <type_traits>
 #include <utility>
 
-namespace OI { namespace Rpc { class Serialize; } }
-namespace OI { namespace Base {
+namespace OI
+{
+namespace Rpc
+{
+class Serialize;
+}
+}
+namespace OI
+{
+namespace Base
+{
 struct ParserException : public std::exception
 {
 	const char* what() const noexcept override
@@ -27,46 +36,79 @@ enum PbHeaderState
 	PB_HEADER_BAD,
 };
 
-template<typename T>
+template <typename T>
 struct PbFixedTrait
 {
 	static const bool bValue = std::is_arithmetic<T>::value || std::is_enum<T>::value;
 };
 
-class BytesStream :public Bytes
+class BytesStream : public Bytes
 {
-	size_t 	m_iCurrentPosition;	//反序列化时使用
-	size_t  m_iSnapshotPosition;	//快照位置
-public:
-	BytesStream() :m_iCurrentPosition(0), m_iSnapshotPosition(0) {}
-	BytesStream(const Bytes& stBytesParam) :Bytes(stBytesParam), m_iCurrentPosition(0), m_iSnapshotPosition(0) {}
-	BytesStream(const char* pDataParam, size_t iDataLengthParam) :Bytes(pDataParam, iDataLengthParam), m_iCurrentPosition(0), m_iSnapshotPosition(0) {}
+	size_t m_iCurrentPosition;  //反序列化时使用
+	size_t m_iSnapshotPosition; //快照位置
+  public:
+	BytesStream()
+	    : m_iCurrentPosition(0), m_iSnapshotPosition(0)
+	{
+	}
+	BytesStream(const Bytes& stBytesParam)
+	    : Bytes(stBytesParam), m_iCurrentPosition(0), m_iSnapshotPosition(0)
+	{
+	}
+	BytesStream(const char* pDataParam, size_t iDataLengthParam)
+	    : Bytes(pDataParam, iDataLengthParam), m_iCurrentPosition(0), m_iSnapshotPosition(0)
+	{
+	}
 	void Clear()
 	{
 		Bytes::Clear();
 		m_iCurrentPosition = 0;
 		m_iSnapshotPosition = 0;
 	}
-	Bytes& GetMutableBuff() { return *this; }
-	const Bytes& GetUnMutableBuff()const { return *this; }
-	size_t	GetCurPos()const { return m_iCurrentPosition; }
-	void 	AddCurPos(size_t iOffsetParam) { m_iCurrentPosition += iOffsetParam; }
-	char*	GetCurPtr() { return &(Begin()[m_iCurrentPosition]); }
-	size_t	RemainSize()const { return Size() - m_iCurrentPosition; }
+	Bytes& GetMutableBuff()
+	{
+		return *this;
+	}
+	const Bytes& GetUnMutableBuff() const
+	{
+		return *this;
+	}
+	size_t GetCurPos() const
+	{
+		return m_iCurrentPosition;
+	}
+	void AddCurPos(size_t iOffsetParam)
+	{
+		m_iCurrentPosition += iOffsetParam;
+	}
+	char* GetCurPtr()
+	{
+		return &(Begin()[m_iCurrentPosition]);
+	}
+	size_t RemainSize() const
+	{
+		return Size() - m_iCurrentPosition;
+	}
 
-	void	StartTransaction() { m_iSnapshotPosition = m_iCurrentPosition; }
-	void  	RollBack() { m_iCurrentPosition = m_iSnapshotPosition; }
+	void StartTransaction()
+	{
+		m_iSnapshotPosition = m_iCurrentPosition;
+	}
+	void RollBack()
+	{
+		m_iCurrentPosition = m_iSnapshotPosition;
+	}
 
-	template<typename T>
+	template <typename T>
 	typename std::enable_if<PbFixedTrait<T>::bValue, BytesStream&>::type
-	operator<< (const T& stValueParam)
+	operator<<(const T& stValueParam)
 	{
 		Append(&stValueParam, sizeof(T));
 		return *this;
 	}
-	template<typename T>
+	template <typename T>
 	typename std::enable_if<PbFixedTrait<T>::bValue, BytesStream&>::type
-	operator>> (T& stValueParam)
+	operator>>(T& stValueParam)
 	{
 		if (RemainSize() < sizeof(T))
 		{
@@ -75,7 +117,10 @@ public:
 		if constexpr (std::is_same_v<T, bool>)
 		{
 			const auto iValue = static_cast<unsigned char>(*GetCurPtr());
-			if (iValue > 1) throw ParserException();
+			if (iValue > 1)
+			{
+				throw ParserException();
+			}
 			stValueParam = iValue != 0;
 		}
 		else
@@ -86,19 +131,19 @@ public:
 		return *this;
 	}
 
-	BytesStream& operator<< (const std::string& sFirstParam);
-	BytesStream& operator<< (const Bytes& stFirstParam);
-	BytesStream& operator<< (const BytesStream& stFirstParam);	//全量写入，内容本身已经是序列化结果
+	BytesStream& operator<<(const std::string& sFirstParam);
+	BytesStream& operator<<(const Bytes& stFirstParam);
+	BytesStream& operator<<(const BytesStream& stFirstParam); //全量写入，内容本身已经是序列化结果
 
-	BytesStream& operator<< (const ::OI::Rpc::Serialize& stFirstParam);
+	BytesStream& operator<<(const ::OI::Rpc::Serialize& stFirstParam);
 
-	BytesStream& operator>> (std::string& sFirstParam);
-	BytesStream& operator>> (Bytes& stFirstParam);
+	BytesStream& operator>>(std::string& sFirstParam);
+	BytesStream& operator>>(Bytes& stFirstParam);
 
-	BytesStream& operator>> (::OI::Rpc::Serialize& stFirstParam);
+	BytesStream& operator>>(::OI::Rpc::Serialize& stFirstParam);
 
-	template<typename T>
-	BytesStream& operator>> (std::vector<T>& stValueParam)
+	template <typename T>
+	BytesStream& operator>>(std::vector<T>& stValueParam)
 	{
 		uint32_t iSize;
 		(*this) >> iSize;
@@ -115,8 +160,8 @@ public:
 		}
 		return *this;
 	}
-	template<typename T>
-	BytesStream& operator << (const std::vector<T>& stValueParam)
+	template <typename T>
+	BytesStream& operator<<(const std::vector<T>& stValueParam)
 	{
 		uint32_t iSize = stValueParam.size();
 		(*this) << iSize;
@@ -137,7 +182,7 @@ public:
 	void ReadPbHeader(uint32_t& iSequenceParam, uint32_t& iSizeParam);
 	void SkipPb(uint32_t iSizeParam);
 
-	template<typename T>
+	template <typename T>
 	typename std::enable_if<PbFixedTrait<T>::bValue, BytesStream&>::type
 	WritePb(uint32_t iSequenceParam, const T& stValueParam)
 	{
@@ -146,7 +191,7 @@ public:
 	BytesStream& WritePb(uint32_t iSequenceParam, const std::string& sValueParam);
 	BytesStream& WritePb(uint32_t iSequenceParam, const Bytes& stValueParam);
 	BytesStream& WritePb(uint32_t iSequenceParam, const ::OI::Rpc::Serialize& stValueParam);
-	template<typename T>
+	template <typename T>
 	BytesStream& WritePb(uint32_t iSequenceParam, const std::vector<T>& stValueParam)
 	{
 		for (const auto& stValue : stValueParam)
@@ -156,7 +201,7 @@ public:
 		return *this;
 	}
 
-	template<typename T>
+	template <typename T>
 	typename std::enable_if<PbFixedTrait<T>::bValue, void>::type
 	ReadPb(uint32_t iSizeParam, T& stValueParam)
 	{
@@ -167,7 +212,10 @@ public:
 		if constexpr (std::is_same_v<T, bool>)
 		{
 			const auto iValue = static_cast<unsigned char>(*GetCurPtr());
-			if (iValue > 1) throw ParserException();
+			if (iValue > 1)
+			{
+				throw ParserException();
+			}
 			stValueParam = iValue != 0;
 		}
 		else
@@ -179,14 +227,14 @@ public:
 	void ReadPb(uint32_t iSizeParam, std::string& sValueParam);
 	void ReadPb(uint32_t iSizeParam, Bytes& stValueParam);
 	void ReadPb(uint32_t iSizeParam, ::OI::Rpc::Serialize& stValueParam);
-	template<typename T>
+	template <typename T>
 	void ReadPb(uint32_t iSizeParam, std::vector<T>& stValueParam)
 	{
 		T stElem{};
 		ReadPb(iSizeParam, stElem);
 		stValueParam.push_back(std::move(stElem));
 	}
-	template<typename K, typename V>
+	template <typename K, typename V>
 	BytesStream& WritePb(uint32_t iSequenceParam, const std::map<K, V>& stValueParam)
 	{
 		BytesStream stAll;
@@ -201,7 +249,7 @@ public:
 		uint32_t iSize = (uint32_t)stAll.Size();
 		return WritePbRaw(iSequenceParam, iSize ? stAll.Begin() : NULL, iSize);
 	}
-	template<typename K, typename V>
+	template <typename K, typename V>
 	void ReadPb(uint32_t iSizeParam, std::map<K, V>& stValueParam)
 	{
 		if (RemainSize() < iSizeParam)
@@ -257,7 +305,6 @@ public:
 			stValueParam.insert(std::make_pair(stKey, stVal));
 		}
 	}
-
-
 };
-}}
+}
+}

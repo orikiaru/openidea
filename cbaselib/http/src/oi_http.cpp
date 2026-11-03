@@ -11,7 +11,10 @@
 #include <cstdio>
 #include <cstring>
 
-namespace OI { namespace Http {
+namespace OI
+{
+namespace Http
+{
 
 namespace
 {
@@ -26,8 +29,7 @@ std::string EncodeQuery(const std::string& sValueParam)
 	for (size_t iIndexLocal = 0; iIndexLocal < sValueParam.size(); ++iIndexLocal)
 	{
 		unsigned char iCharacter = (unsigned char)sValueParam[iIndexLocal];
-		bool bPlain = (iCharacter >= 'a' && iCharacter <= 'z') || (iCharacter >= 'A' && iCharacter <= 'Z') || (iCharacter >= '0' && iCharacter <= '9')
-			|| iCharacter == '-' || iCharacter == '_' || iCharacter == '.' || iCharacter == '!' || iCharacter == '~' || iCharacter == '*' || iCharacter == '\'' || iCharacter == '(' || iCharacter == ')';
+		bool bPlain = (iCharacter >= 'a' && iCharacter <= 'z') || (iCharacter >= 'A' && iCharacter <= 'Z') || (iCharacter >= '0' && iCharacter <= '9') || iCharacter == '-' || iCharacter == '_' || iCharacter == '.' || iCharacter == '!' || iCharacter == '~' || iCharacter == '*' || iCharacter == '\'' || iCharacter == '(' || iCharacter == ')';
 		if (bPlain)
 		{
 			sOutput.push_back((char)iCharacter);
@@ -111,7 +113,10 @@ bool ParseHex(const std::string& sTextParam, size_t iPositionParam, size_t iEndP
 		}
 		if (iD < 0)
 		{
-			if (iCharacter == ';' && iDigits > 0) break;
+			if (iCharacter == ';' && iDigits > 0)
+			{
+				break;
+			}
 			return false;
 		}
 		if (iValue > (UINT64_MAX >> 4))
@@ -164,9 +169,9 @@ struct Call::State
 	uv_getaddrinfo_t stDns;
 
 	State()
-		: iPort(0), iTimeoutMilliseconds(5000), iSent(0), iHeaderBytes(0), iContentLength(0), iStatus(0), iPhase(PHASE_CONNECT),
-		bHeadersReady(false), bHasLength(false), bChunked(false), iChunkPosition(0), bFailed(false), bInIo(false),
-		iDescriptor(INVALID_SOCKET_ID), pChannel(NULL), stHandle(), iDone(0), iWoke(0), iReferences(1)
+	    : iPort(0), iTimeoutMilliseconds(5000), iSent(0), iHeaderBytes(0), iContentLength(0), iStatus(0), iPhase(PHASE_CONNECT),
+	      bHeadersReady(false), bHasLength(false), bChunked(false), iChunkPosition(0), bFailed(false), bInIo(false),
+	      iDescriptor(INVALID_SOCKET_ID), pChannel(NULL), stHandle(), iDone(0), iWoke(0), iReferences(1)
 	{
 	}
 	~State();
@@ -237,10 +242,19 @@ struct Call::State
 		{
 			return false;
 		}
-		if (iLineEnd < 12 || (sIncoming.compare(0, 9, "HTTP/1.1 ") != 0 && sIncoming.compare(0, 9, "HTTP/1.0 ") != 0)) return false;
-		if (iLineEnd > 12 && sIncoming[12] != ' ') return false;
+		if (iLineEnd < 12 || (sIncoming.compare(0, 9, "HTTP/1.1 ") != 0 && sIncoming.compare(0, 9, "HTTP/1.0 ") != 0))
+		{
+			return false;
+		}
+		if (iLineEnd > 12 && sIncoming[12] != ' ')
+		{
+			return false;
+		}
 		uint64_t iCodeLocal = 0;
-		if (!ParseU64(sIncoming, 9, 12, iCodeLocal) || iCodeLocal < 100 || iCodeLocal > 599 || iCodeLocal == 101) return false;
+		if (!ParseU64(sIncoming, 9, 12, iCodeLocal) || iCodeLocal < 100 || iCodeLocal > 599 || iCodeLocal == 101)
+		{
+			return false;
+		}
 		iStatus = static_cast<int32_t>(iCodeLocal);
 		bHasLength = false;
 		bChunked = false;
@@ -262,7 +276,10 @@ struct Call::State
 					iValue += 1;
 				}
 				size_t iValueEnd = iEnd;
-				while (iValueEnd > iValue && (sIncoming[iValueEnd - 1] == ' ' || sIncoming[iValueEnd - 1] == '\t')) --iValueEnd;
+				while (iValueEnd > iValue && (sIncoming[iValueEnd - 1] == ' ' || sIncoming[iValueEnd - 1] == '\t'))
+				{
+					--iValueEnd;
+				}
 				size_t iNameEnd = iColon;
 				while (iNameEnd > iPosition && sIncoming[iNameEnd - 1] == ' ')
 				{
@@ -271,8 +288,7 @@ struct Call::State
 				if (EqName(sIncoming, iPosition, iNameEnd, "content-length") && iPosition + std::strlen("content-length") == iNameEnd)
 				{
 					uint64_t iLength = 0;
-					if (!ParseU64(sIncoming, iValue, iValueEnd, iLength) || (iStatus != 304 && iStatus >= 200 && iLength > kMaxBody)
-						|| (bHasLength && iContentLength != iLength))
+					if (!ParseU64(sIncoming, iValue, iValueEnd, iLength) || (iStatus != 304 && iStatus >= 200 && iLength > kMaxBody) || (bHasLength && iContentLength != iLength))
 					{
 						return false;
 					}
@@ -289,7 +305,10 @@ struct Call::State
 							sCoding[iIndexLocal] = (char)(sCoding[iIndexLocal] - 'A' + 'a');
 						}
 					}
-					if (bChunked || sCoding != "chunked") return false;
+					if (bChunked || sCoding != "chunked")
+					{
+						return false;
+					}
 					bChunked = true;
 				}
 			}
@@ -320,7 +339,11 @@ struct Call::State
 			}
 			if (iStatus < 200)
 			{
-				if (++iInterimResponses > 16) { Fail("status"); return true; }
+				if (++iInterimResponses > 16)
+				{
+					Fail("status");
+					return true;
+				}
 				sIncoming.erase(0, iHeaderEnd + 4);
 				continue;
 			}
@@ -548,9 +571,10 @@ struct Call::State
 class HttpChannel : public ::OI::Net::Channel
 {
 	Call::State* m_pState;
-public:
+
+  public:
 	HttpChannel(::OI::Net::NetSocket stSockParam, Call::State* pStateParam)
-		: ::OI::Net::Channel(stSockParam, NULL), m_pState(pStateParam)
+	    : ::OI::Net::Channel(stSockParam, NULL), m_pState(pStateParam)
 	{
 	}
 	void DataIn()
@@ -626,7 +650,8 @@ void Call::State::Start(void* pArgumentParam)
 	}
 	int32_t iTimeout = pSelf->iTimeoutMilliseconds > 0 ? pSelf->iTimeoutMilliseconds : 5000;
 	pSelf->Retain();
-	::OI::Timer::BaseTimerManager::GetInstance().AddTimer([pSelf]() {
+	::OI::Timer::BaseTimerManager::GetInstance().AddTimer([pSelf]()
+	{
 		::OI::Net::Poll::GetInstance().CallOnLoop(State::OnTimeout, pSelf);
 	}, iTimeout);
 	sockaddr_in stAddr;
@@ -761,7 +786,7 @@ Response Call::await_resume()
 }
 
 Client::Client(const std::string& sHostParam, int32_t iPortParam, int32_t iTimeoutMillisecondsParam)
-	: m_sHost(sHostParam), m_iPort(iPortParam), m_iTimeoutMilliseconds(iTimeoutMillisecondsParam)
+    : m_sHost(sHostParam), m_iPort(iPortParam), m_iTimeoutMilliseconds(iTimeoutMillisecondsParam)
 {
 }
 
@@ -821,4 +846,5 @@ Call Client::Post(const std::string& sPathParam, const std::string& sBodyParam, 
 	return Call(pStateLocal);
 }
 
-}}
+}
+}

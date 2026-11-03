@@ -68,3 +68,5 @@ redisserver 的 `[Redis] max_pending_bytes`（默认 64MiB）和 `max_pending_co
 `Poll::CallOnLoop` 在 poll 线程上可以立即执行；`PostOnLoop` 始终入队。每次只消费进入时已有的一批操作，回调中新投的操作留到下一次唤醒，防止递归执行及持续自投递饿死 IO。
 
 新增 `--case redis-fairness`：RedisMgr 建立两条真实下游连接，在上游额度为 1、服务端时间轮 tick 为 1000ms 时发送 64+1 条命令；驱动通过 Redis MONITOR 核对后者最迟第三条执行，并检查全部回复和恢复耗时。HoldMgr 同时覆盖不 await 即启动、完成后再 await、首次/重复建连、32 个并发等待者、失败和延迟投递不内联。两项纳入 `--case all`，单、多线程分别复测。
+
+共享 Redis 上游禁止 `SCRIPT DEBUG` 子命令（大小写不敏感，所有模式均拒绝；子命令内嵌 NUL 也拒绝，防止 C 字符串比较截断绕过），避免调试模式污染其他下游的 EVAL/PING；SCRIPT LOAD 和 EVALSHA 保留。普通 RedisMgr 回归强制使用一条上游，以两条下游验证调试命令被断开、另一条仍收到正常脚本结果，并验证重连后的 PING 与脚本加载/执行。

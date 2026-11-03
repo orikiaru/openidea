@@ -53,7 +53,7 @@ void LogManager::Stop()
 
 bool LogManager::OnTimer()
 {
-	tm	stNowCalendarTime = ::OI::Timer::GetLocalTime();
+	tm stNowCalendarTime = ::OI::Timer::GetLocalTime();
 	time_t iNowTimestamp = ::OI::Timer::GetTime();
 
 	bool bIsCrossDay = ::OI::Timer::CrossDay(m_iLastTimestamp, iNowTimestamp);
@@ -64,12 +64,12 @@ bool LogManager::OnTimer()
 	{
 		OnCrossDay();
 	}
-	
+
 	char vLogTitleText[LOG_TITLE_BUFF_SIZE];
 	//只需要时分秒.
 	size_t iLength = strftime(vLogTitleText, sizeof(vLogTitleText), "%T ", &stNowCalendarTime);
 	assert(iLength < sizeof(vLogTitleText));
-	vLogTitleText[iLength] = '\0';	//字符串结尾
+	vLogTitleText[iLength] = '\0'; //字符串结尾
 	{
 		::OI::Thread::MutexGuard stLock(m_stTitleLocker);
 		m_sLogTitle.assign(vLogTitleText, iLength);
@@ -98,19 +98,19 @@ static std::string GetLogLvName(LOG_LEVEL iLevelParam)
 {
 	switch (iLevelParam)
 	{
-		case LOG_LEVEL::LOG_TRACE:
-			return "trace";
-		case LOG_LEVEL::LOG_DEBUG:
-			return "debug";
-		case LOG_LEVEL::LOG_INFO:
-			return "info";
-		case LOG_LEVEL::LOG_WARNING:
-			return "warning";
-		case LOG_LEVEL::LOG_ERROR:
-			return "error";
-		default:
-			assert(false);
-			return "unknow_lv";
+	case LOG_LEVEL::LOG_TRACE:
+		return "trace";
+	case LOG_LEVEL::LOG_DEBUG:
+		return "debug";
+	case LOG_LEVEL::LOG_INFO:
+		return "info";
+	case LOG_LEVEL::LOG_WARNING:
+		return "warning";
+	case LOG_LEVEL::LOG_ERROR:
+		return "error";
+	default:
+		assert(false);
+		return "unknow_lv";
 	};
 	return "unknow_lv";
 }
@@ -152,7 +152,6 @@ bool LogManager::StartLogInstanceWork()
 	}
 }
 
-
 bool LogManager::OpenAllLogFile()
 {
 	for (int iLevelLv = 0; iLevelLv < LOG_LEVEL::LOG_LEVEL_COUNT; ++iLevelLv)
@@ -190,5 +189,3 @@ std::string LogManager::GetLogTitle()
 	::OI::Thread::MutexGuard stLock(m_stTitleLocker);
 	return m_sLogTitle;
 }
-
-

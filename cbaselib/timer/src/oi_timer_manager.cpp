@@ -4,7 +4,10 @@
 #include "oi_timer_manager.h"
 #include "oi_thread.h"
 #include "oi_poll.h"
-namespace OI { namespace Timer {
+namespace OI
+{
+namespace Timer
+{
 
 static std::atomic<bool> g_tick_queued(false);
 
@@ -83,7 +86,7 @@ bool BaseTimerManager::Init()
 
 	m_iTickOffsetMilliseconds = iOffsetMilliseconds;
 	m_stLastTickMonotonic = std::chrono::steady_clock::now();
-	gettimeofday(&m_stCurrentTimeValue, 0);	 //记录第0帧的时间
+	gettimeofday(&m_stCurrentTimeValue, 0); //记录第0帧的时间
 	m_iCurrentTime = time(NULL);
 	localtime_r(&m_iCurrentTime, &m_stCurrentCalendarTime);
 	// Windows / Linux 都用 poll 循环上的 libuv timer 叫醒
@@ -98,7 +101,8 @@ void BaseTimerManager::OnSignal()
 	{
 		return;
 	}
-	bool bQueued = ::OI::Thread::ThreadPool::GetInstance().AddTask([]() {
+	bool bQueued = ::OI::Thread::ThreadPool::GetInstance().AddTask([]()
+	{
 		BaseTimerManager::GetInstance().Update();
 		g_tick_queued.store(false);
 	}, ::OI::Thread::PRIO_ENUM::PRIO_QUEUE);
@@ -113,11 +117,10 @@ std::string BaseTimerManager::GenTraceLog()
 {
 	char vBuffer[1024];
 	snprintf(vBuffer, sizeof(vBuffer) - 1,
-		"BaseTimerManager::Update mono_ms=%lld wall=[%lld,%lld] tick_num=%lld",
-		(long long)std::chrono::duration_cast<std::chrono::milliseconds>(m_stLastTickMonotonic.time_since_epoch()).count(),
-		(long long)m_stCurrentTimeValue.tv_sec, (long long)m_stCurrentTimeValue.tv_usec,
-		(long long)m_iCurrentTick
-	);
+	    "BaseTimerManager::Update mono_ms=%lld wall=[%lld,%lld] tick_num=%lld",
+	    (long long)std::chrono::duration_cast<std::chrono::milliseconds>(m_stLastTickMonotonic.time_since_epoch()).count(),
+	    (long long)m_stCurrentTimeValue.tv_sec, (long long)m_stCurrentTimeValue.tv_usec,
+	    (long long)m_iCurrentTick);
 	return vBuffer;
 }
 
@@ -130,7 +133,8 @@ void BaseTimerManager::Update()
 		m_iCurrentTime = m_stCurrentTimeValue.tv_sec;
 		localtime_r(&m_iCurrentTime, &m_stCurrentCalendarTime);
 		const int64_t iDeltaUs = std::chrono::duration_cast<std::chrono::microseconds>(
-			std::chrono::steady_clock::now() - m_stLastTickMonotonic).count();
+		    std::chrono::steady_clock::now() - m_stLastTickMonotonic)
+		                             .count();
 		if (iDeltaUs <= 0)
 		{
 			return;
@@ -164,7 +168,8 @@ void BaseTimerManager::AddTimer(BaseTimer* pTimerParam, int iMillisecondParam)
 int64_t BaseTimerManager::TicksFromNow(int iMillisecondParam) const
 {
 	int64_t iElapsedUs = std::chrono::duration_cast<std::chrono::microseconds>(
-		std::chrono::steady_clock::now() - m_stLastTickMonotonic).count();
+	    std::chrono::steady_clock::now() - m_stLastTickMonotonic)
+	                         .count();
 	if (iElapsedUs < 0)
 	{
 		iElapsedUs = 0;
@@ -259,4 +264,5 @@ void BaseTimerManager::run_tick(TimerList& vDueParam)
 		try_uniform();
 	}
 }
-}}
+}
+}

@@ -5,7 +5,10 @@
 #include "oi_timer_manager.h"
 #include "oi_poll.h"
 
-namespace OI { namespace Base {
+namespace OI
+{
+namespace Base
+{
 int StartFramework(const char* pConfigPathParam)
 {
 	if (!Config::GlobalMutableConfig().Parse(pConfigPathParam))
@@ -13,9 +16,7 @@ int StartFramework(const char* pConfigPathParam)
 		printf("ParseConfigError\n");
 		return -2;
 	}
-	if (!::OI::Thread::ThreadPool::GetInstance().Init()
-		|| !::OI::Timer::BaseTimerManager::GetInstance().Init()
-		|| !::OI::Net::Poll::GetInstance().Init())
+	if (!::OI::Thread::ThreadPool::GetInstance().Init() || !::OI::Timer::BaseTimerManager::GetInstance().Init() || !::OI::Net::Poll::GetInstance().Init())
 	{
 		printf("framework init error\n");
 		return -1;
@@ -28,4 +29,5 @@ int RunFramework()
 	::OI::Thread::ThreadPool::GetInstance().StartWork();
 	return ::OI::Thread::ThreadPool::GetInstance().ExitCode();
 }
-}}
+}
+}

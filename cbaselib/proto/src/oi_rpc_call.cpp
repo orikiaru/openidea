@@ -12,7 +12,10 @@
 #include <set>
 #include <unordered_map>
 #include <vector>
-namespace OI { namespace Rpc {
+namespace OI
+{
+namespace Rpc
+{
 
 static bool DrainStCoro()
 {
@@ -72,10 +75,16 @@ struct RpcCallShard
 // 调用者持分片锁。删除空桶，避免动态超时参数让桶本身无限增长。
 void RemoveRpcExpiry(RpcCallShard& stShardParam, RpcCoroSlot& stSlotParam)
 {
-	if (!stSlotParam.bHasExpiry) return;
+	if (!stSlotParam.bHasExpiry)
+	{
+		return;
+	}
 	auto stBucket = stSlotParam.stExpiryBucket;
 	stBucket->second.erase(stSlotParam.stExpiry);
-	if (stBucket->second.empty()) stShardParam.mExpire.erase(stBucket);
+	if (stBucket->second.empty())
+	{
+		stShardParam.mExpire.erase(stBucket);
+	}
 	stSlotParam.bHasExpiry = false;
 	stSlotParam.stExpiry = {};
 	stSlotParam.stExpiryBucket = {};
@@ -93,7 +102,8 @@ std::map<proto_type_t, RpcHandleFn> g_rpc_handle;
 int64_t NowMs()
 {
 	return std::chrono::duration_cast<std::chrono::milliseconds>(
-		std::chrono::steady_clock::now().time_since_epoch()).count();
+	    std::chrono::steady_clock::now().time_since_epoch())
+	    .count();
 }
 
 RpcCallShard& ShardOf(uint64_t iCallIdParam)
@@ -103,7 +113,10 @@ RpcCallShard& ShardOf(uint64_t iCallIdParam)
 
 void FinishRpcSlot(RpcCoroSlot& stSlotParam, int32_t iCodeParam, ::OI::Base::BytesStream* pBodyParam)
 {
-	if (stSlotParam.bAwaitingConnect) stSlotParam.pManager->DropPendingCall(stSlotParam.iCallId);
+	if (stSlotParam.bAwaitingConnect)
+	{
+		stSlotParam.pManager->DropPendingCall(stSlotParam.iCallId);
+	}
 	if (pBodyParam)
 	{
 		if (stSlotParam.fnDecode)
@@ -135,7 +148,10 @@ bool TakeRpcSlot(uint64_t iCallIdParam, RpcCoroSlot& stOutputParam, ::OI::Net::S
 		return false;
 	}
 	// 来源或协议错误不能消费其他连接的等待项。
-	if (pManagerParam && (stIterator->second.pManager != pManagerParam || stIterator->second.iSessionId != iSessionIdParam || stIterator->second.iResponseId != iResponseIdParam)) return false;
+	if (pManagerParam && (stIterator->second.pManager != pManagerParam || stIterator->second.iSessionId != iSessionIdParam || stIterator->second.iResponseId != iResponseIdParam))
+	{
+		return false;
+	}
 	RemoveRpcExpiry(stShard, stIterator->second);
 	stOutputParam = std::move(stIterator->second);
 	stShard.mSlots.erase(stIterator);
@@ -150,7 +166,7 @@ void SweepRpcCalls()
 	{
 		RpcCallShard& stShard = g_call_shards[iIndexLocal];
 		::OI::Thread::MutexGuard stLock(stShard.stMutex);
-		for (auto stBit = stShard.mExpire.begin(); stBit != stShard.mExpire.end(); )
+		for (auto stBit = stShard.mExpire.begin(); stBit != stShard.mExpire.end();)
 		{
 			std::list<RpcExpire>& vQ = stBit->second;
 			while (!vQ.empty())
@@ -172,8 +188,14 @@ void SweepRpcCalls()
 				stShard.mSlots.erase(stIterator);
 				vQ.pop_front();
 			}
-			if (vQ.empty()) stBit = stShard.mExpire.erase(stBit);
-			else ++stBit;
+			if (vQ.empty())
+			{
+				stBit = stShard.mExpire.erase(stBit);
+			}
+			else
+			{
+				++stBit;
+			}
 		}
 	}
 	for (size_t iIndexLocal = 0; iIndexLocal < vFired.size(); ++iIndexLocal)
@@ -186,7 +208,7 @@ void SweepRpcCalls()
 
 class RpcSweepTimer : public ::OI::Timer::BaseTimer
 {
-public:
+  public:
 	bool OnTimer()
 	{
 		SweepRpcCalls();
@@ -208,7 +230,10 @@ RpcWaitStats GetRpcWaitStats()
 		::OI::Thread::MutexGuard stLock(stShard.stMutex);
 		stStats.iCalls += stShard.mSlots.size();
 		stStats.iBuckets += stShard.mExpire.size();
-		for (const auto& stBucket : stShard.mExpire) stStats.iExpirations += stBucket.second.size();
+		for (const auto& stBucket : stShard.mExpire)
+		{
+			stStats.iExpirations += stBucket.second.size();
+		}
 	}
 	return stStats;
 }
@@ -242,7 +267,8 @@ bool ClaimRpcSend(uint64_t iCallIdParam, sid_t iSessionIdParam)
 
 uint64_t BindRpcCall(::OI::Net::SessionManager* pManagerParam, sid_t iSessionIdParam, proto_type_t iResponseIdParam, std::coroutine_handle<> stHandleParam, int32_t* pResultParam, int64_t iTimeoutMillisecondsParam, std::function<bool(::OI::Base::BytesStream&)> fnDecodeParam, std::function<void()> fnResumeParam)
 {
-	std::call_once(g_sweep_once, []() {
+	std::call_once(g_sweep_once, []()
+	{
 		::OI::Net::Poll::GetInstance().CallOnLoop(ArmRpcSweep, NULL);
 	});
 	// 最高位留给请求标记，槽里只存去掉标记的号。
@@ -273,7 +299,10 @@ uint64_t BindRpcCall(::OI::Net::SessionManager* pManagerParam, sid_t iSessionIdP
 			}
 			catch (...)
 			{
-				if (stBucket->second.empty()) stShard.mExpire.erase(stBucket);
+				if (stBucket->second.empty())
+				{
+					stShard.mExpire.erase(stBucket);
+				}
 				throw;
 			}
 			stInserted->second.stExpiryBucket = stBucket;
@@ -307,7 +336,7 @@ void FailRpcCalls(::OI::Net::SessionManager* pManagerParam, sid_t iSessionIdPara
 	for (auto& stShard : g_call_shards)
 	{
 		::OI::Thread::MutexGuard stLock(stShard.stMutex);
-		for (auto stIterator = stShard.mSlots.begin(); stIterator != stShard.mSlots.end(); )
+		for (auto stIterator = stShard.mSlots.begin(); stIterator != stShard.mSlots.end();)
 		{
 			if (stIterator->second.pManager == pManagerParam && stIterator->second.iSessionId == iSessionIdParam)
 			{
@@ -315,11 +344,17 @@ void FailRpcCalls(::OI::Net::SessionManager* pManagerParam, sid_t iSessionIdPara
 				vFailed.push_back(std::move(stIterator->second));
 				stIterator = stShard.mSlots.erase(stIterator);
 			}
-			else ++stIterator;
+			else
+			{
+				++stIterator;
+			}
 		}
 	}
 	// 唤醒放在锁外，应用可以立即发起新的调用。
-	for (auto& stSlot : vFailed) FinishRpcSlot(stSlot, OI_ERR_CONNECT, NULL);
+	for (auto& stSlot : vFailed)
+	{
+		FinishRpcSlot(stSlot, OI_ERR_CONNECT, NULL);
+	}
 }
 
 void BindRpcHandler(proto_type_t iIdParam, RpcHandleFn fnHandleParam)
@@ -372,7 +407,8 @@ bool DeliverRpc(proto_type_t iIdParam, ::OI::Base::BytesStream& stBodyParam, ::O
 		}
 		else
 		{
-			coro::StartTask([pHandle, pManagerParam, iSessionIdParam, &stBodyParam](coro::Token iTokenParam) {
+			coro::StartTask([pHandle, pManagerParam, iSessionIdParam, &stBodyParam](coro::Token iTokenParam)
+			{
 				return (*pHandle)(iTokenParam, pManagerParam, iSessionIdParam, std::move(stBodyParam));
 			});
 		}
@@ -382,4 +418,5 @@ bool DeliverRpc(proto_type_t iIdParam, ::OI::Base::BytesStream& stBodyParam, ::O
 	}
 	return true;
 }
-}}
+}
+}

@@ -121,23 +121,48 @@ bool ChangesConnection(const char* pBeginParam, const char* pEndParam)
 	std::string sCommand(pPointer, (size_t)iLength);
 	for (char& iCharacter : sCommand)
 	{
-		if (iCharacter >= 'a' && iCharacter <= 'z') iCharacter = (char)(iCharacter - 'a' + 'A');
+		if (iCharacter >= 'a' && iCharacter <= 'z')
+		{
+			iCharacter = (char)(iCharacter - 'a' + 'A');
+		}
+	}
+	// ScanCommand 已校验完整 RESP；仅检查 SCRIPT 的子命令，保留 LOAD/EXISTS 等正常功能。
+	if (sCommand == "SCRIPT" && iCount >= 2)
+	{
+		pPointer += iLength + 2;
+		pPointer = ReadLine(pPointer + 1, pEndParam, iLength, bBad);
+		std::string sSubcommand(pPointer, static_cast<size_t>(iLength));
+		for (auto& iCharacter : sSubcommand)
+		{
+			if (iCharacter >= 'a' && iCharacter <= 'z')
+			{
+				iCharacter = static_cast<char>(iCharacter - 'a' + 'A');
+			}
+		}
+		// Redis 的子命令比较使用 C 字符串，拒绝内嵌 NUL，不能借后缀绕过过滤。
+		if (sSubcommand == "DEBUG" || sSubcommand.find('\0') != std::string::npos)
+		{
+			return true;
+		}
 	}
 	// 上游由多个下游共享，任何连接状态都不能带到其他会话。
 	static const char* vCommands[] = {"SELECT", "AUTH", "HELLO", "RESET", "QUIT",
-		"MULTI", "EXEC", "DISCARD", "WATCH", "UNWATCH", "CLIENT", "MONITOR",
-		"SUBSCRIBE", "PSUBSCRIBE", "SSUBSCRIBE", "UNSUBSCRIBE", "PUNSUBSCRIBE",
-		"SUNSUBSCRIBE", "READONLY", "READWRITE", "ASKING", "SYNC", "PSYNC", "REPLCONF"};
+	    "MULTI", "EXEC", "DISCARD", "WATCH", "UNWATCH", "CLIENT", "MONITOR",
+	    "SUBSCRIBE", "PSUBSCRIBE", "SSUBSCRIBE", "UNSUBSCRIBE", "PUNSUBSCRIBE",
+	    "SUNSUBSCRIBE", "READONLY", "READWRITE", "ASKING", "SYNC", "PSYNC", "REPLCONF"};
 	for (const char* pName : vCommands)
 	{
-		if (sCommand == pName) return true;
+		if (sCommand == pName)
+		{
+			return true;
+		}
 	}
 	return false;
 }
 }
 
 RedisServerSession::RedisServerSession(RedisServer* pOwnerParam)
-	: ::OI::Net::NetSession(pOwnerParam), m_pOwner(pOwnerParam), m_iLink(0)
+    : ::OI::Net::NetSession(pOwnerParam), m_pOwner(pOwnerParam), m_iLink(0)
 {
 }
 
@@ -145,19 +170,23 @@ RedisServerSession::~RedisServerSession()
 {
 }
 
-
-
 void RedisServerSession::OnDataOut()
 {
 }
 
 bool RedisServerSession::ResumeRead()
 {
-	if (IsClosed()) return false;
+	if (IsClosed())
+	{
+		return false;
+	}
 	m_bReadPaused = false;
 	// 内核可能已经没数据；必须先消费会话中留下的完整命令。
 	const size_t iConsumed = ProcessInput(1);
-	if (!m_bReadPaused && !IsClosed()) AllowRead();
+	if (!m_bReadPaused && !IsClosed())
+	{
+		AllowRead();
+	}
 	return iConsumed != 0;
 }
 
@@ -168,7 +197,10 @@ void RedisServerSession::OnDataIn()
 
 size_t RedisServerSession::ProcessInput(size_t iBudgetParam)
 {
-	if (m_bReadPaused || IsClosed()) return 0;
+	if (m_bReadPaused || IsClosed())
+	{
+		return 0;
+	}
 	// 只切出完整命令的边界，原样转给上游，不拆成参数再编一遍。
 	const char* pBegin = stInputBuffer.Begin();
 	const char* pEnd = pBegin + stInputBuffer.Size();
@@ -203,7 +235,10 @@ size_t RedisServerSession::ProcessInput(size_t iBudgetParam)
 				m_pOwner->Pause(m_iLink, GetSessionID());
 				break;
 			}
-			if (IsClosed()) break;
+			if (IsClosed())
+			{
+				break;
+			}
 		}
 		pPointer += iNumber;
 		if (--iBudgetParam == 0 && pPointer < pEnd)

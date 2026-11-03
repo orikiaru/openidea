@@ -30,18 +30,40 @@ std::atomic<uint64_t> g_task_uid(1);
 
 namespace coro
 {
-namespace { std::atomic<TaskErrorHandler> g_error_handler{nullptr}; }
-void SetTaskErrorHandler(TaskErrorHandler fnHandlerParam) { g_error_handler.store(fnHandlerParam); }
+namespace
+{
+std::atomic<TaskErrorHandler> g_error_handler{nullptr};
+}
+void SetTaskErrorHandler(TaskErrorHandler fnHandlerParam)
+{
+	g_error_handler.store(fnHandlerParam);
+}
 void ReportTaskError(Token iTokenParam, std::exception_ptr stErrorParam) noexcept
 {
 	if (auto fnHandler = g_error_handler.load())
 	{
-		try { fnHandler(iTokenParam, stErrorParam); return; }
-		catch (...) { fprintf(stderr, "coroutine error handler threw\n"); }
+		try
+		{
+			fnHandler(iTokenParam, stErrorParam);
+			return;
+		}
+		catch (...)
+		{
+			fprintf(stderr, "coroutine error handler threw\n");
+		}
 	}
-	try { std::rethrow_exception(stErrorParam); }
-	catch (const std::exception& stErrorLocal) { fprintf(stderr, "coroutine %llu failed: %s\n", (unsigned long long)iTokenParam, stErrorLocal.what()); }
-	catch (...) { fprintf(stderr, "coroutine %llu failed\n", (unsigned long long)iTokenParam); }
+	try
+	{
+		std::rethrow_exception(stErrorParam);
+	}
+	catch (const std::exception& stErrorLocal)
+	{
+		fprintf(stderr, "coroutine %llu failed: %s\n", (unsigned long long)iTokenParam, stErrorLocal.what());
+	}
+	catch (...)
+	{
+		fprintf(stderr, "coroutine %llu failed\n", (unsigned long long)iTokenParam);
+	}
 }
 
 TaskUid AllocTaskUid()
@@ -56,7 +78,7 @@ TaskUid AllocTaskUid()
 
 namespace
 {
-thread_local std::vector<std::coroutine_handle<> > g_detached_done;
+thread_local std::vector<std::coroutine_handle<>> g_detached_done;
 }
 
 void DetachFinished(std::coroutine_handle<> stHandleParam)
@@ -97,7 +119,8 @@ static void ArmWakeLater(void* pArgumentParam)
 	std::coroutine_handle<> stHandleLocal = pLater->stHandle;
 	int32_t iMillisecondsLocal = pLater->iMilliseconds;
 	delete pLater;
-	::OI::Timer::BaseTimerManager::GetInstance().AddTimer([stHandleLocal]() {
+	::OI::Timer::BaseTimerManager::GetInstance().AddTimer([stHandleLocal]()
+	{
 		PostTask(stHandleLocal);
 	}, iMillisecondsLocal);
 }
@@ -119,7 +142,7 @@ void SleepMs::await_suspend(std::coroutine_handle<> stHandleParam) const noexcep
 namespace
 {
 ::OI::Thread::Mutex g_st_lock;
-std::deque<std::coroutine_handle<> > g_st_queue;
+std::deque<std::coroutine_handle<>> g_st_queue;
 }
 
 void StScheduler::Post(std::coroutine_handle<> stHandleParam)
@@ -139,7 +162,7 @@ void StScheduler::Post(std::coroutine_handle<> stHandleParam)
 bool StScheduler::Poll()
 {
 	// 把进来时的队列整批拿走。resume 里 yield(0)、StartTask 进的是原队列，这次循环碰不到。
-	std::deque<std::coroutine_handle<> > vBatch;
+	std::deque<std::coroutine_handle<>> vBatch;
 	{
 		::OI::Thread::MutexGuard stLock(g_st_lock);
 		vBatch.swap(g_st_queue);

@@ -1,8 +1,9 @@
 #include "oi_rpc_session.h"
 #include "oi_rpc_call.h"
-namespace OI { namespace Rpc {
-
-
+namespace OI
+{
+namespace Rpc
+{
 
 void ProtoSession::OnDataIn()
 {
@@ -41,4 +42,5 @@ void ProtoSession::OnDataIn()
 void ProtoSession::OnDataOut()
 {
 }
-}}
+}
+}

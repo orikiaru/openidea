@@ -2,7 +2,10 @@
 #include <filesystem>
 #include <system_error>
 
-namespace OI { namespace File {
+namespace OI
+{
+namespace File
+{
 bool Exists(const std::string& sPathParam)
 {
 	if (sPathParam.empty())
@@ -31,4 +34,5 @@ bool MakeDirs(const std::string& sPathParam)
 	}
 	return std::filesystem::is_directory(sPathParam, stEc);
 }
-}}
+}
+}

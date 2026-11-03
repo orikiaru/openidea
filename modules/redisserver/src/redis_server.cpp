@@ -23,9 +23,10 @@ class RedisEv : public ::OI::Net::Channel
 	int32_t m_iMask;
 	bool m_bInIo;
 	bool m_bDead;
-public:
+
+  public:
 	RedisEv(::OI::Net::NetSocket stSockParam, redisAsyncContext* pAsyncContextParam)
-		: ::OI::Net::Channel(stSockParam, NULL), m_pAsyncContext(pAsyncContextParam), m_iMask(0), m_bInIo(false), m_bDead(false)
+	    : ::OI::Net::Channel(stSockParam, NULL), m_pAsyncContext(pAsyncContextParam), m_iMask(0), m_bInIo(false), m_bDead(false)
 	{
 	}
 	void DataIn()
@@ -78,7 +79,7 @@ public:
 				return;
 			}
 			::OI::Net::Poll::GetInstance().IOEventRegister(this,
-				(m_iMask & ::OI::Net::IO_EV_READ) != 0, (m_iMask & ::OI::Net::IO_EV_WRITE) != 0);
+			    (m_iMask & ::OI::Net::IO_EV_READ) != 0, (m_iMask & ::OI::Net::IO_EV_WRITE) != 0);
 			return;
 		}
 		::OI::Net::Poll::GetInstance().IOEventMod(this, m_iMask);
@@ -96,11 +97,26 @@ public:
 	}
 };
 
-void EvAddRead(void* pPointerParam) { ((RedisEv*)pPointerParam)->Add(::OI::Net::IO_EV_READ); }
-void EvDelRead(void* pPointerParam) { ((RedisEv*)pPointerParam)->Del(::OI::Net::IO_EV_READ); }
-void EvAddWrite(void* pPointerParam) { ((RedisEv*)pPointerParam)->Add(::OI::Net::IO_EV_WRITE); }
-void EvDelWrite(void* pPointerParam) { ((RedisEv*)pPointerParam)->Del(::OI::Net::IO_EV_WRITE); }
-void EvCleanup(void* pPointerParam) { ((RedisEv*)pPointerParam)->Cleanup(); }
+void EvAddRead(void* pPointerParam)
+{
+	((RedisEv*)pPointerParam)->Add(::OI::Net::IO_EV_READ);
+}
+void EvDelRead(void* pPointerParam)
+{
+	((RedisEv*)pPointerParam)->Del(::OI::Net::IO_EV_READ);
+}
+void EvAddWrite(void* pPointerParam)
+{
+	((RedisEv*)pPointerParam)->Add(::OI::Net::IO_EV_WRITE);
+}
+void EvDelWrite(void* pPointerParam)
+{
+	((RedisEv*)pPointerParam)->Del(::OI::Net::IO_EV_WRITE);
+}
+void EvCleanup(void* pPointerParam)
+{
+	((RedisEv*)pPointerParam)->Cleanup();
+}
 
 int AttachRedis(redisAsyncContext* pAsyncContextParam)
 {
@@ -196,7 +212,10 @@ void OnReply(redisAsyncContext*, void* pReplyParam, void* pPrivParam)
 	auto* pLink = static_cast<RedisLink*>(pPrivParam);
 	if (pLink->vPending.empty())
 	{
-		if (pReplyParam) freeReplyObject(pReplyParam);
+		if (pReplyParam)
+		{
+			freeReplyObject(pReplyParam);
+		}
 		return;
 	}
 	const sid_t iSessionIdLocal = pLink->vPending.front().iSessionId;
@@ -214,7 +233,10 @@ void OnReply(redisAsyncContext*, void* pReplyParam, void* pPrivParam)
 		AppendReply(stOutput, (redisReply*)pReplyParam);
 		freeReplyObject(pReplyParam);
 	}
-	if (!RedisServer::GetInstance().SendBytes(iSessionIdLocal, stOutput)) RedisServer::GetInstance().CloseSession(iSessionIdLocal);
+	if (!RedisServer::GetInstance().SendBytes(iSessionIdLocal, stOutput))
+	{
+		RedisServer::GetInstance().CloseSession(iSessionIdLocal);
+	}
 }
 
 void OnConnect(redisAsyncContext* pCharacterParam, int iStatusParam)
@@ -240,7 +262,8 @@ void OnDisconnect(const redisAsyncContext* pCharacterParam, int iStatusParam)
 }
 }
 
-RedisServer::RedisServer() : m_iConnections(1), m_iNext(0)
+RedisServer::RedisServer()
+    : m_iConnections(1), m_iNext(0)
 {
 }
 
@@ -271,8 +294,10 @@ bool RedisServer::Init()
 	int64_t iMaxCommands = static_cast<int64_t>(m_iMaxPendingCommands);
 	TryGetConfig("Redis.max_pending_bytes", iMaxBytes);
 	TryGetConfig("Redis.max_pending_commands", iMaxCommands);
-	if (iMaxBytes < 64 || static_cast<uint64_t>(iMaxBytes) > (std::numeric_limits<size_t>::max)()
-		|| iMaxCommands < 1 || static_cast<uint64_t>(iMaxCommands) > (std::numeric_limits<size_t>::max)()) return false;
+	if (iMaxBytes < 64 || static_cast<uint64_t>(iMaxBytes) > (std::numeric_limits<size_t>::max)() || iMaxCommands < 1 || static_cast<uint64_t>(iMaxCommands) > (std::numeric_limits<size_t>::max)())
+	{
+		return false;
+	}
 	m_iMaxPendingBytes = static_cast<size_t>(iMaxBytes);
 	m_iMaxPendingCommands = static_cast<size_t>(iMaxCommands);
 	m_iConnections = 1;
@@ -358,7 +383,8 @@ void RedisServer::ArmReconnect(RedisLink* pLinkParam)
 		return;
 	}
 	pLinkParam->bDialing = true;
-	::OI::Timer::BaseTimerManager::GetInstance().AddTimer([pLinkParam]() {
+	::OI::Timer::BaseTimerManager::GetInstance().AddTimer([pLinkParam]()
+	{
 		pLinkParam->bDialing = false;
 		RedisServer::GetInstance().Open(pLinkParam);
 	}, 2000);
@@ -373,7 +399,10 @@ void RedisServer::Pause(int32_t iLinkParam, sid_t iSessionIdParam)
 		LOG_TRACE("redis pressure pause link=%d pending=%zu bytes=%zu", iLinkParam, stLink.vPending.size(), stLink.iPendingBytes);
 		fflush(stdout);
 	}
-	if (!stLink.bResuming) ArmResume(&stLink);
+	if (!stLink.bResuming)
+	{
+		ArmResume(&stLink);
+	}
 }
 
 void RedisServer::ReleaseCredit(RedisLink* pLinkParam)
@@ -385,12 +414,13 @@ void RedisServer::ReleaseCredit(RedisLink* pLinkParam)
 
 void RedisServer::ArmResume(RedisLink* pLinkParam)
 {
-	if (::OI::Thread::ThreadPool::GetInstance().StopRequested()
-		|| pLinkParam->bResumeArmed || pLinkParam->vPaused.empty()
-		|| pLinkParam->iPendingBytes > m_iMaxPendingBytes / 2
-		|| pLinkParam->vPending.size() > m_iMaxPendingCommands / 2) return;
+	if (::OI::Thread::ThreadPool::GetInstance().StopRequested() || pLinkParam->bResumeArmed || pLinkParam->vPaused.empty() || pLinkParam->iPendingBytes > m_iMaxPendingBytes / 2 || pLinkParam->vPending.size() > m_iMaxPendingCommands / 2)
+	{
+		return;
+	}
 	pLinkParam->bResumeArmed = true;
-	OI::Net::Poll::GetInstance().PostOnLoop([](void* pArgumentParam) {
+	OI::Net::Poll::GetInstance().PostOnLoop([](void* pArgumentParam)
+	{
 		RedisServer::GetInstance().Resume(static_cast<RedisLink*>(pArgumentParam));
 	}, pLinkParam);
 }
@@ -404,7 +434,10 @@ void RedisServer::Resume(RedisLink* pLinkParam)
 	while (iRemaining-- > 0 && !pLinkParam->vReady.empty())
 	{
 		// 额度满时保留队首；恢复者每次只发一条，然后排到队尾。
-		if (pLinkParam->vPending.size() >= m_iMaxPendingCommands || pLinkParam->iPendingBytes >= m_iMaxPendingBytes) break;
+		if (pLinkParam->vPending.size() >= m_iMaxPendingCommands || pLinkParam->iPendingBytes >= m_iMaxPendingBytes)
+		{
+			break;
+		}
 		const sid_t iSessionId = pLinkParam->vReady.front();
 		pLinkParam->vReady.pop_front();
 		pLinkParam->vPaused.erase(iSessionId);
@@ -433,13 +466,15 @@ void RedisServer::Resume(RedisLink* pLinkParam)
 		}
 	}
 	pLinkParam->bResuming = false;
-	if (bProgress) ArmResume(pLinkParam);
+	if (bProgress)
+	{
+		ArmResume(pLinkParam);
+	}
 }
 
 bool RedisServer::Issue(int32_t iLinkParam, sid_t iSessionIdParam, const char* pCmdParam, size_t iLengthParam)
 {
-	if (iLinkParam < 0 || iLinkParam >= static_cast<int>(m_vLinks.size()) || iLengthParam == 0
-		|| iLengthParam > m_iMaxPendingBytes)
+	if (iLinkParam < 0 || iLinkParam >= static_cast<int>(m_vLinks.size()) || iLengthParam == 0 || iLengthParam > m_iMaxPendingBytes)
 	{
 		CloseSession(iSessionIdParam);
 		return true;
@@ -449,11 +484,20 @@ bool RedisServer::Issue(int32_t iLinkParam, sid_t iSessionIdParam, const char* p
 	{
 		::OI::Base::Bytes stError;
 		AppendErr(stError, "ERR redis down");
-		if (!SendBytes(iSessionIdParam, stError)) CloseSession(iSessionIdParam);
+		if (!SendBytes(iSessionIdParam, stError))
+		{
+			CloseSession(iSessionIdParam);
+		}
 		return true;
 	}
-	if (!stLink.bResuming && !stLink.vPaused.empty()) return false;
-	if (stLink.vPending.size() >= m_iMaxPendingCommands || iLengthParam > m_iMaxPendingBytes - stLink.iPendingBytes) return false;
+	if (!stLink.bResuming && !stLink.vPaused.empty())
+	{
+		return false;
+	}
+	if (stLink.vPending.size() >= m_iMaxPendingCommands || iLengthParam > m_iMaxPendingBytes - stLink.iPendingBytes)
+	{
+		return false;
+	}
 	stLink.vPending.push_back(RedisPending{iSessionIdParam, iLengthParam});
 	stLink.iPendingBytes += iLengthParam;
 	if (redisAsyncFormattedCommand(stLink.pAsyncContext, OnReply, &stLink, pCmdParam, iLengthParam) != REDIS_OK)

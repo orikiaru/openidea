@@ -24,7 +24,7 @@ typedef intptr_t net_socket_t;
 typedef int net_socket_t;
 #endif
 
-#define INVALID_SOCKET_ID ((net_socket_t)-1)
+#define INVALID_SOCKET_ID ((net_socket_t) - 1)
 
 void NetOs_Startup();
 net_socket_t NetOs_CreateTcp(bool bNonblockParam);

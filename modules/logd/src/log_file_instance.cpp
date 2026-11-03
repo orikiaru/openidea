@@ -7,24 +7,24 @@
 #include "log_manager.h"
 
 #ifdef _SINGLE_THREAD_
-	#error LOG_SERVER MUST BE MULTI THREAD
+#error LOG_SERVER MUST BE MULTI THREAD
 #endif
 
-LogFileInstance::LogFileInstance(LogManager* pManagerParam, LOG_LEVEL iLevelParam):m_pManager(pManagerParam), m_iLevel(iLevelParam), m_bWorking(false), m_bQuit(false)
+LogFileInstance::LogFileInstance(LogManager* pManagerParam, LOG_LEVEL iLevelParam)
+    : m_pManager(pManagerParam), m_iLevel(iLevelParam), m_bWorking(false), m_bQuit(false)
 {
 	memset(m_vFiles, 0, sizeof(m_vFiles));
 }
 
 LogFileInstance::~LogFileInstance()
 {
-	FILE* pFile = GetActiveFile();	//顺带把跨天换下来的旧文件关掉
+	FILE* pFile = GetActiveFile(); //顺带把跨天换下来的旧文件关掉
 	if (pFile)
 	{
 		fflush(pFile);
 		fclose(pFile);
 	}
 }
-
 
 bool LogFileInstance::CreateNewFile(const char* pPathParam)
 {
@@ -100,7 +100,6 @@ void LogFileInstance::Passive()
 	m_stCacheCondition.Wait(m_stCacheLocker);
 }
 
-
 void LogFileInstance::AddLog(::OI::Base::Bytes& stLogParam)
 {
 	bool bNotify = false;
@@ -165,7 +164,7 @@ void LogFileInstance::WriteLog()
 	::OI::Base::Bytes stTmp;
 	stTmp.Reserve(iItemIndexChunk);
 	int64_t iUnflushed = 0;
-	for(;;)
+	for (;;)
 	{
 		FILE* pFile = GetActiveFile();
 		if (!pFile)
@@ -182,7 +181,10 @@ void LogFileInstance::WriteLog()
 			if (m_bQuit)
 			{
 				m_stCacheLocker.UnLock();
-				if (fflush(pFile) != 0) DiskFailure("fflush");
+				if (fflush(pFile) != 0)
+				{
+					DiskFailure("fflush");
+				}
 				return;
 			}
 			Passive();
@@ -211,7 +213,10 @@ void LogFileInstance::WriteLog()
 					stTmp.Reserve(0);
 					if (pFile && iUnflushed >= (int64_t)iItemIndexChunk)
 					{
-						if (fflush(pFile) != 0) DiskFailure("fflush");
+						if (fflush(pFile) != 0)
+						{
+							DiskFailure("fflush");
+						}
 						iUnflushed = 0;
 					}
 				}
@@ -227,10 +232,12 @@ void LogFileInstance::WriteLog()
 			stTmp.Reserve(0);
 			if (pFile)
 			{
-				if (fflush(pFile) != 0) DiskFailure("fflush");
+				if (fflush(pFile) != 0)
+				{
+					DiskFailure("fflush");
+				}
 			}
 			iUnflushed = 0;
 		}
 	}
 }
-

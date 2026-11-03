@@ -1,7 +1,10 @@
 #pragma once
 #include "oi_redis.h"
 #include "oi_duration.h"
-namespace OI { namespace Redis {
+namespace OI
+{
+namespace Redis
+{
 
 // 每条 Redis 命令一层薄封装。协程拿到 RedisCall 再 co_await，同步直接返回 RedisResult。
 
@@ -258,4 +261,5 @@ inline RedisCall RedisLRange(const std::string& sKeyParam, int64_t iStartParam, 
 	return RedisLRange(sKeyParam, std::to_string(iStartParam), std::to_string(iStopParam), pOutputParam);
 }
 
-}}
+}
+}

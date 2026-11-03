@@ -10,9 +10,13 @@ class HoldMgr
 	bool m_bEnabled;
 	sid_t m_iSessionId;
 	int32_t m_iRedisTimeoutMilliseconds;
-public:
+
+  public:
 	void Load();
-	bool Enabled() const { return m_bEnabled; }
+	bool Enabled() const
+	{
+		return m_bEnabled;
+	}
 	void Start(sid_t iSessionIdParam);
 	coro::Task Pump();
 };

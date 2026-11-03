@@ -7,7 +7,10 @@
 #include "oi_rpc_session.h"
 #include "oi_rpc_call.h"
 #include "oi_log.h"
-namespace OI { namespace Rpc {
+namespace OI
+{
+namespace Rpc
+{
 
 void FailRpcCalls(::OI::Net::SessionManager* pManagerParam, sid_t iSessionIdParam);
 
@@ -19,11 +22,23 @@ enum CLIENT_CONNECT_MODE
 
 class ProtoSessionManager : public ::OI::Net::SessionManager
 {
-	void OnSessionClosed(sid_t iSessionIdParam) override final { FailRpcCalls(this, iSessionIdParam); }
-public:
-	ProtoSessionManager() {}
-	virtual const std::string GetIDString() { return "ProtoSessionManager"; }
-	virtual ::OI::Net::Session* CloneSession() { return new ProtoSession(this); }	//自定制回话类型
+	void OnSessionClosed(sid_t iSessionIdParam) override final
+	{
+		FailRpcCalls(this, iSessionIdParam);
+	}
+
+  public:
+	ProtoSessionManager()
+	{
+	}
+	virtual const std::string GetIDString()
+	{
+		return "ProtoSessionManager";
+	}
+	virtual ::OI::Net::Session* CloneSession()
+	{
+		return new ProtoSession(this);
+	} //自定制回话类型
 	virtual void OnAddSession(::OI::Net::Session* pSessionParam)
 	{
 		LOG_INFO("ProtoSessionManager::OnAddSession sid=%d", pSessionParam->GetSessionID());
@@ -38,8 +53,8 @@ public:
 //如果需要连接池,需要建立多个client,自行设计吧
 class ProtoClientManager : public ProtoSessionManager
 {
-	sid_t		m_iSessionId;
-	bool		m_bConnected;
+	sid_t m_iSessionId;
+	bool m_bConnected;
 	CLIENT_CONNECT_MODE m_iConnectMode;
 	struct HeldCall
 	{
@@ -52,13 +67,23 @@ class ProtoClientManager : public ProtoSessionManager
 	size_t m_iHeldBytes = 0;
 	size_t m_iHeldMaxCount = 65536;
 	size_t m_iHeldMaxBytes = 64 * 1024 * 1024;
-	size_t		m_iPendingBytes;
-	bool		m_bEverConnected;
-	::OI::Thread::SpinLock	m_stClientLocker;
-public:
-	ProtoClientManager():m_iSessionId(INVALID_SID),m_bConnected(false),m_iConnectMode(CLIENT_CONNECT_DIRECT),m_iPendingBytes(0),m_bEverConnected(false) {}
-	void SetConnectMode(CLIENT_CONNECT_MODE iModeParam) { m_iConnectMode = iModeParam; }
-	CLIENT_CONNECT_MODE GetConnectMode() const { return m_iConnectMode; }
+	size_t m_iPendingBytes;
+	bool m_bEverConnected;
+	::OI::Thread::SpinLock m_stClientLocker;
+
+  public:
+	ProtoClientManager()
+	    : m_iSessionId(INVALID_SID), m_bConnected(false), m_iConnectMode(CLIENT_CONNECT_DIRECT), m_iPendingBytes(0), m_bEverConnected(false)
+	{
+	}
+	void SetConnectMode(CLIENT_CONNECT_MODE iModeParam)
+	{
+		m_iConnectMode = iModeParam;
+	}
+	CLIENT_CONNECT_MODE GetConnectMode() const
+	{
+		return m_iConnectMode;
+	}
 	virtual void OnClientConnect(::OI::Net::Session* pSessionParam) = 0;
 	virtual void OnClientDisconnect(const ::OI::Net::Session* pSessionParam) = 0;
 
@@ -84,7 +109,10 @@ public:
 			// 待发总量已受发送额度限制；若连接恰好关闭，保留尚未接纳的部分等重连。
 			while (!m_vPending.empty())
 			{
-				if (!SendBytes(iSessionIdLocal, m_vPending.front())) break;
+				if (!SendBytes(iSessionIdLocal, m_vPending.front()))
+				{
+					break;
+				}
 				m_iPendingBytes -= m_vPending.front().Size();
 				m_vPending.pop_front();
 			}
@@ -142,6 +170,6 @@ public:
 	// 没连上先存着，连上时按顺序补发。存满 max_pending_bytes 再来的丢掉，返回 false
 	bool SendRawOrPend(const ::OI::Base::Bytes& stDataParam, size_t iMaxPendingBytesParam);
 	void Reconnect(int iDelayMillisecondsParam = 2000);
-
 };
-}}
+}
+}

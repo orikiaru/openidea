@@ -3,7 +3,6 @@
 
 LogServer::~LogServer()
 {
-
 }
 
 bool LogServer::Init()
@@ -20,4 +19,3 @@ void LogServer::OnDelSession(const ::OI::Net::Session* pSessionParam)
 {
 	LOG_TRACE("LogServer::OnDelSession sid=%d", pSessionParam->GetSessionID());
 }
-
