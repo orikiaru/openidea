@@ -3,7 +3,7 @@
 #include "oi_lock.h"
 namespace OI { namespace Timer {
 
-void TimerLevel::RunTick(BaseTimerManager* pMgr, bool run_timer)
+void TimerLevel::RunTick(BaseTimerManager* pMgr, TimerList* due)
 {
 	assert(_offset >= 0 && _offset < _max_tick);
 	TimerList cur_list;
@@ -20,23 +20,15 @@ void TimerLevel::RunTick(BaseTimerManager* pMgr, bool run_timer)
 		}
 	}
 
-#if __cplusplus >= 201103L
-	//执行定时器走上面,均匀定时器走下面
-	if (run_timer)
+	// 第一层到点的交给调用方在锁外执行，上层的按剩余 tick 重新挂到下层。
+	if (due)
 	{
-		std::for_each(cur_list.begin(), cur_list.end(), [&](BaseTimer* pTimer) {	pMgr->run_timer(pTimer); });
+		due->splice(due->end(), cur_list);
+		return;
 	}
-	else
-	{
-		std::for_each(cur_list.begin(), cur_list.end(), [&](BaseTimer* pTimer) {	pMgr->add_timer(pTimer); });
-	}
-#else
-	typedef void (BaseTimerManager::* timer_run_func_t) (BaseTimer*);
-	timer_run_func_t func = run_timer ? &BaseTimerManager::run_timer : &BaseTimerManager::add_timer;
 	for (TimerList::iterator it = cur_list.begin(); it != cur_list.end(); ++it)
 	{
-		(pMgr->*func)(*it);
+		pMgr->add_timer(*it);
 	}
-#endif
 }
 }}

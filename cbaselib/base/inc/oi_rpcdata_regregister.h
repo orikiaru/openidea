@@ -9,10 +9,10 @@ namespace OI { namespace RpcData {
 class RegRegister : public ::OI::Rpc::RpcData
 {
 public:
-    std::string name;
-    int32_t id;
-    std::string ip;
-    std::string port;
+    std::string name{};
+    int32_t id{};
+    std::string ip{};
+    std::string port{};
     
     explicit RegRegister (){}
     RegRegister ( const std::string & l_name, const int32_t & l_id, const std::string & l_ip, const std::string & l_port )

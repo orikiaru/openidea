@@ -12,6 +12,7 @@ set(LIBSRC
 	src/oi_config.cpp
 	src/oi_file.cpp
 	src/oi_registry.cpp
+	src/oi_app.cpp
 	)
 
 add_library(${LIBRARY} STATIC ${LIBSRC})

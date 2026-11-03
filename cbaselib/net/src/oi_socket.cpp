@@ -7,9 +7,12 @@
 #include <fcntl.h>
 
 
+#include <stdlib.h>
+#include <string.h>
 #include "oi_socket.h"
 #include "oi_session_manager.h"
 #include "oi_net_helper.h"
+#include "oi_log.h"
 namespace OI { namespace Net {
 
 NetAddr::NetAddr():_proto_type(AF_UNSPEC)
@@ -26,10 +29,23 @@ bool NetAddr::Init(SessionManager* pMgr)
 		case AF_INET:
 		{
 			sockaddr_in addr;
+			memset(&addr, 0, sizeof(addr));
 			addr.sin_family = AF_INET;
-			addr.sin_port = htons(atoi(port.c_str()));
-			addr.sin_addr.s_addr = INADDR_NONE;
-			inet_pton(AF_INET, ip.c_str(), &addr.sin_addr);
+			char* end = NULL;
+			long port_num = strtol(port.c_str(), &end, 10);
+			if (port.empty() || *end != '\0' || port_num < 0 || port_num > 65535)
+			{
+				LOG_ERROR("NetAddr::Init bad port=%s id=%s", port.c_str(), pMgr->GetIDString().c_str());
+				return false;
+			}
+			addr.sin_port = htons((uint16_t)port_num);
+			// 只收点分 IPv4。解析失败不能按 255.255.255.255 去连。
+			if (inet_pton(AF_INET, ip.c_str(), &addr.sin_addr) != 1)
+			{
+				LOG_ERROR("NetAddr::Init bad ip=%s id=%s", ip.c_str(), pMgr->GetIDString().c_str());
+				return false;
+			}
+			_addr_data.Clear();
 			_addr_data.Append(&addr, sizeof(addr));
 		}break;
 		//TODO AF_INET6

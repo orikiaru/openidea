@@ -9,7 +9,7 @@ namespace OI { namespace RpcData {
 class RegPull : public ::OI::Rpc::RpcData
 {
 public:
-    std::vector<std::string> names;
+    std::vector<std::string> names{};
     
     explicit RegPull (){}
     RegPull ( const std::vector<std::string> & l_names )

@@ -28,9 +28,19 @@ static std::string GetPrioConfigString(PRIO_ENUM prio)
 	return "errno_prio";
 }
 
-#define DEFAULD_THREAD_COUNT 3
+static constexpr int kDefaultThreadCount = 3;
 bool ThreadPool::Init()
 {
+	int64_t max_task_count = 0;
+	if (TryGetConfig("ThreadPool.max_task_count", max_task_count))
+	{
+		if (max_task_count <= 0 || max_task_count > (int64_t)UINT32_MAX)
+		{
+			fprintf(stderr, "ThreadPool.max_task_count=%lld must be in [1, %u]\n", (long long)max_task_count, UINT32_MAX);
+			return false;
+		}
+		_max_task_count = (uint32_t)max_task_count;
+	}
 #ifdef _SINGLE_THREAD_
 	for(int i = PRIO_NORMAL; i < PRIO_NUM; ++i)
 	{
@@ -42,7 +52,7 @@ bool ThreadPool::Init()
 	{
 		ThreadData& thread_data = _thread_data[i];
 
-		thread_data._thread_count = DEFAULD_THREAD_COUNT;
+		thread_data._thread_count = kDefaultThreadCount;
 		std::string config_key = "ThreadPool." + GetPrioConfigString((PRIO_ENUM)i);
 		TryGetConfigAndReturnFalse(config_key, thread_data._thread_count);
 
@@ -295,7 +305,7 @@ bool ThreadPool::AddTask(Task* pTask)
 	assert(prio >= PRIO_NORMAL && prio < PRIO_NUM);
 #ifdef _SINGLE_THREAD_
 	ThreadData& thread_data = _thread_data[prio];	
-	if(thread_data._task_count > 0xFFFFFFFF)
+	if(thread_data._task_count >= _max_task_count)
 	{
 		SAFE_DELETE(pTask);
 		return false;
@@ -305,7 +315,7 @@ bool ThreadPool::AddTask(Task* pTask)
 #else
 	ThreadData& thread_data = _thread_data[prio];	
 	std::lock_guard<std::mutex> lock(thread_data._mutex);
-	if(thread_data._task_count > 0xFFFFFFFF)
+	if(thread_data._task_count >= _max_task_count)
 	{
 		SAFE_DELETE(pTask);
 		return false;

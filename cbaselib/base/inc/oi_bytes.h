@@ -5,7 +5,7 @@
 
 namespace OI { namespace Base {
 // 连续字节缓冲。
-// 容量和有效长度分开：Begin() 在 [0, Captity()) 内可写，Size() 才是有效数据。
+// 容量和有效长度分开：Begin() 在 [0, Capacity()) 内可写，Size() 才是有效数据。
 // 这样 read/aio 可以先 Reserve，再往 Begin() 里写，写完 Commit。
 // 从头部删除只挪起点，不搬数据；扩容不清零，拷贝只拷有效数据。
 class Bytes
@@ -18,9 +18,10 @@ class Bytes
 
 	void Grow(size_t need);
 	char* Mutable();
+	bool Overlaps(const void* data) const;
 public:
 	Bytes();
-	Bytes(const char* data, size_t len, uint32_t retain_len = 4096);
+	Bytes(const char* data, size_t len);
 	Bytes(const Bytes& other);
 	Bytes& operator=(const Bytes& other);
 	Bytes(Bytes&& other);
@@ -58,12 +59,12 @@ public:
 	char* End();
 
 	size_t Size() const { return _size; }
-	size_t Captity() const { return _cap - _head; }
+	size_t Capacity() const { return _cap - _head; }
 
 	// n 大于当前有效长度时只扩容，不改 Size()。
 	// n 更小时把 Size() 收到 n，容量保留，避免写缓冲反复缩容。
 	size_t Reserve(size_t size);
-	// 直接往 End() 写了 n 字节后调用。n 不能超过 Captity() - Size()
+	// 直接往 End() 写了 n 字节后调用。n 超过 Capacity() - Size() 抛 std::out_of_range
 	void Commit(size_t n);
 	void Swap(Bytes& other);
 	void Clear();

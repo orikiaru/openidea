@@ -1,5 +1,4 @@
-#ifndef __j_thread_pool_h__
-#define __j_thread_pool_h__
+#pragma once
 #include <atomic>
 #include <coroutine>
 #include <deque>
@@ -36,6 +35,8 @@ public:
 	}_thread_data[PRIO_NUM];
 	
 	int32_t _status;
+	// 每个优先级队列里最多攒多少个 Task。配置 [ThreadPool] max_task_count，不配不限。
+	uint32_t _max_task_count = UINT32_MAX;
 	bool (*_drain)() = nullptr;
 	bool (*_pending)() = nullptr;
 	void (*_after_resume)() = nullptr;
@@ -76,5 +77,3 @@ private:
 	void MultiThreadStartWork();
 };
 }}
-
-#endif

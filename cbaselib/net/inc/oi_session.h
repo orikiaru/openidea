@@ -1,5 +1,5 @@
-#ifndef __io_session_h__
-#define __io_session_h__
+#pragma once
+#include <atomic>
 #include "oi_lock.h"
 #include "oi_bytes.h"
 #include <errno.h>
@@ -31,12 +31,18 @@ protected:
 	Channel*	_p_channel;
 	SessionManager* _p_session_mgr;
 	std::string	_endpoint;
+	// 通道持有一份，SendBytes 在锁外发送时临时再持一份。最后一份释放时 delete。
+	std::atomic<int32_t>	_refs;
 public:
 	Session(SessionManager* pMgr);
 	virtual ~Session();
+	void AddRef() { _refs.fetch_add(1, std::memory_order_relaxed); }
+	void Release();
 
 public: //提供给Channel的调用
 	void SetChannel(Channel* pChannel) { _p_channel = pChannel; }
+	// 通道销毁前调用。之后 Send 只追加缓冲，不再碰通道。
+	void DetachChannel();
 	//从Channel的inBuff提取数据到_ibuff
 	virtual void SwapInBuff(::OI::Base::Bytes& inBuff);
 	//将会话输出数据处理后追加到outBuff
@@ -86,4 +92,3 @@ protected:
 
 
 }}
-#endif

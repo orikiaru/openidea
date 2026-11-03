@@ -72,10 +72,8 @@ RpcCallShard g_call_shards[kCallShards];
 std::atomic<uint64_t> g_call_seq(1);
 std::once_flag g_sweep_once;
 
-::OI::Thread::Mutex g_rpc_wait_lock;
-std::map<proto_type_t, std::deque<std::function<void(::OI::Base::BytesStream&)> > > g_rpc_wait;
+::OI::Thread::Mutex g_rpc_handle_lock;
 std::map<proto_type_t, RpcHandleFn> g_rpc_handle;
-std::set<proto_type_t> g_rpc_res;
 
 int64_t NowMs()
 {
@@ -212,12 +210,6 @@ bool ClaimRpcSend(uint64_t call_id, sid_t sid)
 	return true;
 }
 
-void RegisterRpcRes(proto_type_t res_id)
-{
-	::OI::Thread::MutexGuard lock(g_rpc_wait_lock);
-	g_rpc_res.insert(res_id);
-}
-
 uint64_t BindRpcCall(::OI::Net::SessionManager* mgr, sid_t sid, proto_type_t res_id, std::coroutine_handle<> handle, int32_t* result, int64_t timeout_ms, std::function<bool(::OI::Base::BytesStream&)> decode, std::function<void()> resume)
 {
 	std::call_once(g_sweep_once, []() {
@@ -279,15 +271,9 @@ void FailRpcCalls(::OI::Net::SessionManager* mgr, sid_t sid)
 	for (auto& slot : failed) FinishRpcSlot(slot, OI_ERR_CONNECT, NULL);
 }
 
-void WatchRpc(proto_type_t id, std::function<void(::OI::Base::BytesStream&)> decode)
-{
-	::OI::Thread::MutexGuard lock(g_rpc_wait_lock);
-	g_rpc_wait[id].push_back(std::move(decode));
-}
-
 void BindRpcHandler(proto_type_t id, RpcHandleFn handle)
 {
-	::OI::Thread::MutexGuard lock(g_rpc_wait_lock);
+	::OI::Thread::MutexGuard lock(g_rpc_handle_lock);
 	g_rpc_handle[id] = std::move(handle);
 }
 
@@ -307,31 +293,17 @@ bool DeliverRpc(proto_type_t id, ::OI::Base::BytesStream& body, ::OI::Net::Sessi
 		return false;
 	}
 
-	std::function<void(::OI::Base::BytesStream&)> decode;
 	const RpcHandleFn* handle = NULL;
 	if (is_req)
 	{
-		::OI::Thread::MutexGuard lock(g_rpc_wait_lock);
-		std::map<proto_type_t, std::deque<std::function<void(::OI::Base::BytesStream&)> > >::iterator it = g_rpc_wait.find(id);
-		if (it != g_rpc_wait.end() && !it->second.empty())
+		::OI::Thread::MutexGuard lock(g_rpc_handle_lock);
+		std::map<proto_type_t, RpcHandleFn>::iterator hit = g_rpc_handle.find(id);
+		if (hit == g_rpc_handle.end())
 		{
-			decode = std::move(it->second.front());
-			it->second.pop_front();
-			if (it->second.empty())
-			{
-				g_rpc_wait.erase(it);
-			}
+			return false;
 		}
-		else
-		{
-			std::map<proto_type_t, RpcHandleFn>::iterator hit = g_rpc_handle.find(id);
-			if (hit == g_rpc_handle.end())
-			{
-				return false;
-			}
-			// 处理函数只在启动时注册，map 节点不会再动，出锁后用指针调用。
-			handle = &hit->second;
-		}
+		// 处理函数只在启动时注册，map 节点不会再动，出锁后用指针调用。
+		handle = &hit->second;
 	}
 	try
 	{
@@ -346,10 +318,6 @@ bool DeliverRpc(proto_type_t id, ::OI::Base::BytesStream& body, ::OI::Net::Sessi
 				return true;
 			}
 			FinishRpcSlot(slot, 0, &body);
-		}
-		else if (decode)
-		{
-			decode(body);
 		}
 		else
 		{

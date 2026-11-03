@@ -2,7 +2,9 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include <new>
+#include <stdexcept>
 #include <utility>
 
 namespace OI { namespace Base {
@@ -10,9 +12,8 @@ char Bytes::_empty = 0;
 
 Bytes::Bytes() : _mem(NULL), _cap(0), _head(0), _size(0) {}
 
-Bytes::Bytes(const char* data, size_t len, uint32_t retain_len) : _mem(NULL), _cap(0), _head(0), _size(0)
+Bytes::Bytes(const char* data, size_t len) : _mem(NULL), _cap(0), _head(0), _size(0)
 {
-	(void)retain_len;
 	if (len == 0)
 	{
 		return;
@@ -95,11 +96,15 @@ void Bytes::Grow(size_t need)
 		_head = 0;
 		return;
 	}
-	size_t cap = _cap ? _cap * 2 : 64;
-	while (cap < need)
+	size_t cap = _cap ? _cap : 32;
+	do
 	{
+		if (cap > SIZE_MAX / 2)
+		{
+			throw std::bad_alloc();
+		}
 		cap *= 2;
-	}
+	} while (cap < need);
 	char* mem = (char*)malloc(cap);
 	if (!mem)
 	{
@@ -146,13 +151,22 @@ size_t Bytes::Reserve(size_t size)
 	{
 		_head = 0;
 	}
-	return Captity();
+	return Capacity();
 }
 
 void Bytes::Commit(size_t n)
 {
-	assert(_size + n <= Captity());
+	if (n > Capacity() - _size)
+	{
+		throw std::out_of_range("Bytes::Commit past capacity");
+	}
 	_size += n;
+}
+
+bool Bytes::Overlaps(const void* data) const
+{
+	const char* p = (const char*)data;
+	return _mem && p >= _mem && p < _mem + _cap;
 }
 
 void Bytes::Swap(Bytes& other)
@@ -176,6 +190,16 @@ size_t Bytes::Append(const void* data, size_t len)
 		return 0;
 	}
 	assert(data);
+	if (len > SIZE_MAX - _size)
+	{
+		throw std::bad_alloc();
+	}
+	// 源在自己的缓冲里，扩容会把它释放掉。先拷出来。
+	if (Overlaps(data))
+	{
+		Bytes copy((const char*)data, len);
+		return Append(copy.Data(), len);
+	}
 	Grow(_size + len);
 	memcpy(Mutable() + _size, data, len);
 	_size += len;
@@ -243,6 +267,15 @@ size_t Bytes::Insert(size_t offset, const void* data, size_t len)
 		return 0;
 	}
 	assert(data);
+	if (len > SIZE_MAX - _size)
+	{
+		throw std::bad_alloc();
+	}
+	if (Overlaps(data))
+	{
+		Bytes copy((const char*)data, len);
+		return Insert(offset, copy.Data(), len);
+	}
 	if (offset == 0 && _head >= len)
 	{
 		_head -= len;

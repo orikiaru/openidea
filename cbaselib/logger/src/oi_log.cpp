@@ -10,15 +10,10 @@ namespace OI { namespace Log
 {
 	static std::string _log_title;
 	static bool	_logclient_init = false;
-	bool Init()
-	{
-		bool ret = LogClient::GetInstance().Init();
-		if (!ret)
-		{
-			return false;
-		}
-		LogClient::GetInstance().StartClient();
+	static LocalSink _local_sink = NULL;
 
+	static void InitTitle()
+	{
 		int service_id = 1;
 		std::string service_name = "UnKnownService";
 		TryGetConfigNoReturn("Service.id", service_id);
@@ -27,8 +22,25 @@ namespace OI { namespace Log
 		int max_len = sizeof(buff) - 1;
 		snprintf(buff, max_len, "%s-%d:", service_name.c_str(), service_id);
 		_log_title = buff;
+	}
+
+	bool Init()
+	{
+		bool ret = LogClient::GetInstance().Init();
+		if (!ret)
+		{
+			return false;
+		}
+		LogClient::GetInstance().StartClient();
+		InitTitle();
 		_logclient_init = true;
 		return true;
+	}
+
+	void InitLocal(LocalSink sink)
+	{
+		InitTitle();
+		_local_sink = sink;
 	}
 
 	bool Log(LOG_LEVEL lv, const char* format, ...)
@@ -63,6 +75,10 @@ namespace OI { namespace Log
 
 		fwrite(tmp.Data(), 1, tmp.Size(), stdout);
 
+		if (_local_sink)
+		{
+			return _local_sink(lv, tmp.Data(), tmp.Size());
+		}
 		if (_logclient_init)
 		{
 			return LogClient::GetInstance().SendLog((int)lv, tmp.Data(), tmp.Size());

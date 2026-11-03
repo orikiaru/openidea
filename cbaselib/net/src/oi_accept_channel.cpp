@@ -8,6 +8,8 @@
 
 #include "oi_accept_channel.h"
 #include "oi_session_manager.h"
+#include "oi_poll.h"
+#include "oi_net_os.h"
 #include "oi_log.h"
 namespace OI { namespace Net {
 
@@ -18,7 +20,8 @@ void AcceptChannel::DataIn()
 		int accept_count = _socket.SocketAcceptOne(_p_session_mgr);
 		if (accept_count == -1)
 		{
-			assert(false);
+			// 描述符用尽时连接还在队列里，监听口一直可读。先停一会儿，不让 poll 线程空转。
+			Poll::GetInstance().PauseEvents(this, 100);
 			break;
 		}
 		if (accept_count == 0)
@@ -54,7 +57,12 @@ bool AcceptChannel::StartAccept(SessionManager* pMgr, bool async)
 
 bool AcceptChannel::StartTcpAccept(SessionManager* pMgr, bool async)
 {
-	//当同步调用时,线程会被永久性阻塞
+	// 只支持异步监听。同步 accept 会把调用线程永久堵住。
+	if (!async)
+	{
+		LOG_ERROR("AcceptChannel::StartTcpAccept sync accept not supported id=%s", pMgr->GetIDString().c_str());
+		return false;
+	}
 	NetSocket s;
 	if (!s.CreateSocket(pMgr, async))
 	{
@@ -63,27 +71,13 @@ bool AcceptChannel::StartTcpAccept(SessionManager* pMgr, bool async)
 
 	if (!s.SocketListenAndBind(pMgr))
 	{
+		NetOs_Close(s.GetSocket());
+		s.Detach();
 		return false;
 	}
 
-	if (s.IsAsync())
-	{
-		AcceptChannel* pChannel = new AcceptChannel(s, pMgr);
-		Poll::GetInstance().IOEventRegister(pChannel, true, true);
-	}
-	else
-	{
-		//阻塞就看看怎么办吧,先直接死循环
-		while (1)
-		{
-			int accept_count = s.SocketAcceptOne(pMgr);
-			if (accept_count == -1)
-			{
-				assert(false);
-				return false;
-			}
-		}
-	}
+	AcceptChannel* pChannel = new AcceptChannel(s, pMgr);
+	Poll::GetInstance().IOEventRegister(pChannel, true, true);
 	return true;
 }
 }}

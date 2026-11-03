@@ -149,7 +149,6 @@ public:
 private:
 	virtual void OnClientConnect(OI::Net::Session* pSession);
 	virtual void OnClientDisconnect(const OI::Net::Session* pSession);
-	virtual void OnAbortSession();
 };
 '''
         file_data = self.DoReplace(file_data)
@@ -185,11 +184,6 @@ void __COMPONENT_NAME__::OnClientDisconnect(const OI::Net::Session* pSession)
 {
 
 }
-
-void __COMPONENT_NAME__::OnAbortSession()
-{
-
-}        
 '''
         file_data = self.DoReplace(file_data)
         return file_data
@@ -227,46 +221,3 @@ void __COMPONENT_NAME__::OnDelSession(const OI::Net::Session* pSession)
 '''
         file_data = self.DoReplace(file_data)
         return file_data
-    
-    
-   
-   
-#下面暂时没有用,有些想多了 
-
-    def GetMemberDecl(self):
-        file_data = ""
-        if(self.component.GetType() == ComponentType.Client):
-            file_data += """
-            
-"""
-        elif(self.component.GetType() == ComponentType.Server):
-            file_data += """
-            
-"""        
-
-    def GetProtoDispatchDecl(self):
-        file_data = ""
-        if(self.component.GetType() == ComponentType.Client):
-            file_data += """
-    bool SendProtocol(OI::Rpc::Protocol& p)  {   return SendProtocol(&p);    }  
-    bool SendProtocol(OI::Rpc::Protocol* p);
-"""
-        elif(self.component.GetType() == ComponentType.Server):
-            file_data += """
-    bool DispatchProtocol(OI::Rpc::Protocol& p)  {   return SendProtocol(&p);    }  
-    bool SendProtocol(OI::Rpc::Protocol* p);              
-"""        
-        return file_data
-
-    def GetProtoDispatchImpl(self):
-        file_data = ""
-        if(self.component.GetType() == ComponentType.Client):
-            file_data += """
-            
-"""
-        elif(self.component.GetType() == ComponentType.Server):
-            file_data += """
-            
-"""        
-        return file_data
-    

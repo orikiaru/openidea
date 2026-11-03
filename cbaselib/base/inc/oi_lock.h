@@ -1,5 +1,4 @@
-#ifndef __spin_lock__
-#define __spin_lock__
+#pragma once
 #include <atomic>
 #include <mutex>
 #include <thread>
@@ -120,4 +119,3 @@ public:
 typedef LockGuard<SpinLock> SpinLockGuard;
 typedef LockGuard<Mutex> MutexGuard;
 }}
-#endif

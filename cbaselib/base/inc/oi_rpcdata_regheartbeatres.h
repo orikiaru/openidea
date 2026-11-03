@@ -9,7 +9,7 @@ namespace OI { namespace RpcData {
 class RegHeartbeatRes : public ::OI::Rpc::RpcData
 {
 public:
-    int32_t code;
+    int32_t code{};
     
     explicit RegHeartbeatRes (){}
     RegHeartbeatRes ( const int32_t & l_code )

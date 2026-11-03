@@ -1,5 +1,4 @@
-#ifndef _j_header_h__
-#define _j_header_h__
+#pragma once
 #include <stdint.h>
 
 #ifdef _MSC_VER
@@ -50,5 +49,3 @@ enum LOG_LEVEL
 	LOG_ERROR,
 	LOG_LEVEL_COUNT,
 };
-
-#endif

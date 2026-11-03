@@ -49,6 +49,8 @@ coro::Task LogMgr::Pump()
 		if (!::OI::Log::LogClient::GetInstance().SendLog(LOG_INFO, payload.data(), payload.size()))
 		{
 			_sent.fetch_sub(_line);
+			// 还没连上且待发已满。让出一轮给 poll，不进时间轮：一跳 50 毫秒，等不起。
+			co_await coro::yield(0);
 		}
 		// 下一条不等这条写完。单线程先 poll 把缓冲发出去，再跑新挂上的。
 		coro::StartTask([](coro::Token) {

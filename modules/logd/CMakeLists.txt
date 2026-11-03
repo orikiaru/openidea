@@ -20,23 +20,11 @@ target_include_directories(logd
 		inc
 )
 
-#logd只能是多线程,受限于logmanager逻辑
-set(SINGLE_THREAD FALSE)
-
+#logd 只能多线程：写文件在 LogManager 自己的写线程上
 #链接base,net,proto,timer,logger
 if(MSVC)
-	if(SINGLE_THREAD)
-		target_link_libraries(logd PUBLIC ${BASE_LIBS})
-		target_compile_definitions(logd PUBLIC _SINGLE_THREAD_)
-	else()
-		target_link_libraries(logd PUBLIC ${BASE_M_LIBS})
-	endif()
+	target_link_libraries(logd PUBLIC ${BASE_M_LIBS})
 else()
-	if(SINGLE_THREAD)
-		target_link_libraries(logd PUBLIC -Wl,--start-group ${BASE_LIBS} -Wl,--end-group)
-		target_compile_definitions(logd PUBLIC _SINGLE_THREAD_)
-	else()
-		target_link_libraries(logd PUBLIC -Wl,--start-group ${BASE_M_LIBS} -Wl,--end-group)
-		target_link_libraries(logd PUBLIC pthread)
-	endif()
+	target_link_libraries(logd PUBLIC -Wl,--start-group ${BASE_M_LIBS} -Wl,--end-group)
+	target_link_libraries(logd PUBLIC pthread)
 endif()

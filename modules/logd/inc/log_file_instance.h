@@ -37,7 +37,7 @@ public:
 	//跨天需要更换文件指针
 	bool CreateNewFile(const char* path);
 	void OnCreateNewFile(FILE* new_file);
-	void StartWriteThread();
+	bool StartWriteThread();
 	// 打退出标记并 join。返回时队列里的日志都已写盘并 fflush。
 	void StopWriteThread();
 	// 会把 log 的内容移走

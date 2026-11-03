@@ -1,5 +1,6 @@
 #pragma once
 #include <sys/time.h>
+#include <stdio.h>
 #include <string.h>
 #include "oi_header.h"
 #include <deque>
@@ -30,7 +31,10 @@ public:
 	{
 		F copied = _fn;
 		// 跟时间轮同一条有序队列，紧跟这次 Update。不丢到普通队列里排队。
-		::OI::Thread::ThreadPool::GetInstance().AddTask(std::move(copied), ::OI::Thread::PRIO_QUEUE);
+		if (!::OI::Thread::ThreadPool::GetInstance().AddTask(std::move(copied), ::OI::Thread::PRIO_QUEUE))
+		{
+			fprintf(stderr, "timer callback dropped: ThreadPool queue full\n");
+		}
 		delete this;
 		return END_TIMER;
 	}
@@ -84,24 +88,14 @@ private:
 
 	//增加定时器
 	void add_timer(BaseTimer* pTimer);
-	//执行定时器
+	//执行定时器。不持锁调用，续期时自己加锁挂回去
 	void run_timer(BaseTimer* pTimer);
-	//实际执行1tick的逻辑,
-	void run_tick();
+	//推进 1 tick，本 tick 到点的放进 due。持 _wheel_mu 调用
+	void run_tick(TimerList& due);
 	//均衡高级定时器
 	void try_uniform();
-	//执行最低等级的一级定时器 _timer_level[0].RunTick()
-	void try_run_timer();
-
-	void collect_timer_trigger_delta(BaseTimer* pTimer)
-	{
-		/*
-				struct timeval tv;
-				gettimeofday(&tv, 0); //记录当前触发tick的实际物理时间
-		*/
-	}
-
-
+	//取出最低一级本 tick 到点的定时器
+	void try_run_timer(TimerList& due);
 
 private:
 	friend class TimerLevel;
@@ -121,7 +115,6 @@ private:
 	size_t				_timer_lv_count;
 	//当前timer层级数组,0代表与tick同步的定时器列表
 	TimerLevelVector	_timer_levels;		//分级的timer
-	bool				_trigger;
 
 	time_t				_cur_time;
 	struct tm			_cur_tm;

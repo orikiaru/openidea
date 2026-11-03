@@ -184,14 +184,21 @@ const std::string SessionManager::GetIDString()
 
 bool SessionManager::SendBytes(sid_t sid, const ::OI::Base::Bytes& data)
 {
-	::OI::Thread::MutexGuard l(_locker);
-	SessionMap::iterator it = _session_map.find(sid);
-	if (it != _session_map.end())
+	Session* pSession = NULL;
 	{
-		it->second->Send(data);
-		return true;
+		::OI::Thread::MutexGuard l(_locker);
+		SessionMap::iterator it = _session_map.find(sid);
+		if (it == _session_map.end())
+		{
+			return false;
+		}
+		// 还在表里说明 poll 线程没销毁它。持一份引用，拷贝放到管理器锁外，别的连接发送不用排队。
+		pSession = it->second;
+		pSession->AddRef();
 	}
-	return false;
+	pSession->Send(data);
+	pSession->Release();
+	return true;
 }
 
 void SessionManager::AddSession(Session* pSession)

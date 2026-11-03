@@ -4,6 +4,9 @@ cmake_minimum_required(VERSION 3.10)
 set(CMAKE_VERBOSE_MAKEFILE ON)
 
 project(CPP_DEV)
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
 option(OI_IPC_SINGLE_THREAD "Build ipcclient and ipcserver with single-thread scheduling" OFF)
 
 # 给 clangd 用。Ninja 配置后会在构建目录写出 compile_commands.json。
@@ -38,8 +41,6 @@ set(MODULES_PATH ${CMAKE_SOURCE_DIR}/modules)
 
 set(BASE_M_LIBS timer_m_static logger_m_static redis_m_static net_m_static proto_m_static base_m_static net_m_static timer_m_static hiredis_static)
 set(BASE_LIBS timer_static logger_static redis_static net_static proto_static base_static net_static timer_static hiredis_static)
-set(LOGD_M_LIBS timer_m_static logd_m_static net_m_static proto_m_static base_m_static )
-
 
 set(DEPOLY_PATH ${CMAKE_SOURCE_DIR}/deploy)
 

@@ -1,6 +1,4 @@
-#ifndef __multi_t_t___
-#define __multi_t_t___
-#define MAX_MULTI_FD  1024
+#pragma once
 #include <thread>
 #include "oi_singleton.h"
 struct uv_loop_s;
@@ -38,6 +36,8 @@ public:
 
 	void IOEventRegister(Channel* pChannel, bool allow_read = true, bool allow_write = false);
 	void IOEventMod(Channel* pChannel, int new_mask);
+	// 只在 poll 线程调用。先摘掉事件，ms 毫秒后恢复成暂停前的掩码。通道在这段时间里不能删。
+	void PauseEvents(Channel* pChannel, unsigned ms);
 	// close_fd 为假时只摘掉监听，套接字留给调用方关。
 	void IOEventUnRegister(Channel* pChannel, bool close_fd = true);
 	static void* StartThreadPollWait(void* arg);
@@ -49,4 +49,3 @@ public:
 };
 
 }}
-#endif

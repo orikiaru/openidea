@@ -21,20 +21,3 @@ target_compile_options(${LIBRARY} PUBLIC ${_CXX_OPTION_})
 target_compile_options(${LIBRARY_M} PUBLIC ${_CXX_OPTION_})
 
 target_compile_definitions(${LIBRARY} PUBLIC _SINGLE_THREAD_)
-
-
-#logserver只允许使用多线程
-set(LIBNAME2 logd)
-set(LIBRARY_M2 ${LIBNAME2}_m_static)
-
-#logserver也会包含logclient,所以重复的target不需要包含
-set(LIBSRC2
-	src/oi_log_client.cpp
-	src/oi_log_client_session.cpp
-	src/oi_log.cpp
-	)
-
-add_library(${LIBRARY_M2} STATIC ${LIBSRC2})
-target_include_directories(${LIBRARY_M2} PUBLIC inc ../net/inc ../base/inc)
-target_compile_options(${LIBRARY_M2} PUBLIC ${_CXX_OPTION_})
-target_compile_definitions(${LIBRARY_M2} PUBLIC _LOG_SERVER_)

@@ -1,5 +1,4 @@
-#ifndef  __config_h_j__
-#define  __config_h_j__	
+#pragma once
 #include "cpptoml.h"
 #include "oi_singleton.h"
 #include <assert.h>
@@ -57,5 +56,3 @@ public:
 //可以拿取返回值
 #define TryGetConfig(KEY, VALUE)				::OI::Base::Config::GlobalConfig().GetAs(KEY, VALUE)
 #define ParseConfig(PATH)						::OI::Base::Config::GlobalMutableConfig().Parse(PATH)
-
-#endif // ! __config_h_j__

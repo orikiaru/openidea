@@ -111,7 +111,6 @@ coro::Task HoldMgr::Pump()
 	// 只在内部配对入口注入错误来源，不构造另一套网络客户端。
 	auto& mgr = IpcClient::GetInstance();
 	const auto response_id = ::OI::Rpc::RpcProtoId<::OI::RpcData::HoldRes>::value;
-	::OI::Rpc::RegisterRpcRes(response_id);
 	int decoded = 0, resumed = 0, result = -99;
 	uint64_t call = ::OI::Rpc::BindRpcCall(&mgr, _sid, response_id, {}, &result, 0,
 		[&](::OI::Base::BytesStream&) { ++decoded; return true; }, [&]() { ++resumed; });

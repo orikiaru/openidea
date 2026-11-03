@@ -1,5 +1,7 @@
 #include "log_manager.h"
+#include <stdio.h>
 #include <string.h>
+#include <cstdlib>
 #include "oi_timer_helper.h"
 #include "oi_file.h"
 #include "log_file_instance.h"
@@ -29,13 +31,15 @@ bool LogManager::Init()
 		return false;
 	}
 
-	StartLogInstanceWork();
+	if (!StartLogInstanceWork())
+	{
+		LOG_TRACE("LogManager::Init error StartLogInstanceWork");
+		Stop();
+		return false;
+	}
 
 	//每秒触发一定定时器
 	::OI::Timer::BaseTimerManager::GetInstance().AddTimer(this, 1000);
-
-
-
 	return true;
 }
 
@@ -75,13 +79,18 @@ bool LogManager::OnTimer()
 
 void LogManager::OnCrossDay()
 {
+	// 和写盘失败一样直接停。Release 下 assert 不在，不能接着往昨天的文件里写。
 	if (!CheckAndCreateRootPath())
 	{
-		assert(false && "日志服务创建不了根目录直接嘎掉");
+		fprintf(stderr, "logd cross day mkdir failed: %s\n", _cur_log_path.c_str());
+		fflush(stderr);
+		std::abort();
 	}
 	if (!OpenAllLogFile())
 	{
-		assert(false && "日志服务打不了文件,直接嘎掉");
+		fprintf(stderr, "logd cross day open failed: %s\n", _cur_log_path.c_str());
+		fflush(stderr);
+		std::abort();
 	}
 }
 
@@ -113,13 +122,17 @@ bool LogManager::OpenLogFile(LOG_LEVEL lv)
 	return _log_file_map[lv]->CreateNewFile(log_lv_path.c_str());
 }
 
-void LogManager::StartLogInstanceWork()
+bool LogManager::StartLogInstanceWork()
 {
 	for (LogFileMap::iterator it = _log_file_map.begin(); it != _log_file_map.end(); ++it)
 	{
-		it->second->StartWriteThread();
+		if (!it->second->StartWriteThread())
+		{
+			return false;
+		}
 	}
 
+	// 启动阶段，还没进 StartWork。等各级写线程跑起来就走。
 	for (;;)
 	{
 		bool all_working = true;
@@ -133,8 +146,9 @@ void LogManager::StartLogInstanceWork()
 		}
 		if (all_working)
 		{
-			break;
+			return true;
 		}
+		std::this_thread::yield();
 	}
 }
 

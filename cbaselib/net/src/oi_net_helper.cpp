@@ -17,7 +17,11 @@ namespace OI { namespace Net {
 
 bool NetHelper::CreateSocket(NetSocket& net_socket, SessionManager* pMgr, bool async)
 {
-	assert(async == true && "sync server is not supported");
+	if (!async)
+	{
+		LOG_ERROR("NetHelper::CreateSocket sync socket not supported id=%s", pMgr->GetIDString().c_str());
+		return false;
+	}
 	net_socket_t sfd = NetOs_CreateTcp(async);
 	if (sfd == INVALID_SOCKET_ID)
 	{
@@ -27,6 +31,8 @@ bool NetHelper::CreateSocket(NetSocket& net_socket, SessionManager* pMgr, bool a
 	if (!net_socket.Init(sfd, pMgr))
 	{
 		LOG_ERROR("NetHelper::CreateSocket Init error id=%s", pMgr->GetIDString().c_str());
+		NetOs_Close(sfd);
+		net_socket.Detach();
 		return false;
 	}
 	net_socket.SetAsync(async);
@@ -60,9 +66,7 @@ bool NetHelper::SocketListen(NetSocket& sid, SessionManager* pMgr)
 	{
 		return false;
 	}
-	int listen_count = 10;
-	//TODO ::OI::Base::Config
-	int ret = NetOs_Listen(sid.GetSocket(), listen_count);
+	int ret = NetOs_Listen(sid.GetSocket(), SOMAXCONN);
 	if (ret != 0)
 	{
 		LOG_TRACE("NetHelper::SocketListen error=%s, SessionManager=%s", NetOs_StrError(errno), pMgr->GetIDString().c_str());
@@ -154,8 +158,9 @@ int NetHelper::SocketAcceptOne(NetSocket& sid, SessionManager* pMgr)
 			accpet_count = 0;
 			break;
 		}
-		else if (cfd == INVALID_SOCKET_ID && errno == EINTR)
+		else if (cfd == INVALID_SOCKET_ID && (errno == EINTR || errno == ECONNABORTED || errno == EPROTO))
 		{
+			// 对端在 accept 之前就断了，只影响这一条，接着收下一条。
 			continue;
 		}
 		LOG_ERROR("NetHelper::SocketAccept error id=%s, error=%s", pMgr->GetIDString().c_str(), NetOs_StrError(errno));

@@ -10,8 +10,8 @@ namespace OI { namespace RpcData {
 class RegPullRes : public ::OI::Rpc::RpcData
 {
 public:
-    int32_t code;
-    std::vector<RegInstance> list;
+    int32_t code{};
+    std::vector<RegInstance> list{};
     
     explicit RegPullRes (){}
     RegPullRes ( const int32_t & l_code, const std::vector<RegInstance> & l_list )

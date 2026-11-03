@@ -93,13 +93,29 @@ void Session::ForbidRead()
 Session::Session(SessionManager* pMgr):_status(IO_ST_CONNECTED)
 	, _errcode(0)
 	, _session_id(0)
+	, _p_channel(NULL)
 	, _p_session_mgr(pMgr)
+	, _refs(1)
 {
 
 }
 
 Session::~Session()
 {
+}
+
+void Session::Release()
+{
+	if (_refs.fetch_sub(1, std::memory_order_acq_rel) == 1)
+	{
+		delete this;
+	}
+}
+
+void Session::DetachChannel()
+{
+	::OI::Thread::MutexGuard l(_locker);
+	_p_channel = NULL;
 }
 }}
 

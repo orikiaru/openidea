@@ -39,7 +39,6 @@ class BaseTimer
 			_offset_ms = 0;
 			_trigger_tick = 0;
 			_cur_level = NULL;
-			_level_tick = -1;
 			_level_tick = 0;
 		}
 	};

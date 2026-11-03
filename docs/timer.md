@@ -25,7 +25,9 @@
 
 libuv 到点只调用 `OnSignal`。`OnSignal` 把 `Update` 丢进线程池，不在 poll 回调里转时间轮。单线程在主循环里执行 `Update`，多线程在有序队列线程执行。
 
-`Update` 里到期的 `OnTimer` 可以再次 `AddTimer`。时间轮上的锁是可重入的 `Mutex`。
+`Update` 每一跳先在锁里把到期的定时器摘下来，放锁后再逐个调 `OnTimer`。`OnTimer` 里可以 `AddTimer`，也可以耗时，不会挡住别的线程挂定时器。返回 true 的定时器再加锁挂回去。
+
+`Init` 会检查上面三项配置，不合法就往 stderr 打原因并返回 false，进程退出。
 
 回调时间按 `offset_ms` 对齐，用 `steady_clock` 计时。系统校时不影响相对延时，日历时间单独从系统时钟更新。没走完的一跳留到下次；外部 `AddTimer` 向上取整到到期 tick，不会提前触发。线程调度和回调执行仍可能造成额外延迟。`OnTimer` 返回 true 再挂上的周期定时器按逻辑 tick 续，停顿之后错过的跳会补上。`AddTimer(lambda)` 的 lambda 进有序队列，紧跟这次 `Update`，不排在普通任务后面。
 

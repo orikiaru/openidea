@@ -409,6 +409,42 @@ void Poll::IOEventMod(Channel* p, int new_mask)
 	PostOp(op);
 }
 
+struct PausedChannel
+{
+	uv_timer_t timer;
+	Channel* channel;
+	int32_t mask;
+};
+
+static void FreePaused(uv_handle_t* handle)
+{
+	delete (PausedChannel*)handle->data;
+}
+
+static void OnPauseEnd(uv_timer_t* timer)
+{
+	PausedChannel* paused = (PausedChannel*)timer->data;
+	Poll::GetInstance().IOEventMod(paused->channel, paused->mask);
+	uv_close((uv_handle_t*)timer, FreePaused);
+}
+
+void Poll::PauseEvents(Channel* p, unsigned ms)
+{
+	assert(InLoopThread());
+	// 已经停着的不再叠一次，否则恢复时拿到的是 0。
+	if (p->_event_mask == 0)
+	{
+		return;
+	}
+	PausedChannel* paused = new PausedChannel();
+	paused->channel = p;
+	paused->mask = p->_event_mask;
+	paused->timer.data = paused;
+	IOEventMod(p, 0);
+	uv_timer_init(&g_loop, &paused->timer);
+	uv_timer_start(&paused->timer, OnPauseEnd, ms, 0);
+}
+
 void Poll::IOEventRegister(Channel* p, bool allow_read, bool allow_write)
 {
 	int new_mask = 0;

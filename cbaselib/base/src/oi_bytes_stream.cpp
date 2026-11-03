@@ -5,56 +5,56 @@
 
 namespace OI { namespace Base {
 //暂不处理大小端问题，默认小端
-/*
-	glibc 2.9
-	   #include <endian.h>
 
-	   uint16_t htobe16(uint16_t host_16bits);
-	   uint16_t htole16(uint16_t host_16bits);
-	   uint16_t be16toh(uint16_t big_endian_16bits);
-	   uint16_t le16toh(uint16_t little_endian_16bits);
+// 长度前缀是 4 字节，最高位为 1 的长度对端按非法处理。
+static void WriteLenPrefixed(BytesStream& os, const void* data, size_t size)
+{
+	if (size > (size_t)0x7FFFFFFF)
+	{
+		throw ParserException();
+	}
+	os << (int32_t)size;
+	if (size > 0)
+	{
+		os.Append(data, size);
+	}
+}
 
-	   uint32_t htobe32(uint32_t host_32bits);
-	   uint32_t htole32(uint32_t host_32bits);
-	   uint32_t be32toh(uint32_t big_endian_32bits);
-	   uint32_t le32toh(uint32_t little_endian_32bits);
-
-	   uint64_t htobe64(uint64_t host_64bits);
-	   uint64_t htole64(uint64_t host_64bits);
-	   uint64_t be64toh(uint64_t big_endian_64bits);
-	   uint64_t le64toh(uint64_t little_endian_64bits);
-*/
+static size_t ReadLenPrefix(BytesStream& os)
+{
+	int32_t size;
+	os >> size;
+	if (size < 0 || os.RemainSize() < (size_t)size)
+	{
+		throw ParserException();
+	}
+	return (size_t)size;
+}
 
 BytesStream& BytesStream::operator<< (const std::string& a)
 {
-	Bytes b(a.c_str(), a.length());
-	*this << b;
+	WriteLenPrefixed(*this, a.data(), a.size());
 	return *this;
 }
 BytesStream& BytesStream::operator>> (std::string& a)
 {
-	Bytes b;
-	*this >> b;
-	a = std::string(b.Begin(), b.Size());
+	size_t size = ReadLenPrefix(*this);
+	a.assign(GetCurPtr(), size);
+	_cur_pos += size;
 	return *this;
 }
 
 BytesStream& BytesStream::operator<< (const Bytes& a)
 {
-	*this << (int)a.Size();
-	Append(a);
+	WriteLenPrefixed(*this, a.Data(), a.Size());
 	return *this;
 }
+// 覆盖 a 原有内容，和 ReadPb 一致。
 BytesStream& BytesStream::operator>> (Bytes& a)
 {
-	int size;
-	*this >> size;
-	if (size < 0 || RemainSize() < (unsigned int)size)
-	{
-		throw ParserException();
-	}
-	char* p_a = GetCurPtr();
-	a.Append(p_a, size);
+	size_t size = ReadLenPrefix(*this);
+	a.Clear();
+	a.Append(GetCurPtr(), size);
 	_cur_pos += size;
 	return *this;
 }

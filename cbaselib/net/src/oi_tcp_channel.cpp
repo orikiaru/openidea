@@ -14,11 +14,11 @@ void TCP_Channel::DataIn()
 		{
 			goto read_finish;
 		}
-		if (_ibuff.Captity() - _ibuff.Size() < 16 * 1024)
+		if (_ibuff.Capacity() - _ibuff.Size() < 16 * 1024)
 		{
 			_ibuff.Reserve(_ibuff.Size() + 64 * 1024);
 		}
-		int read_num = NetOs_Recv(_socket.GetSocket(), _ibuff.End(), _ibuff.Captity() - _ibuff.Size());
+		int read_num = NetOs_Recv(_socket.GetSocket(), _ibuff.End(), _ibuff.Capacity() - _ibuff.Size());
 		if (read_num > 0)
 		{
 			_ibuff.Commit((size_t)read_num);

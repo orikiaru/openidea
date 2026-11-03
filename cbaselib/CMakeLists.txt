@@ -17,9 +17,6 @@ add_compile_options(${_CXX_OPTION_})
 
 set(BASE_M_LIBS timer_m_static proto_m_static logger_m_static net_m_static base_m_static )
 set(BASE_LIBS timer_static proto_static logger_static net_static base_static )
-
-set(LOGD_M_LIBS timer_m_static proto_m_static logd_m_static net_m_static base_m_static )
-
 set(BASE_LIB_PATH ${CMAKE_SOURCE_DIR}/)
 
 #通用头文件目录

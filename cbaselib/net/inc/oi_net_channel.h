@@ -20,6 +20,6 @@ public:
 	virtual void DataOut() = 0;		//real_data_send
 	virtual bool TryClose();
 	//自定义销毁接口,默认为销毁会话并销毁自身
-	virtual void Destory();
+	virtual void Destroy();
 };
 }}

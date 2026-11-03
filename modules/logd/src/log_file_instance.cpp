@@ -17,8 +17,12 @@ LogFileInstance::LogFileInstance(LogManager* p_mgr, LOG_LEVEL lv):_p_mgr(p_mgr),
 
 LogFileInstance::~LogFileInstance()
 {
-	fflush(GetActiveFile());	//临死把文件写完
-	fclose(GetActiveFile());
+	FILE* fp = GetActiveFile();	//顺带把跨天换下来的旧文件关掉
+	if (fp)
+	{
+		fflush(fp);
+		fclose(fp);
+	}
 }
 
 
@@ -53,9 +57,9 @@ void LogFileInstance::OnCreateNewFile(FILE* new_file)
 	Active();
 }
 
-void LogFileInstance::StartWriteThread()
+bool LogFileInstance::StartWriteThread()
 {
-	::OI::Thread::ThreadPool::CreateSpecThread(_thread, LogFileInstance::WriteLogThreadHandle, this);
+	return ::OI::Thread::ThreadPool::CreateSpecThread(_thread, LogFileInstance::WriteLogThreadHandle, this);
 }
 
 void LogFileInstance::StopWriteThread()

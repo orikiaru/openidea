@@ -5,3 +5,4 @@
 #include "oi_thread.h"
 #include "oi_timer_manager.h"
 #include "oi_log.h"
+#include "oi_app.h"

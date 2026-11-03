@@ -1,4 +1,5 @@
 #include <unistd.h>
+#include <stdio.h>
 #include <atomic>
 #include "oi_timer_manager.h"
 #include "oi_thread.h"
@@ -17,23 +18,26 @@ BaseTimerManager::BaseTimerManager()
 	memset(&_cur_tv, 0, sizeof(_cur_tv));
 	_cur_tick = 0;
 	_tick_offset_ms = 0;
-	_trigger = false;
-
-
 }
 
 bool BaseTimerManager::Init()
 {
 	uint32_t offset_ms = 50;
 	TryGetConfigNoReturn("Timer.offset_ms", offset_ms);
-	uint32_t delta_us = offset_ms *1000;
-	assert(1000000 % delta_us == 0 && "delta_us Must be divisible by 1000");
-	(void)delta_us;
+	if (offset_ms == 0 || 1000 % offset_ms != 0)
+	{
+		fprintf(stderr, "Timer.offset_ms=%u must divide 1000\n", offset_ms);
+		return false;
+	}
 
 	uint32_t timer_lv_count = 4;
 	TryGetConfigNoReturn("Timer.timer_lv_count", timer_lv_count);
+	if (timer_lv_count <= 2)
+	{
+		fprintf(stderr, "Timer.timer_lv_count=%u must be bigger than 2\n", timer_lv_count);
+		return false;
+	}
 	_timer_lv_count = timer_lv_count;
-	assert(timer_lv_count > 2 && "timer_lv_count Must be bigger than 2");
 
 	std::vector<int64_t> timer_lvs;
 	if (!::OI::Base::Config::GlobalConfig().GetArrayAs("Timer.timer_lvs", timer_lvs))
@@ -48,8 +52,25 @@ bool BaseTimerManager::Init()
 		timer_lvs[_timer_lv_count - 1] = 1;
 	}
 
-	assert(timer_lvs[_timer_lv_count - 1] == 1 && "定时器最后一级一定是1");
-	assert(timer_lvs.size() == _timer_lv_count && "配置跟总数一定要对齐");
+	if (timer_lvs.size() != _timer_lv_count || timer_lvs[_timer_lv_count - 1] != 1)
+	{
+		fprintf(stderr, "Timer.timer_lvs needs %zu levels and the last one must be 1\n", (size_t)_timer_lv_count);
+		return false;
+	}
+	// 各层格子数相乘不能溢出 uint32_t。
+	uint64_t total = 1;
+	for (size_t i = 0; i < timer_lvs.size(); ++i)
+	{
+		if (timer_lvs[i] > 0 && timer_lvs[i] <= 0xFFFFFFFFll)
+		{
+			total *= (uint64_t)timer_lvs[i];
+		}
+		if (timer_lvs[i] <= 0 || timer_lvs[i] > 0xFFFFFFFFll || total > 0xFFFFFFFFull)
+		{
+			fprintf(stderr, "Timer.timer_lvs[%zu]=%lld out of range\n", i, (long long)timer_lvs[i]);
+			return false;
+		}
+	}
 
 	uint32_t lv_tick = 1;
 	for (size_t i = 0; i < _timer_lv_count; ++i)
@@ -77,10 +98,15 @@ void BaseTimerManager::OnSignal()
 	{
 		return;
 	}
-	::OI::Thread::ThreadPool::GetInstance().AddTask([]() {
+	bool queued = ::OI::Thread::ThreadPool::GetInstance().AddTask([]() {
 		BaseTimerManager::GetInstance().Update();
 		g_tick_queued.store(false);
 	}, ::OI::Thread::PRIO_ENUM::PRIO_QUEUE);
+	if (!queued)
+	{
+		// 队列满了这一跳不投。下次到点再投，错过的 tick 由 Update 按单调时钟补上。
+		g_tick_queued.store(false);
+	}
 }
 
 std::string BaseTimerManager::GenTraceLog()
@@ -97,22 +123,34 @@ std::string BaseTimerManager::GenTraceLog()
 
 void BaseTimerManager::Update()
 {
-	::OI::Thread::MutexGuard lock(_wheel_mu);
-	gettimeofday(&_cur_tv, 0);
-	_cur_time = _cur_tv.tv_sec;
-	localtime_r(&_cur_time, &_cur_tm);
-	const int64_t delta_us = std::chrono::duration_cast<std::chrono::microseconds>(
-		std::chrono::steady_clock::now() - _last_tick_mono).count();
-	if (delta_us <= 0)
+	int64_t ticks = 0;
 	{
-		return;
+		::OI::Thread::MutexGuard lock(_wheel_mu);
+		gettimeofday(&_cur_tv, 0);
+		_cur_time = _cur_tv.tv_sec;
+		localtime_r(&_cur_time, &_cur_tm);
+		const int64_t delta_us = std::chrono::duration_cast<std::chrono::microseconds>(
+			std::chrono::steady_clock::now() - _last_tick_mono).count();
+		if (delta_us <= 0)
+		{
+			return;
+		}
+		// 只取完整的 tick，余数留在单调时钟基点里，系统时间回拨不会暂停计时。
+		ticks = (delta_us / 1000) / (int64_t)_tick_offset_ms;
 	}
 
-	// 只取完整的 tick，余数留在单调时钟基点里，系统时间回拨不会暂停计时。
-	int64_t ticks = (delta_us / 1000) / (int64_t)_tick_offset_ms;
+	// 锁里只推进时间轮。OnTimer 在锁外跑，回调里发网络、建目录不挡别的线程 AddTimer。
 	for (int64_t i = 0; i < ticks; ++i)
 	{
-		run_tick();
+		TimerList due;
+		{
+			::OI::Thread::MutexGuard lock(_wheel_mu);
+			run_tick(due);
+		}
+		for (TimerList::iterator it = due.begin(); it != due.end(); ++it)
+		{
+			run_timer(*it);
+		}
 	}
 }
 
@@ -178,10 +216,9 @@ void BaseTimerManager::run_timer(BaseTimer* pTimer)
 {
 	assert(pTimer);
 
-	//collect_timer_trigger_delta(pTimer);
-
 	if (pTimer->OnTimer())
 	{
+		::OI::Thread::MutexGuard lock(_wheel_mu);
 		// 周期定时器按逻辑 tick 续，停顿时后面的跳还能补上。
 		int64_t ticks = milling2tick(pTimer->GetOffsetTime());
 		pTimer->InitData(this, pTimer->GetOffsetTime(), ticks);
@@ -197,24 +234,24 @@ void BaseTimerManager::try_uniform()
 		if (_timer_levels[i - 1].IsLevelEnd())
 		{
 			//先执行tick,以便均匀后的定时器进入准确的offset
-			_timer_levels[i].RunTick(this, false);
+			_timer_levels[i].RunTick(this, NULL);
 		}
 	}
 }
 
-void BaseTimerManager::try_run_timer()
+void BaseTimerManager::try_run_timer(TimerList& due)
 {
-	//执行本tick逻辑
+	//取出本tick到点的定时器
 	TimerLevel& level = _timer_levels[0];
-	level.RunTick(this, true);
+	level.RunTick(this, &due);
 }
 
-void BaseTimerManager::run_tick()
+void BaseTimerManager::run_tick(TimerList& due)
 {
 	_last_tick_mono += std::chrono::milliseconds(_tick_offset_ms);
 	++_cur_tick;
 
-	try_run_timer();
+	try_run_timer(due);
 
 	//第一层如果到尾,需要触发上级均匀
 	if (_timer_levels[0].IsLevelEnd())

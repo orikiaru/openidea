@@ -41,7 +41,7 @@ public:
 
 private:
 	friend class LogFileInstance;
-	void StartLogInstanceWork();
+	bool StartLogInstanceWork();
 	bool OpenAllLogFile();
 	bool CheckAndCreateRootPath();
 	bool OpenLogFile(LOG_LEVEL lv);

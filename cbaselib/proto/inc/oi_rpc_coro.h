@@ -209,8 +209,6 @@ void HandleRpc(F fn)
 	});
 }
 
-// 登记一种回包协议号。这种包按包体开头的调用号去找等待的调用。
-void RegisterRpcRes(proto_type_t res_id);
 // 返回调用号。回包、超时或 WakeRpcCall 三者只有一个会触发 decode/resume。
 uint64_t BindRpcCall(::OI::Net::SessionManager* mgr, sid_t sid, proto_type_t res_id, std::coroutine_handle<> handle, int32_t* result, int64_t timeout_ms, std::function<bool(::OI::Base::BytesStream&)> decode, std::function<void()> resume);
 void FailRpcCalls(::OI::Net::SessionManager* mgr, sid_t sid);
@@ -248,8 +246,6 @@ struct RpcCallAwaiter
 	template<typename Promise>
 	bool await_suspend(std::coroutine_handle<Promise> h)
 	{
-		static const bool registered = (RegisterRpcRes(RpcProtoId<Res>::value), true);
-		(void)registered;
 		handle = h;
 		result = OI_ERR_FAIL;
 		replied = false;

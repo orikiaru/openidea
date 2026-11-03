@@ -25,6 +25,10 @@ bool MakeDirs(const std::string& path)
 		return true;
 	}
 	std::filesystem::create_directories(path, ec);
-	return !ec && std::filesystem::is_directory(path);
+	if (ec)
+	{
+		return false;
+	}
+	return std::filesystem::is_directory(path, ec);
 }
 }}

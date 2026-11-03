@@ -1,5 +1,4 @@
-#ifndef __j_parser_h__
-#define __j_parser_h__
+#pragma once
 #include "oi_bytes_stream.h"
 #include "oi_thread.h"
 #include <string>
@@ -40,4 +39,3 @@ public:
 namespace OI { namespace Rpc {
 ::OI::Base::BytesStream EncodePbFrame(proto_type_t id, ::OI::Base::BytesStream& body);
 }}
-#endif

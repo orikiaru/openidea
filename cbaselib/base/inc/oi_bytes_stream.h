@@ -5,13 +5,14 @@
 #include <map>
 #include <string>
 #include <string.h>
+#include <exception>
 #include <type_traits>
 
 namespace OI { namespace Rpc { class Serialize; } }
 namespace OI { namespace Base {
-struct ParserException
+struct ParserException : public std::exception
 {
-	const char* what() const throw()
+	const char* what() const noexcept override
 	{
 		return "ParserException";
 	}
@@ -91,6 +92,12 @@ public:
 	{
 		uint32_t size;
 		(*this) >> size;
+		// 个数是对端给的。先按剩余字节估一下，免得按一个巨大的数先分配。
+		const size_t min_elem = PbFixedTrait<T>::value ? sizeof(T) : 1;
+		if ((size_t)size > RemainSize() / min_elem)
+		{
+			throw ParserException();
+		}
 		t.resize(size);
 		for (uint32_t i = 0; i < size; ++i)
 		{
@@ -231,22 +238,6 @@ public:
 			value.insert(std::make_pair(key, val));
 		}
 	}
-
-	/*
-	template<typename Key, typename Value>
-	BytesStream& operator>> (std::map<Key, Value>& t)
-	{
-
-	}
-
-	template<typename Key, typename Value>
-	BytesStream& operator<< (std::map<Key, Value>& t)
-	{
-
-	}	
-	*/
-
-
 
 
 };

@@ -9,8 +9,8 @@ namespace OI { namespace RpcData {
 class RegHeartbeat : public ::OI::Rpc::RpcData
 {
 public:
-    std::string name;
-    int32_t id;
+    std::string name{};
+    int32_t id{};
     
     explicit RegHeartbeat (){}
     RegHeartbeat ( const std::string & l_name, const int32_t & l_id )

@@ -324,7 +324,6 @@ coro::Task RegistryServer::Reload()
 			LOG_TRACE("registry reload failed status=%d, keep clients as is", (int)r.status);
 			fflush(stdout);
 		}
-		_snapshot_ok = false;
 		co_return;
 	}
 	std::vector<::OI::Base::ServiceInstance> list;
@@ -431,6 +430,16 @@ coro::Task RegistryServer::Refresh(sid_t sid, Binding b)
 			if (list[i].name == b.name && list[i].id == b.id)
 			{
 				list.erase(list.begin() + i);
+				break;
+			}
+		}
+		// 新主人登记时已经换过快照。只摘还指着本连接地址的那份。
+		for (size_t i = 0; i < _snapshot.size(); ++i)
+		{
+			const ::OI::Base::ServiceInstance& inst = _snapshot[i];
+			if (inst.name == b.name && inst.id == b.id && inst.ip == b.ip && inst.port == b.port)
+			{
+				_snapshot.erase(_snapshot.begin() + i);
 				break;
 			}
 		}

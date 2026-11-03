@@ -51,12 +51,13 @@ bool ProtoClientManager::TryPendCall(uint64_t call_id, const ::OI::Base::Bytes& 
 		{
 			return false;
 		}
+		// 和入队放在同一把锁里。放锁后 FlushHeldCalls 才能取到它，ClaimRpcSend 清标记一定在这之后。
+		MarkRpcAwaitingConnect(call_id);
 		HeldCall held;
 		held.call_id = call_id;
 		held.data = data;
 		_held_calls.push_back(held);
 	}
-	MarkRpcAwaitingConnect(call_id);
 	return true;
 }
 

@@ -33,12 +33,7 @@ timer_lv_count = 4	#定时器分割等级数,必须>=2
 timer_lvs = [128,128,128,1] #每级定时器对应的间隔,最后一级只能是1
 
 # ip port 必须为字符串.
-[LogClient]
-service = "logd"
-ip		= "127.0.0.1"
-port	= "19995"
-type   	= "tcp"
-
+# logd 自己的日志直接写本地，不配 [LogClient]。
 [LogServer]
 ip		= "127.0.0.1"
 port	= "19995"

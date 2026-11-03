@@ -153,31 +153,21 @@ class ModuleFileGen:
         file_data += r'''
 int main(int argc, char* argv[])
 {
-    //加载模块配置
-    if (!Config::GlobalMutableConfig().Parse("__MODULE_CONFIG_RELATIVE_PATH__"))
-	{
-		printf("ParseConfigError\n");
-		return -2;
-	}
- 
-    //初始化线程池
-    ThreadPool::GetInstance()->Init();
-    
-    //初始化定时器
-    OI::Timer::BaseTimerManager::GetInstance()->Init();
-    
-    //初始化IO复用
-	OI::Net::Poll::GetInstance()->Init();
+    //加载模块配置，初始化线程池、定时器、IO复用
+    int code = ::OI::Base::StartFramework("__MODULE_CONFIG_RELATIVE_PATH__");
+    if (code != 0)
+    {
+        return code;
+    }
 
     //初始化日志服务
-    OI::Log::Init();
- 
+    ::OI::Log::Init();
+
     //添加组件逻辑,如网络组件,自定义单例对象等初始化逻辑
     __MODULE_COMPONENTS_INIT__
- 
-    //单线程在这里跑任务、定时器和协程，没有任务时进入 poll
-    ThreadPool::GetInstance()->StartWork();
-    return ThreadPool::GetInstance()->ExitCode();
+
+    //跑任务、定时器和协程。收到退出信号或 RequestStop 后 join 完线程再返回
+    return ::OI::Base::RunFramework();
 }
         '''
         file_data = self.DoReplace(file_data)

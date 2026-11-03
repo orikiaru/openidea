@@ -39,7 +39,8 @@ private:
 		}
 	}
 
-	void RunTick(BaseTimerManager* pMgr, bool run_timer = false);
+	// due 不为空时把这一格移进 due，否则逐个重新挂到下层。
+	void RunTick(BaseTimerManager* pMgr, TimerList* due);
 
 	void AddTimer(BaseTimerManager* mgr, BaseTimer* pTimer, uint32_t level_offset)
 	{

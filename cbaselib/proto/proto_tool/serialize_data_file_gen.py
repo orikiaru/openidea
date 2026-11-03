@@ -76,8 +76,8 @@ class SerializeDataFileGen:
     def GetMemberDeclareList(self):
         if(self.member_declare_list == ""):
             for m in self.data.members:
-                #" m.type m.name "
-                self.member_declare_list += QualType(m.type) + r' ' + m.name + r';' + '\n    ' 
+                #" m.type m.name{}; " 标量没出现在包里时要是 0，不能是未初始化的值
+                self.member_declare_list += QualType(m.type) + r' ' + m.name + r'{};' + '\n    ' 
         return self.member_declare_list        
              
     def DoReplace(self, file_data:str):
