@@ -1,5 +1,6 @@
 
 #include "oi_config.h"
+#include "oi_thread.h"
 #include "oi_log.h"
 #include "oi_registry.h"
 #include "oi_session_manager.h"
@@ -49,11 +50,48 @@ bool SessionManager::Init()
 }
 
 bool SessionManager::StartClient(bool bAsyncParam)
-{	if (bServiceDown)
+{
+	if (::OI::Thread::ThreadPool::GetInstance().StopRequested()) return false;
+	// 把检查、建连和状态发布放在同一执行域；工人线程不直接操作连接状态。
+	if (!Poll::GetInstance().InLoopThread())
+	{
+		if (bAsyncParam)
+		{
+			Poll::GetInstance().CallOnLoop([](void* pArgumentParam) {
+				static_cast<SessionManager*>(pArgumentParam)->StartClient();
+			}, this);
+			return true;
+		}
+		struct ConnectRequest
+		{
+			SessionManager* pManager;
+			::OI::Thread::Mutex stMutex;
+			::OI::Thread::MutexCond stCondition;
+			bool bDone = false;
+			bool bResult = false;
+		} stRequest{this, {}, {}, false, false};
+		::OI::Thread::MutexGuard stLock(stRequest.stMutex);
+		Poll::GetInstance().CallOnLoop([](void* pArgumentParam) {
+			auto* pRequest = static_cast<ConnectRequest*>(pArgumentParam);
+			const bool bResult = pRequest->pManager->StartClient(false);
+			::OI::Thread::MutexGuard stGuard(pRequest->stMutex);
+			pRequest->bResult = bResult;
+			pRequest->bDone = true;
+			pRequest->stCondition.Signal();
+		}, &stRequest);
+		while (!stRequest.bDone) stRequest.stCondition.Wait(stRequest.stMutex);
+		return stRequest.bResult;
+	}
+	if (bServiceDown)
 	{
 		return false;
 	}
-	return ConnectChannel::StartConnect(this, bAsyncParam);
+	if (bConnectPending || HasEndpoint(sIpAddress + ":" + sPort)) return true;
+	bConnectPending = true;
+	const uint64_t iGeneration = ++iConnectGeneration;
+	const bool bStarted = ConnectChannel::StartConnect(this, bAsyncParam);
+	if (!bStarted) AbortSession(iGeneration);
+	return bStarted;
 
 }
 
@@ -111,6 +149,17 @@ void SessionManager::CloseAllSessions()
 
 void SessionManager::ApplyService(const std::string& sIpParam, const std::string& sPortParam, bool bOnlineParam)
 {
+	if (!Poll::GetInstance().InLoopThread())
+	{
+		struct ServiceChange { SessionManager* pManager; std::string sIp; std::string sPort; bool bOnline; };
+		auto pChange = std::make_unique<ServiceChange>(ServiceChange{this, sIpParam, sPortParam, bOnlineParam});
+		Poll::GetInstance().CallOnLoop([](void* pArgumentParam) {
+			std::unique_ptr<ServiceChange> pHeld(static_cast<ServiceChange*>(pArgumentParam));
+			pHeld->pManager->ApplyService(pHeld->sIp, pHeld->sPort, pHeld->bOnline);
+		}, pChange.get());
+		pChange.release();
+		return;
+	}
 	if (sServiceName.empty())
 	{
 		return;
@@ -121,6 +170,8 @@ void SessionManager::ApplyService(const std::string& sIpParam, const std::string
 		{
 			return;
 		}
+		++iConnectGeneration;
+		bConnectPending = false;
 		bServiceDown = true;
 		std::string sPrevious = sEndpoint;
 		sEndpoint.clear();
@@ -138,6 +189,8 @@ void SessionManager::ApplyService(const std::string& sIpParam, const std::string
 	{
 		return;
 	}
+	++iConnectGeneration;
+	bConnectPending = false;
 	std::string sPrevious = sEndpoint;
 	bServiceDown = false;
 	sEndpoint = sEndpointLocal;
@@ -246,8 +299,21 @@ void SessionManager::AddSession(net_socket_t iNewDescriptorParam)
 	}
 }
 
-void SessionManager::AbortSession()
+void SessionManager::CompleteConnect(net_socket_t iDescriptorParam, uint64_t iGenerationParam)
 {
+	if (iGenerationParam != iConnectGeneration || !bConnectPending || bServiceDown)
+	{
+		NetOs_Close(iDescriptorParam);
+		return;
+	}
+	bConnectPending = false;
+	AddSession(iDescriptorParam);
+}
+
+void SessionManager::AbortSession(uint64_t iGenerationParam)
+{
+	if (iGenerationParam != iConnectGeneration || !bConnectPending) return;
+	bConnectPending = false;
 	{
 		::OI::Thread::MutexGuard stLock(stLocker);
 		++iCurrentSessionId;

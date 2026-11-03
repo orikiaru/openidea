@@ -5,9 +5,10 @@ class SessionManager;
 class ConnectChannel : public Channel
 {
 	bool m_bClose;
+	uint64_t m_iGeneration;
 	SessionManager* m_pSessionManager;
 public:
-	ConnectChannel(NetSocket stTextParam, SessionManager* pMgrParam) :Channel(stTextParam, 0), m_bClose(false), m_pSessionManager(pMgrParam) {}
+	ConnectChannel(NetSocket stTextParam, SessionManager* pMgrParam, uint64_t iGenerationParam) :Channel(stTextParam, 0), m_bClose(false), m_iGeneration(iGenerationParam), m_pSessionManager(pMgrParam) {}
 	virtual void DataIn();
 	virtual void DataOut();
 	virtual bool TryClose();

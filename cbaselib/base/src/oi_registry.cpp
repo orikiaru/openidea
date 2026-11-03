@@ -28,8 +28,8 @@ public:
 	virtual void OnDataOut() {}
 	virtual void OnDataIn()
 	{
-		ReadRegFrames(stInputBuffer, this, [](uint32_t iIdParam, ::OI::Base::BytesStream& stBodyParam) {
-			RegistryClient::GetInstance().OnFrame(iIdParam, stBodyParam);
+		ReadRegFrames(stInputBuffer, this, [iSessionIdLocal = GetSessionID()](uint32_t iIdParam, ::OI::Base::BytesStream& stBodyParam) {
+			RegistryClient::GetInstance().OnFrame(iSessionIdLocal, iIdParam, stBodyParam);
 		});
 	}
 };
@@ -273,6 +273,8 @@ bool RegistryClient::WaitFlag(const std::atomic<bool>& bFlagParam)
 
 bool RegistryClient::Connect()
 {
+	::OI::Thread::MutexGuard stPendingLock(stPendingMutex);
+	if (bConnected.load()) return true;
 	if (!bAddressReady)
 	{
 		std::string sIpLocal;
@@ -330,6 +332,8 @@ void RegistryClient::SendRegister()
 
 void RegistryClient::OnAddSession(::OI::Net::Session* pSessionParam)
 {
+	::OI::Thread::MutexGuard stPendingLock(stPendingMutex);
+	vPendingPulls.clear();
 	iSessionId = pSessionParam->GetSessionID();
 	bFailed = false;
 	bConnected = true;
@@ -344,6 +348,8 @@ void RegistryClient::OnAddSession(::OI::Net::Session* pSessionParam)
 
 void RegistryClient::OnDelSession(const ::OI::Net::Session* pSessionParam)
 {
+	::OI::Thread::MutexGuard stPendingLock(stPendingMutex);
+	if (iSessionId.load() != pSessionParam->GetSessionID()) return;
 	iSessionId = INVALID_SID;
 	bConnected = false;
 	bRegistered = false;
@@ -364,8 +370,11 @@ void RegistryClient::OnConnectFailed()
 	LOG_TRACE("RegistryClient::OnConnectFailed");
 }
 
-void RegistryClient::OnFrame(uint32_t iIdParam, ::OI::Base::BytesStream& stBodyParam)
+void RegistryClient::OnFrame(sid_t iSessionIdParam, uint32_t iIdParam, ::OI::Base::BytesStream& stBodyParam)
 {
+	// 回包消费、同步结果发布与超时撤销共用同一把锁。
+	::OI::Thread::MutexGuard stPendingLock(stPendingMutex);
+	if (iSessionIdParam != iSessionId.load()) return;
 	if (iIdParam == PROTO_REG_REGISTER_RES)
 	{
 		::OI::RpcData::RegRegisterRes stResponseLocal;
@@ -455,6 +464,7 @@ void RegistryClient::OnFrame(uint32_t iIdParam, ::OI::Base::BytesStream& stBodyP
 
 bool RegistryClient::Lookup(const std::string& sNameParam, std::string& sIpParam, std::string& sPortParam)
 {
+	::OI::Thread::MutexGuard stSyncLock(stSyncMutex);
 	if (sNameParam.empty() || !Configured())
 	{
 		return false;
@@ -467,36 +477,34 @@ bool RegistryClient::Lookup(const std::string& sNameParam, std::string& sIpParam
 	PendingPull stPending;
 	stPending.bSynchronous = true;
 	stPending.vNames.push_back(sNameParam);
-	bGot = false;
-	iCode = OI_ERR_FAIL;
-	{
-		::OI::Thread::MutexGuard stLock(stPendingMutex);
-		vPendingPulls.push_back(stPending);
-	}
 	::OI::RpcData::RegPull stRequestLocal(stPending.vNames);
-	bool bSent = Send(PROTO_REG_PULL, stRequestLocal);
+	bool bSent = false;
+	{
+		// 排队顺序必须等于线上的发送顺序，不能在两步之间释放锁。
+		::OI::Thread::MutexGuard stLock(stPendingMutex);
+		bGot = false;
+		iCode = OI_ERR_FAIL;
+		vPendingPulls.push_back(stPending);
+		try { bSent = Send(PROTO_REG_PULL, stRequestLocal); }
+		catch (...) { vPendingPulls.pop_back(); throw; }
+		if (!bSent) vPendingPulls.pop_back();
+	}
 	if (!bSent || !WaitFlag(bGot))
 	{
-		// 同步等的只有这一份。没发出去就撤掉，免得后面的回包对错位；发出去了就改成不等，迟到的回包不能当成下一次查询的结果。
+		// 同步调用已串行化。发送失败已回滚；超时仅取消等待，保留配对占位。
 		::OI::Thread::MutexGuard stLock(stPendingMutex);
 		for (auto stIterator = vPendingPulls.begin(); stIterator != vPendingPulls.end(); ++stIterator)
 		{
 			if (stIterator->bSynchronous)
 			{
-				if (bSent)
-				{
-					stIterator->bSynchronous = false;
-				}
-				else
-				{
-					vPendingPulls.erase(stIterator);
-				}
+				stIterator->bSynchronous = false;
 				break;
 			}
 		}
 		LOG_TRACE("registry lookup %s %s", sNameParam.c_str(), bSent ? "timeout" : "send failed");
 		return false;
 	}
+	::OI::Thread::MutexGuard stResultLock(stPendingMutex);
 	ServiceInstance stPick;
 	if (iCode != OI_OK || !ServiceTable::Pick(vResponseList, sNameParam, 0, stPick))
 	{
@@ -564,19 +572,12 @@ void RegistryClient::Pull()
 	PendingPull stPending;
 	stPending.bSynchronous = false;
 	stPending.vNames = vNamesLocal;
-	{
-		::OI::Thread::MutexGuard stLock(stPendingMutex);
-		vPendingPulls.push_back(stPending);
-	}
 	::OI::RpcData::RegPull stRequestLocal(vNamesLocal);
-	if (!Send(PROTO_REG_PULL, stRequestLocal))
-	{
-		::OI::Thread::MutexGuard stLock(stPendingMutex);
-		if (!vPendingPulls.empty())
-		{
-			vPendingPulls.pop_back();
-		}
-	}
+	::OI::Thread::MutexGuard stLock(stPendingMutex);
+	if (!bConnected.load()) return;
+	vPendingPulls.push_back(stPending);
+	try { if (!Send(PROTO_REG_PULL, stRequestLocal)) vPendingPulls.pop_back(); }
+	catch (...) { vPendingPulls.pop_back(); throw; }
 }
 
 void RegistryClient::Touch()
@@ -629,6 +630,7 @@ bool PublishAddress(const std::string& sSectionParam, const std::string& sBindIp
 
 bool RegistryClient::Publish(const std::string& sSectionParam, const std::string& sIpParam, const std::string& sPortParam)
 {
+	::OI::Thread::MutexGuard stSyncLock(stSyncMutex);
 	if (sSectionParam == "Registry" || !Configured())
 	{
 		return true;
@@ -670,13 +672,19 @@ bool RegistryClient::Publish(const std::string& sSectionParam, const std::string
 	int32_t iCodeLocal = OI_ERR_FAIL;
 	if (Ensure())
 	{
-		bGot = false;
-		iCode = OI_ERR_FAIL;
-		bRegistrationWaiting = true;
-		SendRegister();
+		{
+			::OI::Thread::MutexGuard stPendingLock(stPendingMutex);
+			bGot = false;
+			iCode = OI_ERR_FAIL;
+			bRegistrationWaiting = true;
+			SendRegister();
+		}
 		bGotLocal = WaitFlag(bGot);
-		iCodeLocal = iCode;
-		bRegistrationWaiting = false;
+		{
+			::OI::Thread::MutexGuard stPendingLock(stPendingMutex);
+			iCodeLocal = iCode;
+			bRegistrationWaiting = false;
+		}
 	}
 	if (bGotLocal && iCodeLocal == OI_ERR_EXIST)
 	{

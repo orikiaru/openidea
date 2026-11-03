@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import resource
+import signal
 import shutil
 import socket
 import socketserver
@@ -53,6 +54,7 @@ class RawHttpRegression(socketserver.BaseRequestHandler):
             chunk = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
             wires = {
                 b"good": ok,
+                b"large": b"HTTP/1.1 200 OK\r\nContent-Length: 1048576\r\n\r\n" + b"x" * 1048576,
                 b"interim": b"HTTP/1.1 100 Continue\r\n\r\n" + ok,
                 b"204": b"HTTP/1.1 204 No Content\r\n\r\n",
                 b"304": b"HTTP/1.1 304 Not Modified\r\nContent-Length: 123\r\n\r\n",
@@ -83,7 +85,11 @@ class RawHttpRegression(socketserver.BaseRequestHandler):
 def run(case, args):
     mode = "hold" if case.startswith("clock-") else ("echo" if case in ("reset", "registry") else case)
     mode = "log" if case == "disk-full" else mode
-    mode = "redis" if case == "redis-limit" else mode
+    mode = "redis" if case.startswith("redis-") else mode
+    pressure = case.startswith("redis-backpressure-")
+    db_paused = False
+    pause_at = None
+    shutdown_sent = False
     procs = []
     handles = []
     http_fixture = None
@@ -94,15 +100,27 @@ def run(case, args):
         work, cfg, logs = root / "bin", root / "config", root / "logs"
         for p in (work, cfg, logs):
             p.mkdir()
-        for name in ("logd", "ipcclient", "ipcserver", "redisserver") + (("registry",) if case == "registry" else ()):
+        for name in ("logd", "ipcclient", "ipcserver", "redisserver") + (("registry",) if case == "registry" or mode == "hold" else ()):
             shutil.copy2(args.bin_dir / name, work / name)
             text = (REPO / "deploy/config" / (name + ".toml")).read_text(encoding="utf-8-sig")
             if name == "logd":
                 text = replace(text, "root_path", '"' + str(logs) + '"')
+            if name == "redisserver" and pressure:
+                text = replace(text, "connections", "1")
+                maximum_bytes = 1024**2 if case.endswith("bytes") else 8 * 1024**2
+                maximum_count = 128 if case.endswith("bytes") else 4
+                text = replace(text, "max_pending_bytes", str(maximum_bytes))
+                text = replace(text, "max_pending_commands", str(maximum_count))
             if name == "ipcclient":
                 if case == "registry":
                     # 错误的直连后备端口，只有通过注册发现才能完成回声。
                     text = text.replace('port = "17981"', 'port = "17982"')
+                if case == "redis-shutdown":
+                    text = replace(text, "timeout_ms", "300")
+                    text += "\n[Regression]\nredis_shutdown = true\n"
+                if pressure:
+                    text = replace(text, "timeout_ms", "10000")
+                    text += "\n[Regression]\nredis_pressure = true\nredis_oversized = %s\n" % ("true" if case.endswith("bytes") else "false")
                 if case == "redis-limit":
                     text = text.replace("[RedisClient]", "[RedisClient]\nmax_pending = 1")
                     text = replace(text, "tasks", "0")
@@ -152,7 +170,7 @@ def run(case, args):
                 http_thread.start()
                 for name in ("ipcclient", "ipcserver"):
                     with (cfg / (name + ".toml")).open("a", encoding="utf-8") as config:
-                        config.write("\n[Regression]\nencoding_failure = true\nhttp_port = %d\n" % http_fixture.server_address[1])
+                        config.write("\n[Regression]\nencoding_failure = true\nregistry_checks = true\nhttp_port = %d\n" % http_fixture.server_address[1])
             logd, logpath = start("logd")
             # 日志服没有 ready 文本，端口探测只用来确认监听，不发送日志。
             deadline = time.monotonic() + 10
@@ -174,10 +192,10 @@ def run(case, args):
                                       'dir ' + str(root) + '\n')
                 db, dbpath = start("redis", [str(args.redis_binary), str(redis_conf)])
                 ready(db, dbpath, "Ready to accept connections")
-                if case == "registry":
-                    rs, rsp = start("registry")
-                    ready(rs, rsp, "registry server listen")
-                else:
+                if case == "registry" or mode == "hold":
+                    registry, registry_path = start("registry")
+                    ready(registry, registry_path, "registry server listen")
+                if case != "registry":
                     rs, rsp = start("redisserver")
                     ready(rs, rsp, "redis server listen")
             server, serverpath = start("ipcserver")
@@ -190,10 +208,27 @@ def run(case, args):
                     raise RuntimeError("clock test requires --clock-fault-so")
                 env["LD_PRELOAD"] = str(args.clock_fault_so)
                 env["OI_TEST_CLOCK_SHIFT"] = "86400" if case == "clock-forward" else "-3600"
+            if pressure:
+                db.send_signal(signal.SIGSTOP)
+                db_paused = True
+                rss_before = int(re.search(r"VmRSS:\s+(\d+)", Path("/proc/%d/status" % rs.pid).read_text()).group(1))
             started = time.monotonic()
             client, clientpath = start("ipcclient", env=env)
-            deadline = started + 210
+            deadline = started + (20 if pressure or case == "redis-shutdown" else 210)
             while client.poll() is None:
+                if case == "redis-shutdown" and not shutdown_sent and "redis shutdown pending" in clientpath.read_text(errors="replace"):
+                    client.send_signal(signal.SIGTERM)
+                    shutdown_sent = True
+                    deadline = time.monotonic() + 3
+                if pressure and db_paused:
+                    if pause_at is None and "redis pressure pause" in rsp.read_text(errors="replace"):
+                        pause_at = time.monotonic()
+                    if pause_at is not None and time.monotonic() - pause_at > 0.5:
+                        rss_paused = int(re.search(r"VmRSS:\s+(\d+)", Path("/proc/%d/status" % rs.pid).read_text()).group(1))
+                        assert rss_paused < rss_before + 32 * 1024, (rss_before, rss_paused)
+                        print(case, "paused RSS KiB before=", rss_before, "after=", rss_paused, flush=True)
+                        db.send_signal(signal.SIGCONT)
+                        db_paused = False
                 if bytes_on_disk(logs) > CAP:
                     raise RuntimeError("test log exceeds 2GiB limit")
                 if case == "disk-full" and logd.poll() is not None:
@@ -214,6 +249,14 @@ def run(case, args):
             if mode == "echo":
                 assert "ok=1000000 mismatch=0 rpc_fail=0" in text
                 assert text.count("ipc client connect sid=") == 1, "echo test started more than once"
+            elif case == "redis-shutdown":
+                assert shutdown_sent and "redis shutdown result=2 late=2 bad=0" in text
+            elif pressure:
+                assert pause_at is not None and not db_paused
+                assert "redis pressure done total=64 bad=0" in text
+                samples = re.findall(r"redis pressure pause link=\d+ pending=(\d+) bytes=(\d+)", rsp.read_text(errors="replace"))
+                assert samples and all(int(count) <= maximum_count and int(size) <= maximum_bytes for count, size in samples)
+                if case.endswith("count"): assert any(int(count) == maximum_count for count, size in samples)
             elif mode == "redis":
                 assert "redis integrity ok" in text
                 if case == "redis-limit":
@@ -221,6 +264,10 @@ def run(case, args):
                 else:
                     assert re.search(r"redis stress .*bad=0", text)
             elif mode == "hold":
+                assert "hold binary bool bad=0" in text
+                assert "hold connection isolation bad=0" in text
+                assert "hold registry pairing bad=0" in text
+                assert re.search(r"hold http release before=\d+ after=\d+ bad=0", text)
                 assert "hold json validation bad=0" in text
                 assert "hold task exceptions bad=0" in text
                 assert "hold server encoding bad=0" in text
@@ -245,6 +292,8 @@ def run(case, args):
                 print(output.name, output.read_text(errors="replace")[-6000:], flush=True)
             raise
         finally:
+            if db_paused and db.poll() is None:
+                db.send_signal(signal.SIGCONT)
             stuck = []
             for proc in reversed(procs):
                 if proc.poll() is None:
@@ -307,7 +356,7 @@ def run_web(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case", default="all", choices=("all", "echo", "log", "redis", "redis-limit", "hold", "reset", "disk-full", "clock-forward", "clock-back", "registry", "web"))
+    parser.add_argument("--case", default="all", choices=("all", "echo", "log", "redis", "redis-limit", "redis-shutdown", "redis-backpressure-bytes", "redis-backpressure-count", "hold", "reset", "disk-full", "clock-forward", "clock-back", "registry", "web"))
     parser.add_argument("--bin-dir", type=Path, default=REPO / "deploy/bin")
     parser.add_argument("--redis-binary", type=Path, default=Path("/tmp/redis-7.4.12/src/redis-server"))
     parser.add_argument("--clock-fault-so", type=Path)
@@ -316,7 +365,7 @@ if __name__ == "__main__":
         with socket.socket() as probe:
             probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             probe.bind(("127.0.0.1", port))
-    cases = ("echo", "log", "redis", "redis-limit", "hold", "reset", "disk-full", "registry", "web") if options.case == "all" else (options.case,)
+    cases = ("echo", "log", "redis", "redis-limit", "redis-shutdown", "redis-backpressure-bytes", "redis-backpressure-count", "hold", "reset", "disk-full", "registry", "web") if options.case == "all" else (options.case,)
     for item in cases:
         if item == "web":
             run_web(options)

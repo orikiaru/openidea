@@ -175,14 +175,38 @@ void ThreadPool::PostCoroutine(std::coroutine_handle<> stHandleParam)
 #endif
 }
 
+bool ThreadPool::AddStopHandler(void (*fnHandlerParam)())
+{
+	::OI::Thread::MutexGuard stLock(m_stStopHandlerMutex);
+	if (!fnHandlerParam || m_bStopRequested.load()) return false;
+	for (const auto& fnHandler : m_vStopHandlers) if (fnHandler == fnHandlerParam) return true;
+	m_vStopHandlers.push_back(fnHandlerParam);
+	return true;
+}
+
 void ThreadPool::RequestStop(int iCodeParam)
 {
 	{
+		::OI::Thread::MutexGuard stLock(m_stStopHandlerMutex);
+		if (m_bStopRequested.exchange(true)) return;
+		iExitCode = iCodeParam;
+	}
+	::OI::Net::Poll::GetInstance().CallOnLoop([](void* pArgumentParam) {
+		static_cast<ThreadPool*>(pArgumentParam)->FinishStop();
+	}, this);
+}
+
+void ThreadPool::FinishStop()
+{
+	// 请求停止后不再接受注册；回调与网络完成串行，不能靠已停工人的超时任务解锁。
+	for (const auto& fnHandler : m_vStopHandlers)
+	{
+		try { fnHandler(); }
+		catch (...) { ReportTaskError(std::current_exception()); }
+	}
+	{
 		std::lock_guard<std::mutex> stLock(stStopMutex);
-		if (!bStop.exchange(true))
-		{
-			iExitCode = iCodeParam;
-		}
+		bStop.store(true);
 	}
 	stStopCondition.notify_one();
 	for (int iIndexLocal = PRIO_NORMAL; iIndexLocal < PRIO_NUM; ++iIndexLocal)

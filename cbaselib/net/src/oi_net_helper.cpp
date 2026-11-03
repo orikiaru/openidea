@@ -105,13 +105,13 @@ bool NetHelper::SocketConnect(NetSocket& stSessionIdParam, SessionManager* pMgrP
 	int iReturnCodeLocal = NetOs_Connect(stSessionIdParam.GetSocket(), stSessionIdParam.GetAddr().NetAttrPtr(), stSessionIdParam.GetAddr().NetAttrLen());
 	if (iReturnCodeLocal == -1 && errno == EINPROGRESS)
 	{
-		ConnectChannel* pChannelLocal = new ConnectChannel(stSessionIdParam, pMgrParam);
+		ConnectChannel* pChannelLocal = new ConnectChannel(stSessionIdParam, pMgrParam, pMgrParam->iConnectGeneration);
 		Poll::GetInstance().IOEventRegister(pChannelLocal, false, true);
 		bSucc = true;
 	}
 	else if (iReturnCodeLocal == 0)
 	{
-		pMgrParam->AddSession(stSessionIdParam.GetSocket());
+		pMgrParam->CompleteConnect(stSessionIdParam.GetSocket(), pMgrParam->iConnectGeneration);
 		bSucc = true;
 	}
 
@@ -120,7 +120,7 @@ bool NetHelper::SocketConnect(NetSocket& stSessionIdParam, SessionManager* pMgrP
 		LOG_ERROR("NetHelper::SocketConnect id=%s, err=%s", pMgrParam->GetIDString().c_str(), NetOs_StrError(errno));
 		NetOs_Close(stSessionIdParam.GetSocket());
 		stSessionIdParam.Detach();
-		pMgrParam->AbortSession();
+		pMgrParam->AbortSession(pMgrParam->iConnectGeneration);
 		return false;
 	}
 

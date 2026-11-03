@@ -72,7 +72,16 @@ public:
 		{
 			throw ParserException();
 		}
-		memcpy(&stValueParam, GetCurPtr(), sizeof(T));
+		if constexpr (std::is_same_v<T, bool>)
+		{
+			const auto iValue = static_cast<unsigned char>(*GetCurPtr());
+			if (iValue > 1) throw ParserException();
+			stValueParam = iValue != 0;
+		}
+		else
+		{
+			memcpy(&stValueParam, GetCurPtr(), sizeof(T));
+		}
 		m_iCurrentPosition += sizeof(T);
 		return *this;
 	}
@@ -155,7 +164,16 @@ public:
 		{
 			throw ParserException();
 		}
-		memcpy(&stValueParam, GetCurPtr(), sizeof(T));
+		if constexpr (std::is_same_v<T, bool>)
+		{
+			const auto iValue = static_cast<unsigned char>(*GetCurPtr());
+			if (iValue > 1) throw ParserException();
+			stValueParam = iValue != 0;
+		}
+		else
+		{
+			memcpy(&stValueParam, GetCurPtr(), sizeof(T));
+		}
 		m_iCurrentPosition += iSizeParam;
 	}
 	void ReadPb(uint32_t iSizeParam, std::string& sValueParam);

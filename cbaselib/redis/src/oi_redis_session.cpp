@@ -10,7 +10,7 @@ void RedisClientSession::OnDataIn()
 	{
 		return;
 	}
-	RedisClient::GetInstance().Feed(stInputBuffer.Begin(), stInputBuffer.Size());
+	RedisClient::GetInstance().Feed(GetSessionID(), stInputBuffer.Begin(), stInputBuffer.Size());
 	stInputBuffer.Clear();
 }
 

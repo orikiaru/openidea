@@ -40,7 +40,6 @@ class ProtoClientManager : public ProtoSessionManager
 {
 	sid_t		m_iSessionId;
 	bool		m_bConnected;
-	bool		m_bConnecting;
 	CLIENT_CONNECT_MODE m_iConnectMode;
 	struct HeldCall
 	{
@@ -57,7 +56,7 @@ class ProtoClientManager : public ProtoSessionManager
 	bool		m_bEverConnected;
 	::OI::Thread::SpinLock	m_stClientLocker;
 public:
-	ProtoClientManager():m_iSessionId(INVALID_SID),m_bConnected(false),m_bConnecting(false),m_iConnectMode(CLIENT_CONNECT_DIRECT),m_iPendingBytes(0),m_bEverConnected(false) {}
+	ProtoClientManager():m_iSessionId(INVALID_SID),m_bConnected(false),m_iConnectMode(CLIENT_CONNECT_DIRECT),m_iPendingBytes(0),m_bEverConnected(false) {}
 	void SetConnectMode(CLIENT_CONNECT_MODE iModeParam) { m_iConnectMode = iModeParam; }
 	CLIENT_CONNECT_MODE GetConnectMode() const { return m_iConnectMode; }
 	virtual void OnClientConnect(::OI::Net::Session* pSessionParam) = 0;
@@ -79,7 +78,6 @@ public:
 		{
 			::OI::Thread::SpinLockGuard stLock(m_stClientLocker);
 			m_bConnected = true;
-			m_bConnecting = false;
 			m_iSessionId = pSessionParam->GetSessionID();
 			iSessionIdLocal = m_iSessionId;
 			// 与新发送共用客户端锁；先发送连接前缓存，不能让新数据抢占它的额度。
@@ -97,10 +95,6 @@ public:
 	}
 	virtual void OnConnectFailed()
 	{
-		{
-			::OI::Thread::SpinLockGuard stLock(m_stClientLocker);
-			m_bConnecting = false;
-		}
 		if (bServiceDown || sEndpoint.empty())
 		{
 			FailHeldCalls();

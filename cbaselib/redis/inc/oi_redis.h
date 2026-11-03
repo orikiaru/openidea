@@ -56,6 +56,7 @@ class RedisClient : public ::OI::Rpc::ProtoClientManager
 	DECLARE_SINGLETON(RedisClient)
 	RedisClient();
 	redisReader* m_pReader;
+	sid_t m_iReaderSessionId = INVALID_SID;
 	int32_t m_iTimeoutMilliseconds;
 	int32_t m_iMaxPending;
 	::OI::Thread::Mutex m_stWaitMutex;
@@ -75,7 +76,7 @@ public:
 		::OI::Thread::MutexGuard stLock(m_stWaitMutex);
 		return m_vWait.size();
 	}
-	void Feed(const char* pDataParam, size_t iSizeParam);
+	void Feed(sid_t iSessionIdParam, const char* pDataParam, size_t iSizeParam);
 	// poll 线程上周期调用，把到期还没回执的调用按超时结掉
 	static void SweepTimeout(void*);
 private:

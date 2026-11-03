@@ -13,6 +13,7 @@
 #include "oi_config.h"
 #include "oi_singleton.h"
 #include "oi_task.h"
+#include "oi_lock.h"
 #include <cstdint>
 
 namespace OI { namespace Thread {
@@ -25,6 +26,10 @@ class ThreadPool
 {
 	DECLARE_SINGLETON(ThreadPool)
 	ThreadPool() = default;
+	std::atomic<bool> m_bStopRequested{false};
+	::OI::Thread::Mutex m_stStopHandlerMutex;
+	std::vector<void (*)()> m_vStopHandlers;
+	void FinishStop();
 public:
 	struct ThreadData
 	{
@@ -64,8 +69,11 @@ public:
 	void StartWork();
 	// 单线程主循环及同步适配器共用：普通任务、协程、IO 都必须推进。
 	void PumpOnce();
-	// 打退出标记并叫醒各线程。线程看到标记自己返回，主线程在 StartWork 里 join，再回到 main 析构。
-	// SIGINT、SIGTERM、SIGQUIT 由 poll 接住后也走这里，退出码为 0。
+	// 初始化时注册；停止开始后拒绝注册。回调在 poll 上执行且不可阻塞。
+	bool AddStopHandler(void (*fnHandlerParam)());
+	bool StopRequested() const { return m_bStopRequested.load(); }
+	// 先关闭入口并执行停止回调，再置 Stopping 并通知工人，join 完最后停止 poll。
+	// SIGINT、SIGTERM、SIGQUIT 也走这里，退出码为 0；重复请求不重复执行回调。
 	void RequestStop(int iCodeParam);
 	bool Stopping() const { return bStop.load(); }
 	int32_t ExitCode() const { return iExitCode; }

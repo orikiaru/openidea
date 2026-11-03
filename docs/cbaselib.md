@@ -52,3 +52,15 @@
 Redis 同步接口在单线程里也会推进普通任务与超时检查，不再只转网络和协程队列；在 libuv 回调中两种线程模式都明确抛 logic_error，避免重入网络循环。应用优先使用 co_await，单线程同步调用仍可能在等待时运行其他业务。
 
 HTTP 客户端忽略临时 1xx 响应并继续读最终响应（最多 16 个，101 升级不支持）；204/304 在头部完成后结束，不等待 EOF。长度字段必须是完整十进制数；冲突 Content-Length、同时出现 Transfer-Encoding 和 Content-Length、未支持的传输编码、损坏的 chunk 长度及数据分隔符均按协议失败处理。chunked 支持扩展和 trailer。
+
+客户端建连和服务地址切换统一在 poll 线程执行；同一管理器已有连接或正在建连时，重复 StartClient 不再创建第二条连接。异步返回 true 表示请求已接纳，实际成败仍由连接回调通知。连接尝试携带代次，服务切换会废弃旧代次，迟到的成功或失败都不能改变当前连接状态。同步 StartClient(false) 保留阻塞语义。
+
+Redis 入队、发送、解析和断连处理都在 poll 线程，等待项与实际发送使用同一个 sid；收包必须携带 sid，旧会话的数据直接丢弃。新连接会先结束旧等待再重建解析器。注册发现的 FIFO 请求入队和发送共用框架锁，发送失败/异常在锁内回滚，旧会话的回复和断连回调不影响新连接。
+
+二进制 bool 字段只接受字节 0 和 1，其他值抛 ParserException，保留输出值及读取位置；普通流和字段格式都做相同校验。HTTP 在完成、失败或超时时先释放请求和原始响应缓冲容量，再唤醒调用方；晚到的超时仅持有轻量状态，不保留大包。
+
+停服时，ThreadPool 先发布 StopRequested，再在 poll 上运行初始化阶段注册的停止回调，最后通知工人退出并 join，之后才停止 poll。Redis 的停止回调以 Disconnected 结束等待并关闭连接；停止后同步/协程 Redis 新调用直接失败，不再排到已退出的网络循环。停止回调不能阻塞；业务自身的 TaskScope 仍须按协程文档在正常退出前 Join。
+
+redisserver 的 `[Redis] max_pending_bytes`（默认 64MiB）和 `max_pending_commands`（默认 65536）按每条上游连接计费，字节数包含完整 RESP 请求；收到回执或上游断连时归还额度，不因客户端超时而提前归还。任一额度不足就保留未发送命令并暂停该下游读取；两项都降到各自限额一半后恢复，并先处理已有输入缓冲。单条命令超过字节限额会关闭下游连接，解析长度时即拒绝，不能等待一个永远凑不齐的额度。这是请求积压上限，并非进程 RSS 上限：分配器容量、下游输入缓冲、内核缓冲及响应内存另计。
+
+复测使用 `python3 tools/run_regressions.py --case redis-shutdown`、`redis-backpressure-bytes`、`redis-backpressure-count`；用例都在现有 RedisMgr，通过临时配置的 `[Regression] redis_shutdown / redis_pressure / redis_oversized` 启用。停服测试在同步等待时发送 SIGTERM；背压测试暂停并恢复本机 Redis，检查限额、内存增量及 64 条大响应逐条配对，还验证超大命令拒绝后的重连。`--case all` 包含这三项，需在两种线程模式分别运行。

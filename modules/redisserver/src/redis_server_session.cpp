@@ -47,7 +47,7 @@ const char* ReadLine(const char* pPointerParam, const char* pEndParam, int64_t& 
 
 // 一条完整的 RESP 命令：*N\r\n 后跟 N 个 $len\r\n<data>\r\n。
 // 返回这条命令的字节数；不完整返回 0；格式不对把 bad 置真。
-size_t ScanCommand(const char* pBeginParam, const char* pEndParam, int64_t& iArgumentCountParam, bool& bBadParam)
+size_t ScanCommand(const char* pBeginParam, const char* pEndParam, int64_t& iArgumentCountParam, bool& bBadParam, size_t iMaxBytesParam)
 {
 	const char* pPointer = pBeginParam;
 	if (pPointer >= pEndParam)
@@ -87,6 +87,12 @@ size_t ScanCommand(const char* pBeginParam, const char* pEndParam, int64_t& iArg
 			return 0;
 		}
 		if (iLength < 0 || iLength > kMaxBulk)
+		{
+			bBadParam = true;
+			return 0;
+		}
+		const size_t iPrefixBytes = static_cast<size_t>(pPointer - pBeginParam);
+		if (iPrefixBytes > iMaxBytesParam || static_cast<uint64_t>(iLength) + 2 > iMaxBytesParam - iPrefixBytes)
 		{
 			bBadParam = true;
 			return 0;
@@ -145,8 +151,18 @@ void RedisServerSession::OnDataOut()
 {
 }
 
+void RedisServerSession::ResumeRead()
+{
+	if (IsClosed()) return;
+	m_bReadPaused = false;
+	// 内核可能已经没数据；必须先消费会话中留下的完整命令。
+	OnDataIn();
+	if (!m_bReadPaused && !IsClosed()) AllowRead();
+}
+
 void RedisServerSession::OnDataIn()
 {
+	if (m_bReadPaused || IsClosed()) return;
 	// 只切出完整命令的边界，原样转给上游，不拆成参数再编一遍。
 	const char* pBegin = stInputBuffer.Begin();
 	const char* pEnd = pBegin + stInputBuffer.Size();
@@ -155,7 +171,7 @@ void RedisServerSession::OnDataIn()
 	{
 		int64_t iArgumentCount = 0;
 		bool bBad = false;
-		size_t iNumber = ScanCommand(pPointer, pEnd, iArgumentCount, bBad);
+		size_t iNumber = ScanCommand(pPointer, pEnd, iArgumentCount, bBad, m_pOwner->MaxCommandBytes());
 		if (bBad)
 		{
 			PassiveClose(PARSER_ERR_PROTOCOL_SIZE);
@@ -174,7 +190,14 @@ void RedisServerSession::OnDataIn()
 				PassiveClose(PARSER_ERR_PROTOCOL_SIZE);
 				break;
 			}
-			m_pOwner->Issue(m_iLink, GetSessionID(), pPointer, iNumber);
+			if (!m_pOwner->Issue(m_iLink, GetSessionID(), pPointer, iNumber))
+			{
+				m_bReadPaused = true;
+				ForbidRead();
+				m_pOwner->Pause(m_iLink, GetSessionID());
+				break;
+			}
+			if (IsClosed()) break;
 		}
 		pPointer += iNumber;
 	}

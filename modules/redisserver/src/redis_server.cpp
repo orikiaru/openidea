@@ -7,10 +7,12 @@
 #include "oi_socket.h"
 #include "oi_timer_manager.h"
 #include "oi_config.h"
+#include "oi_thread.h"
 #include "oi_log.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 
 namespace
 {
@@ -190,7 +192,15 @@ void AppendErr(::OI::Base::Bytes& stOutputParam, const char* pTextParam)
 
 void OnReply(redisAsyncContext*, void* pReplyParam, void* pPrivParam)
 {
-	sid_t iSessionIdLocal = (sid_t)(intptr_t)pPrivParam;
+	auto* pLink = static_cast<RedisLink*>(pPrivParam);
+	if (pLink->vPending.empty())
+	{
+		if (pReplyParam) freeReplyObject(pReplyParam);
+		return;
+	}
+	const sid_t iSessionIdLocal = pLink->vPending.front().iSessionId;
+	// 先归还额度，恢复读取延后到下一轮，避免在 hiredis 回调里重入解析。
+	RedisServer::GetInstance().ReleaseCredit(pLink);
 	// 单线程进程，回包缓冲复用一块，不必每条回执分配。
 	static ::OI::Base::Bytes stOutput;
 	stOutput.Clear();
@@ -256,6 +266,14 @@ bool RedisServer::Init()
 		LOG_ERROR("RedisServer missing Redis.ip or Redis.port");
 		return false;
 	}
+	int64_t iMaxBytes = static_cast<int64_t>(m_iMaxPendingBytes);
+	int64_t iMaxCommands = static_cast<int64_t>(m_iMaxPendingCommands);
+	TryGetConfig("Redis.max_pending_bytes", iMaxBytes);
+	TryGetConfig("Redis.max_pending_commands", iMaxCommands);
+	if (iMaxBytes < 64 || static_cast<uint64_t>(iMaxBytes) > (std::numeric_limits<size_t>::max)()
+		|| iMaxCommands < 1 || static_cast<uint64_t>(iMaxCommands) > (std::numeric_limits<size_t>::max)()) return false;
+	m_iMaxPendingBytes = static_cast<size_t>(iMaxBytes);
+	m_iMaxPendingCommands = static_cast<size_t>(iMaxCommands);
 	m_iConnections = 1;
 	TryGetConfig("Redis.connections", m_iConnections);
 	if (m_iConnections < 1)
@@ -291,6 +309,7 @@ void RedisServer::OnAddSession(::OI::Net::Session* pSessionParam)
 
 void RedisServer::OnDelSession(const ::OI::Net::Session* pSessionParam)
 {
+	for (auto& stLink : m_vLinks) stLink.vPaused.erase(pSessionParam->GetSessionID());
 	LOG_TRACE("RedisServer::OnDelSession sid=%d", pSessionParam->GetSessionID());
 }
 
@@ -340,18 +359,82 @@ void RedisServer::ArmReconnect(RedisLink* pLinkParam)
 	}, 2000);
 }
 
-void RedisServer::Issue(int32_t iLinkParam, sid_t iSessionIdParam, const char* pCmdParam, size_t iLengthParam)
+void RedisServer::Pause(int32_t iLinkParam, sid_t iSessionIdParam)
 {
-	::OI::Base::Bytes stErrorLocal;
-	if (iLinkParam < 0 || iLinkParam >= (int)m_vLinks.size() || !m_vLinks[(size_t)iLinkParam].pAsyncContext || iLengthParam == 0)
+	auto& stLink = m_vLinks.at(static_cast<size_t>(iLinkParam));
+	if (stLink.vPaused.insert(iSessionIdParam).second)
 	{
-		AppendErr(stErrorLocal, "ERR redis down");
-		if (!SendBytes(iSessionIdParam, stErrorLocal)) CloseSession(iSessionIdParam);
-		return;
+		LOG_TRACE("redis pressure pause link=%d pending=%zu bytes=%zu", iLinkParam, stLink.vPending.size(), stLink.iPendingBytes);
+		fflush(stdout);
 	}
-	if (redisAsyncFormattedCommand(m_vLinks[(size_t)iLinkParam].pAsyncContext, OnReply, (void*)(intptr_t)iSessionIdParam, pCmdParam, iLengthParam) != REDIS_OK)
+}
+
+void RedisServer::ReleaseCredit(RedisLink* pLinkParam)
+{
+	pLinkParam->iPendingBytes -= pLinkParam->vPending.front().iBytes;
+	pLinkParam->vPending.pop_front();
+	if (::OI::Thread::ThreadPool::GetInstance().StopRequested()
+		|| pLinkParam->bResumeArmed || pLinkParam->vPaused.empty()
+		|| pLinkParam->iPendingBytes > m_iMaxPendingBytes / 2
+		|| pLinkParam->vPending.size() > m_iMaxPendingCommands / 2) return;
+	pLinkParam->bResumeArmed = true;
+	::OI::Timer::BaseTimerManager::GetInstance().AddTimer([pLinkParam]() {
+		::OI::Net::Poll::GetInstance().CallOnLoop([](void* pArgumentParam) {
+			RedisServer::GetInstance().Resume(static_cast<RedisLink*>(pArgumentParam));
+		}, pLinkParam);
+	}, 1);
+}
+
+void RedisServer::Resume(RedisLink* pLinkParam)
+{
+	pLinkParam->bResumeArmed = false;
+	std::set<sid_t> vReady;
+	vReady.swap(pLinkParam->vPaused);
+	for (const auto& iSessionId : vReady)
 	{
-		AppendErr(stErrorLocal, "ERR redis down");
-		if (!SendBytes(iSessionIdParam, stErrorLocal)) CloseSession(iSessionIdParam);
+		RedisServerSession* pSession = nullptr;
+		{
+			::OI::Thread::MutexGuard stLock(stLocker);
+			auto it = mSessionMap.find(iSessionId);
+			if (it != mSessionMap.end())
+			{
+				pSession = static_cast<RedisServerSession*>(it->second);
+				pSession->AddRef();
+			}
+		}
+		if (pSession)
+		{
+			pSession->ResumeRead();
+			pSession->Release();
+		}
 	}
+}
+
+bool RedisServer::Issue(int32_t iLinkParam, sid_t iSessionIdParam, const char* pCmdParam, size_t iLengthParam)
+{
+	if (iLinkParam < 0 || iLinkParam >= static_cast<int>(m_vLinks.size()) || iLengthParam == 0
+		|| iLengthParam > m_iMaxPendingBytes)
+	{
+		CloseSession(iSessionIdParam);
+		return true;
+	}
+	auto& stLink = m_vLinks[static_cast<size_t>(iLinkParam)];
+	if (!stLink.pAsyncContext)
+	{
+		::OI::Base::Bytes stError;
+		AppendErr(stError, "ERR redis down");
+		if (!SendBytes(iSessionIdParam, stError)) CloseSession(iSessionIdParam);
+		return true;
+	}
+	if (stLink.vPending.size() >= m_iMaxPendingCommands || iLengthParam > m_iMaxPendingBytes - stLink.iPendingBytes) return false;
+	stLink.vPending.push_back(RedisPending{iSessionIdParam, iLengthParam});
+	stLink.iPendingBytes += iLengthParam;
+	if (redisAsyncFormattedCommand(stLink.pAsyncContext, OnReply, &stLink, pCmdParam, iLengthParam) != REDIS_OK)
+	{
+		stLink.iPendingBytes -= iLengthParam;
+		stLink.vPending.pop_back();
+		// 本地失败不能插队回包；关闭下游，已发出的旧命令仍按 FIFO 结算额度。
+		CloseSession(iSessionIdParam);
+	}
+	return true;
 }

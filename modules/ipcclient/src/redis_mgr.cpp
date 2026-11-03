@@ -43,6 +43,65 @@ static bool StatusIs(const ::OI::Redis::RedisResult& stResultParam, const char* 
 		&& stResultParam.pReply->str && std::strcmp(stResultParam.pReply->str, pTextParam) == 0;
 }
 
+static coro::Task RedisShutdownRegression()
+{
+	if (!OI::Thread::ThreadPool::GetInstance().AddTask([]() {
+		auto stResult = OI::Redis::CallRedisSync({"BLPOP", "oi-shutdown-regression", "0"});
+		auto stLate = OI::Redis::RedisPingSync();
+		const bool bGood = stResult.iStatus == OI::Redis::RedisStatus::Disconnected
+			&& stLate.iStatus == OI::Redis::RedisStatus::Disconnected
+			&& OI::Redis::RedisClient::GetInstance().PendingCount() == 0;
+		LOG_TRACE("redis shutdown result=%d late=%d bad=%d", static_cast<int>(stResult.iStatus), static_cast<int>(stLate.iStatus), bGood ? 0 : 1);
+		fflush(stdout);
+	}))
+	{
+		TestBoard::GetInstance().Done(1);
+		co_return;
+	}
+	const auto stDeadline = std::chrono::steady_clock::now() + OI::Timer::Seconds(3);
+	while (OI::Redis::RedisClient::GetInstance().PendingCount() == 0 && std::chrono::steady_clock::now() < stDeadline) co_await coro::yield(1);
+	if (OI::Redis::RedisClient::GetInstance().PendingCount() == 0)
+	{
+		TestBoard::GetInstance().Done(1);
+		co_return;
+	}
+	LOG_TRACE("redis shutdown pending");
+	fflush(stdout);
+	// 驱动脚本收到标记后发 SIGTERM；测试线程必须被停止回调唤醒。
+}
+
+static coro::Task RedisPressureRegression(bool bOversizedParam)
+{
+	coro::TaskScope stTasks;
+	auto pBad = std::make_shared<std::atomic<int>>(0);
+	for (int iIndex = 0; iIndex < 64; ++iIndex)
+	{
+		stTasks.Start([iIndex, pBad](coro::Token, coro::StopToken) -> coro::Task {
+			const std::string sPayload = std::to_string(iIndex) + std::string(256 * 1024, 'x');
+			std::vector<std::string> vArguments{"ECHO", sPayload};
+			auto stResult = co_await OI::Redis::CallRedis(std::move(vArguments));
+			if (!stResult || !stResult.pReply->str || stResult.pReply->len != sPayload.size()
+				|| std::memcmp(stResult.pReply->str, sPayload.data(), sPayload.size()) != 0) ++*pBad;
+		});
+	}
+	co_await stTasks.Join();
+	if (bOversizedParam)
+	{
+		auto& stClient = OI::Redis::RedisClient::GetInstance();
+		const sid_t iOldSid = stClient.ConnectedSid();
+		std::vector<std::string> vArguments{"ECHO", std::string(2 * 1024 * 1024, 'y')};
+		auto stResult = co_await OI::Redis::CallRedis(std::move(vArguments));
+		if (stResult.iStatus != OI::Redis::RedisStatus::Disconnected) ++*pBad;
+		const auto stDeadline = std::chrono::steady_clock::now() + OI::Timer::Seconds(3);
+		while ((!stClient.IsConnect() || stClient.ConnectedSid() == iOldSid)
+			&& std::chrono::steady_clock::now() < stDeadline) co_await coro::yield(1);
+	}
+	if (!StatusIs(co_await OI::Redis::RedisPing(), "PONG")) ++*pBad;
+	LOG_TRACE("redis pressure done total=64 bad=%d", pBad->load());
+	fflush(stdout);
+	TestBoard::GetInstance().Done(pBad->load() ? 1 : 0);
+}
+
 coro::Task RedisMgr::Pump()
 {
 	int iSpins = 0;
@@ -62,6 +121,12 @@ coro::Task RedisMgr::Pump()
 		co_await coro::yield(50);
 	}
 
+	bool bShutdown = false, bPressure = false, bOversized = false;
+	TryGetConfig("Regression.redis_shutdown", bShutdown);
+	TryGetConfig("Regression.redis_pressure", bPressure);
+	TryGetConfig("Regression.redis_oversized", bOversized);
+	if (bShutdown) { co_await RedisShutdownRegression(); co_return; }
+	if (bPressure) { co_await RedisPressureRegression(bOversized); co_return; }
 	m_iFailed = 0;
 	co_await Check();
 	if (m_iFailed)

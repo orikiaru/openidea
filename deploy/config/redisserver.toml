@@ -25,6 +25,10 @@ type = "tcp"
 ip = "127.0.0.1"
 port = "6379"
 connections = 4
+# 每条上游连接的未完成请求限额；收到回复/断连才归还，满额暂停下游读取。
+# 单条完整 RESP 命令也不能超过 max_pending_bytes；低水位为限额的一半。
+max_pending_bytes = 67108864
+max_pending_commands = 65536
 
 [LogClient]
 service = "logd"

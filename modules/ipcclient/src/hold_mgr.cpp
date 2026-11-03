@@ -1,5 +1,10 @@
 #include "hold_mgr.h"
 #include "oi_http.h"
+#include "oi_log_client.h"
+#include "oi_registry.h"
+#if defined(__GLIBC__)
+#include <malloc.h>
+#endif
 #include "oi_rpcdata_jsonall.h"
 #include <limits>
 #include "oi_config.h"
@@ -169,9 +174,136 @@ static int CheckJsonDecoding()
 	return iBad;
 }
 
+static int CheckBinaryBool()
+{
+	int iBad = 0;
+	for (int iMode = 0; iMode < 2; ++iMode)
+	{
+		for (unsigned iByte = 0; iByte < 256; ++iByte)
+		{
+			const unsigned char iRaw = static_cast<unsigned char>(iByte);
+			OI::Base::BytesStream stInput(reinterpret_cast<const char*>(&iRaw), 1);
+			bool bValue = true;
+			bool bRejected = false;
+			try
+			{
+				if (iMode == 0) stInput >> bValue;
+				else stInput.ReadPb(1, bValue);
+			}
+			catch (const OI::Base::ParserException&) { bRejected = true; }
+			if (iByte <= 1)
+			{
+				if (bRejected || bValue != (iByte != 0) || stInput.GetCurPos() != 1) ++iBad;
+			}
+			else if (!bRejected || !bValue || stInput.GetCurPos() != 0) ++iBad;
+		}
+	}
+	return iBad;
+}
+
+// 在 poll 执行域里模拟旧建连完成/失败，不能取消当前代次或新增会话。
+class ConnectGenerationProbe : public OI::Net::SessionManager
+{
+	int m_iFailures = 0;
+	OI::Net::Session* CloneSession() override { return nullptr; }
+	void OnAddSession(OI::Net::Session*) override {}
+	void OnDelSession(const OI::Net::Session*) override {}
+	void OnConnectFailed() override { ++m_iFailures; }
+public:
+	int Check()
+	{
+		iConnectGeneration = 2;
+		bConnectPending = true;
+		AbortSession(1);
+		const auto iDescriptor = NetOs_CreateTcp(true);
+		if (iDescriptor == INVALID_SOCKET_ID) return 1;
+		CompleteConnect(iDescriptor, 1);
+		int iBad = (!bConnectPending || m_iFailures != 0 || !mSessionMap.empty()) ? 1 : 0;
+		AbortSession(2);
+		AbortSession(2);
+		if (bConnectPending || m_iFailures != 1) ++iBad;
+		return iBad;
+	}
+};
+
+static coro::TaskResult<int> CheckConnectionIsolation()
+{
+	int iBad = 0;
+	auto& stClient = IpcClient::GetInstance();
+	auto& stRedis = OI::Redis::RedisClient::GetInstance();
+	const auto stDeadline = std::chrono::steady_clock::now() + OI::Timer::Seconds(5);
+	while (!stRedis.IsConnect() && std::chrono::steady_clock::now() < stDeadline) co_await coro::yield(1);
+	const sid_t iRpcSid = stClient.ConnectedSid();
+	const sid_t iRedisSid = stRedis.ConnectedSid();
+	if (iRpcSid == INVALID_SID || iRedisSid == INVALID_SID) co_return 1;
+	coro::TaskScope stTasks;
+	auto pBad = std::make_shared<std::atomic<int>>(0);
+	for (int iIndex = 0; iIndex < 32; ++iIndex)
+	{
+		stTasks.Start([iIndex, pBad](coro::Token, coro::StopToken) -> coro::Task {
+			IpcClient::GetInstance().StartClient();
+			OI::Redis::RedisClient::GetInstance().StartClient();
+			OI::Log::LogClient::GetInstance().StartClient();
+			OI::RpcData::HoldReq stRequest;
+			stRequest.iMark = 10000 + iIndex;
+			auto stResult = co_await OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequest, OI::Timer::Seconds(3));
+			if (stResult.GetRet() != 0 || stResult.GetRes().iMark != stRequest.iMark) ++*pBad;
+			std::vector<std::string> vArguments{"ECHO", std::to_string(iIndex)};
+			auto stReply = co_await OI::Redis::CallRedis(std::move(vArguments));
+			if (!stReply || !stReply.pReply->str || std::string(stReply.pReply->str, stReply.pReply->len) != std::to_string(iIndex)) ++*pBad;
+		});
+	}
+	co_await stTasks.Join();
+	if (stClient.ConnectedSid() != iRpcSid || stRedis.ConnectedSid() != iRedisSid) ++iBad;
+	struct ProbeResult { std::atomic<bool> bDone{false}; int iBad = 0; };
+	auto pProbe = std::make_shared<ProbeResult>();
+	// 协程帧持有 pProbe，回调完成前不退出；回调结束后只读已发布的结果。
+	OI::Net::Poll::GetInstance().CallOnLoop([](void* pArgumentParam) {
+		auto* pResult = static_cast<ProbeResult*>(pArgumentParam);
+		ConnectGenerationProbe stProbe;
+		pResult->iBad = stProbe.Check();
+		auto& stRedisLocal = OI::Redis::RedisClient::GetInstance();
+		stRedisLocal.Feed(INVALID_SID, "not RESP", 8);
+		stRedisLocal.Feed(stRedisLocal.ConnectedSid() + 1, "+FOREIGN\r\n", 10);
+		pResult->bDone.store(true);
+	}, pProbe.get());
+	while (!pProbe->bDone.load()) co_await coro::yield(1);
+	if (!Pong(co_await OI::Redis::RedisPing())) ++iBad;
+	co_return iBad + pBad->load() + pProbe->iBad;
+}
+
 coro::Task HoldMgr::Pump()
 {
-	int iBadLocal = CheckJsonDecoding();
+	int iBadLocal = CheckBinaryBool();
+	printf("hold binary bool bad=%d\n", iBadLocal);
+	iBadLocal += co_await CheckConnectionIsolation();
+	printf("hold connection isolation bad=%d\n", iBadLocal);
+	bool bRegistryChecks = false;
+	TryGetConfig("Regression.registry_checks", bRegistryChecks);
+	if (bRegistryChecks)
+	{
+		coro::TaskScope stLookups;
+		auto pLookupBad = std::make_shared<std::atomic<int>>(0);
+		for (int iIndex = 0; iIndex < 8; ++iIndex)
+		{
+			stLookups.Start([pLookupBad](coro::Token, coro::StopToken) -> coro::Task {
+				for (int iRound = 0; iRound < 8; ++iRound)
+				{
+					// 周期拉取与同步查询交错，队列顺序必须和线上顺序一致。
+					OI::Base::RegistryClient::GetInstance().Pull();
+					std::string sIp, sPort;
+					if (!OI::Base::RegistryClient::GetInstance().Lookup("ipcserver", sIp, sPort)
+						|| sIp != "127.0.0.1" || sPort != "17981") ++*pLookupBad;
+					co_await coro::yield(0);
+				}
+			});
+		}
+		co_await stLookups.Join();
+		iBadLocal += pLookupBad->load();
+		printf("hold registry pairing bad=%d\n", iBadLocal);
+	}
+
+	iBadLocal += CheckJsonDecoding();
 	printf("hold json validation bad=%d\n", iBadLocal);
 	// 异常必须释放闭包；随后继续执行普通任务，不能终止工作线程。
 	for (int iKind = 0; iKind < 2; ++iKind)
@@ -233,6 +365,30 @@ coro::Task HoldMgr::Pump()
 			}
 		}
 		printf("hold http framing bad=%d\n", iBadLocal);
+		// 长超时期间连续成功的大响应，不应把已完成的收包容量留到超时。
+		auto fnAllocated = []() -> size_t {
+#if defined(__GLIBC__)
+#if __GLIBC_PREREQ(2, 33)
+			const auto stMemory = mallinfo2();
+#else
+			const auto stMemory = mallinfo();
+#endif
+			return static_cast<size_t>(stMemory.uordblks) + static_cast<size_t>(stMemory.hblkhd);
+#else
+			return 0;
+#endif
+		};
+		OI::Http::Client stLargeHttp("127.0.0.1", iHttpPort, 30000);
+		const size_t iBefore = fnAllocated();
+		for (int iIndex = 0; iIndex < 32; ++iIndex)
+		{
+			auto stResult = co_await stLargeHttp.Get("/large", {});
+			if (stResult.bFail || stResult.sBody != std::string(1024 * 1024, 'x')) ++iBadLocal;
+		}
+		const size_t iAfter = fnAllocated();
+		if (iAfter > iBefore + 8 * 1024 * 1024) ++iBadLocal;
+		printf("hold http release before=%zu after=%zu bad=%d\n", iBefore, iAfter, iBadLocal);
+
 	}
 
 	// 发送预算必须跨会话/通道缓冲连续计数，真正写出才恢复额度。

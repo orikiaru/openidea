@@ -204,6 +204,9 @@ struct Call::State
 		{
 			return;
 		}
+		// 完成后不会再读写网络缓冲。先释放容量，再把结果发布给工作线程。
+		std::string().swap(sRequest);
+		std::string().swap(sIncoming);
 		if (bInIo)
 		{
 			return;

@@ -23,7 +23,6 @@ struct ReplyFree
 	}
 };
 
-sid_t g_sid = INVALID_SID;
 std::once_flag g_sweep_once;
 const int kSweepMs = 200;
 
@@ -85,7 +84,13 @@ bool RedisClient::Init()
 	{
 		m_iTimeoutMilliseconds = 25000;
 	}
-	return ::OI::Rpc::ProtoClientManager::Init();
+	if (!::OI::Rpc::ProtoClientManager::Init()) return false;
+	return ::OI::Thread::ThreadPool::GetInstance().AddStopHandler([]() {
+		auto& stClient = GetInstance();
+		stClient.FailAll();
+		stClient.m_iReaderSessionId = INVALID_SID;
+		stClient.CloseAllSessions();
+	});
 }
 
 ::OI::Net::Session* RedisClient::CloneSession()
@@ -95,22 +100,24 @@ bool RedisClient::Init()
 
 void RedisClient::OnClientConnect(::OI::Net::Session* pSessionParam)
 {
-	g_sid = pSessionParam->GetSessionID();
+	// 新连接发布前先结束旧等待；旧连接的后续回包由 Feed 的 sid 检查丢弃。
+	FailAll();
+	m_iReaderSessionId = pSessionParam->GetSessionID();
 	if (m_pReader)
 	{
 		redisReaderFree(m_pReader);
 	}
 	m_pReader = redisReaderCreate();
-	LOG_TRACE("RedisClient::OnClientConnect sid=%d", g_sid);
+	LOG_TRACE("RedisClient::OnClientConnect sid=%d", m_iReaderSessionId);
 }
 
 void RedisClient::OnClientDisconnect(const ::OI::Net::Session* pSessionParam)
 {
 	sid_t iSessionIdLocal = pSessionParam->GetSessionID();
 	LOG_TRACE("RedisClient::OnClientDisconnect sid=%d", iSessionIdLocal);
-	if (g_sid == iSessionIdLocal)
+	if (m_iReaderSessionId == iSessionIdLocal)
 	{
-		g_sid = INVALID_SID;
+		m_iReaderSessionId = INVALID_SID;
 		if (m_pReader)
 		{
 			redisReaderFree(m_pReader);
@@ -160,6 +167,7 @@ RedisResult RedisCall::await_resume()
 
 bool RedisCall::Suspend(std::coroutine_handle<> stHandleParam)
 {
+	if (::OI::Thread::ThreadPool::GetInstance().StopRequested()) return false;
 	m_pState->stHandle = stHandleParam;
 	::OI::Net::Poll::GetInstance().CallOnLoop(RedisClient::Submit, m_pState);
 	int iPrevious = m_pState->iGate.exchange(2, std::memory_order_acq_rel);
@@ -176,6 +184,7 @@ RedisResult RedisClient::CallSync(std::vector<std::string> vArgumentsParam)
 	// 两种模式都禁止在 libuv 回调中同步等待，不能重入事件循环。
 	if (::OI::Net::Poll::GetInstance().InPollCallback())
 		throw std::logic_error("CallRedisSync cannot run in a poll callback; use co_await CallRedis");
+	if (::OI::Thread::ThreadPool::GetInstance().StopRequested()) return {};
 	RedisCall::State* pSt = new RedisCall::State();
 	pSt->vArguments = std::move(vArgumentsParam);
 	pSt->bSynchronous = true;
@@ -273,7 +282,8 @@ void RedisClient::Enqueue(RedisCall::State* pStParam)
 		Settle(pStParam, {}, RedisStatus::InvalidArgument);
 		return;
 	}
-	if (!IsConnect())
+	if (::OI::Thread::ThreadPool::GetInstance().StopRequested()
+		|| m_iReaderSessionId == INVALID_SID || ConnectedSid() != m_iReaderSessionId)
 	{
 		Settle(pStParam, {}, RedisStatus::Disconnected);
 		return;
@@ -305,7 +315,7 @@ void RedisClient::Enqueue(RedisCall::State* pStParam)
 		// 超时的也占着位置。满了就不再排。
 		if (m_vWait.size() < static_cast<size_t>(m_iMaxPending))
 		{
-			pStParam->iSessionId = g_sid;
+			pStParam->iSessionId = m_iReaderSessionId;
 			pStParam->iReferences.fetch_add(1, std::memory_order_relaxed);
 			m_vWait.push_back(pStParam);
 			bQueued = true;
@@ -316,7 +326,7 @@ void RedisClient::Enqueue(RedisCall::State* pStParam)
 		Settle(pStParam, {}, RedisStatus::Busy);
 		return;
 	}
-	if (!SendRaw(stFrame))
+	if (!SendBytes(pStParam->iSessionId, stFrame))
 	{
 		::OI::Thread::MutexGuard stLock(m_stWaitMutex);
 		for (size_t iIndexLocal = 0; iIndexLocal < m_vWait.size(); ++iIndexLocal)
@@ -388,8 +398,9 @@ void RedisClient::FailAll(RedisStatus iStatusParam)
 	}
 }
 
-void RedisClient::Feed(const char* pDataParam, size_t iSizeParam)
+void RedisClient::Feed(sid_t iSessionIdParam, const char* pDataParam, size_t iSizeParam)
 {
+	if (iSessionIdParam != m_iReaderSessionId || iSessionIdParam == INVALID_SID) return;
 	if (!m_pReader)
 	{
 		m_pReader = redisReaderCreate();
@@ -397,9 +408,9 @@ void RedisClient::Feed(const char* pDataParam, size_t iSizeParam)
 	if (redisReaderFeed(m_pReader, pDataParam, iSizeParam) != REDIS_OK)
 	{
 		FailAll(RedisStatus::ProtocolError);
-		if (g_sid != INVALID_SID)
+		if (m_iReaderSessionId != INVALID_SID)
 		{
-			CloseSession(g_sid);
+			CloseSession(m_iReaderSessionId);
 		}
 		return;
 	}
@@ -409,9 +420,9 @@ void RedisClient::Feed(const char* pDataParam, size_t iSizeParam)
 		if (redisReaderGetReply(m_pReader, &pRaw) != REDIS_OK)
 		{
 			FailAll(RedisStatus::ProtocolError);
-			if (g_sid != INVALID_SID)
+			if (m_iReaderSessionId != INVALID_SID)
 			{
-				CloseSession(g_sid);
+				CloseSession(m_iReaderSessionId);
 			}
 			return;
 		}

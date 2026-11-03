@@ -18,7 +18,7 @@ void ConnectChannel::DataIn()
 	}
 	if (!CheckTcpConnect())
 	{
-		m_pSessionManager->AbortSession();
+		m_pSessionManager->AbortSession(m_iGeneration);
 	}
 	Close();
 }
@@ -70,17 +70,17 @@ bool ConnectChannel::CheckTcpConnect()
 	}
 	if (iValue)
 	{
-		m_pSessionManager->AbortSession();
+		m_pSessionManager->AbortSession(m_iGeneration);
 		return true;
 	}
 	// 交 dup 出来的 fd。原 fd 留给本通道关：同一个 fd 上旧 uv_poll 关闭时会 epoll DEL，新会话的监听会被一起删掉。
 	net_socket_t iDescriptorLocal = NetOs_Dup(stSocket.GetSocket());
 	if (iDescriptorLocal == INVALID_SOCKET_ID)
 	{
-		m_pSessionManager->AbortSession();
+		m_pSessionManager->AbortSession(m_iGeneration);
 		return true;
 	}
-	m_pSessionManager->AddSession(iDescriptorLocal);
+	m_pSessionManager->CompleteConnect(iDescriptorLocal, m_iGeneration);
 	return true;
 }
 

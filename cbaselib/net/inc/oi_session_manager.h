@@ -27,6 +27,9 @@ class SessionManager
 protected:
 	typedef std::map<sid_t, Session*> SessionMap;
 	SessionMap 	mSessionMap;
+	// 仅 poll 线程访问；旧连接完成/失败不能改变新一代连接状态。
+	uint64_t iConnectGeneration = 0;
+	bool bConnectPending = false;
 	size_t iMaxSendQueueBytes = 64 * 1024 * 1024;
 	sid_t	   	iCurrentSessionId;
 	::OI::Thread::Mutex   	stLocker;
@@ -72,7 +75,8 @@ protected:
 	void AddSession(net_socket_t iNewDescriptorParam);
 	void AddSession(Session* pSessionParam);
 	//ConnectSession调用,必然有IO线程触发
-	void AbortSession();
+	void AbortSession(uint64_t iGenerationParam);
+	void CompleteConnect(net_socket_t iDescriptorParam, uint64_t iGenerationParam);
 	//不用怕重入,必然由IO线程触发
 	void DelSession(const Session* pSessionParam);
 

@@ -72,7 +72,7 @@ public:
 	// 按 pull_ms 把关心的名字整量拉一次。
 	void Pull();
 	virtual const std::string GetIDString();
-	void OnFrame(uint32_t iIdParam, ::OI::Base::BytesStream& stBodyParam);
+	void OnFrame(sid_t iSessionIdParam, uint32_t iIdParam, ::OI::Base::BytesStream& stBodyParam);
 protected:
 	virtual ::OI::Net::Session* CloneSession();
 	virtual void OnAddSession(::OI::Net::Session* pSessionParam);
@@ -115,6 +115,7 @@ protected:
 		std::vector<std::string> vNames;
 	};
 	::OI::Thread::Mutex stPendingMutex;
+	::OI::Thread::Mutex stSyncMutex;
 	std::deque<PendingPull> vPendingPulls;
 	std::atomic<bool> bRegistrationWaiting;
 	std::atomic<bool> bGot;

@@ -3,11 +3,23 @@
 #include "oi_singleton.h"
 #include <string>
 #include <vector>
+#include <deque>
+#include <set>
 
 struct redisAsyncContext;
 
+struct RedisPending
+{
+	sid_t iSessionId;
+	size_t iBytes;
+};
+
 struct RedisLink
 {
+	std::deque<RedisPending> vPending;
+	std::set<sid_t> vPaused;
+	size_t iPendingBytes = 0;
+	bool bResumeArmed = false;
 	redisAsyncContext* pAsyncContext;
 	int32_t iIndex;
 	bool bDialing;
@@ -24,12 +36,19 @@ class RedisServer : public ::OI::Net::SessionManager
 	int32_t m_iConnections;
 	int32_t m_iNext;
 	std::vector<RedisLink> m_vLinks;
+	size_t m_iMaxPendingBytes = 64 * 1024 * 1024;
+	size_t m_iMaxPendingCommands = 65536;
+	void Resume(RedisLink* pLinkParam);
 public:
 	virtual ~RedisServer();
 	virtual const std::string GetIDString() { return "RedisServer"; }
 	virtual bool Init();
 	// cmd 是一条完整的 RESP 命令，原样转给上游
-	void Issue(int32_t iLinkParam, sid_t iSessionIdParam, const char* pCmdParam, size_t iLengthParam);
+	// false 表示额度不足，调用方保留当前完整命令并暂停读取。
+	bool Issue(int32_t iLinkParam, sid_t iSessionIdParam, const char* pCmdParam, size_t iLengthParam);
+	size_t MaxCommandBytes() const { return m_iMaxPendingBytes; }
+	void ReleaseCredit(RedisLink* pLinkParam);
+	void Pause(int32_t iLinkParam, sid_t iSessionIdParam);
 	void Open(RedisLink* pLinkParam);
 	void ArmReconnect(RedisLink* pLinkParam);
 private:
