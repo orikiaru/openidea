@@ -15,77 +15,77 @@ namespace OI { namespace Net {
 
 bool SessionManager::Init()
 {
-	int64_t send_limit = 64 * 1024 * 1024;
-	TryGetConfig(GetIDString() + ".max_send_queue_bytes", send_limit);
-	if (send_limit <= 0 || (uint64_t)send_limit > (std::numeric_limits<size_t>::max)()) return false;
-	_max_send_queue_bytes = (size_t)send_limit;
-	std::string ip, port, type;
-	TryGetConfigAndReturnFalse(GetIDString() + ".ip", ip);
-	TryGetConfigAndReturnFalse(GetIDString() + ".port", port);
-	TryGetConfigAndReturnFalse(GetIDString() + ".type", type);
+	int64_t iSendLimit = 64 * 1024 * 1024;
+	TryGetConfig(GetIDString() + ".max_send_queue_bytes", iSendLimit);
+	if (iSendLimit <= 0 || (uint64_t)iSendLimit > (std::numeric_limits<size_t>::max)()) return false;
+	iMaxSendQueueBytes = (size_t)iSendLimit;
+	std::string sIpLocal, sPortLocal, sType;
+	TryGetConfigAndReturnFalse(GetIDString() + ".ip", sIpLocal);
+	TryGetConfigAndReturnFalse(GetIDString() + ".port", sPortLocal);
+	TryGetConfigAndReturnFalse(GetIDString() + ".type", sType);
 
-	std::string service;
-	if (::OI::Base::Config::GlobalConfig().GetAs(GetIDString() + ".service", service)
-		&& !service.empty())
+	std::string sService;
+	if (::OI::Base::Config::GlobalConfig().GetAs(GetIDString() + ".service", sService)
+		&& !sService.empty())
 	{
-		std::string found_ip;
-		std::string found_port;
-		if (::OI::Base::RegistryClient::GetInstance().Lookup(service, found_ip, found_port))
+		std::string sFoundIp;
+		std::string sFoundPort;
+		if (::OI::Base::RegistryClient::GetInstance().Lookup(sService, sFoundIp, sFoundPort))
 		{
-			ip = found_ip;
-			port = found_port;
+			sIpLocal = sFoundIp;
+			sPortLocal = sFoundPort;
 		}
-		_service_name = service;
+		sServiceName = sService;
 	}
 
-	assert(GetSessionTypeByString(type) != SESSION_TYPE_INVALID);
-	DefaultInit(ip, port, GetSessionTypeByString(type));
-	_endpoint = ip + ":" + port;
-	if (!_service_name.empty())
+	assert(GetSessionTypeByString(sType) != SESSION_TYPE_INVALID);
+	DefaultInit(sIpLocal, sPortLocal, GetSessionTypeByString(sType));
+	sEndpoint = sIpLocal + ":" + sPortLocal;
+	if (!sServiceName.empty())
 	{
-		::OI::Base::RegistryClient::GetInstance().Watch(this, _service_name);
+		::OI::Base::RegistryClient::GetInstance().Watch(this, sServiceName);
 	}
 	return true;
 }
 
-bool SessionManager::StartClient(bool async)
-{	if (_service_down)
+bool SessionManager::StartClient(bool bAsyncParam)
+{	if (bServiceDown)
 	{
 		return false;
 	}
-	return ConnectChannel::StartConnect(this, async);
+	return ConnectChannel::StartConnect(this, bAsyncParam);
 
 }
 
-void SessionManager::CloseEndpoint(const std::string& endpoint)
+void SessionManager::CloseEndpoint(const std::string& sEndpointParam)
 {
-	if (endpoint.empty())
+	if (sEndpointParam.empty())
 	{
 		return;
 	}
-	std::vector<sid_t> ids;
+	std::vector<sid_t> vIds;
 	{
-		::OI::Thread::MutexGuard lock(_locker);
-		for (SessionMap::iterator it = _session_map.begin(); it != _session_map.end(); ++it)
+		::OI::Thread::MutexGuard stLock(stLocker);
+		for (const auto& [iSessionId, pSession] : mSessionMap)
 		{
-			if (it->second->GetEndpoint() == endpoint)
+			if (pSession->GetEndpoint() == sEndpointParam)
 			{
-				ids.push_back(it->first);
+				vIds.push_back(iSessionId);
 			}
 		}
 	}
-	for (size_t i = 0; i < ids.size(); ++i)
+	for (size_t iIndexLocal = 0; iIndexLocal < vIds.size(); ++iIndexLocal)
 	{
-		CloseSession(ids[i]);
+		CloseSession(vIds[iIndexLocal]);
 	}
 }
 
-bool SessionManager::HasEndpoint(const std::string& endpoint)
+bool SessionManager::HasEndpoint(const std::string& sEndpointParam)
 {
-	::OI::Thread::MutexGuard lock(_locker);
-	for (SessionMap::iterator it = _session_map.begin(); it != _session_map.end(); ++it)
+	::OI::Thread::MutexGuard stLock(stLocker);
+	for (const auto& [iSessionId, pSession] : mSessionMap)
 	{
-		if (it->second->GetEndpoint() == endpoint)
+		if (pSession->GetEndpoint() == sEndpointParam)
 		{
 			return true;
 		}
@@ -95,77 +95,77 @@ bool SessionManager::HasEndpoint(const std::string& endpoint)
 
 void SessionManager::CloseAllSessions()
 {
-	std::vector<sid_t> ids;
+	std::vector<sid_t> vIds;
 	{
-		::OI::Thread::MutexGuard lock(_locker);
-		for (SessionMap::iterator it = _session_map.begin(); it != _session_map.end(); ++it)
+		::OI::Thread::MutexGuard stLock(stLocker);
+		for (const auto& [iSessionId, pSession] : mSessionMap)
 		{
-			ids.push_back(it->first);
+			vIds.push_back(iSessionId);
 		}
 	}
-	for (size_t i = 0; i < ids.size(); ++i)
+	for (size_t iIndexLocal = 0; iIndexLocal < vIds.size(); ++iIndexLocal)
 	{
-		CloseSession(ids[i]);
+		CloseSession(vIds[iIndexLocal]);
 	}
 }
 
-void SessionManager::ApplyService(const std::string& ip, const std::string& port, bool online)
+void SessionManager::ApplyService(const std::string& sIpParam, const std::string& sPortParam, bool bOnlineParam)
 {
-	if (_service_name.empty())
+	if (sServiceName.empty())
 	{
 		return;
 	}
-	if (!online)
+	if (!bOnlineParam)
 	{
-		if (!_service_seen || _service_down)
+		if (!bServiceSeen || bServiceDown)
 		{
 			return;
 		}
-		_service_down = true;
-		std::string previous = _endpoint;
-		_endpoint.clear();
-		LOG_TRACE("service offline %s", _service_name.c_str());
+		bServiceDown = true;
+		std::string sPrevious = sEndpoint;
+		sEndpoint.clear();
+		LOG_TRACE("service offline %s", sServiceName.c_str());
 		fflush(stdout);
-		CloseEndpoint(previous);
+		CloseEndpoint(sPrevious);
 		OnServiceDown();
 		return;
 	}
-	std::string endpoint = ip + ":" + port;
-	bool was_down = _service_down;
-	bool moved = _endpoint != endpoint;
-	_service_seen = true;
-	if (!was_down && !moved)
+	std::string sEndpointLocal = sIpParam + ":" + sPortParam;
+	bool bWasDown = bServiceDown;
+	bool bMoved = sEndpoint != sEndpointLocal;
+	bServiceSeen = true;
+	if (!bWasDown && !bMoved)
 	{
 		return;
 	}
-	std::string previous = _endpoint;
-	_service_down = false;
-	_endpoint = endpoint;
-	DefaultInit(ip, port, _session_type);
-	LOG_TRACE("service switch %s %s -> %s", _service_name.c_str(), previous.c_str(), endpoint.c_str());
+	std::string sPrevious = sEndpoint;
+	bServiceDown = false;
+	sEndpoint = sEndpointLocal;
+	DefaultInit(sIpParam, sPortParam, iSessionType);
+	LOG_TRACE("service switch %s %s -> %s", sServiceName.c_str(), sPrevious.c_str(), sEndpointLocal.c_str());
 	fflush(stdout);
-	if (!previous.empty() && previous != endpoint)
+	if (!sPrevious.empty() && sPrevious != sEndpointLocal)
 	{
-		CloseEndpoint(previous);
+		CloseEndpoint(sPrevious);
 	}
-	if (!HasEndpoint(endpoint))
+	if (!HasEndpoint(sEndpointLocal))
 	{
 		StartClient();
 	}
 }
 
-bool SessionManager::StartServer(bool async)
+bool SessionManager::StartServer(bool bAsyncParam)
 {
-	if (!AcceptChannel::StartAccept(this, async))
+	if (!AcceptChannel::StartAccept(this, bAsyncParam))
 	{
 		return false;
 	}
 	return ::OI::Base::RegistryClient::GetInstance().Publish(GetIDString(), GetStrIP(), GetStrPort());
 }
 
-SESSION_TYPE SessionManager::GetSessionTypeByString(const std::string& type)
+SESSION_TYPE SessionManager::GetSessionTypeByString(const std::string& sTypeParam)
 {
-	if (type == "tcp")
+	if (sTypeParam == "tcp")
 	{
 		return SESSION_TYPE_TCP;
 	}
@@ -174,13 +174,13 @@ SESSION_TYPE SessionManager::GetSessionTypeByString(const std::string& type)
 
 SessionManager::~SessionManager()
 {
-	::OI::Thread::MutexGuard l(_locker);
-	for (SessionMap::iterator it = _session_map.begin(); it != _session_map.end(); ++it)
+	::OI::Thread::MutexGuard stLock(stLocker);
+	for (const auto& [iSessionId, pSession] : mSessionMap)
 	{
-		Session* pSession = it->second;
-		pSession->ActiveClose();
+		Session* pSessionLocal = pSession;
+		pSessionLocal->ActiveClose();
 	}
-	_session_map.clear();
+	mSessionMap.clear();
 }
 
 const std::string SessionManager::GetIDString()
@@ -188,57 +188,57 @@ const std::string SessionManager::GetIDString()
 	return "SessionManager"; 
 }
 
-bool SessionManager::SendBytes(sid_t sid, const ::OI::Base::Bytes& data)
+bool SessionManager::SendBytes(sid_t iSessionIdParam, const ::OI::Base::Bytes& stDataParam)
 {
-	Session* pSession = NULL;
+	Session* pSessionLocal = NULL;
 	{
-		::OI::Thread::MutexGuard l(_locker);
-		SessionMap::iterator it = _session_map.find(sid);
-		if (it == _session_map.end())
+		::OI::Thread::MutexGuard stLock(stLocker);
+		auto stIterator = mSessionMap.find(iSessionIdParam);
+		if (stIterator == mSessionMap.end())
 		{
 			return false;
 		}
 		// 还在表里说明 poll 线程没销毁它。持一份引用，拷贝放到管理器锁外，别的连接发送不用排队。
-		pSession = it->second;
-		pSession->AddRef();
+		pSessionLocal = stIterator->second;
+		pSessionLocal->AddRef();
 	}
-	auto release = [](Session* session) { session->Release(); };
-	std::unique_ptr<Session, decltype(release)> held(pSession, release);
-	return pSession->Send(data);
+	auto fnRelease = [](Session* pSessionParam) { pSessionParam->Release(); };
+	std::unique_ptr<Session, decltype(fnRelease)> pHeld(pSessionLocal, fnRelease);
+	return pSessionLocal->Send(stDataParam);
 }
 
-void SessionManager::AddSession(Session* pSession)
+void SessionManager::AddSession(Session* pSessionParam)
 {
-	pSession->SetSendQueueLimit(_max_send_queue_bytes);
-	int sid = 0;
+	pSessionParam->SetSendQueueLimit(iMaxSendQueueBytes);
+	int iSessionIdLocal = 0;
 	{
 		{
-			::OI::Thread::MutexGuard l(_locker);
-			sid = ++_cur_session_id;
-			_session_map[sid] = pSession;
-			pSession->SetSessionID(sid);
-			pSession->SetEndpoint(_sip + ":" + _sport);
+			::OI::Thread::MutexGuard stLock(stLocker);
+			iSessionIdLocal = ++iCurrentSessionId;
+			mSessionMap[iSessionIdLocal] = pSessionParam;
+			pSessionParam->SetSessionID(iSessionIdLocal);
+			pSessionParam->SetEndpoint(sIpAddress + ":" + sPort);
 		}
-		OnAddSession(pSession);
+		OnAddSession(pSessionParam);
 	}
 }
 
-void SessionManager::AddSession(net_socket_t new_fd)
+void SessionManager::AddSession(net_socket_t iNewDescriptorParam)
 {
-	Session* pSession = CloneSession();
-	Channel* pChannel = NULL;
+	Session* pSessionLocal = CloneSession();
+	Channel* pChannelLocal = NULL;
 	if (GetSessionType() == SESSION_TYPE_TCP)
 	{
-		NetSocket s;
-		s.Init(new_fd, this);
-		pChannel = new TCP_Channel(s, pSession);
+		NetSocket stText;
+		stText.Init(iNewDescriptorParam, this);
+		pChannelLocal = new TCP_Channel(stText, pSessionLocal);
 	}
 
-	if (pChannel)
+	if (pChannelLocal)
 	{
-		pSession->SetChannel(pChannel);
-		Poll::GetInstance().IOEventRegister(pChannel, true, false);
-		AddSession(pSession);
+		pSessionLocal->SetChannel(pChannelLocal);
+		Poll::GetInstance().IOEventRegister(pChannelLocal, true, false);
+		AddSession(pSessionLocal);
 	}
 	else
 	{
@@ -249,38 +249,38 @@ void SessionManager::AddSession(net_socket_t new_fd)
 void SessionManager::AbortSession()
 {
 	{
-		::OI::Thread::MutexGuard l(_locker);
-		++_cur_session_id;
+		::OI::Thread::MutexGuard stLock(stLocker);
+		++iCurrentSessionId;
 	}
-	LOG_ERROR("SessionManager::AbortSession id=%s endpoint=%s", GetIDString().c_str(), _endpoint.c_str());	OnConnectFailed();
+	LOG_ERROR("SessionManager::AbortSession id=%s endpoint=%s", GetIDString().c_str(), sEndpoint.c_str());	OnConnectFailed();
 }
 
-void SessionManager::CloseSession(sid_t sid)
+void SessionManager::CloseSession(sid_t iSessionIdParam)
 {
-	bool closed = false;
+	bool bClosedLocal = false;
 	{
-		::OI::Thread::MutexGuard l(_locker);
-		SessionMap::iterator it = _session_map.find(sid);
-		if (it != _session_map.end())
+		::OI::Thread::MutexGuard stLock(stLocker);
+		auto stIterator = mSessionMap.find(iSessionIdParam);
+		if (stIterator != mSessionMap.end())
 		{
-			Session* pSession = it->second;
-			_session_map.erase(it);
-			pSession->ActiveClose();
-			closed = true;
+			Session* pSessionLocal = stIterator->second;
+			mSessionMap.erase(stIterator);
+			pSessionLocal->ActiveClose();
+			bClosedLocal = true;
 		}
 	}
 	// 逻辑断开立即结束等待；唤醒放在管理器锁外。
-	if (closed) OnSessionClosed(sid);
+	if (bClosedLocal) OnSessionClosed(iSessionIdParam);
 }
 
-void SessionManager::DelSession(const Session* pSession)
+void SessionManager::DelSession(const Session* pSessionParam)
 {
 	{
-		::OI::Thread::MutexGuard l(_locker);
-		SessionMap::iterator it = _session_map.find(pSession->GetSessionID());
-		assert(it == _session_map.end());
+		::OI::Thread::MutexGuard stLock(stLocker);
+		auto stIterator = mSessionMap.find(pSessionParam->GetSessionID());
+		assert(stIterator == mSessionMap.end());
 	}
 	//已经解绑,此时有Session锁
-	OnDelSession(pSession);
+	OnDelSession(pSessionParam);
 }
 }}

@@ -27,41 +27,41 @@ typedef int net_socket_t;
 #define INVALID_SOCKET_ID ((net_socket_t)-1)
 
 void NetOs_Startup();
-net_socket_t NetOs_CreateTcp(bool nonblock);
-int NetOs_SetNonblock(net_socket_t fd);
+net_socket_t NetOs_CreateTcp(bool bNonblockParam);
+int NetOs_SetNonblock(net_socket_t iDescriptorParam);
 // 关掉 Nagle。小包一来一回的请求不等凑包
-int NetOs_SetNoDelay(net_socket_t fd);
-int NetOs_Close(net_socket_t fd);
-int NetOs_Recv(net_socket_t fd, void* buf, size_t len);
-int NetOs_Send(net_socket_t fd, const void* buf, size_t len);
-net_socket_t NetOs_Accept(net_socket_t fd);
-net_socket_t NetOs_Dup(net_socket_t fd);
-int NetOs_Bind(net_socket_t fd, const sockaddr* addr, int len);
-int NetOs_Listen(net_socket_t fd, int backlog);
-int NetOs_Connect(net_socket_t fd, const sockaddr* addr, int len);
-int NetOs_GetSocketError(net_socket_t fd);
+int NetOs_SetNoDelay(net_socket_t iDescriptorParam);
+int NetOs_Close(net_socket_t iDescriptorParam);
+int NetOs_Recv(net_socket_t iDescriptorParam, void* pBufferParam, size_t iLengthParam);
+int NetOs_Send(net_socket_t iDescriptorParam, const void* pBufferParam, size_t iLengthParam);
+net_socket_t NetOs_Accept(net_socket_t iDescriptorParam);
+net_socket_t NetOs_Dup(net_socket_t iDescriptorParam);
+int NetOs_Bind(net_socket_t iDescriptorParam, const sockaddr* pAddrParam, int iLengthParam);
+int NetOs_Listen(net_socket_t iDescriptorParam, int iBacklogParam);
+int NetOs_Connect(net_socket_t iDescriptorParam, const sockaddr* pAddrParam, int iLengthParam);
+int NetOs_GetSocketError(net_socket_t iDescriptorParam);
 
-inline const char* NetOs_StrError(int err)
+inline const char* NetOs_StrError(int iErrorParam)
 {
-	static thread_local char buf[128];
+	static thread_local char vBuffer[128];
 #ifdef _WIN32
 	if (strerror_s(buf, sizeof(buf), err) != 0)
 	{
 		buf[0] = '\0';
 	}
 #else
-	const char* text = strerror(err);
-	if (!text)
+	const char* pText = strerror(iErrorParam);
+	if (!pText)
 	{
-		text = "";
+		pText = "";
 	}
-	size_t n = 0;
-	while (text[n] && n + 1 < sizeof(buf))
+	size_t iNumber = 0;
+	while (pText[iNumber] && iNumber + 1 < sizeof(vBuffer))
 	{
-		buf[n] = text[n];
-		n++;
+		vBuffer[iNumber] = pText[iNumber];
+		iNumber++;
 	}
-	buf[n] = '\0';
+	vBuffer[iNumber] = '\0';
 #endif
-	return buf;
+	return vBuffer;
 }

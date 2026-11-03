@@ -8,8 +8,8 @@ struct Singleton
 {
 	static T& Get()
 	{
-		static T inst;
-		return inst;
+		static T stInst;
+		return stInst;
 	}
 };
 }}

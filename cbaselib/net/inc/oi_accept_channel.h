@@ -5,15 +5,15 @@ namespace OI { namespace Net {
 class SessionManager;
 class AcceptChannel : public Channel
 {
-	SessionManager* _p_session_mgr;
+	SessionManager* m_pSessionManager;
 public:
-	AcceptChannel(NetSocket s, SessionManager* pMgr) :Channel(s, 0), _p_session_mgr(pMgr) {}
+	AcceptChannel(NetSocket stTextParam, SessionManager* pMgrParam) :Channel(stTextParam, 0), m_pSessionManager(pMgrParam) {}
 	virtual void DataIn();
 	virtual void DataOut();
 	virtual bool TryClose();
 public:
-	static bool StartAccept(SessionManager* pMgr, bool async);
+	static bool StartAccept(SessionManager* pMgrParam, bool bAsyncParam);
 private:
-	static bool StartTcpAccept(SessionManager* pMgr, bool async);
+	static bool StartTcpAccept(SessionManager* pMgrParam, bool bAsyncParam);
 };
 }}

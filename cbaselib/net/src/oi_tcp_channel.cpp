@@ -6,49 +6,49 @@ namespace OI { namespace Net {
 void TCP_Channel::DataIn()
 {
 	// 水平触发。一轮读够上限就先交给会话，剩下的下一轮再进来。
-	const size_t kRoundMax = 4 * 1024 * 1024;
-	size_t round = 0;
+	const size_t iItemIndexRoundMax = 4 * 1024 * 1024;
+	size_t iRound = 0;
 	for (;;)
 	{
-		if (round >= kRoundMax)
+		if (iRound >= iItemIndexRoundMax)
 		{
 			goto read_finish;
 		}
-		if (_ibuff.Capacity() - _ibuff.Size() < 16 * 1024)
+		if (stInputBuffer.Capacity() - stInputBuffer.Size() < 16 * 1024)
 		{
-			_ibuff.Reserve(_ibuff.Size() + 64 * 1024);
+			stInputBuffer.Reserve(stInputBuffer.Size() + 64 * 1024);
 		}
-		int read_num = NetOs_Recv(_socket.GetSocket(), _ibuff.End(), _ibuff.Capacity() - _ibuff.Size());
-		if (read_num > 0)
+		int iReadNumber = NetOs_Recv(stSocket.GetSocket(), stInputBuffer.End(), stInputBuffer.Capacity() - stInputBuffer.Size());
+		if (iReadNumber > 0)
 		{
-			_ibuff.Commit((size_t)read_num);
-			round += (size_t)read_num;
+			stInputBuffer.Commit((size_t)iReadNumber);
+			iRound += (size_t)iReadNumber;
 			continue;
 		}
-		else if (read_num == -1 && errno == EAGAIN)
+		else if (iReadNumber == -1 && errno == EAGAIN)
 		{
 			goto read_finish;
 		}
-		else if (read_num == -1 && errno == EINTR)
+		else if (iReadNumber == -1 && errno == EINTR)
 		{
 			continue;
 		}
-		if (read_num == 0)
+		if (iReadNumber == 0)
 		{
 			goto peer_close;
 		}
 		goto read_fault;
 	}
 read_finish:
-	_p_session->SwapInBuff(_ibuff);
+	pSession->SwapInBuff(stInputBuffer);
 	return;
 read_fault:
-	_p_session->SwapInBuff(_ibuff);
-	_p_session->PassiveClose(errno);
+	pSession->SwapInBuff(stInputBuffer);
+	pSession->PassiveClose(errno);
 	return;
 peer_close:
-	_p_session->SwapInBuff(_ibuff);
-	_p_session->PassiveClose(0);
+	pSession->SwapInBuff(stInputBuffer);
+	pSession->PassiveClose(0);
 	return;
 }
 
@@ -56,34 +56,34 @@ peer_close:
 
 void TCP_Channel::DataOut()
 {
-	_p_session->SwapOutBuff(_obuff);
-	while (_obuff.Size())
+	pSession->SwapOutBuff(stOutputBuffer);
+	while (stOutputBuffer.Size())
 	{
-		int write_num = NetOs_Send(_socket.GetSocket(), _obuff.Begin(), _obuff.Size());
-		if (write_num > 0)
+		int iWriteNumber = NetOs_Send(stSocket.GetSocket(), stOutputBuffer.Begin(), stOutputBuffer.Size());
+		if (iWriteNumber > 0)
 		{
-			_obuff.Erase(0, write_num);
-			_p_session->OnBytesSent((size_t)write_num);
+			stOutputBuffer.Erase(0, iWriteNumber);
+			pSession->OnBytesSent((size_t)iWriteNumber);
 			continue;
 		}
-		else if (write_num == -1 && errno == EAGAIN)
+		else if (iWriteNumber == -1 && errno == EAGAIN)
 		{
 			goto write_finish;
 		}
-		else if (write_num == -1 && errno == EINTR)
+		else if (iWriteNumber == -1 && errno == EINTR)
 		{
 			continue;
 		}
 		goto write_fault;
 	}
 write_finish:
-	if (_obuff.Size() == 0)
+	if (stOutputBuffer.Size() == 0)
 	{
-		_p_session->SendDrained();
+		pSession->SendDrained();
 	}
 	return;
 write_fault:
-	_p_session->PassiveClose(errno);
+	pSession->PassiveClose(errno);
 	return;
 }
 }}

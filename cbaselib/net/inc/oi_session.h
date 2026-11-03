@@ -6,7 +6,7 @@
 #include <string>
 #include "oi_poll.h"
 namespace OI { namespace Net {
-enum 
+enum
 {
 	IO_ST_CONNECTED,
 	IO_ST_WILL_CLOSE,
@@ -14,47 +14,47 @@ enum
 };
 
 class SessionManager;
-	
+
 class Session
 {
 	friend class Poll;
 	friend class NetChannel;
 protected:
-	std::atomic<int32_t> _status;
-	std::atomic<int32_t> _errcode;
+	std::atomic<int32_t> iStatus;
+	std::atomic<int32_t> iErrorCode;
 
-	size_t _queued_bytes = 0;
-	size_t _max_send_queue_bytes = 64 * 1024 * 1024;
-	::OI::Base::Bytes		_obuff;
-	::OI::Base::Bytes		_ibuff;
-	::OI::Thread::Mutex		_locker;
+	size_t iQueuedBytes = 0;
+	size_t iMaxSendQueueBytes = 64 * 1024 * 1024;
+	::OI::Base::Bytes		stOutputBuffer;
+	::OI::Base::Bytes		stInputBuffer;
+	::OI::Thread::Mutex		stLocker;
 
-	sid_t		_session_id;
-	Channel*	_p_channel;
-	SessionManager* _p_session_mgr;
-	std::string	_endpoint;
+	sid_t		iSessionId;
+	Channel*	pChannel;
+	SessionManager* pSessionManager;
+	std::string	sEndpoint;
 	// 通道持有一份，SendBytes 在锁外发送时临时再持一份。最后一份释放时 delete。
-	std::atomic<int32_t>	_refs;
+	std::atomic<int32_t>	iReferences;
 public:
-	Session(SessionManager* pMgr);
+	Session(SessionManager* pMgrParam);
 	virtual ~Session();
-	void AddRef() { _refs.fetch_add(1, std::memory_order_relaxed); }
+	void AddRef() { iReferences.fetch_add(1, std::memory_order_relaxed); }
 	void Release();
 
 public: //提供给Channel的调用
-	void SetChannel(Channel* pChannel) { _p_channel = pChannel; }
+	void SetChannel(Channel* pChannelParam) { pChannel = pChannelParam; }
 	// 通道销毁前调用。之后 Send 只追加缓冲，不再碰通道。
 	void DetachChannel();
 	//从Channel的inBuff提取数据到_ibuff
-	virtual void SwapInBuff(::OI::Base::Bytes& inBuff);
+	virtual void SwapInBuff(::OI::Base::Bytes& stInputBufferParam);
 	//将会话输出数据处理后追加到outBuff
-	virtual void SwapOutBuff(::OI::Base::Bytes& outBuff);
+	virtual void SwapOutBuff(::OI::Base::Bytes& stOutputBufferParam);
 	//Channel写空了。会话这边也没有待发数据才关写事件
 	void SendDrained();
 	//会话是否已经失效关闭
 	virtual bool IsClosed();
 	//IO线程被动关闭调用,会回调Mgr->CloseSession
-	virtual void PassiveClose(int err) = 0;	
+	virtual void PassiveClose(int iErrorParam) = 0;
 
 public:
 	//Session自实现
@@ -63,16 +63,16 @@ public:
 
 public:
 	//向外SessionManager暴露的接口
-	inline int32_t GetError()const		{ return _errcode.load(std::memory_order_acquire);	}
-	inline void SetSessionID(int sid) 	{ _session_id = sid;	}
-	inline int  GetSessionID() const	{ return _session_id;	}
-	void SetEndpoint(const std::string& endpoint) { _endpoint = endpoint; }
-	const std::string& GetEndpoint() const { return _endpoint; }
+	inline int32_t GetError()const		{ return iErrorCode.load(std::memory_order_acquire);	}
+	inline void SetSessionID(int iSessionIdParam) 	{ iSessionId = iSessionIdParam;	}
+	inline int  GetSessionID() const	{ return iSessionId;	}
+	void SetEndpoint(const std::string& sEndpointParam) { sEndpoint = sEndpointParam; }
+	const std::string& GetEndpoint() const { return sEndpoint; }
 
-	bool Send(const ::OI::Base::Bytes& bytes);
-	void SetSendQueueLimit(size_t bytes);
+	bool Send(const ::OI::Base::Bytes& stBytesParam);
+	void SetSendQueueLimit(size_t iBytesParam);
 	size_t PendingSendBytes();
-	void OnBytesSent(size_t bytes);
+	void OnBytesSent(size_t iBytesParam);
 	virtual void ActiveClose() = 0;			//外部Mgr主动关闭调用,有锁,不会回调Mgr->CloseSession
 
 protected:
@@ -80,7 +80,7 @@ protected:
 	void ForbidSend();
 	void AllowRead();
 	void ForbidRead();
-	virtual void Close(int err) = 0;
+	virtual void Close(int iErrorParam) = 0;
 	virtual void OnClose() {}
 };
 

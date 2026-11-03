@@ -25,22 +25,22 @@ const std::string IpcServer::GetIDString()
 
 static OI_RPC_SYNC_HANDLER(AllEcho, HandleAllEcho)
 {
-	res.data = req.data;
-	res.code = 1;
+	stResponse.stData = stRequest.stData;
+	stResponse.iCode = 1;
 	return 0;
 }
 
 static OI_RPC_HANDLER(Hold, HandleHold)
 {
-	if (req.delay_ms < 0)
+	if (stRequest.iDelayMilliseconds < 0)
 	{
 		co_return 1001; // 业务错误：延迟不能为负，回执不带响应体。
 	}
-	if (req.delay_ms > 0)
+	if (stRequest.iDelayMilliseconds > 0)
 	{
-		co_await coro::yield(req.delay_ms);
+		co_await coro::yield(stRequest.iDelayMilliseconds);
 	}
-	res.mark = req.mark;
+	stResponse.iMark = stRequest.iMark;
 	co_return 0;
 }
 
@@ -51,60 +51,60 @@ bool IpcServer::Init()
 	return ::OI::Net::SessionManager::Init();
 }
 
-static std::string HtmlTitle(const std::string& html)
+static std::string HtmlTitle(const std::string& sHtmlParam)
 {
-	size_t open = html.find("<title>");
-	if (open == std::string::npos)
+	size_t iOpen = sHtmlParam.find("<title>");
+	if (iOpen == std::string::npos)
 	{
 		return "";
 	}
-	open += 7;
-	size_t close = html.find("</title>", open);
-	if (close == std::string::npos)
+	iOpen += 7;
+	size_t iClose = sHtmlParam.find("</title>", iOpen);
+	if (iClose == std::string::npos)
 	{
 		return "";
 	}
-	return html.substr(open, close - open);
+	return sHtmlParam.substr(iOpen, iClose - iOpen);
 }
 
-static coro::Task HttpProbe(std::string host, int32_t port, std::string path, int32_t timeout_ms)
+static coro::Task HttpProbe(std::string sHostParam, int32_t iPortParam, std::string sPathParam, int32_t iTimeoutMillisecondsParam)
 {
-	::OI::Http::Client cli(host, port, timeout_ms);
-	std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
-	::OI::Http::Response res = co_await cli.Get(path, {});
-	long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - begin).count();
+	::OI::Http::Client stCli(sHostParam, iPortParam, iTimeoutMillisecondsParam);
+	std::chrono::steady_clock::time_point stBegin = std::chrono::steady_clock::now();
+	::OI::Http::Response stResponseLocal = co_await stCli.Get(sPathParam, {});
+	long long iMillisecondsLocal = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - stBegin).count();
 	printf("http probe host=%s port=%d path=%s status=%d bytes=%zu ms=%lld fail=%d err=%s title=%s\n",
-		host.c_str(), port, path.c_str(), res.status, res.body.size(), ms, res.fail ? 1 : 0,
-		res.error.c_str(), HtmlTitle(res.body).c_str());
+		sHostParam.c_str(), iPortParam, sPathParam.c_str(), stResponseLocal.iStatus, stResponseLocal.sBody.size(), iMillisecondsLocal, stResponseLocal.bFail ? 1 : 0,
+		stResponseLocal.sError.c_str(), HtmlTitle(stResponseLocal.sBody).c_str());
 	fflush(stdout);
 }
 
 void IpcServer::StartHttpProbe()
 {
-	std::string host;
-	int32_t port = 80;
-	std::string path = "/";
-	int32_t timeout_ms = 5000;
-	TryGetConfig("HttpProbe.host", host);
-	TryGetConfig("HttpProbe.port", port);
-	TryGetConfig("HttpProbe.path", path);
-	TryGetConfig("HttpProbe.timeout_ms", timeout_ms);
-	if (host.empty())
+	std::string sHostLocal;
+	int32_t iPortLocal = 80;
+	std::string sPath = "/";
+	int32_t iTimeoutMillisecondsLocal = 5000;
+	TryGetConfig("HttpProbe.host", sHostLocal);
+	TryGetConfig("HttpProbe.port", iPortLocal);
+	TryGetConfig("HttpProbe.path", sPath);
+	TryGetConfig("HttpProbe.timeout_ms", iTimeoutMillisecondsLocal);
+	if (sHostLocal.empty())
 	{
 		return;
 	}
-	coro::StartTask([host, port, path, timeout_ms](coro::Token) {
-		return HttpProbe(host, port, path, timeout_ms);
+	coro::StartTask([sHostLocal, iPortLocal, sPath, iTimeoutMillisecondsLocal](coro::Token) {
+		return HttpProbe(sHostLocal, iPortLocal, sPath, iTimeoutMillisecondsLocal);
 	});
 }
 
-void IpcServer::OnAddSession(::OI::Net::Session* pSession)
+void IpcServer::OnAddSession(::OI::Net::Session* pSessionParam)
 {
-	printf("ipc server session %d\n", pSession->GetSessionID());
+	printf("ipc server session %d\n", pSessionParam->GetSessionID());
 	fflush(stdout);
 }
 
-void IpcServer::OnDelSession(const ::OI::Net::Session* pSession)
+void IpcServer::OnDelSession(const ::OI::Net::Session* pSessionParam)
 {
-	(void)pSession;
+	(void)pSessionParam;
 }

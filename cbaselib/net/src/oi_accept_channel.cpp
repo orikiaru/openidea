@@ -17,14 +17,14 @@ void AcceptChannel::DataIn()
 {
 	for (;;)
 	{
-		int accept_count = _socket.SocketAcceptOne(_p_session_mgr);
-		if (accept_count == -1)
+		int iAcceptCount = stSocket.SocketAcceptOne(m_pSessionManager);
+		if (iAcceptCount == -1)
 		{
 			// 描述符用尽时连接还在队列里，监听口一直可读。先停一会儿，不让 poll 线程空转。
 			Poll::GetInstance().PauseEvents(this, 100);
 			break;
 		}
-		if (accept_count == 0)
+		if (iAcceptCount == 0)
 		{
 			break;
 		}
@@ -41,43 +41,43 @@ bool AcceptChannel::TryClose()
 	return false;
 }
 
-bool AcceptChannel::StartAccept(SessionManager* pMgr, bool async)
+bool AcceptChannel::StartAccept(SessionManager* pMgrParam, bool bAsyncParam)
 {
-	int session_type = pMgr->GetSessionType();
-	switch (session_type)
+	int iSessionTypeLocal = pMgrParam->GetSessionType();
+	switch (iSessionTypeLocal)
 	{
 	case SESSION_TYPE_TCP:
-		return StartTcpAccept(pMgr, async);
+		return StartTcpAccept(pMgrParam, bAsyncParam);
 	default:
-		printf("SessionManager::StartServer not support session_type=%d\n", session_type);
+		printf("SessionManager::StartServer not support session_type=%d\n", iSessionTypeLocal);
 		return false;
 	}
 
 }
 
-bool AcceptChannel::StartTcpAccept(SessionManager* pMgr, bool async)
+bool AcceptChannel::StartTcpAccept(SessionManager* pMgrParam, bool bAsyncParam)
 {
 	// 只支持异步监听。同步 accept 会把调用线程永久堵住。
-	if (!async)
+	if (!bAsyncParam)
 	{
-		LOG_ERROR("AcceptChannel::StartTcpAccept sync accept not supported id=%s", pMgr->GetIDString().c_str());
+		LOG_ERROR("AcceptChannel::StartTcpAccept sync accept not supported id=%s", pMgrParam->GetIDString().c_str());
 		return false;
 	}
-	NetSocket s;
-	if (!s.CreateSocket(pMgr, async))
+	NetSocket stText;
+	if (!stText.CreateSocket(pMgrParam, bAsyncParam))
 	{
-		return false;
-	}
-
-	if (!s.SocketListenAndBind(pMgr))
-	{
-		NetOs_Close(s.GetSocket());
-		s.Detach();
 		return false;
 	}
 
-	AcceptChannel* pChannel = new AcceptChannel(s, pMgr);
-	Poll::GetInstance().IOEventRegister(pChannel, true, true);
+	if (!stText.SocketListenAndBind(pMgrParam))
+	{
+		NetOs_Close(stText.GetSocket());
+		stText.Detach();
+		return false;
+	}
+
+	AcceptChannel* pChannelLocal = new AcceptChannel(stText, pMgrParam);
+	Poll::GetInstance().IOEventRegister(pChannelLocal, true, true);
 	return true;
 }
 }}

@@ -7,12 +7,12 @@ class HoldMgr
 {
 	DECLARE_SINGLETON(HoldMgr)
 	HoldMgr();
-	bool _on;
-	sid_t _sid;
-	int32_t _redis_timeout_ms;
+	bool m_bEnabled;
+	sid_t m_iSessionId;
+	int32_t m_iRedisTimeoutMilliseconds;
 public:
 	void Load();
-	bool Enabled() const { return _on; }
-	void Start(sid_t sid);
+	bool Enabled() const { return m_bEnabled; }
+	void Start(sid_t iSessionIdParam);
 	coro::Task Pump();
 };

@@ -9,7 +9,7 @@
 #include "oi_log.h"
 namespace OI { namespace Rpc {
 
-void FailRpcCalls(::OI::Net::SessionManager* mgr, sid_t sid);
+void FailRpcCalls(::OI::Net::SessionManager* pManagerParam, sid_t iSessionIdParam);
 
 enum CLIENT_CONNECT_MODE
 {
@@ -19,18 +19,18 @@ enum CLIENT_CONNECT_MODE
 
 class ProtoSessionManager : public ::OI::Net::SessionManager
 {
-	void OnSessionClosed(sid_t sid) override final { FailRpcCalls(this, sid); }
+	void OnSessionClosed(sid_t iSessionIdParam) override final { FailRpcCalls(this, iSessionIdParam); }
 public:
 	ProtoSessionManager() {}
 	virtual const std::string GetIDString() { return "ProtoSessionManager"; }
 	virtual ::OI::Net::Session* CloneSession() { return new ProtoSession(this); }	//自定制回话类型
-	virtual void OnAddSession(::OI::Net::Session* pSession)
+	virtual void OnAddSession(::OI::Net::Session* pSessionParam)
 	{
-		LOG_INFO("ProtoSessionManager::OnAddSession sid=%d", pSession->GetSessionID());
+		LOG_INFO("ProtoSessionManager::OnAddSession sid=%d", pSessionParam->GetSessionID());
 	}
-	virtual void OnDelSession(const ::OI::Net::Session* pSession)
+	virtual void OnDelSession(const ::OI::Net::Session* pSessionParam)
 	{
-		LOG_INFO("ProtoSessionManager::OnDelSession sid=%d, error=%d", pSession->GetSessionID(), pSession->GetError());
+		LOG_INFO("ProtoSessionManager::OnDelSession sid=%d, error=%d", pSessionParam->GetSessionID(), pSessionParam->GetError());
 	}
 };
 
@@ -38,70 +38,70 @@ public:
 //如果需要连接池,需要建立多个client,自行设计吧
 class ProtoClientManager : public ProtoSessionManager
 {
-	sid_t		_ssid;
-	bool		_conn;
-	bool		_connecting;
-	CLIENT_CONNECT_MODE _connect_mode;
+	sid_t		m_iSessionId;
+	bool		m_bConnected;
+	bool		m_bConnecting;
+	CLIENT_CONNECT_MODE m_iConnectMode;
 	struct HeldCall
 	{
-		uint64_t call_id;
-		::OI::Base::Bytes data;
+		uint64_t iCallId;
+		::OI::Base::Bytes stData;
 	};
-	std::deque<::OI::Base::Bytes> _pending;
-	std::list<HeldCall> _held_calls;
-	std::unordered_map<uint64_t, std::list<HeldCall>::iterator> _held_index;
-	size_t _held_bytes = 0;
-	size_t _held_max_count = 65536;
-	size_t _held_max_bytes = 64 * 1024 * 1024;
-	size_t		_pending_bytes;
-	bool		_ever_connected;
-	::OI::Thread::SpinLock	_client_locker;
+	std::deque<::OI::Base::Bytes> m_vPending;
+	std::list<HeldCall> m_vHeldCalls;
+	std::unordered_map<uint64_t, std::list<HeldCall>::iterator> m_mHeldIndex;
+	size_t m_iHeldBytes = 0;
+	size_t m_iHeldMaxCount = 65536;
+	size_t m_iHeldMaxBytes = 64 * 1024 * 1024;
+	size_t		m_iPendingBytes;
+	bool		m_bEverConnected;
+	::OI::Thread::SpinLock	m_stClientLocker;
 public:
-	ProtoClientManager():_ssid(INVALID_SID),_conn(false),_connecting(false),_connect_mode(CLIENT_CONNECT_DIRECT),_pending_bytes(0),_ever_connected(false) {}
-	void SetConnectMode(CLIENT_CONNECT_MODE mode) { _connect_mode = mode; }
-	CLIENT_CONNECT_MODE GetConnectMode() const { return _connect_mode; }
-	virtual void OnClientConnect(::OI::Net::Session* pSession) = 0;
-	virtual void OnClientDisconnect(const ::OI::Net::Session* pSession) = 0;
+	ProtoClientManager():m_iSessionId(INVALID_SID),m_bConnected(false),m_bConnecting(false),m_iConnectMode(CLIENT_CONNECT_DIRECT),m_iPendingBytes(0),m_bEverConnected(false) {}
+	void SetConnectMode(CLIENT_CONNECT_MODE iModeParam) { m_iConnectMode = iModeParam; }
+	CLIENT_CONNECT_MODE GetConnectMode() const { return m_iConnectMode; }
+	virtual void OnClientConnect(::OI::Net::Session* pSessionParam) = 0;
+	virtual void OnClientDisconnect(const ::OI::Net::Session* pSessionParam) = 0;
 
 	sid_t ConnectedSid()
 	{
-		::OI::Thread::SpinLockGuard lock(_client_locker);
-		return _conn ? _ssid : INVALID_SID;
+		::OI::Thread::SpinLockGuard stLock(m_stClientLocker);
+		return m_bConnected ? m_iSessionId : INVALID_SID;
 	}
 	bool IsConnect()
 	{
-		::OI::Thread::SpinLockGuard lock(_client_locker);
-		return _conn;
+		::OI::Thread::SpinLockGuard stLock(m_stClientLocker);
+		return m_bConnected;
 	}
-	virtual void OnAddSession(::OI::Net::Session* pSession)
+	virtual void OnAddSession(::OI::Net::Session* pSessionParam)
 	{
-		sid_t sid = INVALID_SID;
+		sid_t iSessionIdLocal = INVALID_SID;
 		{
-			::OI::Thread::SpinLockGuard l(_client_locker);
-			_conn = true;
-			_connecting = false;
-			_ssid = pSession->GetSessionID();
-			sid = _ssid;
+			::OI::Thread::SpinLockGuard stLock(m_stClientLocker);
+			m_bConnected = true;
+			m_bConnecting = false;
+			m_iSessionId = pSessionParam->GetSessionID();
+			iSessionIdLocal = m_iSessionId;
 			// 与新发送共用客户端锁；先发送连接前缓存，不能让新数据抢占它的额度。
 			// 待发总量已受发送额度限制；若连接恰好关闭，保留尚未接纳的部分等重连。
-			while (!_pending.empty())
+			while (!m_vPending.empty())
 			{
-				if (!SendBytes(sid, _pending.front())) break;
-				_pending_bytes -= _pending.front().Size();
-				_pending.pop_front();
+				if (!SendBytes(iSessionIdLocal, m_vPending.front())) break;
+				m_iPendingBytes -= m_vPending.front().Size();
+				m_vPending.pop_front();
 			}
-			_ever_connected = true;
+			m_bEverConnected = true;
 		}
-		FlushHeldCalls(sid);
-		OnClientConnect(pSession);
+		FlushHeldCalls(iSessionIdLocal);
+		OnClientConnect(pSessionParam);
 	}
 	virtual void OnConnectFailed()
 	{
 		{
-			::OI::Thread::SpinLockGuard l(_client_locker);
-			_connecting = false;
+			::OI::Thread::SpinLockGuard stLock(m_stClientLocker);
+			m_bConnecting = false;
 		}
-		if (_service_down || _endpoint.empty())
+		if (bServiceDown || sEndpoint.empty())
 		{
 			FailHeldCalls();
 			return;
@@ -116,38 +116,38 @@ public:
 	{
 		return IsConnect() ? OI_ERR_FAIL : OI_ERR_CONNECT;
 	}
-	void SetPendingCallLimits(size_t count, size_t bytes)
+	void SetPendingCallLimits(size_t iCountParam, size_t iBytesParam)
 	{
-		::OI::Thread::SpinLockGuard lock(_client_locker);
-		_held_max_count = count;
-		_held_max_bytes = bytes;
+		::OI::Thread::SpinLockGuard stLock(m_stClientLocker);
+		m_iHeldMaxCount = iCountParam;
+		m_iHeldMaxBytes = iBytesParam;
 	}
-	bool TryPendCall(uint64_t call_id, const ::OI::Base::Bytes& data) override;
-	void DropPendingCall(uint64_t call_id) override;
-	void FlushHeldCalls(sid_t sid);
+	bool TryPendCall(uint64_t iCallIdParam, const ::OI::Base::Bytes& stDataParam) override;
+	void DropPendingCall(uint64_t iCallIdParam) override;
+	void FlushHeldCalls(sid_t iSessionIdParam);
 	void FailHeldCalls();
-	virtual void OnDelSession(const ::OI::Net::Session* pSession)
+	virtual void OnDelSession(const ::OI::Net::Session* pSessionParam)
 	{
-		bool reconnect = false;
+		bool bReconnect = false;
 		{
-			::OI::Thread::SpinLockGuard l(_client_locker);
-			if (_ssid == pSession->GetSessionID())
+			::OI::Thread::SpinLockGuard stLock(m_stClientLocker);
+			if (m_iSessionId == pSessionParam->GetSessionID())
 			{
-				_ssid = INVALID_SID;
-				_conn = false;
-				reconnect = !_service_down && !_endpoint.empty() && pSession->GetEndpoint() == _endpoint;
+				m_iSessionId = INVALID_SID;
+				m_bConnected = false;
+				bReconnect = !bServiceDown && !sEndpoint.empty() && pSessionParam->GetEndpoint() == sEndpoint;
 			}
 		}
-		OnClientDisconnect(pSession);
-		if (reconnect)
+		OnClientDisconnect(pSessionParam);
+		if (bReconnect)
 		{
 			Reconnect(0);
 		}
 	}
-	bool SendRaw(const ::OI::Base::Bytes& data);
+	bool SendRaw(const ::OI::Base::Bytes& stDataParam);
 	// 没连上先存着，连上时按顺序补发。存满 max_pending_bytes 再来的丢掉，返回 false
-	bool SendRawOrPend(const ::OI::Base::Bytes& data, size_t max_pending_bytes);
-	void Reconnect(int delay_ms = 2000);
+	bool SendRawOrPend(const ::OI::Base::Bytes& stDataParam, size_t iMaxPendingBytesParam);
+	void Reconnect(int iDelayMillisecondsParam = 2000);
 
 };
 }}

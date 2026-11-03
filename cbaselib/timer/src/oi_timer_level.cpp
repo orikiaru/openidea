@@ -3,32 +3,32 @@
 #include "oi_lock.h"
 namespace OI { namespace Timer {
 
-void TimerLevel::RunTick(BaseTimerManager* pMgr, TimerList* due)
+void TimerLevel::RunTick(BaseTimerManager* pMgrParam, TimerList* pDueParam)
 {
-	assert(_offset >= 0 && _offset < _max_tick);
-	TimerList cur_list;
+	assert(m_iOffset >= 0 && m_iOffset < m_iMaxTick);
+	TimerList vCurrentList;
 	{
-		::OI::Thread::MutexGuard l(_locker);
+		::OI::Thread::MutexGuard stLock(m_stLocker);
 
-		cur_list.swap(_timer_tick_datas[_offset]);
+		vCurrentList.swap(m_vTimerTickDatas[m_iOffset]);
 
-		++_offset;
-		if (_offset >= _max_tick)
+		++m_iOffset;
+		if (m_iOffset >= m_iMaxTick)
 		{
-			assert(_offset == _max_tick);
-			_offset = 0;
+			assert(m_iOffset == m_iMaxTick);
+			m_iOffset = 0;
 		}
 	}
 
 	// 第一层到点的交给调用方在锁外执行，上层的按剩余 tick 重新挂到下层。
-	if (due)
+	if (pDueParam)
 	{
-		due->splice(due->end(), cur_list);
+		pDueParam->splice(pDueParam->end(), vCurrentList);
 		return;
 	}
-	for (TimerList::iterator it = cur_list.begin(); it != cur_list.end(); ++it)
+	for (const auto& pTimer : vCurrentList)
 	{
-		pMgr->add_timer(*it);
+		pMgrParam->add_timer(pTimer);
 	}
 }
 }}

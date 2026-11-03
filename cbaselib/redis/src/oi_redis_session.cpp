@@ -6,12 +6,12 @@ namespace OI { namespace Redis {
 
 void RedisClientSession::OnDataIn()
 {
-	if (_ibuff.Size() == 0)
+	if (stInputBuffer.Size() == 0)
 	{
 		return;
 	}
-	RedisClient::GetInstance().Feed(_ibuff.Begin(), _ibuff.Size());
-	_ibuff.Clear();
+	RedisClient::GetInstance().Feed(stInputBuffer.Begin(), stInputBuffer.Size());
+	stInputBuffer.Clear();
 }
 
 void RedisClientSession::OnDataOut()

@@ -2,10 +2,10 @@
 #include "oi_base.h"
 #include "web_server.h"
 
-int main(int argc, char* argv[])
+int main(int iArgumentCountParam, char* vArgumentsParam[])
 {
-	(void)argc;
-	(void)argv;
+	(void)iArgumentCountParam;
+	(void)vArgumentsParam;
 	if (!::OI::Base::Config::GlobalMutableConfig().Parse("../config/webserver.toml"))
 	{
 		printf("ParseConfigError\n");

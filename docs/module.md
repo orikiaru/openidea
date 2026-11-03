@@ -8,14 +8,14 @@
 | `module_component.xml` | 模块下的网络组件，`type` 为 `Client` 或 `Server`，上面挂 rpc |
 | `proto.xml` | 协议正文，写法像 protobuf：`字段号 类型 名字;`。不是 XML |
 
-字段号写在每一行前面，这就是线上的序号。缺了、重了，生成失败，不会按出现顺序补号。跳号直接写下一个数字，例如 `20 int32_t gap;`。
+字段号写在每一行前面，这就是线上的序号。缺了、重了，生成失败，不会按出现顺序补号。跳号直接写下一个数字，例如 `20 int32_t iGap json gap;`。
 
 ```
 rpcdata AllTypesData {
-    0 int8_t c;
-    9 vector<int32_t> nums;
-    13 map<int32_t, string> table;
-    20 int32_t gap;
+    0 int8_t iInt8 json c;
+    9 vector<int32_t> vNumbers json nums;
+    13 map<int32_t, string> mTable json table;
+    20 int32_t iGap json gap;
 }
 ```
 
@@ -71,3 +71,11 @@ endforeach()
 `host` 可以写 IPv4 或域名。域名用 libuv 的 `uv_getaddrinfo` 在它自己的线程池里解析，回调回到 poll 线程再连，不卡 poll。响应认 `Content-Length`、`chunked` 和读到断开三种结尾。超时定时器取消不了，所以请求状态带引用计数，定时器晚到时只释放，不改已经收完的结果。
 
 `ipcserver` 也链了这个客户端，多线程模块链 `http_m_static`。`ipcserver.toml` 的 `[HttpProbe]` 填了 `host` 时，起服后 `StartTask` 发一次 GET，打印 `http probe ... status=... bytes=... title=...`。默认不填，压测时不要打开。
+
+## 字段命名和 JSON 兼容
+
+协议字段使用类型前缀 + 大驼峰名称，完整规则见项目 AGENTS.md。生成器同时检查文本协议和 XML 协议；名称不合规范会直接报错，不自动猜测业务名字。
+
+字段名与 JSON 键可以分开：`0 int32_t iCount json count;` 的 C++ 字段为 `iCount`，JSON 仍使用 `count`。省略 `json` 时 JSON 键就是字段名。XML 输入对应 `<member name="iCount" type="int32_t" seq="0" json="count"/>`。同一结构中 JSON 名称不能重复。
+
+这次只修改 C++ 字段名：字段编号、类型、顺序和已有 JSON 键保持不变，配置键不改。生成后的头文件不要手工修；修改协议源后重新执行 cmake。

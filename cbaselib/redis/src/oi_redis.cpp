@@ -17,9 +17,9 @@ namespace
 {
 struct ReplyFree
 {
-	void operator()(redisReply* reply) const
+	void operator()(redisReply* pReplyParam) const
 	{
-		freeReplyObject(reply);
+		freeReplyObject(pReplyParam);
 	}
 };
 
@@ -46,44 +46,44 @@ public:
 
 struct RedisCall::State
 {
-	std::vector<std::string> args;
-	std::shared_ptr<redisReply> reply;
-	RedisStatus status;
-	bool ready;
-	bool sync;
-	RedisResult* out;
-	std::coroutine_handle<> handle;
-	int64_t deadline_ms;
-	std::atomic<int32_t> gate;
-	std::atomic<int32_t> won;
-	std::atomic<int32_t> refs;
-	sid_t sid;
-	::OI::Thread::Mutex mu;
-	::OI::Thread::MutexCond cv;
-	State() : status(RedisStatus::Disconnected), ready(false), sync(false), out(NULL), deadline_ms(0), gate(0), won(0), refs(1), sid(INVALID_SID) {}
+	std::vector<std::string> vArguments;
+	std::shared_ptr<redisReply> pReply;
+	RedisStatus iStatus;
+	bool bReady;
+	bool bSynchronous;
+	RedisResult* pOutput;
+	std::coroutine_handle<> stHandle;
+	int64_t iDeadlineMilliseconds;
+	std::atomic<int32_t> iGate;
+	std::atomic<int32_t> iWon;
+	std::atomic<int32_t> iReferences;
+	sid_t iSessionId;
+	::OI::Thread::Mutex stMutex;
+	::OI::Thread::MutexCond stConditionVariable;
+	State() : iStatus(RedisStatus::Disconnected), bReady(false), bSynchronous(false), pOutput(NULL), iDeadlineMilliseconds(0), iGate(0), iWon(0), iReferences(1), iSessionId(INVALID_SID) {}
 };
 
-RedisClient::RedisClient() : _reader(NULL), _timeout_ms(25000), _max_pending(65536), _swept(0)
+RedisClient::RedisClient() : m_pReader(NULL), m_iTimeoutMilliseconds(25000), m_iMaxPending(65536), m_iSwept(0)
 {
 }
 
 RedisClient::~RedisClient()
 {
-	if (_reader)
+	if (m_pReader)
 	{
-		redisReaderFree(_reader);
-		_reader = NULL;
+		redisReaderFree(m_pReader);
+		m_pReader = NULL;
 	}
 }
 
 bool RedisClient::Init()
 {
-	TryGetConfig("RedisClient.timeout_ms", _timeout_ms);
-	TryGetConfig("RedisClient.max_pending", _max_pending);
-	if (_max_pending < 1) return false;
-	if (_timeout_ms <= 0)
+	TryGetConfig("RedisClient.timeout_ms", m_iTimeoutMilliseconds);
+	TryGetConfig("RedisClient.max_pending", m_iMaxPending);
+	if (m_iMaxPending < 1) return false;
+	if (m_iTimeoutMilliseconds <= 0)
 	{
-		_timeout_ms = 25000;
+		m_iTimeoutMilliseconds = 25000;
 	}
 	return ::OI::Rpc::ProtoClientManager::Init();
 }
@@ -93,308 +93,308 @@ bool RedisClient::Init()
 	return new RedisClientSession(this);
 }
 
-void RedisClient::OnClientConnect(::OI::Net::Session* pSession)
+void RedisClient::OnClientConnect(::OI::Net::Session* pSessionParam)
 {
-	g_sid = pSession->GetSessionID();
-	if (_reader)
+	g_sid = pSessionParam->GetSessionID();
+	if (m_pReader)
 	{
-		redisReaderFree(_reader);
+		redisReaderFree(m_pReader);
 	}
-	_reader = redisReaderCreate();
+	m_pReader = redisReaderCreate();
 	LOG_TRACE("RedisClient::OnClientConnect sid=%d", g_sid);
 }
 
-void RedisClient::OnClientDisconnect(const ::OI::Net::Session* pSession)
+void RedisClient::OnClientDisconnect(const ::OI::Net::Session* pSessionParam)
 {
-	sid_t sid = pSession->GetSessionID();
-	LOG_TRACE("RedisClient::OnClientDisconnect sid=%d", sid);
-	if (g_sid == sid)
+	sid_t iSessionIdLocal = pSessionParam->GetSessionID();
+	LOG_TRACE("RedisClient::OnClientDisconnect sid=%d", iSessionIdLocal);
+	if (g_sid == iSessionIdLocal)
 	{
 		g_sid = INVALID_SID;
-		if (_reader)
+		if (m_pReader)
 		{
-			redisReaderFree(_reader);
-			_reader = NULL;
+			redisReaderFree(m_pReader);
+			m_pReader = NULL;
 		}
 	}
-	FailSid(sid);
+	FailSid(iSessionIdLocal);
 }
 
-void RedisClient::Release(RedisCall::State* st)
+void RedisClient::Release(RedisCall::State* pStParam)
 {
-	if (!st)
+	if (!pStParam)
 	{
 		return;
 	}
-	if (st->refs.fetch_sub(1, std::memory_order_acq_rel) == 1)
+	if (pStParam->iReferences.fetch_sub(1, std::memory_order_acq_rel) == 1)
 	{
-		delete st;
+		delete pStParam;
 	}
 }
 
-RedisCall::RedisCall(std::vector<std::string> args, RedisResult* out) : _state(new State())
+RedisCall::RedisCall(std::vector<std::string> vArgumentsParam, RedisResult* pOutputParam) : m_pState(new State())
 {
-	_state->args = std::move(args);
-	_state->out = out;
+	m_pState->vArguments = std::move(vArgumentsParam);
+	m_pState->pOutput = pOutputParam;
 }
 
-RedisCall::RedisCall(RedisCall&& other) noexcept : _state(other._state)
+RedisCall::RedisCall(RedisCall&& stOtherParam) noexcept : m_pState(stOtherParam.m_pState)
 {
-	other._state = NULL;
+	stOtherParam.m_pState = NULL;
 }
 
 RedisCall::~RedisCall()
 {
-	RedisClient::Release(_state);
+	RedisClient::Release(m_pState);
 }
 
 RedisResult RedisCall::await_resume()
 {
-	RedisResult result;
-	result.reply = _state->reply;
-	result.status = _state->status;
-	result.timeout = result.status == RedisStatus::Timeout;
-	if (_state->out) *_state->out = result;
-	return result;
+	RedisResult stResultLocal;
+	stResultLocal.pReply = m_pState->pReply;
+	stResultLocal.iStatus = m_pState->iStatus;
+	stResultLocal.bTimeout = stResultLocal.iStatus == RedisStatus::Timeout;
+	if (m_pState->pOutput) *m_pState->pOutput = stResultLocal;
+	return stResultLocal;
 }
 
-bool RedisCall::Suspend(std::coroutine_handle<> h)
+bool RedisCall::Suspend(std::coroutine_handle<> stHandleParam)
 {
-	_state->handle = h;
-	::OI::Net::Poll::GetInstance().CallOnLoop(RedisClient::Submit, _state);
-	int prev = _state->gate.exchange(2, std::memory_order_acq_rel);
-	return prev != 1;
+	m_pState->stHandle = stHandleParam;
+	::OI::Net::Poll::GetInstance().CallOnLoop(RedisClient::Submit, m_pState);
+	int iPrevious = m_pState->iGate.exchange(2, std::memory_order_acq_rel);
+	return iPrevious != 1;
 }
 
-RedisCall RedisClient::Call(std::vector<std::string> args, RedisResult* out)
+RedisCall RedisClient::Call(std::vector<std::string> vArgumentsParam, RedisResult* pOutputParam)
 {
-	return RedisCall(std::move(args), out);
+	return RedisCall(std::move(vArgumentsParam), pOutputParam);
 }
 
-RedisResult RedisClient::CallSync(std::vector<std::string> args)
+RedisResult RedisClient::CallSync(std::vector<std::string> vArgumentsParam)
 {
 	// 两种模式都禁止在 libuv 回调中同步等待，不能重入事件循环。
 	if (::OI::Net::Poll::GetInstance().InPollCallback())
 		throw std::logic_error("CallRedisSync cannot run in a poll callback; use co_await CallRedis");
-	RedisCall::State* st = new RedisCall::State();
-	st->args = std::move(args);
-	st->sync = true;
-	::OI::Net::Poll::GetInstance().CallOnLoop(Submit, st);
+	RedisCall::State* pSt = new RedisCall::State();
+	pSt->vArguments = std::move(vArgumentsParam);
+	pSt->bSynchronous = true;
+	::OI::Net::Poll::GetInstance().CallOnLoop(Submit, pSt);
 #ifdef _SINGLE_THREAD_
-	while (!st->ready && !::OI::Thread::ThreadPool::GetInstance().Stopping())
+	while (!pSt->bReady && !::OI::Thread::ThreadPool::GetInstance().Stopping())
 	{
 		// 同步调用也可能来自定时回调；不能依赖该回调返回后才能继续推进的时间轮。
 		SweepTimeout(nullptr);
-		if (!st->ready) ::OI::Thread::ThreadPool::GetInstance().PumpOnce();
+		if (!pSt->bReady) ::OI::Thread::ThreadPool::GetInstance().PumpOnce();
 	}
-	if (!st->ready) Settle(st, {}, RedisStatus::Disconnected);
+	if (!pSt->bReady) Settle(pSt, {}, RedisStatus::Disconnected);
 #else
 	{
-		::OI::Thread::MutexGuard lock(st->mu);
-		while (!st->ready)
+		::OI::Thread::MutexGuard stLock(pSt->stMutex);
+		while (!pSt->bReady)
 		{
-			st->cv.Wait(st->mu);
+			pSt->stConditionVariable.Wait(pSt->stMutex);
 		}
 	}
 #endif
-	RedisResult out;
-	out.reply = st->reply;
-	out.status = st->status;
-	out.timeout = out.status == RedisStatus::Timeout;
-	Release(st);
-	return out;
+	RedisResult stOutput;
+	stOutput.pReply = pSt->pReply;
+	stOutput.iStatus = pSt->iStatus;
+	stOutput.bTimeout = stOutput.iStatus == RedisStatus::Timeout;
+	Release(pSt);
+	return stOutput;
 }
 
-void RedisClient::Submit(void* state)
+void RedisClient::Submit(void* pStateParam)
 {
-	GetInstance().Enqueue((RedisCall::State*)state);
+	GetInstance().Enqueue((RedisCall::State*)pStateParam);
 }
 
 void RedisClient::SweepTimeout(void*)
 {
-	RedisClient& self = GetInstance();
-	int64_t now = NowMs();
-	std::vector<RedisCall::State*> expired;
+	RedisClient& stSelf = GetInstance();
+	int64_t iNow = NowMs();
+	std::vector<RedisCall::State*> vExpired;
 	{
 		// 超时时长固定，又按发送顺序入队，所以 _wait 按截止时间有序。
 		// 超时的仍留在队里认领它那条回执，_swept 记着已经判过的前缀，不重复扫。
-		::OI::Thread::MutexGuard lock(self._wait_mu);
-		while (self._swept < self._wait.size())
+		::OI::Thread::MutexGuard stLock(stSelf.m_stWaitMutex);
+		while (stSelf.m_iSwept < stSelf.m_vWait.size())
 		{
-			RedisCall::State* st = self._wait[self._swept];
-			if (st->deadline_ms > now)
+			RedisCall::State* pSt = stSelf.m_vWait[stSelf.m_iSwept];
+			if (pSt->iDeadlineMilliseconds > iNow)
 			{
 				break;
 			}
-			expired.push_back(st);
-			++self._swept;
+			vExpired.push_back(pSt);
+			++stSelf.m_iSwept;
 		}
 	}
-	for (size_t i = 0; i < expired.size(); ++i)
+	for (size_t iIndexLocal = 0; iIndexLocal < vExpired.size(); ++iIndexLocal)
 	{
-		self.Settle(expired[i], std::shared_ptr<redisReply>(), RedisStatus::Timeout);
+		stSelf.Settle(vExpired[iIndexLocal], std::shared_ptr<redisReply>(), RedisStatus::Timeout);
 	}
 }
 
-void RedisClient::Settle(RedisCall::State* st, std::shared_ptr<redisReply> reply, RedisStatus status)
+void RedisClient::Settle(RedisCall::State* pStParam, std::shared_ptr<redisReply> pReplyParam, RedisStatus iStatusParam)
 {
-	int expect = 0;
-	if (!st->won.compare_exchange_strong(expect, 1, std::memory_order_acq_rel))
+	int iExpect = 0;
+	if (!pStParam->iWon.compare_exchange_strong(iExpect, 1, std::memory_order_acq_rel))
 	{
 		return;
 	}
-	const bool sync = st->sync;
+	const bool bSync = pStParam->bSynchronous;
 	{
-		::OI::Thread::MutexGuard lock(st->mu);
-		st->reply = std::move(reply);
-		st->status = status;
-		st->ready = true;
-		if (sync)
+		::OI::Thread::MutexGuard stLock(pStParam->stMutex);
+		pStParam->pReply = std::move(pReplyParam);
+		pStParam->iStatus = iStatusParam;
+		pStParam->bReady = true;
+		if (bSync)
 		{
-			st->cv.Signal();
+			pStParam->stConditionVariable.Signal();
 		}
 	}
 	// 同步调用可能在通知后立即释放状态，出锁后不再解引用它。
-	if (sync)
+	if (bSync)
 	{
 		return;
 	}
-	int prev = st->gate.exchange(1, std::memory_order_acq_rel);
-	if (prev == 2 && st->handle)
+	int iPrevious = pStParam->iGate.exchange(1, std::memory_order_acq_rel);
+	if (iPrevious == 2 && pStParam->stHandle)
 	{
-		coro::Schedule(st->handle);
+		coro::Schedule(pStParam->stHandle);
 	}
 }
 
-void RedisClient::Enqueue(RedisCall::State* st)
+void RedisClient::Enqueue(RedisCall::State* pStParam)
 {
-	if (st->args.empty())
+	if (pStParam->vArguments.empty())
 	{
-		Settle(st, {}, RedisStatus::InvalidArgument);
+		Settle(pStParam, {}, RedisStatus::InvalidArgument);
 		return;
 	}
 	if (!IsConnect())
 	{
-		Settle(st, {}, RedisStatus::Disconnected);
+		Settle(pStParam, {}, RedisStatus::Disconnected);
 		return;
 	}
-	std::vector<const char*> argv(st->args.size());
-	std::vector<size_t> arglen(st->args.size());
-	for (size_t i = 0; i < st->args.size(); ++i)
+	std::vector<const char*> vArgumentsLocal(pStParam->vArguments.size());
+	std::vector<size_t> vArglen(pStParam->vArguments.size());
+	for (size_t iIndexLocal = 0; iIndexLocal < pStParam->vArguments.size(); ++iIndexLocal)
 	{
-		argv[i] = st->args[i].c_str();
-		arglen[i] = st->args[i].size();
+		vArgumentsLocal[iIndexLocal] = pStParam->vArguments[iIndexLocal].c_str();
+		vArglen[iIndexLocal] = pStParam->vArguments[iIndexLocal].size();
 	}
-	char* cmd = NULL;
-	long long n = redisFormatCommandArgv(&cmd, (int)argv.size(), argv.data(), arglen.data());
-	if (n < 0 || !cmd)
+	char* pCmd = NULL;
+	long long iNumber = redisFormatCommandArgv(&pCmd, (int)vArgumentsLocal.size(), vArgumentsLocal.data(), vArglen.data());
+	if (iNumber < 0 || !pCmd)
 	{
-		Settle(st, {}, RedisStatus::InvalidArgument);
+		Settle(pStParam, {}, RedisStatus::InvalidArgument);
 		return;
 	}
-	::OI::Base::Bytes frame;
-	frame.Append(cmd, (size_t)n);
-	redisFreeCommand(cmd);
+	::OI::Base::Bytes stFrame;
+	stFrame.Append(pCmd, (size_t)iNumber);
+	redisFreeCommand(pCmd);
 	std::call_once(g_sweep_once, []() {
 		::OI::Timer::BaseTimerManager::GetInstance().AddTimer(new RedisSweepTimer(), kSweepMs);
 	});
-	st->deadline_ms = NowMs() + _timeout_ms;
-	bool queued = false;
+	pStParam->iDeadlineMilliseconds = NowMs() + m_iTimeoutMilliseconds;
+	bool bQueued = false;
 	{
-		::OI::Thread::MutexGuard lock(_wait_mu);
+		::OI::Thread::MutexGuard stLock(m_stWaitMutex);
 		// 超时的也占着位置。满了就不再排。
-		if (_wait.size() < static_cast<size_t>(_max_pending))
+		if (m_vWait.size() < static_cast<size_t>(m_iMaxPending))
 		{
-			st->sid = g_sid;
-			st->refs.fetch_add(1, std::memory_order_relaxed);
-			_wait.push_back(st);
-			queued = true;
+			pStParam->iSessionId = g_sid;
+			pStParam->iReferences.fetch_add(1, std::memory_order_relaxed);
+			m_vWait.push_back(pStParam);
+			bQueued = true;
 		}
 	}
-	if (!queued)
+	if (!bQueued)
 	{
-		Settle(st, {}, RedisStatus::Busy);
+		Settle(pStParam, {}, RedisStatus::Busy);
 		return;
 	}
-	if (!SendRaw(frame))
+	if (!SendRaw(stFrame))
 	{
-		::OI::Thread::MutexGuard lock(_wait_mu);
-		for (size_t i = 0; i < _wait.size(); ++i)
+		::OI::Thread::MutexGuard stLock(m_stWaitMutex);
+		for (size_t iIndexLocal = 0; iIndexLocal < m_vWait.size(); ++iIndexLocal)
 		{
-			if (_wait[i] == st)
+			if (m_vWait[iIndexLocal] == pStParam)
 			{
-				_wait.erase(_wait.begin() + (std::ptrdiff_t)i);
-				if (i < _swept)
+				m_vWait.erase(m_vWait.begin() + (std::ptrdiff_t)iIndexLocal);
+				if (iIndexLocal < m_iSwept)
 				{
-					--_swept;
+					--m_iSwept;
 				}
 				break;
 			}
 		}
-		Settle(st, {}, RedisStatus::SendFailed);
-		Release(st);
+		Settle(pStParam, {}, RedisStatus::SendFailed);
+		Release(pStParam);
 		return;
 	}
 }
 
-void RedisClient::FailSid(sid_t sid)
+void RedisClient::FailSid(sid_t iSessionIdParam)
 {
-	std::deque<RedisCall::State*> left;
+	std::deque<RedisCall::State*> vLeft;
 	{
-		::OI::Thread::MutexGuard lock(_wait_mu);
-		std::deque<RedisCall::State*> keep;
-		size_t swept = 0;
-		for (size_t i = 0; i < _wait.size(); ++i)
+		::OI::Thread::MutexGuard stLock(m_stWaitMutex);
+		std::deque<RedisCall::State*> vKeep;
+		size_t iSwept = 0;
+		for (size_t iIndexLocal = 0; iIndexLocal < m_vWait.size(); ++iIndexLocal)
 		{
-			if (_wait[i]->sid == sid)
+			if (m_vWait[iIndexLocal]->iSessionId == iSessionIdParam)
 			{
-				left.push_back(_wait[i]);
+				vLeft.push_back(m_vWait[iIndexLocal]);
 				continue;
 			}
-			if (i < _swept)
+			if (iIndexLocal < m_iSwept)
 			{
-				++swept;
+				++iSwept;
 			}
-			keep.push_back(_wait[i]);
+			vKeep.push_back(m_vWait[iIndexLocal]);
 		}
-		_wait.swap(keep);
-		_swept = swept;
+		m_vWait.swap(vKeep);
+		m_iSwept = iSwept;
 	}
-	for (size_t i = 0; i < left.size(); ++i)
+	for (size_t iIndexLocal = 0; iIndexLocal < vLeft.size(); ++iIndexLocal)
 	{
-		if (left[i]->won.load(std::memory_order_acquire) == 0)
+		if (vLeft[iIndexLocal]->iWon.load(std::memory_order_acquire) == 0)
 		{
-			Settle(left[i], {}, RedisStatus::Disconnected);
+			Settle(vLeft[iIndexLocal], {}, RedisStatus::Disconnected);
 		}
-		Release(left[i]);
+		Release(vLeft[iIndexLocal]);
 	}
 }
 
-void RedisClient::FailAll(RedisStatus status)
+void RedisClient::FailAll(RedisStatus iStatusParam)
 {
-	std::deque<RedisCall::State*> left;
+	std::deque<RedisCall::State*> vLeft;
 	{
-		::OI::Thread::MutexGuard lock(_wait_mu);
-		left.swap(_wait);
-		_swept = 0;
+		::OI::Thread::MutexGuard stLock(m_stWaitMutex);
+		vLeft.swap(m_vWait);
+		m_iSwept = 0;
 	}
-	for (size_t i = 0; i < left.size(); ++i)
+	for (size_t iIndexLocal = 0; iIndexLocal < vLeft.size(); ++iIndexLocal)
 	{
-		if (left[i]->won.load(std::memory_order_acquire) == 0)
+		if (vLeft[iIndexLocal]->iWon.load(std::memory_order_acquire) == 0)
 		{
-			Settle(left[i], {}, status);
+			Settle(vLeft[iIndexLocal], {}, iStatusParam);
 		}
-		Release(left[i]);
+		Release(vLeft[iIndexLocal]);
 	}
 }
 
-void RedisClient::Feed(const char* data, size_t size)
+void RedisClient::Feed(const char* pDataParam, size_t iSizeParam)
 {
-	if (!_reader)
+	if (!m_pReader)
 	{
-		_reader = redisReaderCreate();
+		m_pReader = redisReaderCreate();
 	}
-	if (redisReaderFeed(_reader, data, size) != REDIS_OK)
+	if (redisReaderFeed(m_pReader, pDataParam, iSizeParam) != REDIS_OK)
 	{
 		FailAll(RedisStatus::ProtocolError);
 		if (g_sid != INVALID_SID)
@@ -405,8 +405,8 @@ void RedisClient::Feed(const char* data, size_t size)
 	}
 	for (;;)
 	{
-		void* raw = NULL;
-		if (redisReaderGetReply(_reader, &raw) != REDIS_OK)
+		void* pRaw = NULL;
+		if (redisReaderGetReply(m_pReader, &pRaw) != REDIS_OK)
 		{
 			FailAll(RedisStatus::ProtocolError);
 			if (g_sid != INVALID_SID)
@@ -415,31 +415,31 @@ void RedisClient::Feed(const char* data, size_t size)
 			}
 			return;
 		}
-		if (!raw)
+		if (!pRaw)
 		{
 			return;
 		}
-		std::shared_ptr<redisReply> held((redisReply*)raw, ReplyFree());
-		RedisCall::State* st = NULL;
+		std::shared_ptr<redisReply> pHeld((redisReply*)pRaw, ReplyFree());
+		RedisCall::State* pSt = NULL;
 		{
-			::OI::Thread::MutexGuard lock(_wait_mu);
-			if (_wait.empty())
+			::OI::Thread::MutexGuard stLock(m_stWaitMutex);
+			if (m_vWait.empty())
 			{
 				continue;
 			}
-			st = _wait.front();
-			_wait.pop_front();
-			if (_swept > 0)
+			pSt = m_vWait.front();
+			m_vWait.pop_front();
+			if (m_iSwept > 0)
 			{
-				--_swept;
+				--m_iSwept;
 			}
 		}
-		if (st->won.load(std::memory_order_acquire) == 0)
+		if (pSt->iWon.load(std::memory_order_acquire) == 0)
 		{
-			const auto status = held->type == REDIS_REPLY_ERROR ? RedisStatus::ServerError : RedisStatus::Ok;
-			Settle(st, std::move(held), status);
+			const auto iStatusLocal = pHeld->type == REDIS_REPLY_ERROR ? RedisStatus::ServerError : RedisStatus::Ok;
+			Settle(pSt, std::move(pHeld), iStatusLocal);
 		}
-		Release(st);
+		Release(pSt);
 	}
 }
 }}

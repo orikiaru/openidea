@@ -16,56 +16,56 @@ typedef std::vector<TimerList>	TimerListVector;
 class TimerLevel
 {
 	friend class BaseTimerManager;
-	uint32_t		_max_tick;					//当前等级的timer的tick数
-	uint32_t		_lv_offset_tick;			//当前等级基础偏移tick数,第一级就是1，第二集就是1*lv[0]._max_tick =====
-	uint32_t		_offset;					//当前数组偏移量
-	TimerListVector _timer_tick_datas;			//定时器队列
-	::OI::Thread::Mutex		_locker;
+	uint32_t		m_iMaxTick;					//当前等级的timer的tick数
+	uint32_t		m_iLevelOffsetTick;			//当前等级基础偏移tick数,第一级就是1，第二集就是1*lv[0]._max_tick =====
+	uint32_t		m_iOffset;					//当前数组偏移量
+	TimerListVector m_vTimerTickDatas;			//定时器队列
+	::OI::Thread::Mutex		m_stLocker;
 public:
-	TimerLevel():_max_tick(0),_offset(0) {}
+	TimerLevel():m_iMaxTick(0),m_iOffset(0) {}
 	TimerLevel(const TimerLevel&) = delete;
 	TimerLevel& operator=(const TimerLevel&) = delete;
 private:
-	void Init(uint32_t max_tick, uint32_t lv_offset_tick)
+	void Init(uint32_t iMaxTickParam, uint32_t iLevelOffsetTickParam)
 	{
-		assert(lv_offset_tick > 0);
-		_lv_offset_tick = lv_offset_tick;
+		assert(iLevelOffsetTickParam > 0);
+		m_iLevelOffsetTick = iLevelOffsetTickParam;
 
-		assert(max_tick > 0);
-		_max_tick = max_tick;
-		for (uint32_t i = 0; i < max_tick; ++i)
+		assert(iMaxTickParam > 0);
+		m_iMaxTick = iMaxTickParam;
+		for (uint32_t iIndexLocal = 0; iIndexLocal < iMaxTickParam; ++iIndexLocal)
 		{
-			_timer_tick_datas.push_back(TimerList());	//初始化定时器队列
+			m_vTimerTickDatas.push_back(TimerList());	//初始化定时器队列
 		}
 	}
 
 	// due 不为空时把这一格移进 due，否则逐个重新挂到下层。
-	void RunTick(BaseTimerManager* pMgr, TimerList* due);
+	void RunTick(BaseTimerManager* pMgrParam, TimerList* pDueParam);
 
-	void AddTimer(BaseTimerManager* mgr, BaseTimer* pTimer, uint32_t level_offset)
+	void AddTimer(BaseTimerManager* pManagerParam, BaseTimer* pTimerParam, uint32_t iLevelOffsetParam)
 	{
-		assert(level_offset >= 0 && level_offset < _max_tick);
+		assert(iLevelOffsetParam >= 0 && iLevelOffsetParam < m_iMaxTick);
 
-		::OI::Thread::MutexGuard l(_locker);
+		::OI::Thread::MutexGuard stLock(m_stLocker);
 		//在此定时器层级,则进入适当索引的定时器列表中
-		int offset = (level_offset + _offset) % _max_tick;
-		_timer_tick_datas[offset].push_back(pTimer);
-		pTimer->_data._cur_level = this;
-		pTimer->_data._level_tick = offset;
+		int iOffset = (iLevelOffsetParam + m_iOffset) % m_iMaxTick;
+		m_vTimerTickDatas[iOffset].push_back(pTimerParam);
+		pTimerParam->m_stData.m_pCurrentLevel = this;
+		pTimerParam->m_stData.m_iLevelTick = iOffset;
 	}
 
 	//通常情况下, timer移除建议在OnTimer返回false移除
 	//在多线程情况下,可能会存在移除过程中, timer被触发的情况, 此时移除将是失败的操作
-	bool RemoveTimer(BaseTimerManager* mgr, BaseTimer* pTimer)
+	bool RemoveTimer(BaseTimerManager* pManagerParam, BaseTimer* pTimerParam)
 	{
-		assert(pTimer->GetLevelOffset() >= 0 && pTimer->GetLevelOffset() < _max_tick);
+		assert(pTimerParam->GetLevelOffset() >= 0 && pTimerParam->GetLevelOffset() < m_iMaxTick);
 
-		::OI::Thread::MutexGuard l(_locker);
-		TimerList& timer_list = _timer_tick_datas[pTimer->GetLevelOffset()];
-		TimerList::iterator it = std::find(timer_list.begin(), timer_list.end(), pTimer);
-		if (it != timer_list.end())
+		::OI::Thread::MutexGuard stLock(m_stLocker);
+		TimerList& vTimerList = m_vTimerTickDatas[pTimerParam->GetLevelOffset()];
+		auto stIterator = std::find(vTimerList.begin(), vTimerList.end(), pTimerParam);
+		if (stIterator != vTimerList.end())
 		{
-			timer_list.erase(it);
+			vTimerList.erase(stIterator);
 			return true;
 		}
 		return false;
@@ -74,7 +74,7 @@ private:
 	//是否跑完一次循环
 	bool IsLevelEnd()
 	{
-		return _offset == 0;
+		return m_iOffset == 0;
 	}
 };
 }}

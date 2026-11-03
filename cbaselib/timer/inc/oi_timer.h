@@ -27,40 +27,40 @@ class BaseTimer
 		friend class BaseTimer;
 		friend class TimerLevel;
 		friend class BaseTimerManager;
-		struct timeval	_trigger_ts;	//触发时戳
-		int32_t			_offset_ms;		//间隔ms数
-		timer_tick_t	_trigger_tick;	//偏移基础tick数
-		TimerLevel*		_cur_level;		//当前所处的timer_lv
-		uint32_t		_level_tick;	//所在timer_lv的offset
+		struct timeval	m_stTriggerTimestamp;	//触发时戳
+		int32_t			m_iOffsetMilliseconds;		//间隔ms数
+		timer_tick_t	m_iTriggerTick;	//偏移基础tick数
+		TimerLevel*		m_pCurrentLevel;		//当前所处的timer_lv
+		uint32_t		m_iLevelTick;	//所在timer_lv的offset
 
 		TimerData()
 		{
-			memset(&_trigger_ts, 0, sizeof(_trigger_ts));
-			_offset_ms = 0;
-			_trigger_tick = 0;
-			_cur_level = NULL;
-			_level_tick = 0;
+			memset(&m_stTriggerTimestamp, 0, sizeof(m_stTriggerTimestamp));
+			m_iOffsetMilliseconds = 0;
+			m_iTriggerTick = 0;
+			m_pCurrentLevel = NULL;
+			m_iLevelTick = 0;
 		}
 	};
 
 	friend class BaseTimerManager;
-	TimerData _data;		//标记定时器所在定时器管理器的位置,只由TimerManager控制,外部不可操作
-	void InitData(BaseTimerManager* pMgr, int millsec, int64_t ticks);
+	TimerData m_stData;		//标记定时器所在定时器管理器的位置,只由TimerManager控制,外部不可操作
+	void InitData(BaseTimerManager* pMgrParam, int iMillsecParam, int64_t iTicksParam);
 	TimerLevel* GetTimerLevel()
 	{
-		return _data._cur_level;
+		return m_stData.m_pCurrentLevel;
 	}
 	uint32_t GetLevelOffset()
 	{
-		return _data._level_tick;
+		return m_stData.m_iLevelTick;
 	}
 	int GetOffsetTime()
 	{
-		return _data._offset_ms;
+		return m_stData.m_iOffsetMilliseconds;
 	}
 	struct timeval& GetTriggerTime()
 	{
-		return _data._trigger_ts;
+		return m_stData.m_stTriggerTimestamp;
 	}
 
 public:

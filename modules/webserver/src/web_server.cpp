@@ -8,73 +8,73 @@
 #include <memory>
 #include <string>
 
-static std::string DumpJson(const Json::Value& value)
+static std::string DumpJson(const Json::Value& stValueParam)
 {
-	Json::StreamWriterBuilder builder;
-	builder["indentation"] = "";
-	return Json::writeString(builder, value);
+	Json::StreamWriterBuilder stBuilder;
+	stBuilder["indentation"] = "";
+	return Json::writeString(stBuilder, stValueParam);
 }
 
-static bool ParseJson(const std::string& text, Json::Value& out)
+static bool ParseJson(const std::string& sTextParam, Json::Value& stOutputParam)
 {
-	Json::CharReaderBuilder builder;
-	std::string errs;
-	const std::unique_ptr<Json::CharReader> reader(builder.newCharReader());
-	const char* begin = text.data();
-	return reader->parse(begin, begin + text.size(), &out, &errs);
+	Json::CharReaderBuilder stBuilder;
+	std::string sErrors;
+	const std::unique_ptr<Json::CharReader> pReader(stBuilder.newCharReader());
+	const char* pBegin = sTextParam.data();
+	return pReader->parse(pBegin, pBegin + sTextParam.size(), &stOutputParam, &sErrors);
 }
 
 bool WebServer::Run()
 {
-	std::string ip = "127.0.0.1";
-	int port = 18080;
-	TryGetConfig("WebServer.ip", ip);
-	TryGetConfig("WebServer.port", port);
-	if (port <= 0 || port > 65535)
+	std::string sIpLocal = "127.0.0.1";
+	int iPortLocal = 18080;
+	TryGetConfig("WebServer.ip", sIpLocal);
+	TryGetConfig("WebServer.port", iPortLocal);
+	if (iPortLocal <= 0 || iPortLocal > 65535)
 	{
-		printf("web server bad port=%d\n", port);
+		printf("web server bad port=%d\n", iPortLocal);
 		return false;
 	}
 
-	httplib::Server svr;
-	svr.Get("/health", [](const httplib::Request&, httplib::Response& res) {
-		res.set_content("ok", "text/plain");
+	httplib::Server stSvr;
+	stSvr.Get("/health", [](const httplib::Request&, httplib::Response& stResponseParam) {
+		stResponseParam.set_content("ok", "text/plain");
 	});
-	svr.Get("/query", [](const httplib::Request& req, httplib::Response& res) {
-		if (!req.has_param("text"))
+	stSvr.Get("/query", [](const httplib::Request& stRequestParam, httplib::Response& stResponseParam) {
+		if (!stRequestParam.has_param("text"))
 		{
-			res.status = 400;
+			stResponseParam.status = 400;
 			return;
 		}
-		Json::Value out(Json::objectValue);
-		out["text"] = req.get_param_value("text");
-		res.set_content(DumpJson(out), "application/json");
+		Json::Value stOutput(Json::objectValue);
+		stOutput["text"] = stRequestParam.get_param_value("text");
+		stResponseParam.set_content(DumpJson(stOutput), "application/json");
 	});
-	svr.Post("/json", [](const httplib::Request& req, httplib::Response& res) {
-		Json::Value body;
-		if (!ParseJson(req.body, body) || !body.isObject())
+	stSvr.Post("/json", [](const httplib::Request& stRequestParam, httplib::Response& stResponseParam) {
+		Json::Value stBody;
+		if (!ParseJson(stRequestParam.body, stBody) || !stBody.isObject())
 		{
-			res.status = 400;
+			stResponseParam.status = 400;
 			return;
 		}
-		body["ok"] = true;
-		res.set_content(DumpJson(body), "application/json");
+		stBody["ok"] = true;
+		stResponseParam.set_content(DumpJson(stBody), "application/json");
 	});
-	svr.Post("/rpcjson", [](const httplib::Request& req, httplib::Response& res) {
-		::OI::RpcData::JsonAll data;
-		if (!data.FromJson(req.body))
+	stSvr.Post("/rpcjson", [](const httplib::Request& stRequestParam, httplib::Response& stResponseParam) {
+		::OI::RpcData::JsonAll stDataLocal;
+		if (!stDataLocal.FromJson(stRequestParam.body))
 		{
-			res.status = 400;
+			stResponseParam.status = 400;
 			return;
 		}
-		data.gap += 1;
-		res.set_content(data.ToJson(), "application/json");
+		stDataLocal.iGap += 1;
+		stResponseParam.set_content(stDataLocal.ToJson(), "application/json");
 	});
-	svr.Post("/bin", [](const httplib::Request& req, httplib::Response& res) {
-		res.set_content(req.body.data(), req.body.size(), "application/octet-stream");
+	stSvr.Post("/bin", [](const httplib::Request& stRequestParam, httplib::Response& stResponseParam) {
+		stResponseParam.set_content(stRequestParam.body.data(), stRequestParam.body.size(), "application/octet-stream");
 	});
 
-	printf("web server listen %s:%d\n", ip.c_str(), port);
+	printf("web server listen %s:%d\n", sIpLocal.c_str(), iPortLocal);
 	fflush(stdout);
-	return svr.listen(ip, port);
+	return stSvr.listen(sIpLocal, iPortLocal);
 }

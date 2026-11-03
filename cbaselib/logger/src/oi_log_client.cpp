@@ -14,30 +14,30 @@ bool LogClient::Init()
 	return ::OI::Rpc::ProtoClientManager::Init();
 }
 
-void LogClient::OnClientConnect(::OI::Net::Session* pSession)
+void LogClient::OnClientConnect(::OI::Net::Session* pSessionParam)
 {
-	LOG_TRACE("LogClient::OnClientConnect sid=%d", pSession->GetSessionID());
+	LOG_TRACE("LogClient::OnClientConnect sid=%d", pSessionParam->GetSessionID());
 }
 
-void LogClient::OnClientDisconnect(const ::OI::Net::Session* pSession)
+void LogClient::OnClientDisconnect(const ::OI::Net::Session* pSessionParam)
 {
-	LOG_TRACE("LogClient::OnClientDisconnect sid=%d, errno=%d", pSession->GetSessionID(), pSession->GetError());
+	LOG_TRACE("LogClient::OnClientDisconnect sid=%d, errno=%d", pSessionParam->GetSessionID(), pSessionParam->GetError());
 }
 
-bool LogClient::SendLog(int level, const char* text, size_t text_len)
+bool LogClient::SendLog(int iLevelParam, const char* pTextParam, size_t iTextLengthParam)
 {
-	if (!text && text_len > 0)
+	if (!pTextParam && iTextLengthParam > 0)
 	{
 		return false;
 	}
-	if (text_len + 1 > (size_t)LOG_FRAME_MAX)
+	if (iTextLengthParam + 1 > (size_t)LOG_FRAME_MAX)
 	{
 		return false;
 	}
-	::OI::Base::Bytes frame;
-	AppendLogFrame(frame, level, text, text_len);
+	::OI::Base::Bytes stFrame;
+	AppendLogFrame(stFrame, iLevelParam, pTextParam, iTextLengthParam);
 	// 进程刚起、日志服还没连上时的日志先攒着，别丢。
-	const size_t kMaxPending = 4 * 1024 * 1024;
-	return SendRawOrPend(frame, kMaxPending);
+	const size_t iItemIndexMaxPending = 4 * 1024 * 1024;
+	return SendRawOrPend(stFrame, iItemIndexMaxPending);
 }
 }}

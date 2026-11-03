@@ -11,254 +11,254 @@
 
 namespace OI { namespace Rpc {
 
-inline void ToJsonValue(Json::Value& out, bool in) { out = in; }
-inline void ToJsonValue(Json::Value& out, int8_t in) { out = static_cast<int32_t>(in); }
-inline void ToJsonValue(Json::Value& out, uint8_t in) { out = static_cast<uint32_t>(in); }
-inline void ToJsonValue(Json::Value& out, int16_t in) { out = static_cast<int32_t>(in); }
-inline void ToJsonValue(Json::Value& out, uint16_t in) { out = static_cast<uint32_t>(in); }
-inline void ToJsonValue(Json::Value& out, int32_t in) { out = static_cast<Json::Int>(in); }
-inline void ToJsonValue(Json::Value& out, uint32_t in) { out = static_cast<Json::UInt>(in); }
-inline void ToJsonValue(Json::Value& out, int64_t in) { out = static_cast<Json::Int64>(in); }
-inline void ToJsonValue(Json::Value& out, uint64_t in) { out = static_cast<Json::UInt64>(in); }
-inline void ToJsonValue(Json::Value& out, float in) { out = static_cast<double>(in); }
-inline void ToJsonValue(Json::Value& out, double in) { out = in; }
-inline void ToJsonValue(Json::Value& out, const std::string& in) { out = in; }
-inline void ToJsonValue(Json::Value& out, const ::OI::Base::Bytes& in)
+inline void ToJsonValue(Json::Value& stOutputParam, bool bInputParam) { stOutputParam = bInputParam; }
+inline void ToJsonValue(Json::Value& stOutputParam, int8_t iInputParam) { stOutputParam = static_cast<int32_t>(iInputParam); }
+inline void ToJsonValue(Json::Value& stOutputParam, uint8_t iInputParam) { stOutputParam = static_cast<uint32_t>(iInputParam); }
+inline void ToJsonValue(Json::Value& stOutputParam, int16_t iInputParam) { stOutputParam = static_cast<int32_t>(iInputParam); }
+inline void ToJsonValue(Json::Value& stOutputParam, uint16_t iInputParam) { stOutputParam = static_cast<uint32_t>(iInputParam); }
+inline void ToJsonValue(Json::Value& stOutputParam, int32_t iInputParam) { stOutputParam = static_cast<Json::Int>(iInputParam); }
+inline void ToJsonValue(Json::Value& stOutputParam, uint32_t iInputParam) { stOutputParam = static_cast<Json::UInt>(iInputParam); }
+inline void ToJsonValue(Json::Value& stOutputParam, int64_t iInputParam) { stOutputParam = static_cast<Json::Int64>(iInputParam); }
+inline void ToJsonValue(Json::Value& stOutputParam, uint64_t iInputParam) { stOutputParam = static_cast<Json::UInt64>(iInputParam); }
+inline void ToJsonValue(Json::Value& stOutputParam, float fInputParam) { stOutputParam = static_cast<double>(fInputParam); }
+inline void ToJsonValue(Json::Value& stOutputParam, double dInputParam) { stOutputParam = dInputParam; }
+inline void ToJsonValue(Json::Value& stOutputParam, const std::string& sInputParam) { stOutputParam = sInputParam; }
+inline void ToJsonValue(Json::Value& stOutputParam, const ::OI::Base::Bytes& stInputParam)
 {
-	out = std::string(in.Data(), in.Data() ? in.Size() : 0);
+	stOutputParam = std::string(stInputParam.Data(), stInputParam.Data() ? stInputParam.Size() : 0);
 }
 
-inline bool FromJsonValue(const Json::Value& in, bool& out)
+inline bool FromJsonValue(const Json::Value& stInputParam, bool& bOutputParam)
 {
-	if (!in.isBool()) return false;
-	out = in.asBool();
+	if (!stInputParam.isBool()) return false;
+	bOutputParam = stInputParam.asBool();
 	return true;
 }
-inline bool FromJsonValue(const Json::Value& in, int8_t& out)
+inline bool FromJsonValue(const Json::Value& stInputParam, int8_t& iOutputParam)
 {
-	if (!in.isIntegral()) return false;
-	out = static_cast<int8_t>(in.asInt());
+	if (!stInputParam.isIntegral()) return false;
+	iOutputParam = static_cast<int8_t>(stInputParam.asInt());
 	return true;
 }
-inline bool FromJsonValue(const Json::Value& in, uint8_t& out)
+inline bool FromJsonValue(const Json::Value& stInputParam, uint8_t& iOutputParam)
 {
-	if (!in.isIntegral()) return false;
-	out = static_cast<uint8_t>(in.asUInt());
+	if (!stInputParam.isIntegral()) return false;
+	iOutputParam = static_cast<uint8_t>(stInputParam.asUInt());
 	return true;
 }
-inline bool FromJsonValue(const Json::Value& in, int16_t& out)
+inline bool FromJsonValue(const Json::Value& stInputParam, int16_t& iOutputParam)
 {
-	if (!in.isIntegral()) return false;
-	out = static_cast<int16_t>(in.asInt());
+	if (!stInputParam.isIntegral()) return false;
+	iOutputParam = static_cast<int16_t>(stInputParam.asInt());
 	return true;
 }
-inline bool FromJsonValue(const Json::Value& in, uint16_t& out)
+inline bool FromJsonValue(const Json::Value& stInputParam, uint16_t& iOutputParam)
 {
-	if (!in.isIntegral()) return false;
-	out = static_cast<uint16_t>(in.asUInt());
+	if (!stInputParam.isIntegral()) return false;
+	iOutputParam = static_cast<uint16_t>(stInputParam.asUInt());
 	return true;
 }
-inline bool FromJsonValue(const Json::Value& in, int32_t& out)
+inline bool FromJsonValue(const Json::Value& stInputParam, int32_t& iOutputParam)
 {
-	if (!in.isIntegral()) return false;
-	out = static_cast<int32_t>(in.asInt());
+	if (!stInputParam.isIntegral()) return false;
+	iOutputParam = static_cast<int32_t>(stInputParam.asInt());
 	return true;
 }
-inline bool FromJsonValue(const Json::Value& in, uint32_t& out)
+inline bool FromJsonValue(const Json::Value& stInputParam, uint32_t& iOutputParam)
 {
-	if (!in.isIntegral()) return false;
-	out = static_cast<uint32_t>(in.asUInt());
+	if (!stInputParam.isIntegral()) return false;
+	iOutputParam = static_cast<uint32_t>(stInputParam.asUInt());
 	return true;
 }
-inline bool FromJsonValue(const Json::Value& in, int64_t& out)
+inline bool FromJsonValue(const Json::Value& stInputParam, int64_t& iOutputParam)
 {
-	if (!in.isIntegral()) return false;
-	out = static_cast<int64_t>(in.asInt64());
+	if (!stInputParam.isIntegral()) return false;
+	iOutputParam = static_cast<int64_t>(stInputParam.asInt64());
 	return true;
 }
-inline bool FromJsonValue(const Json::Value& in, uint64_t& out)
+inline bool FromJsonValue(const Json::Value& stInputParam, uint64_t& iOutputParam)
 {
-	if (!in.isUInt64() && !in.isIntegral()) return false;
-	out = static_cast<uint64_t>(in.asUInt64());
+	if (!stInputParam.isUInt64() && !stInputParam.isIntegral()) return false;
+	iOutputParam = static_cast<uint64_t>(stInputParam.asUInt64());
 	return true;
 }
-inline bool FromJsonValue(const Json::Value& in, float& out)
+inline bool FromJsonValue(const Json::Value& stInputParam, float& fOutputParam)
 {
-	if (!in.isNumeric()) return false;
-	out = static_cast<float>(in.asDouble());
+	if (!stInputParam.isNumeric()) return false;
+	fOutputParam = static_cast<float>(stInputParam.asDouble());
 	return true;
 }
-inline bool FromJsonValue(const Json::Value& in, double& out)
+inline bool FromJsonValue(const Json::Value& stInputParam, double& dOutputParam)
 {
-	if (!in.isNumeric()) return false;
-	out = in.asDouble();
+	if (!stInputParam.isNumeric()) return false;
+	dOutputParam = stInputParam.asDouble();
 	return true;
 }
-inline bool FromJsonValue(const Json::Value& in, std::string& out)
+inline bool FromJsonValue(const Json::Value& stInputParam, std::string& sOutputParam)
 {
-	if (!in.isString()) return false;
-	out = in.asString();
+	if (!stInputParam.isString()) return false;
+	sOutputParam = stInputParam.asString();
 	return true;
 }
-inline bool FromJsonValue(const Json::Value& in, ::OI::Base::Bytes& out)
+inline bool FromJsonValue(const Json::Value& stInputParam, ::OI::Base::Bytes& stOutputParam)
 {
-	if (!in.isString()) return false;
-	const std::string s = in.asString();
-	out.Reserve(0);
-	out.Append(s.data(), s.size());
-	return true;
-}
-
-template<typename T>
-bool FromJsonValue(const Json::Value& in, std::vector<T>& out)
-{
-	if (!in.isArray()) return false;
-	out.clear();
-	for (Json::ArrayIndex i = 0; i < in.size(); ++i)
-	{
-		T elem{};
-		if (!FromJsonValue(in[i], elem)) return false;
-		out.push_back(std::move(elem));
-	}
+	if (!stInputParam.isString()) return false;
+	const std::string sText = stInputParam.asString();
+	stOutputParam.Reserve(0);
+	stOutputParam.Append(sText.data(), sText.size());
 	return true;
 }
 
 template<typename T>
-void ToJsonValue(Json::Value& out, const std::vector<T>& in)
+bool FromJsonValue(const Json::Value& stInputParam, std::vector<T>& stOutputParam)
 {
-	out = Json::Value(Json::arrayValue);
-	for (size_t i = 0; i < in.size(); ++i)
+	if (!stInputParam.isArray()) return false;
+	stOutputParam.clear();
+	for (Json::ArrayIndex iIndexLocal = 0; iIndexLocal < stInputParam.size(); ++iIndexLocal)
 	{
-		Json::Value child;
-		ToJsonValue(child, in[i]);
-		out.append(std::move(child));
+		T stElem{};
+		if (!FromJsonValue(stInputParam[iIndexLocal], stElem)) return false;
+		stOutputParam.push_back(std::move(stElem));
+	}
+	return true;
+}
+
+template<typename T>
+void ToJsonValue(Json::Value& stOutputParam, const std::vector<T>& stInputParam)
+{
+	stOutputParam = Json::Value(Json::arrayValue);
+	for (size_t iIndexLocal = 0; iIndexLocal < stInputParam.size(); ++iIndexLocal)
+	{
+		Json::Value stChild;
+		ToJsonValue(stChild, stInputParam[iIndexLocal]);
+		stOutputParam.append(std::move(stChild));
 	}
 }
 
 template<typename V>
-bool FromJsonValue(const Json::Value& in, std::map<std::string, V>& out)
+bool FromJsonValue(const Json::Value& stInputParam, std::map<std::string, V>& stOutputParam)
 {
-	if (!in.isObject()) return false;
-	out.clear();
-	for (Json::Value::const_iterator it = in.begin(); it != in.end(); ++it)
+	if (!stInputParam.isObject()) return false;
+	stOutputParam.clear();
+	for (auto it = stInputParam.begin(); it != stInputParam.end(); ++it)
 	{
-		V val{};
-		if (!FromJsonValue(*it, val)) return false;
-		out[it.name()] = std::move(val);
+		V stVal{};
+		if (!FromJsonValue(*it, stVal)) return false;
+		stOutputParam[it.name()] = std::move(stVal);
 	}
 	return true;
 }
 
 template<typename V>
-void ToJsonValue(Json::Value& out, const std::map<std::string, V>& in)
+void ToJsonValue(Json::Value& stOutputParam, const std::map<std::string, V>& stInputParam)
 {
-	out = Json::Value(Json::objectValue);
-	for (typename std::map<std::string, V>::const_iterator it = in.begin(); it != in.end(); ++it)
+	stOutputParam = Json::Value(Json::objectValue);
+	for (const auto& [sKey, stValue] : stInputParam)
 	{
-		Json::Value child;
-		ToJsonValue(child, it->second);
-		out[it->first] = std::move(child);
+		Json::Value stChild;
+		ToJsonValue(stChild, stValue);
+		stOutputParam[sKey] = std::move(stChild);
 	}
 }
 
 template<typename V>
-bool FromJsonValue(const Json::Value& in, std::map<int32_t, V>& out)
+bool FromJsonValue(const Json::Value& stInputParam, std::map<int32_t, V>& stOutputParam)
 {
-	if (!in.isObject()) return false;
-	out.clear();
-	for (Json::Value::const_iterator it = in.begin(); it != in.end(); ++it)
+	if (!stInputParam.isObject()) return false;
+	stOutputParam.clear();
+	for (auto it = stInputParam.begin(); it != stInputParam.end(); ++it)
 	{
-		char* end = NULL;
-		int64_t key = std::strtoll(it.name().c_str(), &end, 10);
-		if (end == it.name().c_str() || *end != '\0') return false;
-		if (key < INT32_MIN || key > INT32_MAX) return false;
-		V val{};
-		if (!FromJsonValue(*it, val)) return false;
-		out[static_cast<int32_t>(key)] = std::move(val);
+		char* pEnd = NULL;
+		int64_t iKey = std::strtoll(it.name().c_str(), &pEnd, 10);
+		if (pEnd == it.name().c_str() || *pEnd != '\0') return false;
+		if (iKey < INT32_MIN || iKey > INT32_MAX) return false;
+		V stVal{};
+		if (!FromJsonValue(*it, stVal)) return false;
+		stOutputParam[static_cast<int32_t>(iKey)] = std::move(stVal);
 	}
 	return true;
 }
 
 template<typename V>
-void ToJsonValue(Json::Value& out, const std::map<int32_t, V>& in)
+void ToJsonValue(Json::Value& stOutputParam, const std::map<int32_t, V>& stInputParam)
 {
-	out = Json::Value(Json::objectValue);
-	for (typename std::map<int32_t, V>::const_iterator it = in.begin(); it != in.end(); ++it)
+	stOutputParam = Json::Value(Json::objectValue);
+	for (const auto& [iKey, stValue] : stInputParam)
 	{
-		Json::Value child;
-		ToJsonValue(child, it->second);
-		out[std::to_string(it->first)] = std::move(child);
+		Json::Value stChild;
+		ToJsonValue(stChild, stValue);
+		stOutputParam[std::to_string(iKey)] = std::move(stChild);
 	}
 }
 
 template<typename U, typename V>
-bool FromJsonUnsignedKeyMap(const Json::Value& in, std::map<U, V>& out)
+bool FromJsonUnsignedKeyMap(const Json::Value& stInputParam, std::map<U, V>& stOutputParam)
 {
-	if (!in.isObject()) return false;
-	out.clear();
-	for (Json::Value::const_iterator it = in.begin(); it != in.end(); ++it)
+	if (!stInputParam.isObject()) return false;
+	stOutputParam.clear();
+	for (auto it = stInputParam.begin(); it != stInputParam.end(); ++it)
 	{
-		const std::string& name = it.name();
-		if (name.empty() || name[0] == '-') return false;
-		char* end = NULL;
+		const std::string& sNameLocal = it.name();
+		if (sNameLocal.empty() || sNameLocal[0] == '-') return false;
+		char* pEnd = NULL;
 		errno = 0;
-		unsigned long long key = std::strtoull(name.c_str(), &end, 10);
-		if (end == name.c_str() || *end != '\0' || errno == ERANGE) return false;
-		if (key > static_cast<unsigned long long>(static_cast<U>(-1))) return false;
-		V val{};
-		if (!FromJsonValue(*it, val)) return false;
-		out[static_cast<U>(key)] = std::move(val);
+		unsigned long long iKey = std::strtoull(sNameLocal.c_str(), &pEnd, 10);
+		if (pEnd == sNameLocal.c_str() || *pEnd != '\0' || errno == ERANGE) return false;
+		if (iKey > static_cast<unsigned long long>(static_cast<U>(-1))) return false;
+		V stVal{};
+		if (!FromJsonValue(*it, stVal)) return false;
+		stOutputParam[static_cast<U>(iKey)] = std::move(stVal);
 	}
 	return true;
 }
 
 template<typename U, typename V>
-void ToJsonUnsignedKeyMap(Json::Value& out, const std::map<U, V>& in)
+void ToJsonUnsignedKeyMap(Json::Value& stOutputParam, const std::map<U, V>& stInputParam)
 {
-	out = Json::Value(Json::objectValue);
-	for (typename std::map<U, V>::const_iterator it = in.begin(); it != in.end(); ++it)
+	stOutputParam = Json::Value(Json::objectValue);
+	for (const auto& [stKey, stValue] : stInputParam)
 	{
-		Json::Value child;
-		ToJsonValue(child, it->second);
-		out[std::to_string(it->first)] = std::move(child);
+		Json::Value stChild;
+		ToJsonValue(stChild, stValue);
+		stOutputParam[std::to_string(stKey)] = std::move(stChild);
 	}
 }
 
 template<typename V>
-bool FromJsonValue(const Json::Value& in, std::map<uint32_t, V>& out)
+bool FromJsonValue(const Json::Value& stInputParam, std::map<uint32_t, V>& stOutputParam)
 {
-	return FromJsonUnsignedKeyMap(in, out);
+	return FromJsonUnsignedKeyMap(stInputParam, stOutputParam);
 }
 
 template<typename V>
-void ToJsonValue(Json::Value& out, const std::map<uint32_t, V>& in)
+void ToJsonValue(Json::Value& stOutputParam, const std::map<uint32_t, V>& stInputParam)
 {
-	ToJsonUnsignedKeyMap(out, in);
+	ToJsonUnsignedKeyMap(stOutputParam, stInputParam);
 }
 
 template<typename V>
-bool FromJsonValue(const Json::Value& in, std::map<uint64_t, V>& out)
+bool FromJsonValue(const Json::Value& stInputParam, std::map<uint64_t, V>& stOutputParam)
 {
-	return FromJsonUnsignedKeyMap(in, out);
+	return FromJsonUnsignedKeyMap(stInputParam, stOutputParam);
 }
 
 template<typename V>
-void ToJsonValue(Json::Value& out, const std::map<uint64_t, V>& in)
+void ToJsonValue(Json::Value& stOutputParam, const std::map<uint64_t, V>& stInputParam)
 {
-	ToJsonUnsignedKeyMap(out, in);
+	ToJsonUnsignedKeyMap(stOutputParam, stInputParam);
 }
 
 template<typename T>
-auto FromJsonValue(const Json::Value& in, T& out) -> decltype(out.FromJson(in))
+auto FromJsonValue(const Json::Value& stInputParam, T& stOutputParam) -> decltype(stOutputParam.FromJson(stInputParam))
 {
-	if (!in.isObject()) return false;
-	return out.FromJson(in);
+	if (!stInputParam.isObject()) return false;
+	return stOutputParam.FromJson(stInputParam);
 }
 
 template<typename T>
-auto ToJsonValue(Json::Value& out, const T& in) -> decltype(in.ToJson(out))
+auto ToJsonValue(Json::Value& stOutputParam, const T& stInputParam) -> decltype(stInputParam.ToJson(stOutputParam))
 {
-	in.ToJson(out);
+	stInputParam.ToJson(stOutputParam);
 }
 
 }}

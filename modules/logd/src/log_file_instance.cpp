@@ -10,226 +10,226 @@
 	#error LOG_SERVER MUST BE MULTI THREAD
 #endif
 
-LogFileInstance::LogFileInstance(LogManager* p_mgr, LOG_LEVEL lv):_p_mgr(p_mgr), _lv(lv), _working(false), _quit(false)
+LogFileInstance::LogFileInstance(LogManager* pManagerParam, LOG_LEVEL iLevelParam):m_pManager(pManagerParam), m_iLevel(iLevelParam), m_bWorking(false), m_bQuit(false)
 {
-	memset(_fp, 0, sizeof(_fp));
+	memset(m_vFiles, 0, sizeof(m_vFiles));
 }
 
 LogFileInstance::~LogFileInstance()
 {
-	FILE* fp = GetActiveFile();	//顺带把跨天换下来的旧文件关掉
-	if (fp)
+	FILE* pFile = GetActiveFile();	//顺带把跨天换下来的旧文件关掉
+	if (pFile)
 	{
-		fflush(fp);
-		fclose(fp);
+		fflush(pFile);
+		fclose(pFile);
 	}
 }
 
 
-bool LogFileInstance::CreateNewFile(const char* path)
+bool LogFileInstance::CreateNewFile(const char* pPathParam)
 {
 #ifdef _WIN32
-	FILE* fp = NULL;
-	if (fopen_s(&fp, path, "a+") != 0 || !fp)
+	FILE* pFile = NULL;
+	if (fopen_s(&pFile, pPathParam, "a+") != 0 || !pFile)
 	{
 		return false;
 	}
 #else
-	FILE* fp = fopen(path, "a+");
-	if (!fp)
+	FILE* pFile = fopen(pPathParam, "a+");
+	if (!pFile)
 	{
 		return false;
 	}
 #endif
 	// 交给写线程按块刷。这里只把 stdio 缓冲放大，避免每条日志一次系统调用。
-	setvbuf(fp, NULL, _IOFBF, 1024 * 1024);
-	OnCreateNewFile(fp);
+	setvbuf(pFile, NULL, _IOFBF, 1024 * 1024);
+	OnCreateNewFile(pFile);
 	return true;
 }
 
-void LogFileInstance::OnCreateNewFile(FILE* new_file)
+void LogFileInstance::OnCreateNewFile(FILE* pNewFileParam)
 {
 	{
-		::OI::Thread::MutexGuard _l(_file_locker);
-		assert(_fp[1] == NULL);
-		_fp[1] = new_file;
+		::OI::Thread::MutexGuard stIndexLockState(m_stFileLocker);
+		assert(m_vFiles[1] == NULL);
+		m_vFiles[1] = pNewFileParam;
 	}
 	Active();
 }
 
 bool LogFileInstance::StartWriteThread()
 {
-	return ::OI::Thread::ThreadPool::CreateSpecThread(_thread, LogFileInstance::WriteLogThreadHandle, this);
+	return ::OI::Thread::ThreadPool::CreateSpecThread(m_stThread, LogFileInstance::WriteLogThreadHandle, this);
 }
 
 void LogFileInstance::StopWriteThread()
 {
 	{
-		::OI::Thread::MutexGuard l(_cache_locker);
-		_quit = true;
+		::OI::Thread::MutexGuard stLock(m_stCacheLocker);
+		m_bQuit = true;
 		Active();
 	}
-	if (_thread.joinable())
+	if (m_stThread.joinable())
 	{
-		_thread.join();
+		m_stThread.join();
 	}
 }
 
 FILE* LogFileInstance::GetActiveFile()
 {
-	::OI::Thread::MutexGuard _l(_file_locker);
-	if (_fp[1])
+	::OI::Thread::MutexGuard stIndexLockState(m_stFileLocker);
+	if (m_vFiles[1])
 	{
-		if (_fp[0])
+		if (m_vFiles[0])
 		{
-			fclose(_fp[0]);
+			fclose(m_vFiles[0]);
 		}
-		_fp[0] = _fp[1];
-		_fp[1] = NULL;
+		m_vFiles[0] = m_vFiles[1];
+		m_vFiles[1] = NULL;
 	}
-	return _fp[0];
+	return m_vFiles[0];
 }
 
 void LogFileInstance::Active()
 {
-	_cache_cond.Signal();
+	m_stCacheCondition.Signal();
 }
 
 void LogFileInstance::Passive()
 {
-	_cache_cond.Wait(_cache_locker);
+	m_stCacheCondition.Wait(m_stCacheLocker);
 }
 
 
-void LogFileInstance::AddLog(::OI::Base::Bytes& log)
+void LogFileInstance::AddLog(::OI::Base::Bytes& stLogParam)
 {
-	bool notify = false;
+	bool bNotify = false;
 
 	{
-		::OI::Thread::MutexGuard l(_cache_locker);
-		if (_logs.empty())
+		::OI::Thread::MutexGuard stLock(m_stCacheLocker);
+		if (m_vLogs.empty())
 		{
-			notify = true;
+			bNotify = true;
 		}
-		_logs.push_back(std::move(log));
-		if (notify)
+		m_vLogs.push_back(std::move(stLogParam));
+		if (bNotify)
 		{
 			Active();
 		}
 	}
 }
 
-void* LogFileInstance::WriteLogThreadHandle(void* arg)
+void* LogFileInstance::WriteLogThreadHandle(void* pArgumentParam)
 {
-	LogFileInstance* p_inst = (LogFileInstance*)arg;
-	p_inst->WriteLog();
+	LogFileInstance* pInst = (LogFileInstance*)pArgumentParam;
+	pInst->WriteLog();
 	return NULL;
 }
 
 std::string LogFileInstance::GetLogTiTle()
 {
-	return _p_mgr->GetLogTitle();
+	return m_pManager->GetLogTitle();
 }
 
-static void DiskFailure(const char* operation)
+static void DiskFailure(const char* pOperationParam)
 {
-	const int error = errno;
+	const int iError = errno;
 	// 不经日志网络告警，避免递归记录。停止进程并明确暴露失败，不能清空后假装已落盘。
-	fprintf(stderr, "logd %s failed: %s\n", operation, strerror(error));
+	fprintf(stderr, "logd %s failed: %s\n", pOperationParam, strerror(iError));
 	fflush(stderr);
 	std::abort();
 }
 
-static bool WriteAll(FILE* fp, const char* data, size_t size)
+static bool WriteAll(FILE* pFileParam, const char* pDataParam, size_t iSizeParam)
 {
-	while (size > 0)
+	while (iSizeParam > 0)
 	{
-		size_t wrote = fwrite(data, 1, size, fp);
-		if (wrote == 0)
+		size_t iWrote = fwrite(pDataParam, 1, iSizeParam, pFileParam);
+		if (iWrote == 0)
 		{
 			DiskFailure("fwrite");
 		}
-		data += wrote;
-		size -= wrote;
+		pDataParam += iWrote;
+		iSizeParam -= iWrote;
 	}
 	return true;
 }
 
 void LogFileInstance::WriteLog()
 {
-	assert(std::this_thread::get_id() == _thread.get_id());
-	_working = true;
+	assert(std::this_thread::get_id() == m_stThread.get_id());
+	m_bWorking = true;
 
 	// 攒到一块再写。压力上来时大约 8MB 刷一次，队列空了把尾巴刷掉。
-	const size_t kChunk = 8 * 1024 * 1024;
-	::OI::Base::Bytes tmp;
-	tmp.Reserve(kChunk);
-	int64_t unflushed = 0;
+	const size_t iItemIndexChunk = 8 * 1024 * 1024;
+	::OI::Base::Bytes stTmp;
+	stTmp.Reserve(iItemIndexChunk);
+	int64_t iUnflushed = 0;
 	for(;;)
 	{
-		FILE* fp = GetActiveFile();
-		if (!fp)
+		FILE* pFile = GetActiveFile();
+		if (!pFile)
 		{
 			errno = EBADF;
 			DiskFailure("missing active file");
 		}
 
-		LogCacheList tmp_logs;
-		_cache_locker.Lock();
-		tmp_logs.swap(_logs);
-		if (tmp_logs.empty() && tmp.Size() == 0)
+		LogCacheList vTmpLogs;
+		m_stCacheLocker.Lock();
+		vTmpLogs.swap(m_vLogs);
+		if (vTmpLogs.empty() && stTmp.Size() == 0)
 		{
-			if (_quit)
+			if (m_bQuit)
 			{
-				_cache_locker.UnLock();
-				if (fflush(fp) != 0) DiskFailure("fflush");
+				m_stCacheLocker.UnLock();
+				if (fflush(pFile) != 0) DiskFailure("fflush");
 				return;
 			}
 			Passive();
-			_cache_locker.UnLock();
+			m_stCacheLocker.UnLock();
 			continue;
 		}
-		_cache_locker.UnLock();
+		m_stCacheLocker.UnLock();
 
-		if (!tmp_logs.empty())
+		if (!vTmpLogs.empty())
 		{
-			const std::string time_title = GetLogTiTle();
-			size_t title_len = time_title.size();
-			for (LogCacheList::iterator it = tmp_logs.begin(); it != tmp_logs.end(); ++it)
+			const std::string sTimeTitle = GetLogTiTle();
+			size_t iTitleLength = sTimeTitle.size();
+			for (const auto& stLog : vTmpLogs)
 			{
-				if (title_len > 0)
+				if (iTitleLength > 0)
 				{
-					tmp.Append(time_title.data(), title_len);
+					stTmp.Append(sTimeTitle.data(), iTitleLength);
 				}
-				tmp.Append(*it);
-				if (tmp.Size() >= kChunk)
+				stTmp.Append(stLog);
+				if (stTmp.Size() >= iItemIndexChunk)
 				{
-					if (fp && WriteAll(fp, tmp.Begin(), tmp.Size()))
+					if (pFile && WriteAll(pFile, stTmp.Begin(), stTmp.Size()))
 					{
-						unflushed += (int64_t)tmp.Size();
+						iUnflushed += (int64_t)stTmp.Size();
 					}
-					tmp.Reserve(0);
-					if (fp && unflushed >= (int64_t)kChunk)
+					stTmp.Reserve(0);
+					if (pFile && iUnflushed >= (int64_t)iItemIndexChunk)
 					{
-						if (fflush(fp) != 0) DiskFailure("fflush");
-						unflushed = 0;
+						if (fflush(pFile) != 0) DiskFailure("fflush");
+						iUnflushed = 0;
 					}
 				}
 			}
 		}
 
-		if (tmp_logs.empty() && tmp.Size() > 0)
+		if (vTmpLogs.empty() && stTmp.Size() > 0)
 		{
-			if (fp)
+			if (pFile)
 			{
-				WriteAll(fp, tmp.Begin(), tmp.Size());
+				WriteAll(pFile, stTmp.Begin(), stTmp.Size());
 			}
-			tmp.Reserve(0);
-			if (fp)
+			stTmp.Reserve(0);
+			if (pFile)
 			{
-				if (fflush(fp) != 0) DiskFailure("fflush");
+				if (fflush(pFile) != 0) DiskFailure("fflush");
 			}
-			unflushed = 0;
+			iUnflushed = 0;
 		}
 	}
 }

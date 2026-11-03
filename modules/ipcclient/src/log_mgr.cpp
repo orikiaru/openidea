@@ -6,29 +6,29 @@
 #include <vector>
 
 LogMgr::LogMgr()
-	: _on(false), _tasks(8), _line(64 * 1024), _bytes(1024LL * 1024 * 1024),
-	  _drain_sec(15), _sent(0), _done(0)
+	: m_bEnabled(false), m_iTaskCount(8), m_iLineBytes(64 * 1024), m_iTargetBytes(1024LL * 1024 * 1024),
+	  m_iDrainSeconds(15), m_iSent(0), m_iDone(0)
 {
 }
 
 void LogMgr::Load()
 {
-	TryGetConfig("Test.log", _on);
-	TryGetConfig("TestLog.tasks", _tasks);
-	TryGetConfig("TestLog.line", _line);
-	TryGetConfig("TestLog.bytes", _bytes);
-	TryGetConfig("TestLog.drain_sec", _drain_sec);
+	TryGetConfig("Test.log", m_bEnabled);
+	TryGetConfig("TestLog.tasks", m_iTaskCount);
+	TryGetConfig("TestLog.line", m_iLineBytes);
+	TryGetConfig("TestLog.bytes", m_iTargetBytes);
+	TryGetConfig("TestLog.drain_sec", m_iDrainSeconds);
 }
 
 void LogMgr::Start()
 {
-	if (!_on || _tasks <= 0 || _line <= 0 || _bytes <= 0)
+	if (!m_bEnabled || m_iTaskCount <= 0 || m_iLineBytes <= 0 || m_iTargetBytes <= 0)
 	{
 		return;
 	}
-	_start = std::chrono::steady_clock::now();
+	m_stStart = std::chrono::steady_clock::now();
 	TestBoard::GetInstance().Arm();
-	for (int i = 0; i < _tasks; ++i)
+	for (int iIndexLocal = 0; iIndexLocal < m_iTaskCount; ++iIndexLocal)
 	{
 		coro::StartTask([](coro::Token) {
 			return LogMgr::GetInstance().Pump();
@@ -38,41 +38,41 @@ void LogMgr::Start()
 
 coro::Task LogMgr::Pump()
 {
-	std::vector<char> payload((size_t)_line, 'L');
-	if (!payload.empty())
+	std::vector<char> vPayload((size_t)m_iLineBytes, 'L');
+	if (!vPayload.empty())
 	{
-		payload.back() = '\n';
+		vPayload.back() = '\n';
 	}
 	for (;;)
 	{
-		int64_t prev = _sent.fetch_add(_line);
-		if (prev >= _bytes)
+		int64_t iPrevious = m_iSent.fetch_add(m_iLineBytes);
+		if (iPrevious >= m_iTargetBytes)
 		{
 			// 结束探测也要归还额度，不能把未发送的占位计入成功字节数。
-			_sent.fetch_sub(_line);
+			m_iSent.fetch_sub(m_iLineBytes);
 			break;
 		}
-		if (!::OI::Log::LogClient::GetInstance().SendLog(LOG_INFO, payload.data(), payload.size()))
-			_sent.fetch_sub(_line);
+		if (!::OI::Log::LogClient::GetInstance().SendLog(LOG_INFO, vPayload.data(), vPayload.size()))
+			m_iSent.fetch_sub(m_iLineBytes);
 		// 同一协程复用 payload；每条后让出，让 poll 排空缓冲并给其他业务运行机会。
 		co_await coro::yield(0);
 	}
-	if (_done.fetch_add(1) + 1 == _tasks)
+	if (m_iDone.fetch_add(1) + 1 == m_iTaskCount)
 	{
-		long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-			std::chrono::steady_clock::now() - _start).count();
-		if (ms < 1)
+		long long iMillisecondsLocal = std::chrono::duration_cast<std::chrono::milliseconds>(
+			std::chrono::steady_clock::now() - m_stStart).count();
+		if (iMillisecondsLocal < 1)
 		{
-			ms = 1;
+			iMillisecondsLocal = 1;
 		}
-		long long sent = _sent.load();
+		long long iSentLocal = m_iSent.load();
 		printf("log tasks=%d sent=%lld ms=%lld enqueue_rate=%lldMB/s\n",
-			_tasks, sent, ms, sent / ms * 1000 / (1024 * 1024));
+			m_iTaskCount, iSentLocal, iMillisecondsLocal, iSentLocal / iMillisecondsLocal * 1000 / (1024 * 1024));
 		fflush(stdout);
-		if (_drain_sec > 0)
+		if (m_iDrainSeconds > 0)
 		{
 			// 单线程只有这一条线程。sleep 会把 poll 冻住，套接字里的日志发不出去。
-			co_await coro::yield(_drain_sec * 1000);
+			co_await coro::yield(m_iDrainSeconds * 1000);
 		}
 		TestBoard::GetInstance().Done(0);
 	}

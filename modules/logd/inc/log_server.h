@@ -11,7 +11,7 @@ public:
 	bool Init();
 	virtual const std::string GetIDString() { return "LogServer"; }
 private:
-	virtual void OnAddSession(::OI::Net::Session* pSession);
-	virtual void OnDelSession(const ::OI::Net::Session* pSession);
+	virtual void OnAddSession(::OI::Net::Session* pSessionParam);
+	virtual void OnDelSession(const ::OI::Net::Session* pSessionParam);
 	virtual ::OI::Net::Session* CloneSession() { return new LogServerSession(this); }	//自定制回话类型
 };

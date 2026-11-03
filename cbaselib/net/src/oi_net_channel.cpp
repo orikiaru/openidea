@@ -3,10 +3,10 @@
 #include "oi_net_os.h"
 namespace OI { namespace Net {
 
-NetChannel::NetChannel(NetSocket s, Session* pSession):Channel(s, pSession)
+NetChannel::NetChannel(NetSocket stTextParam, Session* pSessionParam):Channel(stTextParam, pSessionParam)
 {
-	NetOs_SetNonblock(_socket.GetSocket());
-	NetOs_SetNoDelay(_socket.GetSocket());
+	NetOs_SetNonblock(stSocket.GetSocket());
+	NetOs_SetNoDelay(stSocket.GetSocket());
 }
 
 NetChannel::~NetChannel()
@@ -15,10 +15,10 @@ NetChannel::~NetChannel()
 
 bool NetChannel::TryClose()
 {
-	if (_p_session->IsClosed())
+	if (pSession->IsClosed())
 	{
 		// 发送方可能还持着会话。先断开，它拿到会话锁后就看不到这个通道，不会再改已注销的事件。
-		_p_session->DetachChannel();
+		pSession->DetachChannel();
 		Poll::GetInstance().IOEventUnRegister(this);
 		Destroy();
 		return true;
@@ -28,11 +28,11 @@ bool NetChannel::TryClose()
 
 void NetChannel::Destroy()
 {
-	if (_p_session)
+	if (pSession)
 	{
 		// 会话已经从管理器解绑，在销毁前通知客户端清理等待并安排重连。
-		_p_session->OnClose();
-		_p_session->Release();
+		pSession->OnClose();
+		pSession->Release();
 	}
 	delete this;
 }

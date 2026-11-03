@@ -14,8 +14,8 @@ enum PRIO_ENUM
 class Task
 {
 public:
-	PRIO_ENUM _prio;
-	Task(PRIO_ENUM prio = PRIO_NORMAL) :_prio(prio) {}
+	PRIO_ENUM iPriority;
+	Task(PRIO_ENUM iPriorityParam = PRIO_NORMAL) :iPriority(iPriorityParam) {}
 	virtual ~Task() {}
 	virtual void Exec() = 0;
 };
@@ -24,12 +24,12 @@ public:
 template<typename F>
 class FnTask : public Task
 {
-	F _fn;
+	F m_fnFunction;
 public:
-	FnTask(F fn, PRIO_ENUM prio = PRIO_NORMAL) : Task(prio), _fn(std::move(fn)) {}
+	FnTask(F fnFunctionParam, PRIO_ENUM iPriorityParam = PRIO_NORMAL) : Task(iPriorityParam), m_fnFunction(std::move(fnFunctionParam)) {}
 	void Exec()
 	{
-		_fn();
+		m_fnFunction();
 		delete this;
 	}
 };

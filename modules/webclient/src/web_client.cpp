@@ -13,203 +13,203 @@
 #include <utility>
 #include <vector>
 
-static std::string DumpJson(const Json::Value& value)
+static std::string DumpJson(const Json::Value& stValueParam)
 {
-	Json::StreamWriterBuilder builder;
-	builder["indentation"] = "";
-	return Json::writeString(builder, value);
+	Json::StreamWriterBuilder stBuilder;
+	stBuilder["indentation"] = "";
+	return Json::writeString(stBuilder, stValueParam);
 }
 
-static bool ParseJson(const std::string& text, Json::Value& out)
+static bool ParseJson(const std::string& sTextParam, Json::Value& stOutputParam)
 {
-	Json::CharReaderBuilder builder;
-	std::string errs;
-	const std::unique_ptr<Json::CharReader> reader(builder.newCharReader());
-	const char* begin = text.data();
-	return reader->parse(begin, begin + text.size(), &out, &errs);
+	Json::CharReaderBuilder stBuilder;
+	std::string sErrors;
+	const std::unique_ptr<Json::CharReader> pReader(stBuilder.newCharReader());
+	const char* pBegin = sTextParam.data();
+	return pReader->parse(pBegin, pBegin + sTextParam.size(), &stOutputParam, &sErrors);
 }
 
-static bool OkStatus(const ::OI::Http::Response& res)
+static bool OkStatus(const ::OI::Http::Response& stResponseParam)
 {
-	return !res.fail && res.status == 200;
+	return !stResponseParam.bFail && stResponseParam.iStatus == 200;
 }
 
 static coro::Task Run()
 {
-	std::string ip = "127.0.0.1";
-	int32_t port = 18080;
-	TryGetConfig("WebClient.ip", ip);
-	TryGetConfig("WebClient.port", port);
+	std::string sIpLocal = "127.0.0.1";
+	int32_t iPortLocal = 18080;
+	TryGetConfig("WebClient.ip", sIpLocal);
+	TryGetConfig("WebClient.port", iPortLocal);
 
-	::OI::Http::Client cli(ip, port);
-	int bad = 0;
+	::OI::Http::Client stCli(sIpLocal, iPortLocal);
+	int iBadLocal = 0;
 
-	const std::string text = "a b+";
-	std::vector<std::pair<std::string, std::string>> query;
-	query.push_back(std::make_pair(std::string("text"), text));
-	::OI::Http::Response got = co_await cli.Get("/query", query);
-	std::string got_text;
-	if (!OkStatus(got))
+	const std::string sText = "a b+";
+	std::vector<std::pair<std::string, std::string>> vQuery;
+	vQuery.push_back(std::make_pair(std::string("text"), sText));
+	::OI::Http::Response stGot = co_await stCli.Get("/query", vQuery);
+	std::string sGotTextGottext;
+	if (!OkStatus(stGot))
 	{
-		bad += 1;
+		iBadLocal += 1;
 	}
 	else
 	{
-		Json::Value body;
-		if (!ParseJson(got.body, body) || !body.isMember("text") || !body["text"].isString())
+		Json::Value stBody;
+		if (!ParseJson(stGot.sBody, stBody) || !stBody.isMember("text") || !stBody["text"].isString())
 		{
-			bad += 1;
+			iBadLocal += 1;
 		}
 		else
 		{
-			got_text = body["text"].asString();
-			if (got_text != text)
+			sGotTextGottext = stBody["text"].asString();
+			if (sGotTextGottext != sText)
 			{
-				bad += 1;
+				iBadLocal += 1;
 			}
 		}
 	}
 
-	Json::Value req(Json::objectValue);
-	req["n"] = 1;
-	req["s"] = "hi";
-	::OI::Http::Response js = co_await cli.Post("/json", DumpJson(req), "application/json");
-	int got_n = 0;
-	bool got_ok = false;
-	std::string got_s;
-	if (!OkStatus(js))
+	Json::Value stRequestLocal(Json::objectValue);
+	stRequestLocal["n"] = 1;
+	stRequestLocal["s"] = "hi";
+	::OI::Http::Response stJs = co_await stCli.Post("/json", DumpJson(stRequestLocal), "application/json");
+	int iGotNumber = 0;
+	bool bGotOk = false;
+	std::string sGotTextGots;
+	if (!OkStatus(stJs))
 	{
-		bad += 1;
+		iBadLocal += 1;
 	}
 	else
 	{
-		Json::Value body;
-		if (!ParseJson(js.body, body) || !body.isMember("n") || !body.isMember("s") || !body.isMember("ok"))
+		Json::Value stBody;
+		if (!ParseJson(stJs.sBody, stBody) || !stBody.isMember("n") || !stBody.isMember("s") || !stBody.isMember("ok"))
 		{
-			bad += 1;
+			iBadLocal += 1;
 		}
 		else
 		{
-			got_n = body["n"].asInt();
-			got_s = body["s"].asString();
-			got_ok = body["ok"].asBool();
-			if (got_n != 1 || got_s != "hi" || !got_ok)
+			iGotNumber = stBody["n"].asInt();
+			sGotTextGots = stBody["s"].asString();
+			bGotOk = stBody["ok"].asBool();
+			if (iGotNumber != 1 || sGotTextGots != "hi" || !bGotOk)
 			{
-				bad += 1;
+				iBadLocal += 1;
 			}
 		}
 	}
 
-	::OI::RpcData::JsonAll sent;
-	sent.c = 7;
-	sent.s = 1001;
-	sent.i = 42;
-	sent.l = 100000;
-	sent.i64 = 10000000000LL;
-	sent.f = 1.5f;
-	sent.d = 2.5;
-	sent.raw.Append("raw", 3);
-	sent.msg = "msg";
-	sent.nums.push_back(1);
-	sent.nums.push_back(2);
-	sent.words.push_back("w");
-	sent.words.push_back("ord");
-	sent.child.n = 3;
-	sent.child.s = "child";
-	::OI::RpcData::Inner kin;
-	kin.n = 9;
-	kin.s = "kin";
-	sent.children.push_back(sent.child);
-	sent.children.push_back(kin);
-	sent.table[1] = "t";
-	sent.table[2] = "u";
-	sent.named["a"] = sent.child;
-	sent.named["b"] = kin;
-	sent.u8 = 200;
-	sent.u16 = 40000;
-	sent.u32 = 3000000000u;
-	sent.u64 = (1ULL << 63) + 9;
-	sent.unums.push_back(sent.u64);
-	sent.unums.push_back(1);
-	sent.gap = 20;
-	sent.utable[sent.u32] = "u";
-	sent.ubig[sent.u64] = "b";
-	::OI::Http::Response rpc = co_await cli.Post("/rpcjson", sent.ToJson(), "application/json");
-	int rpc_ok = 0;
-	if (!OkStatus(rpc))
+	::OI::RpcData::JsonAll stSent;
+	stSent.iInt8 = 7;
+	stSent.iInt16 = 1001;
+	stSent.iInt32 = 42;
+	stSent.iInt64 = 100000;
+	stSent.iAlternateInt64 = 10000000000LL;
+	stSent.fFloat = 1.5f;
+	stSent.dDouble = 2.5;
+	stSent.stRawData.Append("raw", 3);
+	stSent.sMessage = "msg";
+	stSent.vNumbers.push_back(1);
+	stSent.vNumbers.push_back(2);
+	stSent.vWords.push_back("w");
+	stSent.vWords.push_back("ord");
+	stSent.stChild.iNumber = 3;
+	stSent.stChild.sText = "child";
+	::OI::RpcData::Inner stKin;
+	stKin.iNumber = 9;
+	stKin.sText = "kin";
+	stSent.vChildren.push_back(stSent.stChild);
+	stSent.vChildren.push_back(stKin);
+	stSent.mTable[1] = "t";
+	stSent.mTable[2] = "u";
+	stSent.mNamed["a"] = stSent.stChild;
+	stSent.mNamed["b"] = stKin;
+	stSent.iUnsigned8 = 200;
+	stSent.iUnsigned16 = 40000;
+	stSent.iUnsigned32 = 3000000000u;
+	stSent.iUnsigned64 = (1ULL << 63) + 9;
+	stSent.vUnsignedNumbers.push_back(stSent.iUnsigned64);
+	stSent.vUnsignedNumbers.push_back(1);
+	stSent.iGap = 20;
+	stSent.mUnsignedTable[stSent.iUnsigned32] = "u";
+	stSent.mLargeUnsignedTable[stSent.iUnsigned64] = "b";
+	::OI::Http::Response stRpc = co_await stCli.Post("/rpcjson", stSent.ToJson(), "application/json");
+	int iRpcOk = 0;
+	if (!OkStatus(stRpc))
 	{
-		bad += 1;
+		iBadLocal += 1;
 	}
 	else
 	{
-		::OI::RpcData::JsonAll back;
-		bool same = back.FromJson(rpc.body)
-			&& back.c == sent.c && back.s == sent.s && back.i == sent.i
-			&& back.l == sent.l && back.i64 == sent.i64
-			&& back.f == sent.f && back.d == sent.d
-			&& back.raw.Size() == sent.raw.Size()
-			&& (sent.raw.Size() == 0 || std::memcmp(back.raw.Data(), sent.raw.Data(), sent.raw.Size()) == 0)
-			&& back.msg == sent.msg && back.nums == sent.nums && back.words == sent.words
-			&& back.child.n == sent.child.n && back.child.s == sent.child.s
-			&& back.children.size() == sent.children.size()
-			&& back.table == sent.table && back.named.size() == sent.named.size()
-			&& back.u8 == sent.u8 && back.u16 == sent.u16 && back.u32 == sent.u32 && back.u64 == sent.u64
-			&& back.unums == sent.unums && back.gap == sent.gap + 1
-			&& back.utable == sent.utable && back.ubig == sent.ubig;
-		if (same)
+		::OI::RpcData::JsonAll stBack;
+		bool bSame = stBack.FromJson(stRpc.sBody)
+			&& stBack.iInt8 == stSent.iInt8 && stBack.iInt16 == stSent.iInt16 && stBack.iInt32 == stSent.iInt32
+			&& stBack.iInt64 == stSent.iInt64 && stBack.iAlternateInt64 == stSent.iAlternateInt64
+			&& stBack.fFloat == stSent.fFloat && stBack.dDouble == stSent.dDouble
+			&& stBack.stRawData.Size() == stSent.stRawData.Size()
+			&& (stSent.stRawData.Size() == 0 || std::memcmp(stBack.stRawData.Data(), stSent.stRawData.Data(), stSent.stRawData.Size()) == 0)
+			&& stBack.sMessage == stSent.sMessage && stBack.vNumbers == stSent.vNumbers && stBack.vWords == stSent.vWords
+			&& stBack.stChild.iNumber == stSent.stChild.iNumber && stBack.stChild.sText == stSent.stChild.sText
+			&& stBack.vChildren.size() == stSent.vChildren.size()
+			&& stBack.mTable == stSent.mTable && stBack.mNamed.size() == stSent.mNamed.size()
+			&& stBack.iUnsigned8 == stSent.iUnsigned8 && stBack.iUnsigned16 == stSent.iUnsigned16 && stBack.iUnsigned32 == stSent.iUnsigned32 && stBack.iUnsigned64 == stSent.iUnsigned64
+			&& stBack.vUnsignedNumbers == stSent.vUnsignedNumbers && stBack.iGap == stSent.iGap + 1
+			&& stBack.mUnsignedTable == stSent.mUnsignedTable && stBack.mLargeUnsignedTable == stSent.mLargeUnsignedTable;
+		if (bSame)
 		{
-			for (size_t i = 0; i < sent.children.size(); ++i)
+			for (size_t iIndexLocal = 0; iIndexLocal < stSent.vChildren.size(); ++iIndexLocal)
 			{
-				if (back.children[i].n != sent.children[i].n || back.children[i].s != sent.children[i].s)
+				if (stBack.vChildren[iIndexLocal].iNumber != stSent.vChildren[iIndexLocal].iNumber || stBack.vChildren[iIndexLocal].sText != stSent.vChildren[iIndexLocal].sText)
 				{
-					same = false;
+					bSame = false;
 					break;
 				}
 			}
 		}
-		if (same)
+		if (bSame)
 		{
-			for (std::map<std::string, ::OI::RpcData::Inner>::const_iterator it = sent.named.begin(); it != sent.named.end(); ++it)
+			for (const auto& [sName, stValue] : stSent.mNamed)
 			{
-				std::map<std::string, ::OI::RpcData::Inner>::const_iterator jt = back.named.find(it->first);
-				if (jt == back.named.end() || jt->second.n != it->second.n || jt->second.s != it->second.s)
+				auto stJt = stBack.mNamed.find(sName);
+				if (stJt == stBack.mNamed.end() || stJt->second.iNumber != stValue.iNumber || stJt->second.sText != stValue.sText)
 				{
-					same = false;
+					bSame = false;
 					break;
 				}
 			}
 		}
-		if (same)
+		if (bSame)
 		{
-			rpc_ok = 1;
+			iRpcOk = 1;
 		}
 		else
 		{
-			bad += 1;
+			iBadLocal += 1;
 		}
 	}
 
-	std::string bin("\x00\x01\xff", 3);
-	::OI::Http::Response raw = co_await cli.Post("/bin", bin, "application/octet-stream");
-	int bin_ok = 0;
-	if (OkStatus(raw) && raw.body.size() == bin.size() && std::memcmp(raw.body.data(), bin.data(), bin.size()) == 0)
+	std::string sBin("\x00\x01\xff", 3);
+	::OI::Http::Response stRaw = co_await stCli.Post("/bin", sBin, "application/octet-stream");
+	int iBinOk = 0;
+	if (OkStatus(stRaw) && stRaw.sBody.size() == sBin.size() && std::memcmp(stRaw.sBody.data(), sBin.data(), sBin.size()) == 0)
 	{
-		bin_ok = 1;
+		iBinOk = 1;
 	}
 	else
 	{
-		bad += 1;
+		iBadLocal += 1;
 	}
 
 	printf("web query=%d text=%s json_n=%d json_s=%s json_ok=%d rpc=%d bin=%d bad=%d\n",
-		got_text == text ? 1 : 0, got_text.c_str(), got_n, got_s.c_str(), got_ok ? 1 : 0, rpc_ok, bin_ok, bad);
-	if (bad != 0)
+		sGotTextGottext == sText ? 1 : 0, sGotTextGottext.c_str(), iGotNumber, sGotTextGots.c_str(), bGotOk ? 1 : 0, iRpcOk, iBinOk, iBadLocal);
+	if (iBadLocal != 0)
 	{
 		printf("web err query=%s json=%s rpc=%s bin=%s\n",
-			got.error.c_str(), js.error.c_str(), rpc.error.c_str(), raw.error.c_str());
+			stGot.sError.c_str(), stJs.sError.c_str(), stRpc.sError.c_str(), stRaw.sError.c_str());
 	}
 	fflush(stdout);
-	::OI::Thread::ThreadPool::GetInstance().RequestStop(bad == 0 ? 0 : 1);
+	::OI::Thread::ThreadPool::GetInstance().RequestStop(iBadLocal == 0 ? 0 : 1);
 }
 
 void WebClient::Start()

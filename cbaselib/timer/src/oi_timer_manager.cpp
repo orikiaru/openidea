@@ -15,94 +15,94 @@ static void OnLoopTick()
 
 BaseTimerManager::BaseTimerManager()
 {
-	memset(&_cur_tv, 0, sizeof(_cur_tv));
-	_cur_tick = 0;
-	_tick_offset_ms = 0;
+	memset(&m_stCurrentTimeValue, 0, sizeof(m_stCurrentTimeValue));
+	m_iCurrentTick = 0;
+	m_iTickOffsetMilliseconds = 0;
 }
 
 bool BaseTimerManager::Init()
 {
-	uint32_t offset_ms = 50;
-	TryGetConfigNoReturn("Timer.offset_ms", offset_ms);
-	if (offset_ms == 0 || 1000 % offset_ms != 0)
+	uint32_t iOffsetMilliseconds = 50;
+	TryGetConfigNoReturn("Timer.offset_ms", iOffsetMilliseconds);
+	if (iOffsetMilliseconds == 0 || 1000 % iOffsetMilliseconds != 0)
 	{
-		fprintf(stderr, "Timer.offset_ms=%u must divide 1000\n", offset_ms);
+		fprintf(stderr, "Timer.offset_ms=%u must divide 1000\n", iOffsetMilliseconds);
 		return false;
 	}
 
-	uint32_t timer_lv_count = 4;
-	TryGetConfigNoReturn("Timer.timer_lv_count", timer_lv_count);
-	if (timer_lv_count <= 2)
+	uint32_t iTimerLevelCount = 4;
+	TryGetConfigNoReturn("Timer.timer_lv_count", iTimerLevelCount);
+	if (iTimerLevelCount <= 2)
 	{
-		fprintf(stderr, "Timer.timer_lv_count=%u must be bigger than 2\n", timer_lv_count);
+		fprintf(stderr, "Timer.timer_lv_count=%u must be bigger than 2\n", iTimerLevelCount);
 		return false;
 	}
-	_timer_lv_count = timer_lv_count;
+	m_iTimerLevelCount = iTimerLevelCount;
 
-	std::vector<int64_t> timer_lvs;
-	if (!::OI::Base::Config::GlobalConfig().GetArrayAs("Timer.timer_lvs", timer_lvs))
+	std::vector<int64_t> vTimerLevels;
+	if (!::OI::Base::Config::GlobalConfig().GetArrayAs("Timer.timer_lvs", vTimerLevels))
 	{
 		//没有就给一组默认数据,影响不大.
-		std::vector<int64_t> tmp;
-		for (size_t i = 0; i < _timer_lv_count; ++i)
+		std::vector<int64_t> vTmp;
+		for (size_t iIndexLocal = 0; iIndexLocal < m_iTimerLevelCount; ++iIndexLocal)
 		{
-			tmp.push_back(128);
+			vTmp.push_back(128);
 		}
-		timer_lvs.swap(tmp);
-		timer_lvs[_timer_lv_count - 1] = 1;
+		vTimerLevels.swap(vTmp);
+		vTimerLevels[m_iTimerLevelCount - 1] = 1;
 	}
 
-	if (timer_lvs.size() != _timer_lv_count || timer_lvs[_timer_lv_count - 1] != 1)
+	if (vTimerLevels.size() != m_iTimerLevelCount || vTimerLevels[m_iTimerLevelCount - 1] != 1)
 	{
-		fprintf(stderr, "Timer.timer_lvs needs %zu levels and the last one must be 1\n", (size_t)_timer_lv_count);
+		fprintf(stderr, "Timer.timer_lvs needs %zu levels and the last one must be 1\n", (size_t)m_iTimerLevelCount);
 		return false;
 	}
 	// 各层格子数相乘不能溢出 uint32_t。
-	uint64_t total = 1;
-	for (size_t i = 0; i < timer_lvs.size(); ++i)
+	uint64_t iTotal = 1;
+	for (size_t iIndexLocal = 0; iIndexLocal < vTimerLevels.size(); ++iIndexLocal)
 	{
-		if (timer_lvs[i] > 0 && timer_lvs[i] <= 0xFFFFFFFFll)
+		if (vTimerLevels[iIndexLocal] > 0 && vTimerLevels[iIndexLocal] <= 0xFFFFFFFFll)
 		{
-			total *= (uint64_t)timer_lvs[i];
+			iTotal *= (uint64_t)vTimerLevels[iIndexLocal];
 		}
-		if (timer_lvs[i] <= 0 || timer_lvs[i] > 0xFFFFFFFFll || total > 0xFFFFFFFFull)
+		if (vTimerLevels[iIndexLocal] <= 0 || vTimerLevels[iIndexLocal] > 0xFFFFFFFFll || iTotal > 0xFFFFFFFFull)
 		{
-			fprintf(stderr, "Timer.timer_lvs[%zu]=%lld out of range\n", i, (long long)timer_lvs[i]);
+			fprintf(stderr, "Timer.timer_lvs[%zu]=%lld out of range\n", iIndexLocal, (long long)vTimerLevels[iIndexLocal]);
 			return false;
 		}
 	}
 
-	uint32_t lv_tick = 1;
-	for (size_t i = 0; i < _timer_lv_count; ++i)
+	uint32_t iLevelTick = 1;
+	for (size_t iIndexLocal = 0; iIndexLocal < m_iTimerLevelCount; ++iIndexLocal)
 	{
-		_timer_levels.emplace_back();
-		uint32_t slots = (uint32_t)timer_lvs[i];
-		_timer_levels[i].Init(slots, lv_tick);
-		lv_tick *= slots;
+		m_vTimerLevels.emplace_back();
+		uint32_t iSlots = (uint32_t)vTimerLevels[iIndexLocal];
+		m_vTimerLevels[iIndexLocal].Init(iSlots, iLevelTick);
+		iLevelTick *= iSlots;
 	}
 
-	_tick_offset_ms = offset_ms;
-	_last_tick_mono = std::chrono::steady_clock::now();
-	gettimeofday(&_cur_tv, 0);	 //记录第0帧的时间
-	_cur_time = time(NULL);
-	localtime_r(&_cur_time, &_cur_tm);
+	m_iTickOffsetMilliseconds = iOffsetMilliseconds;
+	m_stLastTickMonotonic = std::chrono::steady_clock::now();
+	gettimeofday(&m_stCurrentTimeValue, 0);	 //记录第0帧的时间
+	m_iCurrentTime = time(NULL);
+	localtime_r(&m_iCurrentTime, &m_stCurrentCalendarTime);
 	// Windows / Linux 都用 poll 循环上的 libuv timer 叫醒
-	::OI::Net::Poll::GetInstance().ArmTick(_tick_offset_ms, OnLoopTick);
+	::OI::Net::Poll::GetInstance().ArmTick(m_iTickOffsetMilliseconds, OnLoopTick);
 	return true;
 }
 
 void BaseTimerManager::OnSignal()
 {
-	bool expected = false;
-	if (!g_tick_queued.compare_exchange_strong(expected, true))
+	bool bExpected = false;
+	if (!g_tick_queued.compare_exchange_strong(bExpected, true))
 	{
 		return;
 	}
-	bool queued = ::OI::Thread::ThreadPool::GetInstance().AddTask([]() {
+	bool bQueued = ::OI::Thread::ThreadPool::GetInstance().AddTask([]() {
 		BaseTimerManager::GetInstance().Update();
 		g_tick_queued.store(false);
 	}, ::OI::Thread::PRIO_ENUM::PRIO_QUEUE);
-	if (!queued)
+	if (!bQueued)
 	{
 		// 队列满了这一跳不投。下次到点再投，错过的 tick 由 Update 按单调时钟补上。
 		g_tick_queued.store(false);
@@ -111,150 +111,150 @@ void BaseTimerManager::OnSignal()
 
 std::string BaseTimerManager::GenTraceLog()
 {
-	char buff[1024];
-	snprintf(buff, sizeof(buff) - 1, 
+	char vBuffer[1024];
+	snprintf(vBuffer, sizeof(vBuffer) - 1,
 		"BaseTimerManager::Update mono_ms=%lld wall=[%lld,%lld] tick_num=%lld",
-		(long long)std::chrono::duration_cast<std::chrono::milliseconds>(_last_tick_mono.time_since_epoch()).count(),
-		(long long)_cur_tv.tv_sec, (long long)_cur_tv.tv_usec,
-		(long long)_cur_tick
+		(long long)std::chrono::duration_cast<std::chrono::milliseconds>(m_stLastTickMonotonic.time_since_epoch()).count(),
+		(long long)m_stCurrentTimeValue.tv_sec, (long long)m_stCurrentTimeValue.tv_usec,
+		(long long)m_iCurrentTick
 	);
-	return buff;
+	return vBuffer;
 }
 
 void BaseTimerManager::Update()
 {
-	int64_t ticks = 0;
+	int64_t iTicks = 0;
 	{
-		::OI::Thread::MutexGuard lock(_wheel_mu);
-		gettimeofday(&_cur_tv, 0);
-		_cur_time = _cur_tv.tv_sec;
-		localtime_r(&_cur_time, &_cur_tm);
-		const int64_t delta_us = std::chrono::duration_cast<std::chrono::microseconds>(
-			std::chrono::steady_clock::now() - _last_tick_mono).count();
-		if (delta_us <= 0)
+		::OI::Thread::MutexGuard stLock(m_stWheelMutex);
+		gettimeofday(&m_stCurrentTimeValue, 0);
+		m_iCurrentTime = m_stCurrentTimeValue.tv_sec;
+		localtime_r(&m_iCurrentTime, &m_stCurrentCalendarTime);
+		const int64_t iDeltaUs = std::chrono::duration_cast<std::chrono::microseconds>(
+			std::chrono::steady_clock::now() - m_stLastTickMonotonic).count();
+		if (iDeltaUs <= 0)
 		{
 			return;
 		}
 		// 只取完整的 tick，余数留在单调时钟基点里，系统时间回拨不会暂停计时。
-		ticks = (delta_us / 1000) / (int64_t)_tick_offset_ms;
+		iTicks = (iDeltaUs / 1000) / (int64_t)m_iTickOffsetMilliseconds;
 	}
 
 	// 锁里只推进时间轮。OnTimer 在锁外跑，回调里发网络、建目录不挡别的线程 AddTimer。
-	for (int64_t i = 0; i < ticks; ++i)
+	for (int64_t iIndexLocal = 0; iIndexLocal < iTicks; ++iIndexLocal)
 	{
-		TimerList due;
+		TimerList vDue;
 		{
-			::OI::Thread::MutexGuard lock(_wheel_mu);
-			run_tick(due);
+			::OI::Thread::MutexGuard stLock(m_stWheelMutex);
+			run_tick(vDue);
 		}
-		for (TimerList::iterator it = due.begin(); it != due.end(); ++it)
+		for (const auto& pTimer : vDue)
 		{
-			run_timer(*it);
+			run_timer(pTimer);
 		}
 	}
 }
 
-void BaseTimerManager::AddTimer(BaseTimer* pTimer, int millisecond)
+void BaseTimerManager::AddTimer(BaseTimer* pTimerParam, int iMillisecondParam)
 {
-	::OI::Thread::MutexGuard lock(_wheel_mu);
-	pTimer->InitData(this, millisecond, TicksFromNow(millisecond));
-	add_timer(pTimer);
+	::OI::Thread::MutexGuard stLock(m_stWheelMutex);
+	pTimerParam->InitData(this, iMillisecondParam, TicksFromNow(iMillisecondParam));
+	add_timer(pTimerParam);
 }
 
-int64_t BaseTimerManager::TicksFromNow(int millisecond) const
+int64_t BaseTimerManager::TicksFromNow(int iMillisecondParam) const
 {
-	int64_t elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
-		std::chrono::steady_clock::now() - _last_tick_mono).count();
-	if (elapsed_us < 0)
+	int64_t iElapsedUs = std::chrono::duration_cast<std::chrono::microseconds>(
+		std::chrono::steady_clock::now() - m_stLastTickMonotonic).count();
+	if (iElapsedUs < 0)
 	{
-		elapsed_us = 0;
+		iElapsedUs = 0;
 	}
-	const int64_t tick_us = (int64_t)_tick_offset_ms * 1000;
-	const int64_t due_us = elapsed_us + (int64_t)millisecond * 1000;
-	int64_t ticks = (due_us + tick_us - 1) / tick_us;
-	if (ticks < 1)
+	const int64_t iTickUs = (int64_t)m_iTickOffsetMilliseconds * 1000;
+	const int64_t iDueUs = iElapsedUs + (int64_t)iMillisecondParam * 1000;
+	int64_t iTicks = (iDueUs + iTickUs - 1) / iTickUs;
+	if (iTicks < 1)
 	{
-		ticks = 1;
+		iTicks = 1;
 	}
-	return ticks;
+	return iTicks;
 }
 
-void BaseTimerManager::add_timer(BaseTimer* pTimer)
+void BaseTimerManager::add_timer(BaseTimer* pTimerParam)
 {
-	int64_t offset = pTimer->_data._trigger_tick - _cur_tick;
+	int64_t iOffset = pTimerParam->m_stData.m_iTriggerTick - m_iCurrentTick;
 	// 粗层倒出来时可能已经过了点。放到下一跳，避免在均匀过程里再进回调。
-	if (offset <= 0)
+	if (iOffset <= 0)
 	{
-		offset = 1;
+		iOffset = 1;
 	}
 
-	bool added = false;
-	for (uint32_t i = 0; i < _timer_lv_count - 1; ++i)
+	bool bAdded = false;
+	for (uint32_t iIndexLocal = 0; iIndexLocal < m_iTimerLevelCount - 1; ++iIndexLocal)
 	{
-		TimerLevel& cur_level = _timer_levels[i];
-		int64_t level_offset = offset / (int64_t)cur_level._lv_offset_tick;
-		assert(level_offset >= 1);
-		level_offset -= 1;
-		if (level_offset >= (int64_t)cur_level._max_tick)
+		TimerLevel& stCurrentLevel = m_vTimerLevels[iIndexLocal];
+		int64_t iLevelOffset = iOffset / (int64_t)stCurrentLevel.m_iLevelOffsetTick;
+		assert(iLevelOffset >= 1);
+		iLevelOffset -= 1;
+		if (iLevelOffset >= (int64_t)stCurrentLevel.m_iMaxTick)
 		{
 			continue;
 		}
 
-		cur_level.AddTimer(this, pTimer, (uint32_t)level_offset);
-		added = true;
+		stCurrentLevel.AddTimer(this, pTimerParam, (uint32_t)iLevelOffset);
+		bAdded = true;
 		break;
 	}
 
-	if (!added)
+	if (!bAdded)
 	{
-		TimerLevel& cur_level = _timer_levels[_timer_lv_count - 1];
-		cur_level.AddTimer(this, pTimer, 0);
+		TimerLevel& stCurrentLevel = m_vTimerLevels[m_iTimerLevelCount - 1];
+		stCurrentLevel.AddTimer(this, pTimerParam, 0);
 	}
 }
 
-void BaseTimerManager::run_timer(BaseTimer* pTimer)
+void BaseTimerManager::run_timer(BaseTimer* pTimerParam)
 {
-	assert(pTimer);
+	assert(pTimerParam);
 
-	if (pTimer->OnTimer())
+	if (pTimerParam->OnTimer())
 	{
-		::OI::Thread::MutexGuard lock(_wheel_mu);
+		::OI::Thread::MutexGuard stLock(m_stWheelMutex);
 		// 周期定时器按逻辑 tick 续，停顿时后面的跳还能补上。
-		int64_t ticks = milling2tick(pTimer->GetOffsetTime());
-		pTimer->InitData(this, pTimer->GetOffsetTime(), ticks);
-		add_timer(pTimer);
+		int64_t iTicks = milling2tick(pTimerParam->GetOffsetTime());
+		pTimerParam->InitData(this, pTimerParam->GetOffsetTime(), iTicks);
+		add_timer(pTimerParam);
 	}
 }
 
 void BaseTimerManager::try_uniform()
 {
 	//尝试均匀其他层级定时器
-	for (uint32_t i = 1; i < _timer_lv_count; ++i)
+	for (uint32_t iIndexLocal = 1; iIndexLocal < m_iTimerLevelCount; ++iIndexLocal)
 	{
-		if (_timer_levels[i - 1].IsLevelEnd())
+		if (m_vTimerLevels[iIndexLocal - 1].IsLevelEnd())
 		{
 			//先执行tick,以便均匀后的定时器进入准确的offset
-			_timer_levels[i].RunTick(this, NULL);
+			m_vTimerLevels[iIndexLocal].RunTick(this, NULL);
 		}
 	}
 }
 
-void BaseTimerManager::try_run_timer(TimerList& due)
+void BaseTimerManager::try_run_timer(TimerList& vDueParam)
 {
 	//取出本tick到点的定时器
-	TimerLevel& level = _timer_levels[0];
-	level.RunTick(this, &due);
+	TimerLevel& stLevel = m_vTimerLevels[0];
+	stLevel.RunTick(this, &vDueParam);
 }
 
-void BaseTimerManager::run_tick(TimerList& due)
+void BaseTimerManager::run_tick(TimerList& vDueParam)
 {
-	_last_tick_mono += std::chrono::milliseconds(_tick_offset_ms);
-	++_cur_tick;
+	m_stLastTickMonotonic += std::chrono::milliseconds(m_iTickOffsetMilliseconds);
+	++m_iCurrentTick;
 
-	try_run_timer(due);
+	try_run_timer(vDueParam);
 
 	//第一层如果到尾,需要触发上级均匀
-	if (_timer_levels[0].IsLevelEnd())
+	if (m_vTimerLevels[0].IsLevelEnd())
 	{
 		try_uniform();
 	}

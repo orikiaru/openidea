@@ -20,42 +20,42 @@ public:
 	virtual ~RegistryServer();
 	bool Init();
 	virtual const std::string GetIDString();
-	void Handle(::OI::Net::Session* session, uint32_t id, ::OI::Base::BytesStream& body);
+	void Handle(::OI::Net::Session* pSessionParam, uint32_t iIdParam, ::OI::Base::BytesStream& stBodyParam);
 	void StartReload();
 protected:
 	virtual ::OI::Net::Session* CloneSession();
-	virtual void OnAddSession(::OI::Net::Session* pSession);
-	virtual void OnDelSession(const ::OI::Net::Session* pSession);
+	virtual void OnAddSession(::OI::Net::Session* pSessionParam);
+	virtual void OnDelSession(const ::OI::Net::Session* pSessionParam);
 private:
 	struct Binding
 	{
-		std::string name;
-		int32_t id;
-		std::string ip;
-		std::string port;
-		std::string value;
+		std::string sName;
+		int32_t iId;
+		std::string sIp;
+		std::string sPort;
+		std::string sValue;
 	};
 	enum { REG_FAIL = -1, REG_TAKEN = 0, REG_OK = 1, REG_RENEWED = 2 };
 	coro::Task Boot();
 	coro::Task Reload();
-	coro::Task Register(sid_t sid, Binding b);
-	coro::Task Refresh(sid_t sid, Binding b);
-	coro::Task Withdraw(Binding b);
+	coro::Task Register(sid_t iSessionIdParam, Binding stSecondParam);
+	coro::Task Refresh(sid_t iSessionIdParam, Binding stSecondParam);
+	coro::Task Withdraw(Binding stSecondParam);
 	bool LoadSpace();
-	std::string Key(const std::string& tail) const;
-	std::vector<std::string> EvalArgs(const char* lua, const Binding& b) const;
-	void Reply(sid_t sid, uint32_t id, const ::OI::Rpc::Serialize& msg);
-	Binding* FindBinding(sid_t sid, const std::string& name, int32_t id);
-	void PutSnapshot(const Binding& b);
-	void DropSnapshot(const std::string& name, int32_t id);
+	std::string Key(const std::string& sTailParam) const;
+	std::vector<std::string> EvalArgs(const char* pLuaParam, const Binding& stSecondParam) const;
+	void Reply(sid_t iSessionIdParam, uint32_t iIdParam, const ::OI::Rpc::Serialize& stMessageParam);
+	Binding* FindBinding(sid_t iSessionIdParam, const std::string& sNameParam, int32_t iIdParam);
+	void PutSnapshot(const Binding& stSecondParam);
+	void DropSnapshot(const std::string& sNameParam, int32_t iIdParam);
 
-	std::set<sid_t> _alive;
-	std::map<sid_t, std::vector<Binding> > _bindings;
-	std::vector<::OI::Base::ServiceInstance> _snapshot;
-	bool _snapshot_ok;
-	bool _reloading;
-	int32_t _pull_ms;
-	int32_t _expire_ms;
-	std::string _space;
-	std::string _prefix;
+	std::set<sid_t> m_vAlive;
+	std::map<sid_t, std::vector<Binding> > m_mBindings;
+	std::vector<::OI::Base::ServiceInstance> m_vSnapshot;
+	bool m_bSnapshotOk;
+	bool m_bReloading;
+	int32_t m_iPullMilliseconds;
+	int32_t m_iExpireMilliseconds;
+	std::string m_sSpace;
+	std::string m_sPrefix;
 };

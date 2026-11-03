@@ -47,17 +47,17 @@ public:
 
 class SpinLock
 {
-	std::atomic<int32_t> _l;
+	std::atomic<int32_t> m_iLockState;
 public:
-	SpinLock() : _l(0) {}
+	SpinLock() : m_iLockState(0) {}
 	void Lock()
 	{
-		int spins = 0;
-		std::time_t start = std::time(NULL);
-		while (_l.exchange(1, std::memory_order_acquire) != 0)
+		int iSpins = 0;
+		std::time_t iStart = std::time(NULL);
+		while (m_iLockState.exchange(1, std::memory_order_acquire) != 0)
 		{
-			++spins;
-			if ((spins % 100000) == 0 && std::time(NULL) - start > 5)
+			++iSpins;
+			if ((iSpins % 100000) == 0 && std::time(NULL) - iStart > 5)
 			{
 				assert(false && "spin_lock timeout");
 			}
@@ -66,25 +66,25 @@ public:
 	}
 	void UnLock()
 	{
-		_l.store(0, std::memory_order_release);
+		m_iLockState.store(0, std::memory_order_release);
 	}
 };
 
 class Mutex
 {
 	friend class MutexCond;
-	std::recursive_mutex _m;
+	std::recursive_mutex m_stMutex;
 public:
-	void Lock() { _m.lock(); }
-	void UnLock() { _m.unlock(); }
+	void Lock() { m_stMutex.lock(); }
+	void UnLock() { m_stMutex.unlock(); }
 	void TryLock()
 	{
-		int spins = 0;
-		std::time_t start = std::time(NULL);
-		while (!_m.try_lock())
+		int iSpins = 0;
+		std::time_t iStart = std::time(NULL);
+		while (!m_stMutex.try_lock())
 		{
-			++spins;
-			if ((spins % 100000) == 0 && std::time(NULL) - start > 10)
+			++iSpins;
+			if ((iSpins % 100000) == 0 && std::time(NULL) - iStart > 10)
 			{
 				assert(false && "mutex timeout");
 			}
@@ -95,23 +95,23 @@ public:
 
 class MutexCond
 {
-	std::condition_variable_any _cv;
+	std::condition_variable_any m_stConditionVariable;
 public:
-	void Wait(Mutex& locker)
+	void Wait(Mutex& stLockerParam)
 	{
-		_cv.wait(locker._m);
+		m_stConditionVariable.wait(stLockerParam.m_stMutex);
 	}
-	void Signal() { _cv.notify_one(); }
-	void Broadcast() { _cv.notify_all(); }
+	void Signal() { m_stConditionVariable.notify_one(); }
+	void Broadcast() { m_stConditionVariable.notify_all(); }
 };
 
 template<class T>
 class LockGuard
 {
-	T* _lock;
+	T* m_pLock;
 public:
-	LockGuard(T& lock) : _lock(&lock) { _lock->Lock(); }
-	~LockGuard() { _lock->UnLock(); }
+	LockGuard(T& stLockParam) : m_pLock(&stLockParam) { m_pLock->Lock(); }
+	~LockGuard() { m_pLock->UnLock(); }
 };
 
 #endif

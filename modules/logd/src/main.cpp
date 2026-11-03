@@ -5,19 +5,19 @@
 #include "log_manager.h"
 
 // logd 自己的日志直接进本地文件，不作为日志客户端连自己。
-static bool WriteSelfLog(LOG_LEVEL lv, const char* text, size_t len)
+static bool WriteSelfLog(LOG_LEVEL iLevelParam, const char* pTextParam, size_t iLengthParam)
 {
-    ::OI::Base::Bytes body(text, len);
-    LogManager::GetInstance().WriteLog(lv, body);
+    ::OI::Base::Bytes stBody(pTextParam, iLengthParam);
+    LogManager::GetInstance().WriteLog(iLevelParam, stBody);
     return true;
 }
 
-int main(int argc, char* argv[])
+int main(int iArgumentCountParam, char* vArgumentsParam[])
 {
-    int code = ::OI::Base::StartFramework("../config/logd.toml");
-    if (code != 0)
+    int iCodeLocal = ::OI::Base::StartFramework("../config/logd.toml");
+    if (iCodeLocal != 0)
     {
-        return code;
+        return iCodeLocal;
     }
 
     // 写线程起来之前的日志只打 stdout
@@ -43,10 +43,10 @@ int main(int argc, char* argv[])
         return -1;
     }
 
-    code = ::OI::Base::RunFramework();
+    iCodeLocal = ::OI::Base::RunFramework();
 
     //网络和工人都停了，不会再进日志。写线程把剩下的写完再退出。
     ::OI::Log::InitLocal(NULL);
     LogManager::GetInstance().Stop();
-    return code;
+    return iCodeLocal;
 }

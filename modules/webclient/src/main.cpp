@@ -3,14 +3,14 @@
 #include "oi_base.h"
 #include "web_client.h"
 
-int main(int argc, char* argv[])
+int main(int iArgumentCountParam, char* vArgumentsParam[])
 {
-	(void)argc;
-	(void)argv;
-	int code = ::OI::Base::StartFramework("../config/webclient.toml");
-	if (code != 0)
+	(void)iArgumentCountParam;
+	(void)vArgumentsParam;
+	int iCodeLocal = ::OI::Base::StartFramework("../config/webclient.toml");
+	if (iCodeLocal != 0)
 	{
-		return code;
+		return iCodeLocal;
 	}
 	WebClient::GetInstance().Start();
 	return ::OI::Base::RunFramework();

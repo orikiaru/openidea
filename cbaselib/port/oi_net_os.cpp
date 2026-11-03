@@ -2,19 +2,19 @@
 #include <string.h>
 
 #ifdef _WIN32
-static void NetOs_MapError(int wsa_error)
+static void NetOs_MapError(int iWsaErrorParam)
 {
-	if (wsa_error == WSAEWOULDBLOCK || wsa_error == WSAEINPROGRESS)
+	if (iWsaErrorParam == WSAEWOULDBLOCK || iWsaErrorParam == WSAEINPROGRESS)
 	{
 		errno = EINPROGRESS;
 	}
-	else if (wsa_error == WSAEINTR)
+	else if (iWsaErrorParam == WSAEINTR)
 	{
 		errno = EINTR;
 	}
 	else
 	{
-		errno = wsa_error;
+		errno = iWsaErrorParam;
 	}
 }
 #endif
@@ -22,293 +22,293 @@ static void NetOs_MapError(int wsa_error)
 void NetOs_Startup()
 {
 #ifdef _WIN32
-	static bool started = false;
-	if (started)
+	static bool bStarted = false;
+	if (bStarted)
 	{
 		return;
 	}
-	WSADATA data;
-	WSAStartup(MAKEWORD(2, 2), &data);
-	started = true;
+	WSADATA stData;
+	WSAStartup(MAKEWORD(2, 2), &stData);
+	bStarted = true;
 #endif
 }
 
-net_socket_t NetOs_CreateTcp(bool nonblock)
+net_socket_t NetOs_CreateTcp(bool bNonblockParam)
 {
 	NetOs_Startup();
 #ifdef _WIN32
-	SOCKET fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-	if (fd == INVALID_SOCKET)
+	SOCKET iDescriptorLocal = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	if (iDescriptorLocal == INVALID_SOCKET)
 	{
 		NetOs_MapError(WSAGetLastError());
 		return INVALID_SOCKET_ID;
 	}
-	if (nonblock)
+	if (bNonblockParam)
 	{
-		NetOs_SetNonblock((net_socket_t)fd);
+		NetOs_SetNonblock((net_socket_t)iDescriptorLocal);
 	}
-	return (net_socket_t)fd;
+	return (net_socket_t)iDescriptorLocal;
 #else
-	int flags = SOCK_STREAM;
+	int iFlags = SOCK_STREAM;
 #ifdef SOCK_CLOEXEC
-	flags |= SOCK_CLOEXEC;
+	iFlags |= SOCK_CLOEXEC;
 #endif
 #ifdef SOCK_NONBLOCK
-	if (nonblock)
+	if (bNonblockParam)
 	{
-		flags |= SOCK_NONBLOCK;
+		iFlags |= SOCK_NONBLOCK;
 	}
 #endif
-	int fd = socket(AF_INET, flags, 0);
-	if (fd < 0)
+	int iDescriptorLocal = socket(AF_INET, iFlags, 0);
+	if (iDescriptorLocal < 0)
 	{
 		return INVALID_SOCKET_ID;
 	}
 #ifndef SOCK_NONBLOCK
-	if (nonblock)
+	if (bNonblockParam)
 	{
-		NetOs_SetNonblock(fd);
+		NetOs_SetNonblock(iDescriptorLocal);
 	}
 #endif
-	return fd;
+	return iDescriptorLocal;
 #endif
 }
 
-int NetOs_SetNonblock(net_socket_t fd)
+int NetOs_SetNonblock(net_socket_t iDescriptorParam)
 {
 #ifdef _WIN32
-	u_long mode = 1;
-	if (ioctlsocket((SOCKET)fd, FIONBIO, &mode) != 0)
+	u_long iMode = 1;
+	if (ioctlsocket((SOCKET)iDescriptorParam, FIONBIO, &iMode) != 0)
 	{
 		NetOs_MapError(WSAGetLastError());
 		return -1;
 	}
 	return 0;
 #else
-	int flags = fcntl(fd, F_GETFL, 0);
-	if (flags < 0)
+	int iFlags = fcntl(iDescriptorParam, F_GETFL, 0);
+	if (iFlags < 0)
 	{
 		return -1;
 	}
-	return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+	return fcntl(iDescriptorParam, F_SETFL, iFlags | O_NONBLOCK);
 #endif
 }
 
-int NetOs_SetNoDelay(net_socket_t fd)
+int NetOs_SetNoDelay(net_socket_t iDescriptorParam)
 {
-	int on = 1;
+	int iOn = 1;
 #ifdef _WIN32
-	if (setsockopt((SOCKET)fd, IPPROTO_TCP, TCP_NODELAY, (const char*)&on, sizeof(on)) != 0)
+	if (setsockopt((SOCKET)iDescriptorParam, IPPROTO_TCP, TCP_NODELAY, (const char*)&iOn, sizeof(iOn)) != 0)
 	{
 		NetOs_MapError(WSAGetLastError());
 		return -1;
 	}
 	return 0;
 #else
-	return setsockopt((int)fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
+	return setsockopt((int)iDescriptorParam, IPPROTO_TCP, TCP_NODELAY, &iOn, sizeof(iOn));
 #endif
 }
 
-int NetOs_Close(net_socket_t fd)
+int NetOs_Close(net_socket_t iDescriptorParam)
 {
-	if (fd == INVALID_SOCKET_ID)
+	if (iDescriptorParam == INVALID_SOCKET_ID)
 	{
 		return 0;
 	}
 #ifdef _WIN32
-	return closesocket((SOCKET)fd);
+	return closesocket((SOCKET)iDescriptorParam);
 #else
-	return close((int)fd);
+	return close((int)iDescriptorParam);
 #endif
 }
 
-int NetOs_Recv(net_socket_t fd, void* buf, size_t len)
+int NetOs_Recv(net_socket_t iDescriptorParam, void* pBufferParam, size_t iLengthParam)
 {
 #ifdef _WIN32
-	int n = recv((SOCKET)fd, (char*)buf, (int)len, 0);
-	if (n == SOCKET_ERROR)
+	int iCount = recv((SOCKET)iDescriptorParam, (char*)pBufferParam, (int)iLengthParam, 0);
+	if (iCount == SOCKET_ERROR)
 	{
-		int err = WSAGetLastError();
-		if (err == WSAEWOULDBLOCK)
+		int iError = WSAGetLastError();
+		if (iError == WSAEWOULDBLOCK)
 		{
 			errno = EAGAIN;
 		}
-		else if (err == WSAEINTR)
+		else if (iError == WSAEINTR)
 		{
 			errno = EINTR;
 		}
 		else
 		{
-			errno = err;
+			errno = iError;
 		}
 		return -1;
 	}
-	return n;
+	return iCount;
 #else
-	return (int)read((int)fd, buf, len);
+	return (int)read((int)iDescriptorParam, pBufferParam, iLengthParam);
 #endif
 }
 
-int NetOs_Send(net_socket_t fd, const void* buf, size_t len)
+int NetOs_Send(net_socket_t iDescriptorParam, const void* pBufferParam, size_t iLengthParam)
 {
 #ifdef _WIN32
-	int n = send((SOCKET)fd, (const char*)buf, (int)len, 0);
-	if (n == SOCKET_ERROR)
+	int iCount = send((SOCKET)iDescriptorParam, (const char*)pBufferParam, (int)iLengthParam, 0);
+	if (iCount == SOCKET_ERROR)
 	{
-		int err = WSAGetLastError();
-		if (err == WSAEWOULDBLOCK)
+		int iError = WSAGetLastError();
+		if (iError == WSAEWOULDBLOCK)
 		{
 			errno = EAGAIN;
 		}
-		else if (err == WSAEINTR)
+		else if (iError == WSAEINTR)
 		{
 			errno = EINTR;
 		}
 		else
 		{
-			errno = err;
+			errno = iError;
 		}
 		return -1;
 	}
-	return n;
+	return iCount;
 #else
-	return (int)write((int)fd, buf, len);
+	return (int)write((int)iDescriptorParam, pBufferParam, iLengthParam);
 #endif
 }
 
-net_socket_t NetOs_Accept(net_socket_t fd)
+net_socket_t NetOs_Accept(net_socket_t iDescriptorParam)
 {
 #ifdef _WIN32
-	SOCKET client = accept((SOCKET)fd, NULL, NULL);
-	if (client == INVALID_SOCKET)
+	SOCKET iClient = accept((SOCKET)iDescriptorParam, NULL, NULL);
+	if (iClient == INVALID_SOCKET)
 	{
-		int err = WSAGetLastError();
-		if (err == WSAEWOULDBLOCK)
+		int iError = WSAGetLastError();
+		if (iError == WSAEWOULDBLOCK)
 		{
 			errno = EAGAIN;
 		}
-		else if (err == WSAEINTR)
+		else if (iError == WSAEINTR)
 		{
 			errno = EINTR;
 		}
 		else
 		{
-			errno = err;
+			errno = iError;
 		}
 		return INVALID_SOCKET_ID;
 	}
-	NetOs_SetNonblock((net_socket_t)client);
-	return (net_socket_t)client;
+	NetOs_SetNonblock((net_socket_t)iClient);
+	return (net_socket_t)iClient;
 #else
-	int client = accept((int)fd, 0, 0);
-	if (client >= 0)
+	int iClient = accept((int)iDescriptorParam, 0, 0);
+	if (iClient >= 0)
 	{
-		NetOs_SetNonblock(client);
+		NetOs_SetNonblock(iClient);
 	}
-	return client;
+	return iClient;
 #endif
 }
 
-net_socket_t NetOs_Dup(net_socket_t fd)
+net_socket_t NetOs_Dup(net_socket_t iDescriptorParam)
 {
 #ifdef _WIN32
-	WSAPROTOCOL_INFOW info;
-	memset(&info, 0, sizeof(info));
-	if (WSADuplicateSocketW((SOCKET)fd, GetCurrentProcessId(), &info) != 0)
+	WSAPROTOCOL_INFOW stInfo;
+	memset(&stInfo, 0, sizeof(stInfo));
+	if (WSADuplicateSocketW((SOCKET)iDescriptorParam, GetCurrentProcessId(), &stInfo) != 0)
 	{
 		NetOs_MapError(WSAGetLastError());
 		return INVALID_SOCKET_ID;
 	}
-	SOCKET dup_fd = WSASocketW(info.iAddressFamily, info.iSocketType, info.iProtocol, &info, 0, WSA_FLAG_OVERLAPPED);
-	if (dup_fd == INVALID_SOCKET)
+	SOCKET iDuplicateDescriptor = WSASocketW(stInfo.iAddressFamily, stInfo.iSocketType, stInfo.iProtocol, &stInfo, 0, WSA_FLAG_OVERLAPPED);
+	if (iDuplicateDescriptor == INVALID_SOCKET)
 	{
 		NetOs_MapError(WSAGetLastError());
 		return INVALID_SOCKET_ID;
 	}
-	NetOs_SetNonblock((net_socket_t)dup_fd);
-	return (net_socket_t)dup_fd;
+	NetOs_SetNonblock((net_socket_t)iDuplicateDescriptor);
+	return (net_socket_t)iDuplicateDescriptor;
 #else
-	return dup((int)fd);
+	return dup((int)iDescriptorParam);
 #endif
 }
 
-int NetOs_Bind(net_socket_t fd, const sockaddr* addr, int len)
+int NetOs_Bind(net_socket_t iDescriptorParam, const sockaddr* pAddrParam, int iLengthParam)
 {
 	// 监听口关掉之后，旧连接还会在 TIME_WAIT 里占着这个端口。允许复用，重启才能再绑上。
-	int on = 1;
+	int iOn = 1;
 #ifdef _WIN32
-	if (setsockopt((SOCKET)fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&on, sizeof(on)) != 0)
+	if (setsockopt((SOCKET)iDescriptorParam, SOL_SOCKET, SO_REUSEADDR, (const char*)&iOn, sizeof(iOn)) != 0)
 	{
 		NetOs_MapError(WSAGetLastError());
 		return -1;
 	}
-	if (bind((SOCKET)fd, addr, len) != 0)
-	{
-		NetOs_MapError(WSAGetLastError());
-		return -1;
-	}
-	return 0;
-#else
-	if (setsockopt((int)fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) != 0)
-	{
-		return -1;
-	}
-	return bind((int)fd, addr, len);
-#endif
-}
-
-int NetOs_Listen(net_socket_t fd, int backlog)
-{
-#ifdef _WIN32
-	if (listen((SOCKET)fd, backlog) != 0)
+	if (bind((SOCKET)iDescriptorParam, pAddrParam, iLengthParam) != 0)
 	{
 		NetOs_MapError(WSAGetLastError());
 		return -1;
 	}
 	return 0;
 #else
-	return listen((int)fd, backlog);
+	if (setsockopt((int)iDescriptorParam, SOL_SOCKET, SO_REUSEADDR, &iOn, sizeof(iOn)) != 0)
+	{
+		return -1;
+	}
+	return bind((int)iDescriptorParam, pAddrParam, iLengthParam);
 #endif
 }
 
-int NetOs_Connect(net_socket_t fd, const sockaddr* addr, int len)
+int NetOs_Listen(net_socket_t iDescriptorParam, int iBacklogParam)
 {
 #ifdef _WIN32
-	if (connect((SOCKET)fd, addr, len) == 0)
+	if (listen((SOCKET)iDescriptorParam, iBacklogParam) != 0)
+	{
+		NetOs_MapError(WSAGetLastError());
+		return -1;
+	}
+	return 0;
+#else
+	return listen((int)iDescriptorParam, iBacklogParam);
+#endif
+}
+
+int NetOs_Connect(net_socket_t iDescriptorParam, const sockaddr* pAddrParam, int iLengthParam)
+{
+#ifdef _WIN32
+	if (connect((SOCKET)iDescriptorParam, pAddrParam, iLengthParam) == 0)
 	{
 		return 0;
 	}
 	NetOs_MapError(WSAGetLastError());
 	return -1;
 #else
-	return connect((int)fd, addr, len);
+	return connect((int)iDescriptorParam, pAddrParam, iLengthParam);
 #endif
 }
 
-int NetOs_GetSocketError(net_socket_t fd)
+int NetOs_GetSocketError(net_socket_t iDescriptorParam)
 {
-	int value = 0;
+	int iValue = 0;
 #ifdef _WIN32
-	int len = sizeof(value);
-	if (getsockopt((SOCKET)fd, SOL_SOCKET, SO_ERROR, (char*)&value, &len) != 0)
+	int iLength = sizeof(iValue);
+	if (getsockopt((SOCKET)iDescriptorParam, SOL_SOCKET, SO_ERROR, (char*)&iValue, &iLength) != 0)
 	{
 		return WSAGetLastError();
 	}
-	if (value == WSAEWOULDBLOCK || value == WSAEINPROGRESS)
+	if (iValue == WSAEWOULDBLOCK || iValue == WSAEINPROGRESS)
 	{
 		return EINPROGRESS;
 	}
-	if (value == WSAEINTR)
+	if (iValue == WSAEINTR)
 	{
 		return EINTR;
 	}
-	return value;
+	return iValue;
 #else
-	socklen_t len = sizeof(value);
-	if (getsockopt((int)fd, SOL_SOCKET, SO_ERROR, &value, &len) != 0)
+	socklen_t iLength = sizeof(iValue);
+	if (getsockopt((int)iDescriptorParam, SOL_SOCKET, SO_ERROR, &iValue, &iLength) != 0)
 	{
 		return errno;
 	}
-	return value;
+	return iValue;
 #endif
 }

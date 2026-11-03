@@ -15,167 +15,167 @@
 namespace OI { namespace Net {
 
 
-bool NetHelper::CreateSocket(NetSocket& net_socket, SessionManager* pMgr, bool async)
+bool NetHelper::CreateSocket(NetSocket& stNetSocketParam, SessionManager* pMgrParam, bool bAsyncParam)
 {
-	if (!async)
+	if (!bAsyncParam)
 	{
-		LOG_ERROR("NetHelper::CreateSocket sync socket not supported id=%s", pMgr->GetIDString().c_str());
+		LOG_ERROR("NetHelper::CreateSocket sync socket not supported id=%s", pMgrParam->GetIDString().c_str());
 		return false;
 	}
-	net_socket_t sfd = NetOs_CreateTcp(async);
-	if (sfd == INVALID_SOCKET_ID)
+	net_socket_t iSfd = NetOs_CreateTcp(bAsyncParam);
+	if (iSfd == INVALID_SOCKET_ID)
 	{
-		LOG_ERROR("NetHelper::CreateSocket id=%s, err=%s", pMgr->GetIDString().c_str(), NetOs_StrError(errno));
+		LOG_ERROR("NetHelper::CreateSocket id=%s, err=%s", pMgrParam->GetIDString().c_str(), NetOs_StrError(errno));
 		return false;
 	}
-	if (!net_socket.Init(sfd, pMgr))
+	if (!stNetSocketParam.Init(iSfd, pMgrParam))
 	{
-		LOG_ERROR("NetHelper::CreateSocket Init error id=%s", pMgr->GetIDString().c_str());
-		NetOs_Close(sfd);
-		net_socket.Detach();
+		LOG_ERROR("NetHelper::CreateSocket Init error id=%s", pMgrParam->GetIDString().c_str());
+		NetOs_Close(iSfd);
+		stNetSocketParam.Detach();
 		return false;
 	}
-	net_socket.SetAsync(async);
+	stNetSocketParam.SetAsync(bAsyncParam);
 	return true;
 }
 
-bool NetHelper::SocketBind(NetSocket& sid, SessionManager* pMgr)
+bool NetHelper::SocketBind(NetSocket& stSessionIdParam, SessionManager* pMgrParam)
 {
-	if (!sid.IsValidAttr())
+	if (!stSessionIdParam.IsValidAttr())
 	{
 		return false;
 	}
-	if (sid.IsBind())
+	if (stSessionIdParam.IsBind())
 	{
 		return false;
 	}
 
-	int ret = NetOs_Bind(sid.GetSocket(), sid.GetAddr().NetAttrPtr(), sid.GetAddr().NetAttrLen());
-	if (ret != 0)
+	int iReturnCodeLocal = NetOs_Bind(stSessionIdParam.GetSocket(), stSessionIdParam.GetAddr().NetAttrPtr(), stSessionIdParam.GetAddr().NetAttrLen());
+	if (iReturnCodeLocal != 0)
 	{
-		LOG_TRACE("NetHelper::SocketBind error=%s, SessionManager=%s", NetOs_StrError(errno), pMgr->GetIDString().c_str());
+		LOG_TRACE("NetHelper::SocketBind error=%s, SessionManager=%s", NetOs_StrError(errno), pMgrParam->GetIDString().c_str());
 		return false;
 	}
-	sid.SetBind();
+	stSessionIdParam.SetBind();
 	return true;
 }
 
-bool NetHelper::SocketListen(NetSocket& sid, SessionManager* pMgr)
+bool NetHelper::SocketListen(NetSocket& stSessionIdParam, SessionManager* pMgrParam)
 {
-	if (!sid.IsBind())
+	if (!stSessionIdParam.IsBind())
 	{
 		return false;
 	}
-	int ret = NetOs_Listen(sid.GetSocket(), SOMAXCONN);
-	if (ret != 0)
+	int iReturnCodeLocal = NetOs_Listen(stSessionIdParam.GetSocket(), SOMAXCONN);
+	if (iReturnCodeLocal != 0)
 	{
-		LOG_TRACE("NetHelper::SocketListen error=%s, SessionManager=%s", NetOs_StrError(errno), pMgr->GetIDString().c_str());
+		LOG_TRACE("NetHelper::SocketListen error=%s, SessionManager=%s", NetOs_StrError(errno), pMgrParam->GetIDString().c_str());
 		return false;
 	}
-	sid.SetListen();
+	stSessionIdParam.SetListen();
 	return true;
 }
 
-bool NetHelper::SocketListenAndBind(NetSocket& sid, SessionManager* pMgr)
+bool NetHelper::SocketListenAndBind(NetSocket& stSessionIdParam, SessionManager* pMgrParam)
 {
-	if (!SocketBind(sid, pMgr))
+	if (!SocketBind(stSessionIdParam, pMgrParam))
 	{
 		return false;
 	}
-	if (!SocketListen(sid, pMgr))
+	if (!SocketListen(stSessionIdParam, pMgrParam))
 	{
 		return false;
 	}
 	return true;
 }
 
-bool NetHelper::SocketConnect(NetSocket& sid, SessionManager* pMgr)
+bool NetHelper::SocketConnect(NetSocket& stSessionIdParam, SessionManager* pMgrParam)
 {
-	if (!sid.IsValidAttr())
+	if (!stSessionIdParam.IsValidAttr())
 	{
 		return false;
 	}
-	if (sid.IsAccept())
+	if (stSessionIdParam.IsAccept())
 	{
 		return false;
 	}
 
-	bool succ = false;
+	bool bSucc = false;
 
-	int ret = NetOs_Connect(sid.GetSocket(), sid.GetAddr().NetAttrPtr(), sid.GetAddr().NetAttrLen());
-	if (ret == -1 && errno == EINPROGRESS)
+	int iReturnCodeLocal = NetOs_Connect(stSessionIdParam.GetSocket(), stSessionIdParam.GetAddr().NetAttrPtr(), stSessionIdParam.GetAddr().NetAttrLen());
+	if (iReturnCodeLocal == -1 && errno == EINPROGRESS)
 	{
-		ConnectChannel* pChannel = new ConnectChannel(sid, pMgr);
-		Poll::GetInstance().IOEventRegister(pChannel, false, true);
-		succ = true;
+		ConnectChannel* pChannelLocal = new ConnectChannel(stSessionIdParam, pMgrParam);
+		Poll::GetInstance().IOEventRegister(pChannelLocal, false, true);
+		bSucc = true;
 	}
-	else if (ret == 0)
+	else if (iReturnCodeLocal == 0)
 	{
-		pMgr->AddSession(sid.GetSocket());
-		succ = true;
+		pMgrParam->AddSession(stSessionIdParam.GetSocket());
+		bSucc = true;
 	}
 
-	if (!succ)
+	if (!bSucc)
 	{
-		LOG_ERROR("NetHelper::SocketConnect id=%s, err=%s", pMgr->GetIDString().c_str(), NetOs_StrError(errno));
-		NetOs_Close(sid.GetSocket());
-		sid.Detach();
-		pMgr->AbortSession();
+		LOG_ERROR("NetHelper::SocketConnect id=%s, err=%s", pMgrParam->GetIDString().c_str(), NetOs_StrError(errno));
+		NetOs_Close(stSessionIdParam.GetSocket());
+		stSessionIdParam.Detach();
+		pMgrParam->AbortSession();
 		return false;
 	}
 
 	return true;
 }
 
-int NetHelper::SocketAcceptOne(NetSocket& sid, SessionManager* pMgr)
+int NetHelper::SocketAcceptOne(NetSocket& stSessionIdParam, SessionManager* pMgrParam)
 {
-	if (!sid.IsValidAttr())
+	if (!stSessionIdParam.IsValidAttr())
 	{
 		return -1;
 	}
-	if (!sid.IsBind() || !sid.IsListen())
+	if (!stSessionIdParam.IsBind() || !stSessionIdParam.IsListen())
 	{
 		return -1;
 	}
-	if (sid.IsConnect())
+	if (stSessionIdParam.IsConnect())
 	{
 		return -1;
 	}
 
-	sid.SetAccept();
-	int accpet_count = -1;
+	stSessionIdParam.SetAccept();
+	int iAccpetCount = -1;
 	for (;;)
 	{
-		net_socket_t cfd = NetOs_Accept(sid.GetSocket());
-		if (cfd != INVALID_SOCKET_ID)
+		net_socket_t iCfd = NetOs_Accept(stSessionIdParam.GetSocket());
+		if (iCfd != INVALID_SOCKET_ID)
 		{
-			pMgr->AddSession(cfd);
-			accpet_count = 1;
+			pMgrParam->AddSession(iCfd);
+			iAccpetCount = 1;
 			break;
 		}
-		else if (cfd == INVALID_SOCKET_ID && (errno == EAGAIN || errno == EINPROGRESS))
+		else if (iCfd == INVALID_SOCKET_ID && (errno == EAGAIN || errno == EINPROGRESS))
 		{
-			accpet_count = 0;
+			iAccpetCount = 0;
 			break;
 		}
-		else if (cfd == INVALID_SOCKET_ID && (errno == EINTR || errno == ECONNABORTED || errno == EPROTO))
+		else if (iCfd == INVALID_SOCKET_ID && (errno == EINTR || errno == ECONNABORTED || errno == EPROTO))
 		{
 			// 对端在 accept 之前就断了，只影响这一条，接着收下一条。
 			continue;
 		}
-		LOG_ERROR("NetHelper::SocketAccept error id=%s, error=%s", pMgr->GetIDString().c_str(), NetOs_StrError(errno));
-		accpet_count = -1;
+		LOG_ERROR("NetHelper::SocketAccept error id=%s, error=%s", pMgrParam->GetIDString().c_str(), NetOs_StrError(errno));
+		iAccpetCount = -1;
 		break;
 	}
 
-	return accpet_count;
+	return iAccpetCount;
 }
 
 
-NetAddr NetHelper::GetNetAddr(SessionManager* pMgr)
+NetAddr NetHelper::GetNetAddr(SessionManager* pMgrParam)
 {
-	NetAddr addr;
-	addr.Init(pMgr);
-	return addr;
+	NetAddr stAddr;
+	stAddr.Init(pMgrParam);
+	return stAddr;
 }
 }}

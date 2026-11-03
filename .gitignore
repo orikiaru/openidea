@@ -8,3 +8,7 @@
 /*.obj
 /build-win
 /compile_commands.json
+
+# Python tools and protocol generator caches
+__pycache__/
+*.py[cod]

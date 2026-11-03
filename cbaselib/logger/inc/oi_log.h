@@ -15,9 +15,9 @@ namespace OI { namespace Log
 {
 	bool Init();
 	// 日志服自己用：不连日志服，整行日志交给 sink 写本地。传 NULL 摘掉，之后只打 stdout。
-	typedef bool (*LocalSink)(LOG_LEVEL lv, const char* text, size_t len);
-	void InitLocal(LocalSink sink);
-	bool Log(LOG_LEVEL lv, const char* format, ...)__attribute__((format(printf, 2, 3)));
+	typedef bool (*LocalSink)(LOG_LEVEL iLevelParam, const char* pTextParam, size_t iLengthParam);
+	void InitLocal(LocalSink fnSinkParam);
+	bool Log(LOG_LEVEL iLevelParam, const char* pFormatParam, ...)__attribute__((format(printf, 2, 3)));
 }}
 
 #define LOG_WRAPPER(lv, ...)	::OI::Log::Log(lv,						__VA_ARGS__)

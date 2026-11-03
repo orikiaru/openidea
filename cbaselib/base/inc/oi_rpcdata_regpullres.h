@@ -10,25 +10,25 @@ namespace OI { namespace RpcData {
 class RegPullRes : public ::OI::Rpc::RpcData
 {
 public:
-    int32_t code{};
-    std::vector<RegInstance> list{};
+    int32_t iCode{};
+    std::vector<RegInstance> vList{};
     
     explicit RegPullRes (){}
     RegPullRes ( const int32_t & l_code, const std::vector<RegInstance> & l_list )
     {
-        code = l_code;
-        list = l_list;
+        iCode = l_code;
+        vList = l_list;
         
     }
     virtual ::OI::Base::BytesStream& serialize(::OI::Base::BytesStream& os) const
     {
-        os.WritePb(0, code);
-        os.WritePb(1, list);
+        os.WritePb(0, iCode);
+        os.WritePb(1, vList);
         return os;
     }
     virtual ::OI::Base::BytesStream& deserialize(::OI::Base::BytesStream& os)
     {
-        list.clear();
+        vList.clear();
         while (os.RemainSize() > 0)
         {
             uint32_t field_seq = 0;
@@ -36,8 +36,8 @@ public:
             os.ReadPbHeader(field_seq, field_size);
             switch (field_seq)
             {
-            case 0: os.ReadPb(field_size, code); break;
-            case 1: os.ReadPb(field_size, list); break;
+            case 0: os.ReadPb(field_size, iCode); break;
+            case 1: os.ReadPb(field_size, vList); break;
             default: os.SkipPb(field_size); break;
             }
         }
@@ -46,8 +46,8 @@ public:
     bool FromJson(const Json::Value& in)
     {
         if (!in.isObject()) return false;
-        if (in.isMember("code") && !::OI::Rpc::FromJsonValue(in["code"], code)) return false;
-        if (in.isMember("list") && !::OI::Rpc::FromJsonValue(in["list"], list)) return false;
+        if (in.isMember("code") && !::OI::Rpc::FromJsonValue(in["code"], iCode)) return false;
+        if (in.isMember("list") && !::OI::Rpc::FromJsonValue(in["list"], vList)) return false;
         return true;
     }
     bool FromJson(const std::string& text)
@@ -63,8 +63,8 @@ public:
     void ToJson(Json::Value& out) const
     {
         out = Json::Value(Json::objectValue);
-        ::OI::Rpc::ToJsonValue(out["code"], code);
-        ::OI::Rpc::ToJsonValue(out["list"], list);
+        ::OI::Rpc::ToJsonValue(out["code"], iCode);
+        ::OI::Rpc::ToJsonValue(out["list"], vList);
     }
     std::string ToJson() const
     {

@@ -8,23 +8,23 @@ class RedisMgr
 {
 	DECLARE_SINGLETON(RedisMgr)
 	RedisMgr();
-	bool _on;
-	int32_t _tasks;
-	int32_t _sync;
-	int32_t _seconds;
-	int32_t _timeout_ms;
-	int32_t _failed;
-	std::atomic<int32_t> _done;
-	std::atomic<int64_t> _ops;
-	std::atomic<int32_t> _bad;
-	std::chrono::steady_clock::time_point _start;
+	bool m_bEnabled;
+	int32_t m_iTaskCount;
+	int32_t m_iSynchronous;
+	int32_t m_iSeconds;
+	int32_t m_iTimeoutMilliseconds;
+	int32_t m_iFailed;
+	std::atomic<int32_t> m_iDone;
+	std::atomic<int64_t> m_iOperations;
+	std::atomic<int32_t> m_iBad;
+	std::chrono::steady_clock::time_point m_stStart;
 public:
 	void Load();
-	bool Enabled() const { return _on; }
+	bool Enabled() const { return m_bEnabled; }
 	void Start();
 	void NoteDone();
-	void SyncStress(int id);
+	void SyncStress(int iIdParam);
 	coro::Task Pump();
 	coro::Task Check();
-	coro::Task Stress(int id);
+	coro::Task Stress(int iIdParam);
 };

@@ -8,9 +8,9 @@ class TestBoard
 {
 	DECLARE_SINGLETON(TestBoard)
 	TestBoard();
-	std::atomic<int32_t> _left;
-	std::atomic<int32_t> _code;
+	std::atomic<int32_t> m_iLeft;
+	std::atomic<int32_t> m_iCode;
 public:
 	void Arm();
-	void Done(int code);
+	void Done(int iCodeParam);
 };

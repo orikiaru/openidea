@@ -9,19 +9,19 @@
 
 namespace
 {
-void PostTask(std::coroutine_handle<> handle)
+void PostTask(std::coroutine_handle<> stHandleParam)
 {
 	// 刚创建或停在 co_await 上时，不能用 done() 过滤。那会把父协程丢掉，回包没人发。
-	if (!handle)
+	if (!stHandleParam)
 	{
 		return;
 	}
 #ifdef _SINGLE_THREAD_
 	// 单线程只把句柄放回就绪队列，循环空了再进 poll。
-	coro::StScheduler::Post(handle);
+	coro::StScheduler::Post(stHandleParam);
 #else
 	// 多线程把句柄丢给工人。协程一挂起，resume 就返回，工人接着拿下一个。
-	::OI::Thread::ThreadPool::GetInstance().PostCoroutine(handle);
+	::OI::Thread::ThreadPool::GetInstance().PostCoroutine(stHandleParam);
 #endif
 }
 
@@ -31,27 +31,27 @@ std::atomic<uint64_t> g_task_uid(1);
 namespace coro
 {
 namespace { std::atomic<TaskErrorHandler> g_error_handler{nullptr}; }
-void SetTaskErrorHandler(TaskErrorHandler handler) { g_error_handler.store(handler); }
-void ReportTaskError(Token token, std::exception_ptr error) noexcept
+void SetTaskErrorHandler(TaskErrorHandler fnHandlerParam) { g_error_handler.store(fnHandlerParam); }
+void ReportTaskError(Token iTokenParam, std::exception_ptr stErrorParam) noexcept
 {
-	if (auto handler = g_error_handler.load())
+	if (auto fnHandler = g_error_handler.load())
 	{
-		try { handler(token, error); return; }
+		try { fnHandler(iTokenParam, stErrorParam); return; }
 		catch (...) { fprintf(stderr, "coroutine error handler threw\n"); }
 	}
-	try { std::rethrow_exception(error); }
-	catch (const std::exception& e) { fprintf(stderr, "coroutine %llu failed: %s\n", (unsigned long long)token, e.what()); }
-	catch (...) { fprintf(stderr, "coroutine %llu failed\n", (unsigned long long)token); }
+	try { std::rethrow_exception(stErrorParam); }
+	catch (const std::exception& stErrorLocal) { fprintf(stderr, "coroutine %llu failed: %s\n", (unsigned long long)iTokenParam, stErrorLocal.what()); }
+	catch (...) { fprintf(stderr, "coroutine %llu failed\n", (unsigned long long)iTokenParam); }
 }
 
 TaskUid AllocTaskUid()
 {
-	TaskUid uid = g_task_uid.fetch_add(1, std::memory_order_relaxed);
-	if (uid == 0)
+	TaskUid iTaskIdLocal = g_task_uid.fetch_add(1, std::memory_order_relaxed);
+	if (iTaskIdLocal == 0)
 	{
-		uid = g_task_uid.fetch_add(1, std::memory_order_relaxed);
+		iTaskIdLocal = g_task_uid.fetch_add(1, std::memory_order_relaxed);
 	}
-	return uid;
+	return iTaskIdLocal;
 }
 
 namespace
@@ -59,11 +59,11 @@ namespace
 thread_local std::vector<std::coroutine_handle<> > g_detached_done;
 }
 
-void DetachFinished(std::coroutine_handle<> handle)
+void DetachFinished(std::coroutine_handle<> stHandleParam)
 {
-	if (handle)
+	if (stHandleParam)
 	{
-		g_detached_done.push_back(handle);
+		g_detached_done.push_back(stHandleParam);
 	}
 }
 
@@ -71,49 +71,49 @@ void DrainDetached()
 {
 	while (!g_detached_done.empty())
 	{
-		std::coroutine_handle<> handle = g_detached_done.back();
+		std::coroutine_handle<> stHandleLocal = g_detached_done.back();
 		g_detached_done.pop_back();
-		if (handle)
+		if (stHandleLocal)
 		{
-			handle.destroy();
+			stHandleLocal.destroy();
 		}
 	}
 }
 
-void Schedule(std::coroutine_handle<> handle)
+void Schedule(std::coroutine_handle<> stHandleParam)
 {
-	PostTask(handle);
+	PostTask(stHandleParam);
 }
 
 struct WakeLater
 {
-	std::coroutine_handle<> handle;
-	int32_t ms;
+	std::coroutine_handle<> stHandle;
+	int32_t iMilliseconds;
 };
 
-static void ArmWakeLater(void* arg)
+static void ArmWakeLater(void* pArgumentParam)
 {
-	WakeLater* later = (WakeLater*)arg;
-	std::coroutine_handle<> handle = later->handle;
-	int32_t ms = later->ms;
-	delete later;
-	::OI::Timer::BaseTimerManager::GetInstance().AddTimer([handle]() {
-		PostTask(handle);
-	}, ms);
+	WakeLater* pLater = (WakeLater*)pArgumentParam;
+	std::coroutine_handle<> stHandleLocal = pLater->stHandle;
+	int32_t iMillisecondsLocal = pLater->iMilliseconds;
+	delete pLater;
+	::OI::Timer::BaseTimerManager::GetInstance().AddTimer([stHandleLocal]() {
+		PostTask(stHandleLocal);
+	}, iMillisecondsLocal);
 }
 
-void SleepMs::await_suspend(std::coroutine_handle<> handle) const noexcept
+void SleepMs::await_suspend(std::coroutine_handle<> stHandleParam) const noexcept
 {
 	// 时间轮只能在 poll 线程上改。到点再把句柄放回队列，不在定时器回调里 resume。
-	if (ms <= 0)
+	if (iMilliseconds <= 0)
 	{
-		PostTask(handle);
+		PostTask(stHandleParam);
 		return;
 	}
-	WakeLater* later = new WakeLater;
-	later->handle = handle;
-	later->ms = ms;
-	::OI::Net::Poll::GetInstance().CallOnLoop(ArmWakeLater, later);
+	WakeLater* pLater = new WakeLater;
+	pLater->stHandle = stHandleParam;
+	pLater->iMilliseconds = iMilliseconds;
+	::OI::Net::Poll::GetInstance().CallOnLoop(ArmWakeLater, pLater);
 }
 
 namespace
@@ -122,45 +122,45 @@ namespace
 std::deque<std::coroutine_handle<> > g_st_queue;
 }
 
-void StScheduler::Post(std::coroutine_handle<> handle)
+void StScheduler::Post(std::coroutine_handle<> stHandleParam)
 {
 #ifdef _SINGLE_THREAD_
-	if (!handle)
+	if (!stHandleParam)
 	{
 		return;
 	}
-	::OI::Thread::MutexGuard lock(g_st_lock);
-	g_st_queue.push_back(handle);
+	::OI::Thread::MutexGuard stLock(g_st_lock);
+	g_st_queue.push_back(stHandleParam);
 #else
-	PostTask(handle);
+	PostTask(stHandleParam);
 #endif
 }
 
 bool StScheduler::Poll()
 {
 	// 把进来时的队列整批拿走。resume 里 yield(0)、StartTask 进的是原队列，这次循环碰不到。
-	std::deque<std::coroutine_handle<> > batch;
+	std::deque<std::coroutine_handle<> > vBatch;
 	{
-		::OI::Thread::MutexGuard lock(g_st_lock);
-		batch.swap(g_st_queue);
+		::OI::Thread::MutexGuard stLock(g_st_lock);
+		vBatch.swap(g_st_queue);
 	}
-	bool ran = false;
-	for (size_t i = 0; i < batch.size(); ++i)
+	bool bRan = false;
+	for (size_t iIndexLocal = 0; iIndexLocal < vBatch.size(); ++iIndexLocal)
 	{
-		std::coroutine_handle<> handle = batch[i];
-		if (handle && !handle.done())
+		std::coroutine_handle<> stHandleLocal = vBatch[iIndexLocal];
+		if (stHandleLocal && !stHandleLocal.done())
 		{
-			handle.resume();
+			stHandleLocal.resume();
 			DrainDetached();
-			ran = true;
+			bRan = true;
 		}
 	}
-	return ran;
+	return bRan;
 }
 
 bool StScheduler::Queued()
 {
-	::OI::Thread::MutexGuard lock(g_st_lock);
+	::OI::Thread::MutexGuard stLock(g_st_lock);
 	return !g_st_queue.empty();
 }
 }

@@ -3,14 +3,14 @@
 #include "oi_base.h"
 #include "redis_server.h"
 
-int main(int argc, char* argv[])
+int main(int iArgumentCountParam, char* vArgumentsParam[])
 {
-	(void)argc;
-	(void)argv;
-	int code = ::OI::Base::StartFramework("../config/redisserver.toml");
-	if (code != 0)
+	(void)iArgumentCountParam;
+	(void)vArgumentsParam;
+	int iCodeLocal = ::OI::Base::StartFramework("../config/redisserver.toml");
+	if (iCodeLocal != 0)
 	{
-		return code;
+		return iCodeLocal;
 	}
 	::OI::Log::Init();
 

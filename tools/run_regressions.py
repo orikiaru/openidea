@@ -37,7 +37,7 @@ def reset_connections():
 
 
 def run(case, args):
-    mode = "hold" if case.startswith("clock-") else ("echo" if case == "reset" else case)
+    mode = "hold" if case.startswith("clock-") else ("echo" if case in ("reset", "registry") else case)
     mode = "log" if case == "disk-full" else mode
     mode = "redis" if case == "redis-limit" else mode
     procs = []
@@ -48,12 +48,15 @@ def run(case, args):
         work, cfg, logs = root / "bin", root / "config", root / "logs"
         for p in (work, cfg, logs):
             p.mkdir()
-        for name in ("logd", "ipcclient", "ipcserver", "redisserver"):
+        for name in ("logd", "ipcclient", "ipcserver", "redisserver") + (("registry",) if case == "registry" else ()):
             shutil.copy2(args.bin_dir / name, work / name)
             text = (REPO / "deploy/config" / (name + ".toml")).read_text(encoding="utf-8-sig")
             if name == "logd":
                 text = replace(text, "root_path", '"' + str(logs) + '"')
             if name == "ipcclient":
+                if case == "registry":
+                    # 错误的直连后备端口，只有通过注册发现才能完成回声。
+                    text = text.replace('port = "17981"', 'port = "17982"')
                 if case == "redis-limit":
                     text = text.replace("[RedisClient]", "[RedisClient]\nmax_pending = 1")
                     text = replace(text, "tasks", "0")
@@ -110,15 +113,19 @@ def run(case, args):
                             return
                         raise RuntimeError(logpath.read_text(errors="replace"))
                     time.sleep(0.05)
-            if mode in ("redis", "hold"):
+            if mode in ("redis", "hold") or case == "registry":
                 redis_conf = root / "redis.conf"
                 redis_conf.write_text('bind 127.0.0.1\nport 6379\nsave ""\nappendonly no\n'
                                       'maxmemory 1536mb\nmaxmemory-policy allkeys-lru\n'
                                       'dir ' + str(root) + '\n')
                 db, dbpath = start("redis", [str(args.redis_binary), str(redis_conf)])
                 ready(db, dbpath, "Ready to accept connections")
-                rs, rsp = start("redisserver")
-                ready(rs, rsp, "redis server listen")
+                if case == "registry":
+                    rs, rsp = start("registry")
+                    ready(rs, rsp, "registry server listen")
+                else:
+                    rs, rsp = start("redisserver")
+                    ready(rs, rsp, "redis server listen")
             server, serverpath = start("ipcserver")
             ready(server, serverpath, "ipc server listen")
             if case == "reset":
@@ -195,17 +202,60 @@ def run(case, args):
                 raise RuntimeError("graceful shutdown timed out: " + ", ".join(stuck))
 
 
+def run_web(args):
+    # 仍使用模块自带的 WebClient 用例，验证字段改名后的 HTTP/JSON/二进制收发。
+    with tempfile.TemporaryDirectory(prefix="oi-regression-web-") as tmp:
+        root = Path(tmp)
+        work, cfg = root / "bin", root / "config"
+        work.mkdir()
+        cfg.mkdir()
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        for name in ("webserver", "webclient"):
+            shutil.copy2(args.bin_dir / name, work / name)
+            text = (REPO / "deploy/config" / (name + ".toml")).read_text(encoding="utf-8-sig")
+            text = text.replace("port = 18080", "port = " + str(port))
+            (cfg / (name + ".toml")).write_text(text, encoding="utf-8")
+        with (root / "server.out").open("w") as output:
+            server = subprocess.Popen([str(work / "webserver")], cwd=work, stdout=output, stderr=subprocess.STDOUT)
+            try:
+                deadline = time.monotonic() + 10
+                while True:
+                    try:
+                        with socket.create_connection(("127.0.0.1", port), timeout=0.2): break
+                    except OSError:
+                        if server.poll() is not None or time.monotonic() > deadline:
+                            raise RuntimeError((root / "server.out").read_text())
+                        time.sleep(0.05)
+                client = subprocess.run([str(work / "webclient")], cwd=work, capture_output=True, text=True, timeout=30)
+                print(client.stdout, flush=True)
+                assert client.returncode == 0 and "rpc=1 bin=1 bad=0" in client.stdout, client.stderr
+                print("web PASS", flush=True)
+            finally:
+                if server.poll() is None:
+                    server.terminate()
+                    try: server.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        server.kill()
+                        server.wait()
+                        raise RuntimeError("webserver shutdown timed out")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case", default="all", choices=("all", "echo", "log", "redis", "redis-limit", "hold", "reset", "disk-full", "clock-forward", "clock-back"))
+    parser.add_argument("--case", default="all", choices=("all", "echo", "log", "redis", "redis-limit", "hold", "reset", "disk-full", "clock-forward", "clock-back", "registry", "web"))
     parser.add_argument("--bin-dir", type=Path, default=REPO / "deploy/bin")
     parser.add_argument("--redis-binary", type=Path, default=Path("/tmp/redis-7.4.12/src/redis-server"))
     parser.add_argument("--clock-fault-so", type=Path)
     options = parser.parse_args()
-    for port in (19995, 17981, 16379, 6379):
+    for port in (19995, 17981, 16379, 6379, 17990):
         with socket.socket() as probe:
             probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             probe.bind(("127.0.0.1", port))
-    cases = ("echo", "log", "redis", "redis-limit", "hold", "reset", "disk-full") if options.case == "all" else (options.case,)
+    cases = ("echo", "log", "redis", "redis-limit", "hold", "reset", "disk-full", "registry", "web") if options.case == "all" else (options.case,)
     for item in cases:
-        run(item, options)
+        if item == "web":
+            run_web(options)
+        else:
+            run(item, options)

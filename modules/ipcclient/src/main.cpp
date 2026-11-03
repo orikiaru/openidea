@@ -3,12 +3,12 @@
 #include "oi_base.h"
 #include "ipcclient.h"
 
-int main(int argc, char* argv[])
+int main(int iArgumentCountParam, char* vArgumentsParam[])
 {
-    int code = ::OI::Base::StartFramework("../config/ipcclient.toml");
-    if (code != 0)
+    int iCodeLocal = ::OI::Base::StartFramework("../config/ipcclient.toml");
+    if (iCodeLocal != 0)
     {
-        return code;
+        return iCodeLocal;
     }
     ::OI::Log::Init();
 

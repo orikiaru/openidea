@@ -4,33 +4,33 @@
 
 void LogServerSession::OnDataIn()
 {
-	const char* data = _ibuff.Begin();
-	size_t size = _ibuff.Size();
-	size_t used = 0;
-	while (size - used >= (size_t)::OI::Log::LOG_FRAME_HEAD)
+	const char* pData = stInputBuffer.Begin();
+	size_t iSize = stInputBuffer.Size();
+	size_t iUsed = 0;
+	while (iSize - iUsed >= (size_t)::OI::Log::LOG_FRAME_HEAD)
 	{
-		uint32_t payload = ::OI::Log::ReadLogFrameLen(data + used);
-		if (payload < 1 || payload > (uint32_t)::OI::Log::LOG_FRAME_MAX)
+		uint32_t iPayload = ::OI::Log::ReadLogFrameLen(pData + iUsed);
+		if (iPayload < 1 || iPayload > (uint32_t)::OI::Log::LOG_FRAME_MAX)
 		{
 			PassiveClose(PARSER_ERR_PROTOCOL_SIZE);
 			return;
 		}
-		if (size - used < (size_t)::OI::Log::LOG_FRAME_HEAD + payload)
+		if (iSize - iUsed < (size_t)::OI::Log::LOG_FRAME_HEAD + iPayload)
 		{
 			break;
 		}
-		int level = (unsigned char)data[used + ::OI::Log::LOG_FRAME_HEAD];
-		const char* text = data + used + ::OI::Log::LOG_FRAME_HEAD + 1;
-		size_t text_len = payload - 1;
-		if (level >= 0 && level < LOG_LEVEL::LOG_LEVEL_COUNT)
+		int iLevel = (unsigned char)pData[iUsed + ::OI::Log::LOG_FRAME_HEAD];
+		const char* pText = pData + iUsed + ::OI::Log::LOG_FRAME_HEAD + 1;
+		size_t iTextLength = iPayload - 1;
+		if (iLevel >= 0 && iLevel < LOG_LEVEL::LOG_LEVEL_COUNT)
 		{
-			::OI::Base::Bytes body(text, text_len);
-			LogManager::GetInstance().WriteLog((LOG_LEVEL)level, body);
+			::OI::Base::Bytes stBody(pText, iTextLength);
+			LogManager::GetInstance().WriteLog((LOG_LEVEL)iLevel, stBody);
 		}
-		used += (size_t)::OI::Log::LOG_FRAME_HEAD + payload;
+		iUsed += (size_t)::OI::Log::LOG_FRAME_HEAD + iPayload;
 	}
-	if (used > 0)
+	if (iUsed > 0)
 	{
-		_ibuff.Erase(0, used);
+		stInputBuffer.Erase(0, iUsed);
 	}
 }

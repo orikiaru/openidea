@@ -12,6 +12,6 @@ public:
 	bool Init();
 	virtual const std::string GetIDString();
 private:
-	virtual void OnClientConnect(::OI::Net::Session* pSession);
-	virtual void OnClientDisconnect(const ::OI::Net::Session* pSession);
+	virtual void OnClientConnect(::OI::Net::Session* pSessionParam);
+	virtual void OnClientDisconnect(const ::OI::Net::Session* pSessionParam);
 };

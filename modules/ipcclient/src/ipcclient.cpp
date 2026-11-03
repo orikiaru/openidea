@@ -45,16 +45,16 @@ const std::string IpcClient::GetIDString()
 	return "IpcClient";
 }
 
-void IpcClient::OnClientConnect(::OI::Net::Session* pSession)
+void IpcClient::OnClientConnect(::OI::Net::Session* pSessionParam)
 {
 	EchoMgr::GetInstance().Load();
 	LogMgr::GetInstance().Load();
-	EchoMgr::GetInstance().Start(pSession->GetSessionID());
+	EchoMgr::GetInstance().Start(pSessionParam->GetSessionID());
 	LogMgr::GetInstance().Start();
-	HoldMgr::GetInstance().Start(pSession->GetSessionID());
+	HoldMgr::GetInstance().Start(pSessionParam->GetSessionID());
 }
 
-void IpcClient::OnClientDisconnect(const ::OI::Net::Session* pSession)
+void IpcClient::OnClientDisconnect(const ::OI::Net::Session* pSessionParam)
 {
-	(void)pSession;
+	(void)pSessionParam;
 }

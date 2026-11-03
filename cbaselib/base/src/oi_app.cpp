@@ -6,9 +6,9 @@
 #include "oi_poll.h"
 
 namespace OI { namespace Base {
-int StartFramework(const char* config_path)
+int StartFramework(const char* pConfigPathParam)
 {
-	if (!Config::GlobalMutableConfig().Parse(config_path))
+	if (!Config::GlobalMutableConfig().Parse(pConfigPathParam))
 	{
 		printf("ParseConfigError\n");
 		return -2;

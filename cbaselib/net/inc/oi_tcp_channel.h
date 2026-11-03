@@ -5,7 +5,7 @@ namespace OI { namespace Net {
 class TCP_Channel : public NetChannel
 {
 public:
-	TCP_Channel(NetSocket s, Session* pSession) : NetChannel(s, pSession){}
+	TCP_Channel(NetSocket stTextParam, Session* pSessionParam) : NetChannel(stTextParam, pSessionParam){}
 	virtual ~TCP_Channel() {}
 	virtual void DataIn();
 	virtual void DataOut();

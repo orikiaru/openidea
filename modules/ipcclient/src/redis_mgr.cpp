@@ -12,48 +12,48 @@
 #include <uv.h>
 
 RedisMgr::RedisMgr()
-	: _on(false), _tasks(8), _sync(2), _seconds(10), _timeout_ms(25000), _failed(0), _done(0), _ops(0), _bad(0)
+	: m_bEnabled(false), m_iTaskCount(8), m_iSynchronous(2), m_iSeconds(10), m_iTimeoutMilliseconds(25000), m_iFailed(0), m_iDone(0), m_iOperations(0), m_iBad(0)
 {
 }
 
 void RedisMgr::Load()
 {
-	TryGetConfig("Test.redis", _on);
-	TryGetConfig("TestRedis.tasks", _tasks);
-	TryGetConfig("TestRedis.seconds", _seconds);
-	TryGetConfig("TestRedis.timeout_ms", _timeout_ms);
+	TryGetConfig("Test.redis", m_bEnabled);
+	TryGetConfig("TestRedis.tasks", m_iTaskCount);
+	TryGetConfig("TestRedis.seconds", m_iSeconds);
+	TryGetConfig("TestRedis.timeout_ms", m_iTimeoutMilliseconds);
 }
 
 void RedisMgr::Start()
 {
-	if (!_on)
+	if (!m_bEnabled)
 	{
 		return;
 	}
-	_start = std::chrono::steady_clock::now();
+	m_stStart = std::chrono::steady_clock::now();
 	TestBoard::GetInstance().Arm();
 	coro::StartTask([](coro::Token) {
 		return RedisMgr::GetInstance().Pump();
 	});
 }
 
-static bool StatusIs(const ::OI::Redis::RedisResult& result, const char* text)
+static bool StatusIs(const ::OI::Redis::RedisResult& stResultParam, const char* pTextParam)
 {
-	return !result.timeout && result.reply && result.reply->type == REDIS_REPLY_STATUS
-		&& result.reply->str && std::strcmp(result.reply->str, text) == 0;
+	return !stResultParam.bTimeout && stResultParam.pReply && stResultParam.pReply->type == REDIS_REPLY_STATUS
+		&& stResultParam.pReply->str && std::strcmp(stResultParam.pReply->str, pTextParam) == 0;
 }
 
 coro::Task RedisMgr::Pump()
 {
-	int spins = 0;
-	int limit = _timeout_ms > 0 ? _timeout_ms / 50 : 100;
-	if (limit < 1)
+	int iSpins = 0;
+	int iLimit = m_iTimeoutMilliseconds > 0 ? m_iTimeoutMilliseconds / 50 : 100;
+	if (iLimit < 1)
 	{
-		limit = 1;
+		iLimit = 1;
 	}
 	while (!::OI::Redis::RedisClient::GetInstance().IsConnect())
 	{
-		if (spins++ >= limit)
+		if (iSpins++ >= iLimit)
 		{
 			LOG_TRACE("redis connect timeout");
 			TestBoard::GetInstance().Done(1);
@@ -62,352 +62,352 @@ coro::Task RedisMgr::Pump()
 		co_await coro::yield(50);
 	}
 
-	_failed = 0;
+	m_iFailed = 0;
 	co_await Check();
-	if (_failed)
+	if (m_iFailed)
 	{
-		LOG_TRACE("redis integrity failed=%d", _failed);
+		LOG_TRACE("redis integrity failed=%d", m_iFailed);
 		TestBoard::GetInstance().Done(1);
 		co_return;
 	}
 	LOG_TRACE("redis integrity ok");
-	_start = std::chrono::steady_clock::now();
-	if (_tasks <= 0 || _seconds <= 0)
+	m_stStart = std::chrono::steady_clock::now();
+	if (m_iTaskCount <= 0 || m_iSeconds <= 0)
 	{
 		TestBoard::GetInstance().Done(0);
 		co_return;
 	}
-	_done.store(0);
-	for (int i = 0; i < _tasks; ++i)
+	m_iDone.store(0);
+	for (int iIndexLocal = 0; iIndexLocal < m_iTaskCount; ++iIndexLocal)
 	{
-		coro::StartTask([i](coro::Token) {
-			return RedisMgr::GetInstance().Stress(i);
+		coro::StartTask([iIndexLocal](coro::Token) {
+			return RedisMgr::GetInstance().Stress(iIndexLocal);
 		});
 	}
 #ifdef _SINGLE_THREAD_
 	// 收包只有这一条线程。另开线程再 join，poll 被堵住，同步调用永远等不到回包。
-	for (int i = 0; i < _sync; ++i)
+	for (int iIndexLocal = 0; iIndexLocal < m_iSynchronous; ++iIndexLocal)
 	{
-		SyncStress(i);
+		SyncStress(iIndexLocal);
 	}
 #else
-	std::vector<std::thread> syncs;
-	for (int i = 0; i < _sync; ++i)
+	std::vector<std::thread> vSyncs;
+	for (int iIndexLocal = 0; iIndexLocal < m_iSynchronous; ++iIndexLocal)
 	{
-		syncs.emplace_back(&RedisMgr::SyncStress, this, i);
+		vSyncs.emplace_back(&RedisMgr::SyncStress, this, iIndexLocal);
 	}
-	for (size_t i = 0; i < syncs.size(); ++i)
+	for (size_t iIndexLocal = 0; iIndexLocal < vSyncs.size(); ++iIndexLocal)
 	{
-		syncs[i].join();
+		vSyncs[iIndexLocal].join();
 	}
 #endif
 	co_return;
 }
 
-static bool IntIs(const ::OI::Redis::RedisResult& result, long long n)
+static bool IntIs(const ::OI::Redis::RedisResult& stResultParam, long long iNumberParam)
 {
-	return !result.timeout && result.reply && result.reply->type == REDIS_REPLY_INTEGER && result.reply->integer == n;
+	return !stResultParam.bTimeout && stResultParam.pReply && stResultParam.pReply->type == REDIS_REPLY_INTEGER && stResultParam.pReply->integer == iNumberParam;
 }
 
-static bool BulkIs(const ::OI::Redis::RedisResult& result, const char* text, size_t n)
+static bool BulkIs(const ::OI::Redis::RedisResult& stResultParam, const char* pTextParam, size_t iNumberParam)
 {
-	return !result.timeout && result.reply && result.reply->type == REDIS_REPLY_STRING
-		&& result.reply->len == n && result.reply->str && std::memcmp(result.reply->str, text, n) == 0;
+	return !stResultParam.bTimeout && stResultParam.pReply && stResultParam.pReply->type == REDIS_REPLY_STRING
+		&& stResultParam.pReply->len == iNumberParam && stResultParam.pReply->str && std::memcmp(stResultParam.pReply->str, pTextParam, iNumberParam) == 0;
 }
 
 coro::Task RedisMgr::Check()
 {
-	int32_t pending_limit = 65536;
-	TryGetConfig("RedisClient.max_pending", pending_limit);
-	if (pending_limit == 1)
+	int32_t iPendingLimit = 65536;
+	TryGetConfig("RedisClient.max_pending", iPendingLimit);
+	if (iPendingLimit == 1)
 	{
-		struct Pending { std::atomic<bool> done{false}; ::OI::Redis::RedisResult result; };
-		auto pending = std::make_shared<Pending>();
-		coro::StartTask([pending](coro::Token) -> coro::Task {
-			pending->result = co_await ::OI::Redis::CallRedis({"BLPOP", "oi-limit-empty", "1"});
-			pending->done.store(true, std::memory_order_release);
+		struct Pending { std::atomic<bool> bDone{false}; ::OI::Redis::RedisResult stResult; };
+		auto pPending = std::make_shared<Pending>();
+		coro::StartTask([pPending](coro::Token) -> coro::Task {
+			pPending->stResult = co_await ::OI::Redis::CallRedis({"BLPOP", "oi-limit-empty", "1"});
+			pPending->bDone.store(true, std::memory_order_release);
 		});
-		while (::OI::Redis::RedisClient::GetInstance().PendingCount() == 0 && !pending->done.load(std::memory_order_acquire))
+		while (::OI::Redis::RedisClient::GetInstance().PendingCount() == 0 && !pPending->bDone.load(std::memory_order_acquire))
 			co_await coro::yield(::OI::Timer::Milliseconds(10));
-		auto busy = co_await ::OI::Redis::RedisPing();
-		if (busy.status != ::OI::Redis::RedisStatus::Busy || busy.timeout) ++_failed;
-		while (!pending->done.load(std::memory_order_acquire)) co_await coro::yield(::OI::Timer::Milliseconds(10));
-		if (!pending->result || !pending->result.reply || pending->result.reply->type != REDIS_REPLY_NIL) ++_failed;
-		auto recovered = co_await ::OI::Redis::RedisPing();
-		if (!StatusIs(recovered, "PONG")) ++_failed;
-		LOG_TRACE("redis pending limit bad=%d", _failed);
+		auto stBusy = co_await ::OI::Redis::RedisPing();
+		if (stBusy.iStatus != ::OI::Redis::RedisStatus::Busy || stBusy.bTimeout) ++m_iFailed;
+		while (!pPending->bDone.load(std::memory_order_acquire)) co_await coro::yield(::OI::Timer::Milliseconds(10));
+		if (!pPending->stResult || !pPending->stResult.pReply || pPending->stResult.pReply->type != REDIS_REPLY_NIL) ++m_iFailed;
+		auto stRecovered = co_await ::OI::Redis::RedisPing();
+		if (!StatusIs(stRecovered, "PONG")) ++m_iFailed;
+		LOG_TRACE("redis pending limit bad=%d", m_iFailed);
 		co_return;
 	}
-	auto invalid = co_await ::OI::Redis::CallRedis({});
-	if (invalid.status != ::OI::Redis::RedisStatus::InvalidArgument || invalid.timeout) ++_failed;
-	auto direct = co_await ::OI::Redis::RedisPing();
-	if (!direct || !StatusIs(direct, "PONG")) ++_failed;
-	auto error = co_await ::OI::Redis::CallRedis({"OI_UNKNOWN_COMMAND"});
-	if (error.status != ::OI::Redis::RedisStatus::ServerError || !error.reply || error.timeout) ++_failed;
+	auto stInvalid = co_await ::OI::Redis::CallRedis({});
+	if (stInvalid.iStatus != ::OI::Redis::RedisStatus::InvalidArgument || stInvalid.bTimeout) ++m_iFailed;
+	auto stDirect = co_await ::OI::Redis::RedisPing();
+	if (!stDirect || !StatusIs(stDirect, "PONG")) ++m_iFailed;
+	auto stErrorLocal = co_await ::OI::Redis::CallRedis({"OI_UNKNOWN_COMMAND"});
+	if (stErrorLocal.iStatus != ::OI::Redis::RedisStatus::ServerError || !stErrorLocal.pReply || stErrorLocal.bTimeout) ++m_iFailed;
 
-	std::atomic<int32_t> sync_guard(0);
-	::OI::Net::Poll::GetInstance().CallOnLoop([](void* arg) {
-		auto timer = new uv_timer_t{};
-		timer->data = arg;
-		uv_timer_init(OI::Net::Poll::GetInstance().Loop(), timer);
-		uv_timer_start(timer, [](uv_timer_t* timer) {
-			int32_t checked = -1;
+	std::atomic<int32_t> iSyncGuard(0);
+	::OI::Net::Poll::GetInstance().CallOnLoop([](void* pArgumentParam) {
+		auto pTimer = new uv_timer_t{};
+		pTimer->data = pArgumentParam;
+		uv_timer_init(OI::Net::Poll::GetInstance().Loop(), pTimer);
+		uv_timer_start(pTimer, [](uv_timer_t* pTimerParam) {
+			int32_t iChecked = -1;
 			try { OI::Redis::RedisPingSync(); }
-			catch (const std::logic_error&) { checked = 1; }
-			static_cast<std::atomic<int32_t>*>(timer->data)->store(checked, std::memory_order_release);
-			uv_close(reinterpret_cast<uv_handle_t*>(timer), [](uv_handle_t* handle) {
-				delete reinterpret_cast<uv_timer_t*>(handle);
+			catch (const std::logic_error&) { iChecked = 1; }
+			static_cast<std::atomic<int32_t>*>(pTimerParam->data)->store(iChecked, std::memory_order_release);
+			uv_close(reinterpret_cast<uv_handle_t*>(pTimerParam), [](uv_handle_t* pHandleParam) {
+				delete reinterpret_cast<uv_timer_t*>(pHandleParam);
 			});
 		}, 1, 0);
-	}, &sync_guard);
-	while (sync_guard.load(std::memory_order_acquire) == 0) co_await coro::yield(10);
-	if (sync_guard.load() != 1) ++_failed;
-	::OI::Redis::RedisResult synced = ::OI::Redis::RedisPingSync();
-	if (!StatusIs(synced, "PONG"))
+	}, &iSyncGuard);
+	while (iSyncGuard.load(std::memory_order_acquire) == 0) co_await coro::yield(10);
+	if (iSyncGuard.load() != 1) ++m_iFailed;
+	::OI::Redis::RedisResult stSynced = ::OI::Redis::RedisPingSync();
+	if (!StatusIs(stSynced, "PONG"))
 	{
-		++_failed;
+		++m_iFailed;
 	}
 	// 计数和新建字段的断言依赖空键。上一轮留下的值会让 HSET 返回 0、INCR 从中间开始。
-	auto wiped = co_await ::OI::Redis::CallRedis({"DEL", "rk", "rbin", "rk-missing", "rk-exp", "rh", "rl", "rs", "rk-count"});
-	if (wiped.timeout || !wiped.reply || wiped.reply->type != REDIS_REPLY_INTEGER) ++_failed;
-	::OI::Redis::RedisResult set;
+	auto stWiped = co_await ::OI::Redis::CallRedis({"DEL", "rk", "rbin", "rk-missing", "rk-exp", "rh", "rl", "rs", "rk-count"});
+	if (stWiped.bTimeout || !stWiped.pReply || stWiped.pReply->type != REDIS_REPLY_INTEGER) ++m_iFailed;
+	::OI::Redis::RedisResult stSet;
 	{
-		::OI::Redis::RedisCall call = ::OI::Redis::RedisSet("rk", "hello", set);
-		co_await call;
+		::OI::Redis::RedisCall stCall = ::OI::Redis::RedisSet("rk", "hello", stSet);
+		co_await stCall;
 	}
-	if (!StatusIs(set, "OK"))
+	if (!StatusIs(stSet, "OK"))
 	{
-		++_failed;
+		++m_iFailed;
 	}
-	::OI::Redis::RedisResult get;
+	::OI::Redis::RedisResult stGet;
 	{
-		::OI::Redis::RedisCall call = ::OI::Redis::RedisGet("rk", get);
-		co_await call;
+		::OI::Redis::RedisCall stCall = ::OI::Redis::RedisGet("rk", stGet);
+		co_await stCall;
 	}
-	if (!BulkIs(get, "hello", 5))
+	if (!BulkIs(stGet, "hello", 5))
 	{
-		++_failed;
+		++m_iFailed;
 	}
-	std::string bin("a\0b", 3);
-	::OI::Redis::RedisResult setb;
+	std::string sBin("a\0b", 3);
+	::OI::Redis::RedisResult stSetb;
 	{
-		::OI::Redis::RedisCall call = ::OI::Redis::RedisSet("rbin", bin, setb);
-		co_await call;
+		::OI::Redis::RedisCall stCall = ::OI::Redis::RedisSet("rbin", sBin, stSetb);
+		co_await stCall;
 	}
-	if (!StatusIs(setb, "OK"))
+	if (!StatusIs(stSetb, "OK"))
 	{
-		++_failed;
+		++m_iFailed;
 	}
-	::OI::Redis::RedisResult getb;
+	::OI::Redis::RedisResult stGetb;
 	{
-		::OI::Redis::RedisCall call = ::OI::Redis::RedisGet("rbin", getb);
-		co_await call;
+		::OI::Redis::RedisCall stCall = ::OI::Redis::RedisGet("rbin", stGetb);
+		co_await stCall;
 	}
-	if (!BulkIs(getb, bin.data(), 3))
+	if (!BulkIs(stGetb, sBin.data(), 3))
 	{
-		++_failed;
+		++m_iFailed;
 	}
-	::OI::Redis::RedisResult miss;
+	::OI::Redis::RedisResult stMiss;
 	{
-		::OI::Redis::RedisCall call = ::OI::Redis::RedisGet("rk-missing", miss);
-		co_await call;
+		::OI::Redis::RedisCall stCall = ::OI::Redis::RedisGet("rk-missing", stMiss);
+		co_await stCall;
 	}
-	if (miss.timeout || !miss.reply || miss.reply->type != REDIS_REPLY_NIL)
+	if (stMiss.bTimeout || !stMiss.pReply || stMiss.pReply->type != REDIS_REPLY_NIL)
 	{
-		++_failed;
+		++m_iFailed;
 	}
-	::OI::Redis::RedisResult gone;
+	::OI::Redis::RedisResult stGone;
 	{
-		::OI::Redis::RedisCall call = ::OI::Redis::RedisDel("rk", gone);
-		co_await call;
+		::OI::Redis::RedisCall stCall = ::OI::Redis::RedisDel("rk", stGone);
+		co_await stCall;
 	}
-	if (!IntIs(gone, 1))
+	if (!IntIs(stGone, 1))
 	{
-		++_failed;
+		++m_iFailed;
 	}
-	::OI::Redis::RedisResult exp;
+	::OI::Redis::RedisResult stExp;
 	{
-		::OI::Redis::RedisCall call = ::OI::Redis::RedisSet("rk-exp", "1", exp);
-		co_await call;
+		::OI::Redis::RedisCall stCall = ::OI::Redis::RedisSet("rk-exp", "1", stExp);
+		co_await stCall;
 	}
-	auto ttl = co_await ::OI::Redis::RedisExpire("rk-exp", ::OI::Timer::Seconds(60));
-	if (!IntIs(ttl, 1))
+	auto stTimeToLive = co_await ::OI::Redis::RedisExpire("rk-exp", ::OI::Timer::Seconds(60));
+	if (!IntIs(stTimeToLive, 1))
 	{
-		++_failed;
+		++m_iFailed;
 	}
-	::OI::Redis::RedisResult hset;
+	::OI::Redis::RedisResult stHset;
 	{
-		::OI::Redis::RedisCall call = ::OI::Redis::RedisHSet("rh", "f", "v", hset);
-		co_await call;
+		::OI::Redis::RedisCall stCall = ::OI::Redis::RedisHSet("rh", "f", "v", stHset);
+		co_await stCall;
 	}
-	if (!IntIs(hset, 1))
+	if (!IntIs(stHset, 1))
 	{
-		++_failed;
+		++m_iFailed;
 	}
-	::OI::Redis::RedisResult hget;
+	::OI::Redis::RedisResult stHget;
 	{
-		::OI::Redis::RedisCall call = ::OI::Redis::RedisHGet("rh", "f", hget);
-		co_await call;
+		::OI::Redis::RedisCall stCall = ::OI::Redis::RedisHGet("rh", "f", stHget);
+		co_await stCall;
 	}
-	if (!BulkIs(hget, "v", 1))
+	if (!BulkIs(stHget, "v", 1))
 	{
-		++_failed;
+		++m_iFailed;
 	}
-	::OI::Redis::RedisResult lpush;
+	::OI::Redis::RedisResult stLpush;
 	{
-		::OI::Redis::RedisCall call = ::OI::Redis::RedisLPush("rl", "a", lpush);
-		co_await call;
+		::OI::Redis::RedisCall stCall = ::OI::Redis::RedisLPush("rl", "a", stLpush);
+		co_await stCall;
 	}
-	::OI::Redis::RedisResult lpush2;
+	::OI::Redis::RedisResult stLpush2;
 	{
-		::OI::Redis::RedisCall call = ::OI::Redis::RedisLPush("rl", "b", lpush2);
-		co_await call;
+		::OI::Redis::RedisCall stCall = ::OI::Redis::RedisLPush("rl", "b", stLpush2);
+		co_await stCall;
 	}
-	auto lrange = co_await ::OI::Redis::RedisLRange("rl", 0, 1);
-	if (lrange.timeout || !lrange.reply || lrange.reply->type != REDIS_REPLY_ARRAY || lrange.reply->elements != 2)
+	auto stLrange = co_await ::OI::Redis::RedisLRange("rl", 0, 1);
+	if (stLrange.bTimeout || !stLrange.pReply || stLrange.pReply->type != REDIS_REPLY_ARRAY || stLrange.pReply->elements != 2)
 	{
-		++_failed;
+		++m_iFailed;
 	}
-	::OI::Redis::RedisResult sadd;
+	::OI::Redis::RedisResult stSadd;
 	{
-		::OI::Redis::RedisCall call = ::OI::Redis::RedisSAdd("rs", "m", sadd);
-		co_await call;
+		::OI::Redis::RedisCall stCall = ::OI::Redis::RedisSAdd("rs", "m", stSadd);
+		co_await stCall;
 	}
-	::OI::Redis::RedisResult sismember;
+	::OI::Redis::RedisResult stSismember;
 	{
-		::OI::Redis::RedisCall call = ::OI::Redis::RedisSIsMember("rs", "m", sismember);
-		co_await call;
+		::OI::Redis::RedisCall stCall = ::OI::Redis::RedisSIsMember("rs", "m", stSismember);
+		co_await stCall;
 	}
-	if (!IntIs(sismember, 1))
+	if (!IntIs(stSismember, 1))
 	{
-		++_failed;
+		++m_iFailed;
 	}
-	for (int i = 1; i <= 20; ++i)
+	for (int iIndexLocal = 1; iIndexLocal <= 20; ++iIndexLocal)
 	{
-		::OI::Redis::RedisResult n;
-		::OI::Redis::RedisCall call = ::OI::Redis::RedisIncr("rk-count", n);
-		co_await call;
-		if (!IntIs(n, i))
+		::OI::Redis::RedisResult stNumber;
+		::OI::Redis::RedisCall stCall = ::OI::Redis::RedisIncr("rk-count", stNumber);
+		co_await stCall;
+		if (!IntIs(stNumber, iIndexLocal))
 		{
-			++_failed;
+			++m_iFailed;
 			break;
 		}
 	}
 	// 状态命令必须被代理拒绝；重连后普通命令仍能使用，不能留下事务或切库状态。
-	const char* denied[] = {"SELECT", "MULTI", "CLIENT", "SUBSCRIBE"};
-	for (const char* command : denied)
+	const char* vDenied[] = {"SELECT", "MULTI", "CLIENT", "SUBSCRIBE"};
+	for (const char* pCommand : vDenied)
 	{
-		::OI::Redis::RedisResult rejected;
-		::OI::Redis::RedisCall call = ::OI::Redis::CallRedis({command, "1"}, rejected);
-		co_await call;
-		if (rejected.status != ::OI::Redis::RedisStatus::Disconnected || rejected.timeout) ++_failed;
-		int attempts = 0;
-		while (!::OI::Redis::RedisClient::GetInstance().IsConnect() && attempts++ < 100)
+		::OI::Redis::RedisResult stRejected;
+		::OI::Redis::RedisCall stCall = ::OI::Redis::CallRedis({pCommand, "1"}, stRejected);
+		co_await stCall;
+		if (stRejected.iStatus != ::OI::Redis::RedisStatus::Disconnected || stRejected.bTimeout) ++m_iFailed;
+		int iAttempts = 0;
+		while (!::OI::Redis::RedisClient::GetInstance().IsConnect() && iAttempts++ < 100)
 		{
 			co_await coro::yield(50);
 		}
-		::OI::Redis::RedisResult pong;
-		::OI::Redis::RedisCall check = ::OI::Redis::RedisPing(pong);
-		co_await check;
-		if (!StatusIs(pong, "PONG")) ++_failed;
+		::OI::Redis::RedisResult stPong;
+		::OI::Redis::RedisCall stCheck = ::OI::Redis::RedisPing(stPong);
+		co_await stCheck;
+		if (!StatusIs(stPong, "PONG")) ++m_iFailed;
 	}
 	co_return;
 }
 
 void RedisMgr::NoteDone()
 {
-	int total = _tasks + _sync;
-	if (total < 1)
+	int iTotal = m_iTaskCount + m_iSynchronous;
+	if (iTotal < 1)
 	{
-		total = 1;
+		iTotal = 1;
 	}
-	if (_done.fetch_add(1) + 1 != total)
+	if (m_iDone.fetch_add(1) + 1 != iTotal)
 	{
 		return;
 	}
-	long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-		std::chrono::steady_clock::now() - _start).count();
-	if (ms < 1)
+	long long iMillisecondsLocal = std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::steady_clock::now() - m_stStart).count();
+	if (iMillisecondsLocal < 1)
 	{
-		ms = 1;
+		iMillisecondsLocal = 1;
 	}
-	long long ops = _ops.load();
-	int bad = _bad.load();
+	long long iOperations = m_iOperations.load();
+	int iBadLocal = m_iBad.load();
 	LOG_TRACE("redis stress tasks=%d sync=%d ops=%lld ms=%lld rate=%lld/s bad=%d",
-		_tasks, _sync, ops, ms, ops * 1000 / ms, bad);
-	TestBoard::GetInstance().Done(bad == 0 ? 0 : 1);
+		m_iTaskCount, m_iSynchronous, iOperations, iMillisecondsLocal, iOperations * 1000 / iMillisecondsLocal, iBadLocal);
+	TestBoard::GetInstance().Done(iBadLocal == 0 ? 0 : 1);
 }
 
-void RedisMgr::SyncStress(int id)
+void RedisMgr::SyncStress(int iIdParam)
 {
-	std::string key = "sync:" + std::to_string(id);
-	auto end = _start + std::chrono::seconds(_seconds);
-	while (std::chrono::steady_clock::now() < end)
+	std::string sKey = "sync:" + std::to_string(iIdParam);
+	auto stEnd = m_stStart + std::chrono::seconds(m_iSeconds);
+	while (std::chrono::steady_clock::now() < stEnd)
 	{
-		::OI::Redis::RedisResult put = ::OI::Redis::RedisSetSync(key, "s");
-		::OI::Redis::RedisResult got = ::OI::Redis::RedisGetSync(key);
-		if (!StatusIs(put, "OK") || !BulkIs(got, "s", 1))
+		::OI::Redis::RedisResult stPut = ::OI::Redis::RedisSetSync(sKey, "s");
+		::OI::Redis::RedisResult stGot = ::OI::Redis::RedisGetSync(sKey);
+		if (!StatusIs(stPut, "OK") || !BulkIs(stGot, "s", 1))
 		{
-			_bad.fetch_add(1);
+			m_iBad.fetch_add(1);
 		}
 		else
 		{
-			_ops.fetch_add(2);
+			m_iOperations.fetch_add(2);
 		}
 	}
 	NoteDone();
 }
 
-coro::Task RedisMgr::Stress(int id)
+coro::Task RedisMgr::Stress(int iIdParam)
 {
-	std::string value(64, 'x');
-	std::string hash = "h:" + std::to_string(id);
-	std::string list = "l:" + std::to_string(id);
-	auto end = _start + std::chrono::seconds(_seconds);
-	int seq = 0;
-	int kind = id % 4;
-	while (std::chrono::steady_clock::now() < end)
+	std::string sValueLocal(64, 'x');
+	std::string sHash = "h:" + std::to_string(iIdParam);
+	std::string sList = "l:" + std::to_string(iIdParam);
+	auto stEnd = m_stStart + std::chrono::seconds(m_iSeconds);
+	int iSequence = 0;
+	int iKind = iIdParam % 4;
+	while (std::chrono::steady_clock::now() < stEnd)
 	{
-		std::string key = "k:" + std::to_string(id) + ":" + std::to_string(seq % 256);
-		std::string member = std::to_string(seq % 32);
-		++seq;
-		::OI::Redis::RedisResult result;
-		bool ok = false;
-		if (kind == 0)
+		std::string sKey = "k:" + std::to_string(iIdParam) + ":" + std::to_string(iSequence % 256);
+		std::string sMember = std::to_string(iSequence % 32);
+		++iSequence;
+		::OI::Redis::RedisResult stResultLocal;
+		bool bOk = false;
+		if (iKind == 0)
 		{
-			result = co_await ::OI::Redis::RedisSet(key, value);
-			ok = StatusIs(result, "OK");
+			stResultLocal = co_await ::OI::Redis::RedisSet(sKey, sValueLocal);
+			bOk = StatusIs(stResultLocal, "OK");
 		}
-		else if (kind == 1)
+		else if (iKind == 1)
 		{
-			result = co_await ::OI::Redis::RedisHSet(hash, member, value);
-			ok = IntIs(result, 0) || IntIs(result, 1);
+			stResultLocal = co_await ::OI::Redis::RedisHSet(sHash, sMember, sValueLocal);
+			bOk = IntIs(stResultLocal, 0) || IntIs(stResultLocal, 1);
 		}
-		else if (kind == 2)
+		else if (iKind == 2)
 		{
-			result = co_await ::OI::Redis::RedisLPush(list, member);
-			ok = !result.timeout && result.reply && result.reply->type == REDIS_REPLY_INTEGER;
-			if (ok && (seq % 16) == 0)
+			stResultLocal = co_await ::OI::Redis::RedisLPush(sList, sMember);
+			bOk = !stResultLocal.bTimeout && stResultLocal.pReply && stResultLocal.pReply->type == REDIS_REPLY_INTEGER;
+			if (bOk && (iSequence % 16) == 0)
 			{
-				auto trim = co_await ::OI::Redis::RedisLTrim(list, 0, 15);
-				if (!StatusIs(trim, "OK"))
+				auto stTrim = co_await ::OI::Redis::RedisLTrim(sList, 0, 15);
+				if (!StatusIs(stTrim, "OK"))
 				{
-					ok = false;
+					bOk = false;
 				}
 			}
 		}
 		else
 		{
-			result = co_await ::OI::Redis::RedisIncr(key);
-			ok = !result.timeout && result.reply && result.reply->type == REDIS_REPLY_INTEGER;
+			stResultLocal = co_await ::OI::Redis::RedisIncr(sKey);
+			bOk = !stResultLocal.bTimeout && stResultLocal.pReply && stResultLocal.pReply->type == REDIS_REPLY_INTEGER;
 		}
-		if (!ok)
+		if (!bOk)
 		{
-			_bad.fetch_add(1);
+			m_iBad.fetch_add(1);
 		}
 		else
 		{
-			_ops.fetch_add(1);
+			m_iOperations.fetch_add(1);
 		}
 	}
 	NoteDone();

@@ -76,3 +76,25 @@ Redis 也单独测。开关是 `[Test] redis`。先起本机 Redis（`maxmemory 
 | 端口、复用、bind、TIME_WAIT、监听 | `docs/cbaselib.md` 的 net 段 | `cbaselib/port/oi_net_os.cpp` 的 `NetOs_Bind` |
 | Web、HTTP、JSON、urlencode、二进制 body | `docs/module.md` 的 Web 段 | `modules/webserver` 的四个路径；`modules/webclient` 的 `Run` |
 
+
+# 字段、参数和局部变量命名规范
+
+适用于自有 C++ 类成员、普通函数/方法的参数和局部变量。类的私有成员（含静态成员）使用 `m_` + 类型前缀 + 大驼峰业务词；公开/保护成员、参数和局部变量使用类型前缀 + 大驼峰业务词。`struct`、`rpcdata` 成员保留现状，不加 `m_`；生成协议代码的参数和局部变量不参与本轮规范化。第三方库、系统 ABI、标准库固定接口、函数名、类型名、枚举项和宏名不在本条范围内。
+
+- 类型前缀示例：`iCount`、`vRewardList`、`mItems`、`stBaseInfo`、`sName`、`bIsActive`。私有成员示例：`m_iCount`、`m_sName`、`m_stMutex`；不保留其他旧式前导下划线。
+- 普通参数加 `Param` 后缀，如 `iCountParam`；局部变量如 `iCount`、`stIterator`。RPC 宏固定参数名为 `stRequest`、`stResponse`，需要上下文时为 `stContext`。
+- 整数（含定宽整数、size_t、ID、计数、枚举值）用 `i`；vector 用 `v`；map 用 `m`；结构体/类值对象用 `st`；string 用 `s`；bool 用 `b`。
+- 补充类型：float 用 `f`，double 用 `d`；裸指针/智能指针用 `p`；函数指针/可调用对象用 `fn`；array/list/deque/set 等容器沿用 `v`，unordered_map 等映射沿用 `m`。atomic 按内部值类型命名，引用按被引用类型命名。
+- 模板中的未知值类型、optional、迭代器、时间点、协程句柄、锁等值对象用 `st`，不得凭变量名猜成指针或整数。
+- 见名知意，避免单字母和不明确缩写；时间字段写出单位（如 `iTimeoutMilliseconds`），业务词汇沿用项目约定，阵容统一使用 `Arrange`。
+- 开发和修改代码前阅读并遵守 [关键规则](docs/09-key-rules.md)，业务词汇按其中第 9 节执行。
+- 修改字段时同步修改定义、构造初始化、访问点、协议源文件、生成器和文档；不要只改生成产物。
+- 二进制协议字段号不随命名变化。已有配置键和外部 JSON 键保持兼容，协议可用 `json 原键名` 指定 JSON 名称。
+- 去掉旧下划线后检查参数/局部变量遮蔽成员，尤其 setter 不能变成自赋值；参数/局部变量与成员同名时改用 `Param` / `Local` 后缀，不用 `this->` 掩盖遮蔽。重命名必须跑真实收发回归，不能只看编译。
+- 命名检查：`python3 tools/test_field_names.py`；C++ 成员/参数/局部变量扫描使用安装了 libclang 的 Python 运行 `tools/check_field_names.py --build-dir ~/openidea-build-gcc13`。完整回归使用 `python3 tools/run_regressions.py --case all`，单、多线程分别跑，包含原四类测试以及注册发现、Web 收发。
+
+# 容器遍历与迭代器
+
+- 不需要删除元素、位置操作或手动推进时，使用范围 for：只读 `const auto&`，修改元素 `auto&`；map 优先使用引用结构化绑定。
+- 迭代器属于特殊命名，允许 `it`、`nextIt` 等不带类型前缀；解引用得到的元素和结构化绑定按实际类型命名，例如 `const auto& [sKey, stValue]`。
+- 需要 erase 后继续、迭代器位置或 JSON 成员名等迭代器专属接口时保留显式迭代，声明用 `auto`；不得为了改范围 for 改变遍历/删除语义。

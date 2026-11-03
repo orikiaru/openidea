@@ -9,20 +9,20 @@ namespace OI { namespace RpcData {
 class RegHeartbeat : public ::OI::Rpc::RpcData
 {
 public:
-    std::string name{};
-    int32_t id{};
+    std::string sName{};
+    int32_t iId{};
     
     explicit RegHeartbeat (){}
     RegHeartbeat ( const std::string & l_name, const int32_t & l_id )
     {
-        name = l_name;
-        id = l_id;
+        sName = l_name;
+        iId = l_id;
         
     }
     virtual ::OI::Base::BytesStream& serialize(::OI::Base::BytesStream& os) const
     {
-        os.WritePb(0, name);
-        os.WritePb(1, id);
+        os.WritePb(0, sName);
+        os.WritePb(1, iId);
         return os;
     }
     virtual ::OI::Base::BytesStream& deserialize(::OI::Base::BytesStream& os)
@@ -34,8 +34,8 @@ public:
             os.ReadPbHeader(field_seq, field_size);
             switch (field_seq)
             {
-            case 0: os.ReadPb(field_size, name); break;
-            case 1: os.ReadPb(field_size, id); break;
+            case 0: os.ReadPb(field_size, sName); break;
+            case 1: os.ReadPb(field_size, iId); break;
             default: os.SkipPb(field_size); break;
             }
         }
@@ -44,8 +44,8 @@ public:
     bool FromJson(const Json::Value& in)
     {
         if (!in.isObject()) return false;
-        if (in.isMember("name") && !::OI::Rpc::FromJsonValue(in["name"], name)) return false;
-        if (in.isMember("id") && !::OI::Rpc::FromJsonValue(in["id"], id)) return false;
+        if (in.isMember("name") && !::OI::Rpc::FromJsonValue(in["name"], sName)) return false;
+        if (in.isMember("id") && !::OI::Rpc::FromJsonValue(in["id"], iId)) return false;
         return true;
     }
     bool FromJson(const std::string& text)
@@ -61,8 +61,8 @@ public:
     void ToJson(Json::Value& out) const
     {
         out = Json::Value(Json::objectValue);
-        ::OI::Rpc::ToJsonValue(out["name"], name);
-        ::OI::Rpc::ToJsonValue(out["id"], id);
+        ::OI::Rpc::ToJsonValue(out["name"], sName);
+        ::OI::Rpc::ToJsonValue(out["id"], iId);
     }
     std::string ToJson() const
     {

@@ -57,7 +57,7 @@ Redis 连不上或卡住时，登记和续期回失败，客户端下一次心�
 
 不能从框架里删。一个监听进程上同时有多条连接，回包、断连、Redis 把命令转回哪个客户端，都靠 `SessionManager::SendBytes(sid)` 这张表区分。
 
-客户端本来就是一条连接一个 `_ssid`。业务里的 `RpcCall(mgr, sid, ...)` 可以收成按服务名调用，sid 留在管理器内部。服务端处理函数如果只填回包，签名里也可以不再出现 sid；`RunHandledRpc` 发回包时自己还拿着它。`redisserver` 的 `Issue` / `OnReply` 把 sid 当成「这条客户端连接」用，这块拿不掉。
+客户端本来就是一条连接一个 `iSessionId`。业务里的 `RpcCall(mgr, sid, ...)` 可以收成按服务名调用，sid 留在管理器内部。服务端处理函数如果只填回包，签名里也可以不再出现 sid；`RunHandledRpc` 发回包时自己还拿着它。`redisserver` 的 `Issue` / `OnReply` 把 sid 当成「这条客户端连接」用，这块拿不掉。
 
 同一服务名有多份实例时，靠下面的全局服和分区服区分，不是把 sid 删掉。
 
@@ -87,8 +87,8 @@ Redis 连不上或卡住时，登记和续期回失败，客户端下一次心�
 
 ```cpp
 Handle<AllEchoReq, AllEchoRes>([](AllEchoReq& req, AllEchoRes& res) -> coro::Task {
-    res.data = req.data;
-    res.code = 1;
+    res.stData = req.stData;
+    res.iCode = 1;
     co_return;
 });
 ```

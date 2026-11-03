@@ -3,89 +3,89 @@
 // rpcdata 名字后面加 key，才生成比较器，才能当 map 键。这种结构不生成 JSON。
 
 rpcdata Inner {
-    0 int32_t n;
-    1 string s;
+    0 int32_t iNumber json n;
+    1 string sText json s;
 }
 
 rpcdata EchoKeyPart key {
-    0 int32_t n;
+    0 int32_t iNumber json n;
 }
 
 rpcdata EchoKey key {
-    0 EchoKeyPart part;
-    1 string name;
+    0 EchoKeyPart stPart json part;
+    1 string sName json name;
 }
 
 rpcdata AllTypesData {
-    0 int8_t c;
-    1 int16_t s;
-    2 int32_t i;
-    3 int64_t l;
-    4 int64_t i64;
-    5 float f;
-    6 double d;
-    7 Bytes raw;
-    8 string msg;
-    9 vector<int32_t> nums;
-    10 vector<string> words;
-    11 Inner child;
-    12 vector<Inner> children;
-    13 map<int32_t, string> table;
-    14 map<string, Inner> named;
-    15 uint8_t u8;
-    16 uint16_t u16;
-    17 uint32_t u32;
-    18 uint64_t u64;
-    19 vector<uint64_t> unums;
-    20 int32_t gap;
-    21 map<uint32_t, string> utable;
-    22 map<uint64_t, string> ubig;
-    23 map<EchoKey, string> keyed;
+    0 int8_t iInt8 json c;
+    1 int16_t iInt16 json s;
+    2 int32_t iInt32 json i;
+    3 int64_t iInt64 json l;
+    4 int64_t iAlternateInt64 json i64;
+    5 float fFloat json f;
+    6 double dDouble json d;
+    7 Bytes stRawData json raw;
+    8 string sMessage json msg;
+    9 vector<int32_t> vNumbers json nums;
+    10 vector<string> vWords json words;
+    11 Inner stChild json child;
+    12 vector<Inner> vChildren json children;
+    13 map<int32_t, string> mTable json table;
+    14 map<string, Inner> mNamed json named;
+    15 uint8_t iUnsigned8 json u8;
+    16 uint16_t iUnsigned16 json u16;
+    17 uint32_t iUnsigned32 json u32;
+    18 uint64_t iUnsigned64 json u64;
+    19 vector<uint64_t> vUnsignedNumbers json unums;
+    20 int32_t iGap json gap;
+    21 map<uint32_t, string> mUnsignedTable json utable;
+    22 map<uint64_t, string> mLargeUnsignedTable json ubig;
+    23 map<EchoKey, string> mKeyed json keyed;
 }
 
 rpcdata AllEchoReq {
-    0 AllTypesData data;
+    0 AllTypesData stData json data;
 }
 
 rpcdata AllEchoRes {
-    0 AllTypesData data;
-    1 int32_t code;
+    0 AllTypesData stData json data;
+    1 int32_t iCode json code;
 }
 
 rpcdata HoldReq {
-    0 int32_t delay_ms;
-    1 int32_t mark;
+    0 int32_t iDelayMilliseconds json delay_ms;
+    1 int32_t iMark json mark;
 }
 
 rpcdata HoldRes {
-    0 int32_t mark;
+    0 int32_t iMark json mark;
 }
 
 // JSON 能表达的全量结构。结构当 map 键的字段不在这里。
 rpcdata JsonAll {
-    0 int8_t c;
-    1 int16_t s;
-    2 int32_t i;
-    3 int64_t l;
-    4 int64_t i64;
-    5 float f;
-    6 double d;
-    7 Bytes raw;
-    8 string msg;
-    9 vector<int32_t> nums;
-    10 vector<string> words;
-    11 Inner child;
-    12 vector<Inner> children;
-    13 map<int32_t, string> table;
-    14 map<string, Inner> named;
-    15 uint8_t u8;
-    16 uint16_t u16;
-    17 uint32_t u32;
-    18 uint64_t u64;
-    19 vector<uint64_t> unums;
-    20 int32_t gap;
-    21 map<uint32_t, string> utable;
-    22 map<uint64_t, string> ubig;
+    0 int8_t iInt8 json c;
+    1 int16_t iInt16 json s;
+    2 int32_t iInt32 json i;
+    3 int64_t iInt64 json l;
+    4 int64_t iAlternateInt64 json i64;
+    5 float fFloat json f;
+    6 double dDouble json d;
+    7 Bytes stRawData json raw;
+    8 string sMessage json msg;
+    9 vector<int32_t> vNumbers json nums;
+    10 vector<string> vWords json words;
+    11 Inner stChild json child;
+    12 vector<Inner> vChildren json children;
+    13 map<int32_t, string> mTable json table;
+    14 map<string, Inner> mNamed json named;
+    15 uint8_t iUnsigned8 json u8;
+    16 uint16_t iUnsigned16 json u16;
+    17 uint32_t iUnsigned32 json u32;
+    18 uint64_t iUnsigned64 json u64;
+    19 vector<uint64_t> vUnsignedNumbers json unums;
+    20 int32_t iGap json gap;
+    21 map<uint32_t, string> mUnsignedTable json utable;
+    22 map<uint64_t, string> mLargeUnsignedTable json ubig;
 }
 
 // 请求和回复共用一个协议号。调用号最高位区分请求和回包。

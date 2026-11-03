@@ -3,32 +3,32 @@
 #include <system_error>
 
 namespace OI { namespace File {
-bool Exists(const std::string& path)
+bool Exists(const std::string& sPathParam)
 {
-	if (path.empty())
+	if (sPathParam.empty())
 	{
 		return false;
 	}
-	std::error_code ec;
-	return std::filesystem::exists(path, ec) && !ec;
+	std::error_code stEc;
+	return std::filesystem::exists(sPathParam, stEc) && !stEc;
 }
 
-bool MakeDirs(const std::string& path)
+bool MakeDirs(const std::string& sPathParam)
 {
-	if (path.empty())
+	if (sPathParam.empty())
 	{
 		return false;
 	}
-	std::error_code ec;
-	if (std::filesystem::is_directory(path, ec))
+	std::error_code stEc;
+	if (std::filesystem::is_directory(sPathParam, stEc))
 	{
 		return true;
 	}
-	std::filesystem::create_directories(path, ec);
-	if (ec)
+	std::filesystem::create_directories(sPathParam, stEc);
+	if (stEc)
 	{
 		return false;
 	}
-	return std::filesystem::is_directory(path, ec);
+	return std::filesystem::is_directory(sPathParam, stEc);
 }
 }}

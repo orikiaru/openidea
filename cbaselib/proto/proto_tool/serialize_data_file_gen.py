@@ -169,7 +169,7 @@ __COMPARE____JSON_METHODS__};
         lines.append("    {")
         lines.append("        if (!in.isObject()) return false;")
         for m in self.data.members:
-            lines.append('        if (in.isMember("%s") && !::OI::Rpc::FromJsonValue(in["%s"], %s)) return false;' % (m.name, m.name, m.name))
+            lines.append('        if (in.isMember("%s") && !::OI::Rpc::FromJsonValue(in["%s"], %s)) return false;' % (m.json_name or m.name, m.json_name or m.name, m.name))
         lines.append("        return true;")
         lines.append("    }")
         lines.append("    bool FromJson(const std::string& text)")
@@ -186,7 +186,7 @@ __COMPARE____JSON_METHODS__};
         lines.append("    {")
         lines.append("        out = Json::Value(Json::objectValue);")
         for m in self.data.members:
-            lines.append('        ::OI::Rpc::ToJsonValue(out["%s"], %s);' % (m.name, m.name))
+            lines.append('        ::OI::Rpc::ToJsonValue(out["%s"], %s);' % (m.json_name or m.name, m.name))
         lines.append("    }")
         lines.append("    std::string ToJson() const")
         lines.append("    {")

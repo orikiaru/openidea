@@ -10,11 +10,11 @@ class LogClient : public ::OI::Rpc::ProtoClientManager
 public:
 	virtual ~LogClient();
 	bool Init();
-	bool SendLog(int level, const char* text, size_t text_len);
+	bool SendLog(int iLevelParam, const char* pTextParam, size_t iTextLengthParam);
 	virtual const std::string GetIDString() { return "LogClient"; }
 private:
 	virtual ::OI::Net::Session* CloneSession() { return new LogClientSession(this); }	//自定制回话类型
-	virtual void OnClientConnect(::OI::Net::Session* pSession);
-	virtual void OnClientDisconnect(const ::OI::Net::Session* pSession);
+	virtual void OnClientConnect(::OI::Net::Session* pSessionParam);
+	virtual void OnClientDisconnect(const ::OI::Net::Session* pSessionParam);
 };
 }}

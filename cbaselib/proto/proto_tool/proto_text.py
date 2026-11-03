@@ -123,10 +123,15 @@ def ParseRpcData(lex):
             return None
         typ = ParseType(lex)
         field = lex.ident()
-        if typ is None or field is None or not lex.punct(";"):
+        json_name = field
+        if lex.peek_ident() == "json":
+            lex.ident()
+            json_name = lex.ident()
+        if typ is None or field is None or json_name is None or not lex.punct(";"):
             return None
         member = ClassMember()
         member.name = field
+        member.json_name = json_name
         member.type = typ
         member.seq = seq
         for old in data.members:

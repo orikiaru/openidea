@@ -9,13 +9,13 @@ class SessionManager;
 class NetHelper
 {
 public:
-	static bool CreateSocket(NetSocket& socket, SessionManager* pMgr, bool async);
-	static bool SocketBind(NetSocket& sid, SessionManager* pMgr);
-	static bool SocketListen(NetSocket& sid, SessionManager* pMgr);
-	static bool SocketListenAndBind(NetSocket& sid, SessionManager* pMgr);
-	static bool SocketConnect(NetSocket& sid, SessionManager* pMgr);
+	static bool CreateSocket(NetSocket& stSocketParam, SessionManager* pMgrParam, bool bAsyncParam);
+	static bool SocketBind(NetSocket& stSessionIdParam, SessionManager* pMgrParam);
+	static bool SocketListen(NetSocket& stSessionIdParam, SessionManager* pMgrParam);
+	static bool SocketListenAndBind(NetSocket& stSessionIdParam, SessionManager* pMgrParam);
+	static bool SocketConnect(NetSocket& stSessionIdParam, SessionManager* pMgrParam);
 	//accept一个套接字,返回-1失败,返回0说明没有可接受的了
-	static int SocketAcceptOne(NetSocket& sid, SessionManager* pMgr);
-	static NetAddr GetNetAddr(SessionManager* pMgr);
+	static int SocketAcceptOne(NetSocket& stSessionIdParam, SessionManager* pMgrParam);
+	static NetAddr GetNetAddr(SessionManager* pMgrParam);
 };
 }}

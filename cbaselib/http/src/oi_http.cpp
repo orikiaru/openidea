@@ -18,45 +18,45 @@ namespace
 const size_t kMaxHeader = 65536;
 const size_t kMaxBody = 8 * 1024 * 1024;
 
-std::string EncodeQuery(const std::string& value)
+std::string EncodeQuery(const std::string& sValueParam)
 {
-	static const char* hex = "0123456789ABCDEF";
-	std::string out;
-	out.reserve(value.size());
-	for (size_t i = 0; i < value.size(); ++i)
+	static const char* pHex = "0123456789ABCDEF";
+	std::string sOutput;
+	sOutput.reserve(sValueParam.size());
+	for (size_t iIndexLocal = 0; iIndexLocal < sValueParam.size(); ++iIndexLocal)
 	{
-		unsigned char c = (unsigned char)value[i];
-		bool plain = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
-			|| c == '-' || c == '_' || c == '.' || c == '!' || c == '~' || c == '*' || c == '\'' || c == '(' || c == ')';
-		if (plain)
+		unsigned char iCharacter = (unsigned char)sValueParam[iIndexLocal];
+		bool bPlain = (iCharacter >= 'a' && iCharacter <= 'z') || (iCharacter >= 'A' && iCharacter <= 'Z') || (iCharacter >= '0' && iCharacter <= '9')
+			|| iCharacter == '-' || iCharacter == '_' || iCharacter == '.' || iCharacter == '!' || iCharacter == '~' || iCharacter == '*' || iCharacter == '\'' || iCharacter == '(' || iCharacter == ')';
+		if (bPlain)
 		{
-			out.push_back((char)c);
+			sOutput.push_back((char)iCharacter);
 		}
 		else
 		{
-			out.push_back('%');
-			out.push_back(hex[c >> 4]);
-			out.push_back(hex[c & 15]);
+			sOutput.push_back('%');
+			sOutput.push_back(pHex[iCharacter >> 4]);
+			sOutput.push_back(pHex[iCharacter & 15]);
 		}
 	}
-	return out;
+	return sOutput;
 }
 
-bool EqName(const std::string& text, size_t pos, size_t end, const char* name)
+bool EqName(const std::string& sTextParam, size_t iPositionParam, size_t iEndParam, const char* pNameParam)
 {
-	size_t n = std::strlen(name);
-	if (pos + n > end)
+	size_t iNumber = std::strlen(pNameParam);
+	if (iPositionParam + iNumber > iEndParam)
 	{
 		return false;
 	}
-	for (size_t i = 0; i < n; ++i)
+	for (size_t iIndexLocal = 0; iIndexLocal < iNumber; ++iIndexLocal)
 	{
-		char c = text[pos + i];
-		if (c >= 'A' && c <= 'Z')
+		char iCharacter = sTextParam[iPositionParam + iIndexLocal];
+		if (iCharacter >= 'A' && iCharacter <= 'Z')
 		{
-			c = (char)(c - 'A' + 'a');
+			iCharacter = (char)(iCharacter - 'A' + 'a');
 		}
-		if (c != name[i])
+		if (iCharacter != pNameParam[iIndexLocal])
 		{
 			return false;
 		}
@@ -64,64 +64,64 @@ bool EqName(const std::string& text, size_t pos, size_t end, const char* name)
 	return true;
 }
 
-bool ParseU64(const std::string& text, size_t pos, size_t end, uint64_t& out)
+bool ParseU64(const std::string& sTextParam, size_t iPositionParam, size_t iEndParam, uint64_t& iOutputParam)
 {
-	if (pos >= end || text[pos] < '0' || text[pos] > '9')
+	if (iPositionParam >= iEndParam || sTextParam[iPositionParam] < '0' || sTextParam[iPositionParam] > '9')
 	{
 		return false;
 	}
-	uint64_t value = 0;
-	for (size_t i = pos; i < end; ++i)
+	uint64_t iValue = 0;
+	for (size_t iIndexLocal = iPositionParam; iIndexLocal < iEndParam; ++iIndexLocal)
 	{
-		char c = text[i];
-		if (c < '0' || c > '9')
+		char iCharacter = sTextParam[iIndexLocal];
+		if (iCharacter < '0' || iCharacter > '9')
 		{
 			break;
 		}
-		if (value > (UINT64_MAX - 9) / 10)
+		if (iValue > (UINT64_MAX - 9) / 10)
 		{
 			return false;
 		}
-		value = value * 10 + (uint64_t)(c - '0');
+		iValue = iValue * 10 + (uint64_t)(iCharacter - '0');
 	}
-	out = value;
+	iOutputParam = iValue;
 	return true;
 }
 
 // chunk 行里分号后面是扩展，忽略。
-bool ParseHex(const std::string& text, size_t pos, size_t end, uint64_t& out)
+bool ParseHex(const std::string& sTextParam, size_t iPositionParam, size_t iEndParam, uint64_t& iOutputParam)
 {
-	uint64_t value = 0;
-	size_t digits = 0;
-	for (size_t i = pos; i < end; ++i)
+	uint64_t iValue = 0;
+	size_t iDigits = 0;
+	for (size_t iIndexLocal = iPositionParam; iIndexLocal < iEndParam; ++iIndexLocal)
 	{
-		char c = text[i];
-		int d = -1;
-		if (c >= '0' && c <= '9')
+		char iCharacter = sTextParam[iIndexLocal];
+		int iD = -1;
+		if (iCharacter >= '0' && iCharacter <= '9')
 		{
-			d = c - '0';
+			iD = iCharacter - '0';
 		}
-		else if (c >= 'a' && c <= 'f')
+		else if (iCharacter >= 'a' && iCharacter <= 'f')
 		{
-			d = c - 'a' + 10;
+			iD = iCharacter - 'a' + 10;
 		}
-		else if (c >= 'A' && c <= 'F')
+		else if (iCharacter >= 'A' && iCharacter <= 'F')
 		{
-			d = c - 'A' + 10;
+			iD = iCharacter - 'A' + 10;
 		}
-		if (d < 0)
+		if (iD < 0)
 		{
 			break;
 		}
-		if (value > (UINT64_MAX >> 4))
+		if (iValue > (UINT64_MAX >> 4))
 		{
 			return false;
 		}
-		value = (value << 4) | (uint64_t)d;
-		digits += 1;
+		iValue = (iValue << 4) | (uint64_t)iD;
+		iDigits += 1;
 	}
-	out = value;
-	return digits > 0;
+	iOutputParam = iValue;
+	return iDigits > 0;
 }
 }
 
@@ -134,49 +134,49 @@ struct Call::State
 		PHASE_READ = 2,
 	};
 
-	std::string host;
-	int32_t port;
-	int32_t timeout_ms;
-	std::string request;
-	std::string incoming;
-	std::string body;
-	std::string error;
-	size_t sent;
-	size_t header_bytes;
-	uint64_t content_length;
-	int32_t status;
-	int32_t phase;
-	bool headers_ready;
-	bool has_length;
-	bool chunked;
-	size_t chunk_pos;
-	bool failed;
-	bool in_io;
-	net_socket_t fd;
-	HttpChannel* channel;
-	std::coroutine_handle<> handle;
-	std::atomic<int32_t> done;
-	std::atomic<int32_t> woke;
+	std::string sHost;
+	int32_t iPort;
+	int32_t iTimeoutMilliseconds;
+	std::string sRequest;
+	std::string sIncoming;
+	std::string sBody;
+	std::string sError;
+	size_t iSent;
+	size_t iHeaderBytes;
+	uint64_t iContentLength;
+	int32_t iStatus;
+	int32_t iPhase;
+	bool bHeadersReady;
+	bool bHasLength;
+	bool bChunked;
+	size_t iChunkPosition;
+	bool bFailed;
+	bool bInIo;
+	net_socket_t iDescriptor;
+	HttpChannel* pChannel;
+	std::coroutine_handle<> stHandle;
+	std::atomic<int32_t> iDone;
+	std::atomic<int32_t> iWoke;
 	// Call、超时定时器、域名解析各持一份。定时器不能取消，请求结束后它还会来。
-	std::atomic<int32_t> refs;
-	uv_getaddrinfo_t dns;
+	std::atomic<int32_t> iReferences;
+	uv_getaddrinfo_t stDns;
 
 	State()
-		: port(0), timeout_ms(5000), sent(0), header_bytes(0), content_length(0), status(0), phase(PHASE_CONNECT),
-		headers_ready(false), has_length(false), chunked(false), chunk_pos(0), failed(false), in_io(false),
-		fd(INVALID_SOCKET_ID), channel(NULL), handle(), done(0), woke(0), refs(1)
+		: iPort(0), iTimeoutMilliseconds(5000), iSent(0), iHeaderBytes(0), iContentLength(0), iStatus(0), iPhase(PHASE_CONNECT),
+		bHeadersReady(false), bHasLength(false), bChunked(false), iChunkPosition(0), bFailed(false), bInIo(false),
+		iDescriptor(INVALID_SOCKET_ID), pChannel(NULL), stHandle(), iDone(0), iWoke(0), iReferences(1)
 	{
 	}
 	~State();
 
 	void Retain()
 	{
-		refs.fetch_add(1);
+		iReferences.fetch_add(1);
 	}
 
 	void Release()
 	{
-		if (refs.fetch_sub(1) == 1)
+		if (iReferences.fetch_sub(1) == 1)
 		{
 			delete this;
 		}
@@ -184,13 +184,13 @@ struct Call::State
 
 	void Wake()
 	{
-		if (woke.exchange(1) != 0)
+		if (iWoke.exchange(1) != 0)
 		{
 			return;
 		}
-		if (handle)
+		if (stHandle)
 		{
-			coro::Schedule(handle);
+			coro::Schedule(stHandle);
 		}
 	}
 
@@ -198,11 +198,11 @@ struct Call::State
 
 	void Complete()
 	{
-		if (done.exchange(1) != 0)
+		if (iDone.exchange(1) != 0)
 		{
 			return;
 		}
-		if (in_io)
+		if (bInIo)
 		{
 			return;
 		}
@@ -210,92 +210,92 @@ struct Call::State
 		Wake();
 	}
 
-	void Fail(const char* why)
+	void Fail(const char* pWhyParam)
 	{
 		// 都在 poll 线程上调。已经收完的结果不能被晚到的超时改掉。
-		if (done.load() != 0)
+		if (iDone.load() != 0)
 		{
 			return;
 		}
-		failed = true;
-		if (error.empty() && why)
+		bFailed = true;
+		if (sError.empty() && pWhyParam)
 		{
-			error = why;
+			sError = pWhyParam;
 		}
 		Complete();
 	}
 
-	bool ParseHeaders(size_t header_end)
+	bool ParseHeaders(size_t iHeaderEndParam)
 	{
-		size_t line_end = incoming.find("\r\n");
-		if (line_end == std::string::npos || line_end > header_end)
+		size_t iLineEnd = sIncoming.find("\r\n");
+		if (iLineEnd == std::string::npos || iLineEnd > iHeaderEndParam)
 		{
 			return false;
 		}
-		size_t sp = incoming.find(' ');
-		if (sp == std::string::npos || sp >= line_end)
+		size_t iSharedPointer = sIncoming.find(' ');
+		if (iSharedPointer == std::string::npos || iSharedPointer >= iLineEnd)
 		{
 			return false;
 		}
-		size_t code_at = sp + 1;
-		while (code_at < line_end && incoming[code_at] == ' ')
+		size_t iCodeAt = iSharedPointer + 1;
+		while (iCodeAt < iLineEnd && sIncoming[iCodeAt] == ' ')
 		{
-			code_at += 1;
+			iCodeAt += 1;
 		}
-		uint64_t code = 0;
-		if (!ParseU64(incoming, code_at, line_end, code) || code == 0 || code > 999)
+		uint64_t iCodeLocal = 0;
+		if (!ParseU64(sIncoming, iCodeAt, iLineEnd, iCodeLocal) || iCodeLocal == 0 || iCodeLocal > 999)
 		{
 			return false;
 		}
-		status = (int32_t)code;
-		size_t pos = line_end + 2;
-		while (pos < header_end)
+		iStatus = (int32_t)iCodeLocal;
+		size_t iPosition = iLineEnd + 2;
+		while (iPosition < iHeaderEndParam)
 		{
-			size_t end = incoming.find("\r\n", pos);
-			if (end == std::string::npos || end > header_end)
+			size_t iEnd = sIncoming.find("\r\n", iPosition);
+			if (iEnd == std::string::npos || iEnd > iHeaderEndParam)
 			{
 				break;
 			}
-			size_t colon = incoming.find(':', pos);
-			if (colon != std::string::npos && colon < end)
+			size_t iColon = sIncoming.find(':', iPosition);
+			if (iColon != std::string::npos && iColon < iEnd)
 			{
-				size_t value = colon + 1;
-				while (value < end && incoming[value] == ' ')
+				size_t iValue = iColon + 1;
+				while (iValue < iEnd && sIncoming[iValue] == ' ')
 				{
-					value += 1;
+					iValue += 1;
 				}
-				size_t name_end = colon;
-				while (name_end > pos && incoming[name_end - 1] == ' ')
+				size_t iNameEnd = iColon;
+				while (iNameEnd > iPosition && sIncoming[iNameEnd - 1] == ' ')
 				{
-					name_end -= 1;
+					iNameEnd -= 1;
 				}
-				if (EqName(incoming, pos, name_end, "content-length") && pos + std::strlen("content-length") == name_end)
+				if (EqName(sIncoming, iPosition, iNameEnd, "content-length") && iPosition + std::strlen("content-length") == iNameEnd)
 				{
-					uint64_t len = 0;
-					if (!ParseU64(incoming, value, end, len) || len > kMaxBody)
+					uint64_t iLength = 0;
+					if (!ParseU64(sIncoming, iValue, iEnd, iLength) || iLength > kMaxBody)
 					{
 						return false;
 					}
-					has_length = true;
-					content_length = len;
+					bHasLength = true;
+					iContentLength = iLength;
 				}
-				else if (EqName(incoming, pos, name_end, "transfer-encoding") && pos + std::strlen("transfer-encoding") == name_end)
+				else if (EqName(sIncoming, iPosition, iNameEnd, "transfer-encoding") && iPosition + std::strlen("transfer-encoding") == iNameEnd)
 				{
-					std::string coding = incoming.substr(value, end - value);
-					for (size_t i = 0; i < coding.size(); ++i)
+					std::string sCoding = sIncoming.substr(iValue, iEnd - iValue);
+					for (size_t iIndexLocal = 0; iIndexLocal < sCoding.size(); ++iIndexLocal)
 					{
-						if (coding[i] >= 'A' && coding[i] <= 'Z')
+						if (sCoding[iIndexLocal] >= 'A' && sCoding[iIndexLocal] <= 'Z')
 						{
-							coding[i] = (char)(coding[i] - 'A' + 'a');
+							sCoding[iIndexLocal] = (char)(sCoding[iIndexLocal] - 'A' + 'a');
 						}
 					}
-					if (coding.find("chunked") != std::string::npos)
+					if (sCoding.find("chunked") != std::string::npos)
 					{
-						chunked = true;
+						bChunked = true;
 					}
 				}
 			}
-			pos = end + 2;
+			iPosition = iEnd + 2;
 		}
 		return true;
 	}
@@ -303,40 +303,40 @@ struct Call::State
 	// 头或正文已经收齐就结束。返回 true 表示这一轮不用再读。
 	bool Consume()
 	{
-		if (!headers_ready)
+		if (!bHeadersReady)
 		{
-			size_t header_end = incoming.find("\r\n\r\n");
-			if (header_end == std::string::npos)
+			size_t iHeaderEnd = sIncoming.find("\r\n\r\n");
+			if (iHeaderEnd == std::string::npos)
 			{
-				if (incoming.size() > kMaxHeader)
+				if (sIncoming.size() > kMaxHeader)
 				{
 					Fail("header");
 					return true;
 				}
 				return false;
 			}
-			if (!ParseHeaders(header_end))
+			if (!ParseHeaders(iHeaderEnd))
 			{
 				Fail("status");
 				return true;
 			}
-			headers_ready = true;
-			header_bytes = header_end + 4;
-			chunk_pos = header_bytes;
+			bHeadersReady = true;
+			iHeaderBytes = iHeaderEnd + 4;
+			iChunkPosition = iHeaderBytes;
 		}
-		if (chunked)
+		if (bChunked)
 		{
 			return ConsumeChunks();
 		}
-		if (!has_length)
+		if (!bHasLength)
 		{
 			return false;
 		}
-		if (incoming.size() - header_bytes < content_length)
+		if (sIncoming.size() - iHeaderBytes < iContentLength)
 		{
 			return false;
 		}
-		body.assign(incoming, header_bytes, (size_t)content_length);
+		sBody.assign(sIncoming, iHeaderBytes, (size_t)iContentLength);
 		Complete();
 		return true;
 	}
@@ -346,53 +346,53 @@ struct Call::State
 	{
 		for (;;)
 		{
-			size_t line_end = incoming.find("\r\n", chunk_pos);
-			if (line_end == std::string::npos)
+			size_t iLineEnd = sIncoming.find("\r\n", iChunkPosition);
+			if (iLineEnd == std::string::npos)
 			{
-				if (incoming.size() - chunk_pos > 1024)
+				if (sIncoming.size() - iChunkPosition > 1024)
 				{
 					Fail("chunk");
 					return true;
 				}
 				return false;
 			}
-			uint64_t size = 0;
-			if (!ParseHex(incoming, chunk_pos, line_end, size))
+			uint64_t iSize = 0;
+			if (!ParseHex(sIncoming, iChunkPosition, iLineEnd, iSize))
 			{
 				Fail("chunk");
 				return true;
 			}
-			size_t data_at = line_end + 2;
-			if (size == 0)
+			size_t iDataAt = iLineEnd + 2;
+			if (iSize == 0)
 			{
 				// 最后一块后面可以跟 trailer，以空行结束。
-				size_t pos = data_at;
+				size_t iPosition = iDataAt;
 				for (;;)
 				{
-					size_t end = incoming.find("\r\n", pos);
-					if (end == std::string::npos)
+					size_t iEnd = sIncoming.find("\r\n", iPosition);
+					if (iEnd == std::string::npos)
 					{
 						return false;
 					}
-					if (end == pos)
+					if (iEnd == iPosition)
 					{
 						Complete();
 						return true;
 					}
-					pos = end + 2;
+					iPosition = iEnd + 2;
 				}
 			}
-			if (size > kMaxBody || body.size() + (size_t)size > kMaxBody)
+			if (iSize > kMaxBody || sBody.size() + (size_t)iSize > kMaxBody)
 			{
 				Fail("size");
 				return true;
 			}
-			if (incoming.size() < data_at + (size_t)size + 2)
+			if (sIncoming.size() < iDataAt + (size_t)iSize + 2)
 			{
 				return false;
 			}
-			body.append(incoming, data_at, (size_t)size);
-			chunk_pos = data_at + (size_t)size + 2;
+			sBody.append(sIncoming, iDataAt, (size_t)iSize);
+			iChunkPosition = iDataAt + (size_t)iSize + 2;
 		}
 	}
 
@@ -402,36 +402,36 @@ struct Call::State
 		{
 			return;
 		}
-		if (!headers_ready || has_length || chunked)
+		if (!bHeadersReady || bHasLength || bChunked)
 		{
 			Fail("eof");
 			return;
 		}
-		body.assign(incoming, header_bytes, std::string::npos);
+		sBody.assign(sIncoming, iHeaderBytes, std::string::npos);
 		Complete();
 	}
 
 	void PumpRead()
 	{
-		char buf[16384];
+		char vBuffer[16384];
 		for (;;)
 		{
-			int n = NetOs_Recv(fd, buf, sizeof(buf));
-			if (n > 0)
+			int iNumber = NetOs_Recv(iDescriptor, vBuffer, sizeof(vBuffer));
+			if (iNumber > 0)
 			{
-				if (incoming.size() + (size_t)n > kMaxHeader + kMaxBody)
+				if (sIncoming.size() + (size_t)iNumber > kMaxHeader + kMaxBody)
 				{
 					Fail("size");
 					return;
 				}
-				incoming.append(buf, (size_t)n);
+				sIncoming.append(vBuffer, (size_t)iNumber);
 				if (Consume())
 				{
 					return;
 				}
 				continue;
 			}
-			if (n == 0)
+			if (iNumber == 0)
 			{
 				OnEof();
 				return;
@@ -451,19 +451,19 @@ struct Call::State
 
 	void PumpWrite()
 	{
-		while (sent < request.size())
+		while (iSent < sRequest.size())
 		{
-			int n = NetOs_Send(fd, request.data() + sent, request.size() - sent);
-			if (n > 0)
+			int iNumber = NetOs_Send(iDescriptor, sRequest.data() + iSent, sRequest.size() - iSent);
+			if (iNumber > 0)
 			{
-				sent += (size_t)n;
+				iSent += (size_t)iNumber;
 				continue;
 			}
-			if (n < 0 && errno == EINTR)
+			if (iNumber < 0 && errno == EINTR)
 			{
 				continue;
 			}
-			if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+			if (iNumber < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
 			{
 				Arm(::OI::Net::IO_EV_WRITE);
 				return;
@@ -471,226 +471,226 @@ struct Call::State
 			Fail("send");
 			return;
 		}
-		phase = PHASE_READ;
+		iPhase = PHASE_READ;
 		Arm(::OI::Net::IO_EV_READ);
 	}
 
-	void Arm(int32_t mask);
+	void Arm(int32_t iMaskParam);
 
 	void OnWritable()
 	{
-		if (done.load() != 0)
+		if (iDone.load() != 0)
 		{
 			return;
 		}
-		in_io = true;
-		if (phase == PHASE_CONNECT)
+		bInIo = true;
+		if (iPhase == PHASE_CONNECT)
 		{
-			int err = NetOs_GetSocketError(fd);
-			if (err == EINPROGRESS || err == EINTR || err == EAGAIN || err == EWOULDBLOCK)
+			int iError = NetOs_GetSocketError(iDescriptor);
+			if (iError == EINPROGRESS || iError == EINTR || iError == EAGAIN || iError == EWOULDBLOCK)
 			{
-				in_io = false;
+				bInIo = false;
 				return;
 			}
-			if (err != 0)
+			if (iError != 0)
 			{
 				Fail("connect");
-				in_io = false;
+				bInIo = false;
 				return;
 			}
-			phase = PHASE_WRITE;
+			iPhase = PHASE_WRITE;
 		}
-		if (phase == PHASE_WRITE)
+		if (iPhase == PHASE_WRITE)
 		{
 			PumpWrite();
 		}
-		in_io = false;
+		bInIo = false;
 	}
 
 	void OnReadable()
 	{
-		if (done.load() != 0)
+		if (iDone.load() != 0)
 		{
 			return;
 		}
-		if (phase != PHASE_READ)
+		if (iPhase != PHASE_READ)
 		{
-			in_io = true;
+			bInIo = true;
 			Fail("connect");
-			in_io = false;
+			bInIo = false;
 			return;
 		}
-		in_io = true;
+		bInIo = true;
 		PumpRead();
-		in_io = false;
+		bInIo = false;
 	}
 
-	static void OnTimeout(void* arg);
-	static void Start(void* arg);
-	static void OnResolved(uv_getaddrinfo_t* req, int status, struct addrinfo* res);
-	void Connect(const sockaddr_in& addr);
+	static void OnTimeout(void* pArgumentParam);
+	static void Start(void* pArgumentParam);
+	static void OnResolved(uv_getaddrinfo_t* pRequestParam, int iStatusParam, struct addrinfo* pResponseParam);
+	void Connect(const sockaddr_in& stAddrParam);
 };
 
 class HttpChannel : public ::OI::Net::Channel
 {
-	Call::State* _state;
+	Call::State* m_pState;
 public:
-	HttpChannel(::OI::Net::NetSocket sock, Call::State* state)
-		: ::OI::Net::Channel(sock, NULL), _state(state)
+	HttpChannel(::OI::Net::NetSocket stSockParam, Call::State* pStateParam)
+		: ::OI::Net::Channel(stSockParam, NULL), m_pState(pStateParam)
 	{
 	}
 	void DataIn()
 	{
-		_state->OnReadable();
+		m_pState->OnReadable();
 	}
 	void DataOut()
 	{
-		_state->OnWritable();
+		m_pState->OnWritable();
 	}
 	bool TryClose()
 	{
-		if (_state->done.load() == 0)
+		if (m_pState->iDone.load() == 0)
 		{
 			return false;
 		}
-		_state->channel = NULL;
-		_state->fd = INVALID_SOCKET_ID;
-		Call::State* state = _state;
+		m_pState->pChannel = NULL;
+		m_pState->iDescriptor = INVALID_SOCKET_ID;
+		Call::State* pStateLocal = m_pState;
 		delete this;
-		state->Wake();
+		pStateLocal->Wake();
 		return true;
 	}
 };
 
-void Call::State::Arm(int32_t mask)
+void Call::State::Arm(int32_t iMaskParam)
 {
-	if (!channel)
+	if (!pChannel)
 	{
 		return;
 	}
-	bool read = (mask & ::OI::Net::IO_EV_READ) != 0;
-	bool write = (mask & ::OI::Net::IO_EV_WRITE) != 0;
-	if (channel->_poll_token == NULL)
+	bool bRead = (iMaskParam & ::OI::Net::IO_EV_READ) != 0;
+	bool bWrite = (iMaskParam & ::OI::Net::IO_EV_WRITE) != 0;
+	if (pChannel->pPollToken == NULL)
 	{
-		::OI::Net::Poll::GetInstance().IOEventRegister(channel, read, write);
+		::OI::Net::Poll::GetInstance().IOEventRegister(pChannel, bRead, bWrite);
 		return;
 	}
-	::OI::Net::Poll::GetInstance().IOEventMod(channel, mask);
+	::OI::Net::Poll::GetInstance().IOEventMod(pChannel, iMaskParam);
 }
 
 void Call::State::DropChannel()
 {
-	if (channel)
+	if (pChannel)
 	{
-		HttpChannel* held = channel;
-		channel = NULL;
-		fd = INVALID_SOCKET_ID;
-		delete held;
+		HttpChannel* pHeld = pChannel;
+		pChannel = NULL;
+		iDescriptor = INVALID_SOCKET_ID;
+		delete pHeld;
 		return;
 	}
-	if (fd != INVALID_SOCKET_ID)
+	if (iDescriptor != INVALID_SOCKET_ID)
 	{
-		NetOs_Close(fd);
-		fd = INVALID_SOCKET_ID;
+		NetOs_Close(iDescriptor);
+		iDescriptor = INVALID_SOCKET_ID;
 	}
 }
 
-void Call::State::OnTimeout(void* arg)
+void Call::State::OnTimeout(void* pArgumentParam)
 {
-	State* self = (State*)arg;
-	self->Fail("timeout");
-	self->Release();
+	State* pSelf = (State*)pArgumentParam;
+	pSelf->Fail("timeout");
+	pSelf->Release();
 }
 
-void Call::State::Start(void* arg)
+void Call::State::Start(void* pArgumentParam)
 {
-	State* self = (State*)arg;
-	if (self->port <= 0 || self->port > 65535 || self->host.empty())
+	State* pSelf = (State*)pArgumentParam;
+	if (pSelf->iPort <= 0 || pSelf->iPort > 65535 || pSelf->sHost.empty())
 	{
-		self->Fail("host");
+		pSelf->Fail("host");
 		return;
 	}
-	int32_t timeout = self->timeout_ms > 0 ? self->timeout_ms : 5000;
-	self->Retain();
-	::OI::Timer::BaseTimerManager::GetInstance().AddTimer([self]() {
-		::OI::Net::Poll::GetInstance().CallOnLoop(State::OnTimeout, self);
-	}, timeout);
-	sockaddr_in addr;
-	std::memset(&addr, 0, sizeof(addr));
-	addr.sin_family = AF_INET;
-	addr.sin_port = htons((uint16_t)self->port);
-	if (inet_pton(AF_INET, self->host.c_str(), &addr.sin_addr) == 1)
+	int32_t iTimeout = pSelf->iTimeoutMilliseconds > 0 ? pSelf->iTimeoutMilliseconds : 5000;
+	pSelf->Retain();
+	::OI::Timer::BaseTimerManager::GetInstance().AddTimer([pSelf]() {
+		::OI::Net::Poll::GetInstance().CallOnLoop(State::OnTimeout, pSelf);
+	}, iTimeout);
+	sockaddr_in stAddr;
+	std::memset(&stAddr, 0, sizeof(stAddr));
+	stAddr.sin_family = AF_INET;
+	stAddr.sin_port = htons((uint16_t)pSelf->iPort);
+	if (inet_pton(AF_INET, pSelf->sHost.c_str(), &stAddr.sin_addr) == 1)
 	{
-		self->Connect(addr);
+		pSelf->Connect(stAddr);
 		return;
 	}
 	// 域名交给 libuv 的线程池解析，回调回到 poll 线程，不卡 poll。
-	addrinfo hints;
-	std::memset(&hints, 0, sizeof(hints));
-	hints.ai_family = AF_INET;
-	hints.ai_socktype = SOCK_STREAM;
-	self->dns.data = self;
-	self->Retain();
-	if (uv_getaddrinfo(::OI::Net::Poll::GetInstance().Loop(), &self->dns, State::OnResolved, self->host.c_str(), NULL, &hints) != 0)
+	addrinfo stHints;
+	std::memset(&stHints, 0, sizeof(stHints));
+	stHints.ai_family = AF_INET;
+	stHints.ai_socktype = SOCK_STREAM;
+	pSelf->stDns.data = pSelf;
+	pSelf->Retain();
+	if (uv_getaddrinfo(::OI::Net::Poll::GetInstance().Loop(), &pSelf->stDns, State::OnResolved, pSelf->sHost.c_str(), NULL, &stHints) != 0)
 	{
-		self->Fail("dns");
-		self->Release();
+		pSelf->Fail("dns");
+		pSelf->Release();
 	}
 }
 
-void Call::State::OnResolved(uv_getaddrinfo_t* req, int status, struct addrinfo* res)
+void Call::State::OnResolved(uv_getaddrinfo_t* pRequestParam, int iStatusParam, struct addrinfo* pResponseParam)
 {
-	State* self = (State*)req->data;
-	if (self->done.load() == 0)
+	State* pSelf = (State*)pRequestParam->data;
+	if (pSelf->iDone.load() == 0)
 	{
-		if (status != 0 || res == NULL || res->ai_addr == NULL || res->ai_family != AF_INET)
+		if (iStatusParam != 0 || pResponseParam == NULL || pResponseParam->ai_addr == NULL || pResponseParam->ai_family != AF_INET)
 		{
-			self->Fail("dns");
+			pSelf->Fail("dns");
 		}
 		else
 		{
-			sockaddr_in addr = *(const sockaddr_in*)res->ai_addr;
-			addr.sin_port = htons((uint16_t)self->port);
-			self->Connect(addr);
+			sockaddr_in stAddr = *(const sockaddr_in*)pResponseParam->ai_addr;
+			stAddr.sin_port = htons((uint16_t)pSelf->iPort);
+			pSelf->Connect(stAddr);
 		}
 	}
-	uv_freeaddrinfo(res);
-	self->Release();
+	uv_freeaddrinfo(pResponseParam);
+	pSelf->Release();
 }
 
-void Call::State::Connect(const sockaddr_in& addr)
+void Call::State::Connect(const sockaddr_in& stAddrParam)
 {
-	fd = NetOs_CreateTcp(true);
-	if (fd == INVALID_SOCKET_ID)
+	iDescriptor = NetOs_CreateTcp(true);
+	if (iDescriptor == INVALID_SOCKET_ID)
 	{
 		Fail("socket");
 		return;
 	}
-	NetOs_SetNoDelay(fd);
-	::OI::Net::NetSocket sock;
-	sock.Attach(fd);
-	channel = new HttpChannel(sock, this);
-	int rc = -1;
+	NetOs_SetNoDelay(iDescriptor);
+	::OI::Net::NetSocket stSock;
+	stSock.Attach(iDescriptor);
+	pChannel = new HttpChannel(stSock, this);
+	int iReturnCodeLocal = -1;
 	for (;;)
 	{
-		rc = NetOs_Connect(fd, (const sockaddr*)&addr, (int)sizeof(addr));
-		if (rc == 0 || errno != EINTR)
+		iReturnCodeLocal = NetOs_Connect(iDescriptor, (const sockaddr*)&stAddrParam, (int)sizeof(stAddrParam));
+		if (iReturnCodeLocal == 0 || errno != EINTR)
 		{
 			break;
 		}
 	}
-	if (rc != 0 && errno != EINPROGRESS && errno != EAGAIN && errno != EWOULDBLOCK)
+	if (iReturnCodeLocal != 0 && errno != EINPROGRESS && errno != EAGAIN && errno != EWOULDBLOCK)
 	{
 		Fail("connect");
 		return;
 	}
-	if (rc != 0)
+	if (iReturnCodeLocal != 0)
 	{
-		phase = PHASE_CONNECT;
+		iPhase = PHASE_CONNECT;
 		Arm(::OI::Net::IO_EV_WRITE);
 		return;
 	}
-	phase = PHASE_WRITE;
+	iPhase = PHASE_WRITE;
 	PumpWrite();
 }
 
@@ -722,89 +722,89 @@ static struct StReg
 
 Call::~Call()
 {
-	if (_state)
+	if (m_pState)
 	{
-		_state->Release();
+		m_pState->Release();
 	}
 }
 
-void Call::await_suspend(std::coroutine_handle<> handle) noexcept
+void Call::await_suspend(std::coroutine_handle<> stHandleParam) noexcept
 {
-	_state->handle = handle;
-	::OI::Net::Poll::GetInstance().CallOnLoop(State::Start, _state);
+	m_pState->stHandle = stHandleParam;
+	::OI::Net::Poll::GetInstance().CallOnLoop(State::Start, m_pState);
 }
 
 Response Call::await_resume()
 {
-	Response out;
-	out.status = _state->status;
-	out.body = std::move(_state->body);
-	out.fail = _state->failed || _state->status == 0;
-	out.error = std::move(_state->error);
-	_state->Release();
-	_state = nullptr;
-	return out;
+	Response stOutput;
+	stOutput.iStatus = m_pState->iStatus;
+	stOutput.sBody = std::move(m_pState->sBody);
+	stOutput.bFail = m_pState->bFailed || m_pState->iStatus == 0;
+	stOutput.sError = std::move(m_pState->sError);
+	m_pState->Release();
+	m_pState = nullptr;
+	return stOutput;
 }
 
-Client::Client(const std::string& host, int32_t port, int32_t timeout_ms)
-	: _host(host), _port(port), _timeout_ms(timeout_ms)
+Client::Client(const std::string& sHostParam, int32_t iPortParam, int32_t iTimeoutMillisecondsParam)
+	: m_sHost(sHostParam), m_iPort(iPortParam), m_iTimeoutMilliseconds(iTimeoutMillisecondsParam)
 {
 }
 
-static std::string HostHeader(const std::string& host, int32_t port)
+static std::string HostHeader(const std::string& sHostParam, int32_t iPortParam)
 {
-	std::string line = "Host: ";
-	line += host;
-	if (port != 80)
+	std::string sLine = "Host: ";
+	sLine += sHostParam;
+	if (iPortParam != 80)
 	{
-		line += ":";
-		line += std::to_string(port);
+		sLine += ":";
+		sLine += std::to_string(iPortParam);
 	}
-	line += "\r\n";
-	return line;
+	sLine += "\r\n";
+	return sLine;
 }
 
-Call Client::Get(const std::string& path, const std::vector<std::pair<std::string, std::string>>& query)
+Call Client::Get(const std::string& sPathParam, const std::vector<std::pair<std::string, std::string>>& vQueryParam)
 {
-	std::string target = path.empty() ? "/" : path;
-	if (!query.empty())
+	std::string sTarget = sPathParam.empty() ? "/" : sPathParam;
+	if (!vQueryParam.empty())
 	{
-		target.push_back('?');
-		for (size_t i = 0; i < query.size(); ++i)
+		sTarget.push_back('?');
+		for (size_t iIndexLocal = 0; iIndexLocal < vQueryParam.size(); ++iIndexLocal)
 		{
-			if (i != 0)
+			if (iIndexLocal != 0)
 			{
-				target.push_back('&');
+				sTarget.push_back('&');
 			}
-			target += EncodeQuery(query[i].first);
-			target.push_back('=');
-			target += EncodeQuery(query[i].second);
+			sTarget += EncodeQuery(vQueryParam[iIndexLocal].first);
+			sTarget.push_back('=');
+			sTarget += EncodeQuery(vQueryParam[iIndexLocal].second);
 		}
 	}
-	Call::State* state = new Call::State();
-	state->host = _host;
-	state->port = _port;
-	state->timeout_ms = _timeout_ms;
-	state->request = "GET " + target + " HTTP/1.1\r\n";
-	state->request += HostHeader(_host, _port);
-	state->request += "Connection: close\r\n\r\n";
-	return Call(state);
+	Call::State* pStateLocal = new Call::State();
+	pStateLocal->sHost = m_sHost;
+	pStateLocal->iPort = m_iPort;
+	pStateLocal->iTimeoutMilliseconds = m_iTimeoutMilliseconds;
+	pStateLocal->sRequest = "GET " + sTarget + " HTTP/1.1\r\n";
+	pStateLocal->sRequest += HostHeader(m_sHost, m_iPort);
+	pStateLocal->sRequest += "Connection: close\r\n\r\n";
+	return Call(pStateLocal);
 }
 
-Call Client::Post(const std::string& path, const std::string& body, const std::string& content_type)
+Call Client::Post(const std::string& sPathParam, const std::string& sBodyParam, const std::string& sContentTypeParam)
 {
-	std::string target = path.empty() ? "/" : path;
-	Call::State* state = new Call::State();
-	state->host = _host;
-	state->port = _port;
-	state->timeout_ms = _timeout_ms;
-	state->request = "POST " + target + " HTTP/1.1\r\n";
-	state->request += HostHeader(_host, _port);
-	state->request += "Content-Type: " + content_type + "\r\n";
-	state->request += "Content-Length: " + std::to_string(body.size()) + "\r\n";
-	state->request += "Connection: close\r\n\r\n";
-	state->request.append(body.data(), body.size());
-	return Call(state);
+	std::string sTarget = sPathParam.empty() ? "/" : sPathParam;
+	Call::State* pStateLocal = new Call::State();
+	pStateLocal->sHost = m_sHost;
+	pStateLocal->iPort = m_iPort;
+	pStateLocal->iTimeoutMilliseconds = m_iTimeoutMilliseconds;
+	pStateLocal->sRequest = "POST " + sTarget + " HTTP/1.1\r\n";
+	pStateLocal->sRequest += HostHeader(m_sHost, m_iPort);
+	pStateLocal->sRequest += "Content-Type: " + sContentTypeParam + "\r\n";
+	pStateLocal->sRequest += "Content-Length: " + std::to_string(sBodyParam.size()) + "\r\n";
+	pStateLocal->sRequest += "Connection: close\r\n\r\n";
+	pStateLocal->sRequest.append(sBodyParam.data(), sBodyParam.size());
+	return Call(pStateLocal);
 }
 
 }}

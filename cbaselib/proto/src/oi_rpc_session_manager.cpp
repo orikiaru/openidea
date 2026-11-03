@@ -4,123 +4,123 @@
 #include <algorithm>
 namespace OI { namespace Rpc {
 
-bool ProtoClientManager::SendRaw(const ::OI::Base::Bytes& data)
+bool ProtoClientManager::SendRaw(const ::OI::Base::Bytes& stDataParam)
 {
-	sid_t sid = INVALID_SID;
+	sid_t iSessionIdLocal = INVALID_SID;
 	{
-		::OI::Thread::SpinLockGuard l(_client_locker);
-		if (_conn && _ssid != INVALID_SID)
+		::OI::Thread::SpinLockGuard stLock(m_stClientLocker);
+		if (m_bConnected && m_iSessionId != INVALID_SID)
 		{
-			sid = _ssid;
+			iSessionIdLocal = m_iSessionId;
 		}
 	}
-	if (sid == INVALID_SID)
+	if (iSessionIdLocal == INVALID_SID)
 	{
 		return false;
 	}
-	return SendBytes(sid, data);
+	return SendBytes(iSessionIdLocal, stDataParam);
 }
 
-bool ProtoClientManager::SendRawOrPend(const ::OI::Base::Bytes& data, size_t max_pending_bytes)
+bool ProtoClientManager::SendRawOrPend(const ::OI::Base::Bytes& stDataParam, size_t iMaxPendingBytesParam)
 {
-	sid_t sid = INVALID_SID;
+	sid_t iSessionIdLocal = INVALID_SID;
 	{
-		::OI::Thread::SpinLockGuard l(_client_locker);
-		if (_conn && _ssid != INVALID_SID)
+		::OI::Thread::SpinLockGuard stLock(m_stClientLocker);
+		if (m_bConnected && m_iSessionId != INVALID_SID)
 		{
-			sid = _ssid;
+			iSessionIdLocal = m_iSessionId;
 		}
 		else
 		{
-			max_pending_bytes = (std::min)(max_pending_bytes, _max_send_queue_bytes);
-			if (_pending_bytes > max_pending_bytes || data.Size() > max_pending_bytes - _pending_bytes)
+			iMaxPendingBytesParam = (std::min)(iMaxPendingBytesParam, iMaxSendQueueBytes);
+			if (m_iPendingBytes > iMaxPendingBytesParam || stDataParam.Size() > iMaxPendingBytesParam - m_iPendingBytes)
 			{
 				return false;
 			}
-			_pending.push_back(data);
-			_pending_bytes += data.Size();
+			m_vPending.push_back(stDataParam);
+			m_iPendingBytes += stDataParam.Size();
 			return true;
 		}
 	}
-	return SendBytes(sid, data);
+	return SendBytes(iSessionIdLocal, stDataParam);
 }
 
-bool ProtoClientManager::TryPendCall(uint64_t call_id, const ::OI::Base::Bytes& data)
+bool ProtoClientManager::TryPendCall(uint64_t iCallIdParam, const ::OI::Base::Bytes& stDataParam)
 {
 	{
-		::OI::Thread::SpinLockGuard lock(_client_locker);
-		if (_ever_connected || (_conn && _ssid != INVALID_SID)) return false;
-		if (_held_calls.size() < _held_max_count && _held_bytes <= _held_max_bytes
-			&& data.Size() <= _held_max_bytes - _held_bytes)
+		::OI::Thread::SpinLockGuard stLock(m_stClientLocker);
+		if (m_bEverConnected || (m_bConnected && m_iSessionId != INVALID_SID)) return false;
+		if (m_vHeldCalls.size() < m_iHeldMaxCount && m_iHeldBytes <= m_iHeldMaxBytes
+			&& stDataParam.Size() <= m_iHeldMaxBytes - m_iHeldBytes)
 		{
 			// 先标记再入队；超时回调会在本锁释放后删除。已经超时则不再留副本。
-			if (!MarkRpcAwaitingConnect(call_id)) return true;
-			_held_calls.push_back(HeldCall{call_id, data});
-			try { _held_index.emplace(call_id, std::prev(_held_calls.end())); }
+			if (!MarkRpcAwaitingConnect(iCallIdParam)) return true;
+			m_vHeldCalls.push_back(HeldCall{iCallIdParam, stDataParam});
+			try { m_mHeldIndex.emplace(iCallIdParam, std::prev(m_vHeldCalls.end())); }
 			catch (...)
 			{
-				_held_calls.pop_back();
+				m_vHeldCalls.pop_back();
 				throw;
 			}
-			_held_bytes += data.Size();
+			m_iHeldBytes += stDataParam.Size();
 			return true;
 		}
 	}
 	// 不持客户端锁唤醒，回调允许再次发起请求。
-	WakeRpcCall(call_id, OI_ERR_BUSY, nullptr);
+	WakeRpcCall(iCallIdParam, OI_ERR_BUSY, nullptr);
 	return true;
 }
 
-void ProtoClientManager::DropPendingCall(uint64_t call_id)
+void ProtoClientManager::DropPendingCall(uint64_t iCallIdParam)
 {
-	::OI::Thread::SpinLockGuard lock(_client_locker);
-	auto it = _held_index.find(call_id);
-	if (it == _held_index.end()) return;
-	_held_bytes -= it->second->data.Size();
-	_held_calls.erase(it->second);
-	_held_index.erase(it);
+	::OI::Thread::SpinLockGuard stLock(m_stClientLocker);
+	auto stIterator = m_mHeldIndex.find(iCallIdParam);
+	if (stIterator == m_mHeldIndex.end()) return;
+	m_iHeldBytes -= stIterator->second->stData.Size();
+	m_vHeldCalls.erase(stIterator->second);
+	m_mHeldIndex.erase(stIterator);
 }
 
-void ProtoClientManager::FlushHeldCalls(sid_t sid)
+void ProtoClientManager::FlushHeldCalls(sid_t iSessionIdParam)
 {
-	std::list<HeldCall> held;
+	std::list<HeldCall> vHeld;
 	{
-		::OI::Thread::SpinLockGuard l(_client_locker);
-		held.swap(_held_calls);
-		_held_index.clear();
-		_held_bytes = 0;
+		::OI::Thread::SpinLockGuard stLock(m_stClientLocker);
+		vHeld.swap(m_vHeldCalls);
+		m_mHeldIndex.clear();
+		m_iHeldBytes = 0;
 	}
-	for (const auto& call : held)
+	for (const auto& stCall : vHeld)
 	{
-		if (!ClaimRpcSend(call.call_id, sid))
+		if (!ClaimRpcSend(stCall.iCallId, iSessionIdParam))
 		{
 			continue;
 		}
-		if (!SendBytes(sid, call.data))
+		if (!SendBytes(iSessionIdParam, stCall.stData))
 		{
-			WakeRpcCall(call.call_id, OI_ERR_FAIL, NULL);
+			WakeRpcCall(stCall.iCallId, OI_ERR_FAIL, NULL);
 		}
 	}
 }
 
 void ProtoClientManager::FailHeldCalls()
 {
-	std::list<HeldCall> held;
+	std::list<HeldCall> vHeld;
 	{
-		::OI::Thread::SpinLockGuard l(_client_locker);
-		held.swap(_held_calls);
-		_held_index.clear();
-		_held_bytes = 0;
-		_pending.clear();
-		_pending_bytes = 0;
+		::OI::Thread::SpinLockGuard stLock(m_stClientLocker);
+		vHeld.swap(m_vHeldCalls);
+		m_mHeldIndex.clear();
+		m_iHeldBytes = 0;
+		m_vPending.clear();
+		m_iPendingBytes = 0;
 	}
-	for (const auto& call : held)
+	for (const auto& stCall : vHeld)
 	{
-		WakeRpcCall(call.call_id, OI_ERR_CONNECT, NULL);
+		WakeRpcCall(stCall.iCallId, OI_ERR_CONNECT, NULL);
 	}
 }
 
-void ProtoClientManager::Reconnect(int millisecond)
-{	::OI::Timer::BaseTimerManager::GetInstance().AddTimer([this]() { StartClient(); }, millisecond > 0 ? millisecond : 1);
+void ProtoClientManager::Reconnect(int iMillisecondParam)
+{	::OI::Timer::BaseTimerManager::GetInstance().AddTimer([this]() { StartClient(); }, iMillisecondParam > 0 ? iMillisecondParam : 1);
 }
 }}

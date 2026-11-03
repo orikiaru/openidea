@@ -9,17 +9,17 @@ namespace OI { namespace RpcData {
 class RegHeartbeatRes : public ::OI::Rpc::RpcData
 {
 public:
-    int32_t code{};
+    int32_t iCode{};
     
     explicit RegHeartbeatRes (){}
     RegHeartbeatRes ( const int32_t & l_code )
     {
-        code = l_code;
+        iCode = l_code;
         
     }
     virtual ::OI::Base::BytesStream& serialize(::OI::Base::BytesStream& os) const
     {
-        os.WritePb(0, code);
+        os.WritePb(0, iCode);
         return os;
     }
     virtual ::OI::Base::BytesStream& deserialize(::OI::Base::BytesStream& os)
@@ -31,7 +31,7 @@ public:
             os.ReadPbHeader(field_seq, field_size);
             switch (field_seq)
             {
-            case 0: os.ReadPb(field_size, code); break;
+            case 0: os.ReadPb(field_size, iCode); break;
             default: os.SkipPb(field_size); break;
             }
         }
@@ -40,7 +40,7 @@ public:
     bool FromJson(const Json::Value& in)
     {
         if (!in.isObject()) return false;
-        if (in.isMember("code") && !::OI::Rpc::FromJsonValue(in["code"], code)) return false;
+        if (in.isMember("code") && !::OI::Rpc::FromJsonValue(in["code"], iCode)) return false;
         return true;
     }
     bool FromJson(const std::string& text)
@@ -56,7 +56,7 @@ public:
     void ToJson(Json::Value& out) const
     {
         out = Json::Value(Json::objectValue);
-        ::OI::Rpc::ToJsonValue(out["code"], code);
+        ::OI::Rpc::ToJsonValue(out["code"], iCode);
     }
     std::string ToJson() const
     {

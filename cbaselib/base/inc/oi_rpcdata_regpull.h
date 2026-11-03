@@ -9,22 +9,22 @@ namespace OI { namespace RpcData {
 class RegPull : public ::OI::Rpc::RpcData
 {
 public:
-    std::vector<std::string> names{};
+    std::vector<std::string> vNames{};
     
     explicit RegPull (){}
     RegPull ( const std::vector<std::string> & l_names )
     {
-        names = l_names;
+        vNames = l_names;
         
     }
     virtual ::OI::Base::BytesStream& serialize(::OI::Base::BytesStream& os) const
     {
-        os.WritePb(0, names);
+        os.WritePb(0, vNames);
         return os;
     }
     virtual ::OI::Base::BytesStream& deserialize(::OI::Base::BytesStream& os)
     {
-        names.clear();
+        vNames.clear();
         while (os.RemainSize() > 0)
         {
             uint32_t field_seq = 0;
@@ -32,7 +32,7 @@ public:
             os.ReadPbHeader(field_seq, field_size);
             switch (field_seq)
             {
-            case 0: os.ReadPb(field_size, names); break;
+            case 0: os.ReadPb(field_size, vNames); break;
             default: os.SkipPb(field_size); break;
             }
         }
@@ -41,7 +41,7 @@ public:
     bool FromJson(const Json::Value& in)
     {
         if (!in.isObject()) return false;
-        if (in.isMember("names") && !::OI::Rpc::FromJsonValue(in["names"], names)) return false;
+        if (in.isMember("names") && !::OI::Rpc::FromJsonValue(in["names"], vNames)) return false;
         return true;
     }
     bool FromJson(const std::string& text)
@@ -57,7 +57,7 @@ public:
     void ToJson(Json::Value& out) const
     {
         out = Json::Value(Json::objectValue);
-        ::OI::Rpc::ToJsonValue(out["names"], names);
+        ::OI::Rpc::ToJsonValue(out["names"], vNames);
     }
     std::string ToJson() const
     {

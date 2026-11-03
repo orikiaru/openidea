@@ -1,21 +1,21 @@
 #include "oi_parser.h"
 namespace OI { namespace Rpc {
 
-::OI::Base::BytesStream EncodePbFrame(proto_type_t id, ::OI::Base::BytesStream& body)
+::OI::Base::BytesStream EncodePbFrame(proto_type_t iIdParam, ::OI::Base::BytesStream& stBodyParam)
 {
-	if (body.Size() > (size_t)0x7FFFFFFF)
+	if (stBodyParam.Size() > (size_t)0x7FFFFFFF)
 	{
 		throw ::OI::Base::ParserException();
 	}
-	::OI::Base::BytesStream os;
-	uint32_t size = (uint32_t)body.Size();
-	const void* data = NULL;
-	if (size > 0)
+	::OI::Base::BytesStream stOutputStream;
+	uint32_t iSize = (uint32_t)stBodyParam.Size();
+	const void* pData = NULL;
+	if (iSize > 0)
 	{
-		data = body.Begin();
+		pData = stBodyParam.Begin();
 	}
-	os.WritePbRaw((uint32_t)id, data, size);
-	return os;
+	stOutputStream.WritePbRaw((uint32_t)iIdParam, pData, iSize);
+	return stOutputStream;
 }
 }}
 

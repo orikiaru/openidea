@@ -10,7 +10,7 @@
 - `ms <= 0` 只把句柄放回队列，这一轮不再碰它。主循环会先去 poll，再跑新挂上的
 - 应用层要空等一段时间，只用 `co_await coro::yield(毫秒)`。不要 `sleep`、`sleep_for`、`Sleep`、`usleep`。单线程就这一条线程，睡下去 poll 停转，套接字里的数据发不出去
 
-`co_await` 一条 `Task` 会在调用方的栈上把子协程 `resume` 到它自己挂起为止。子协程当场跑完，调用方不挂起。子协程自己停住（等回包或定时）时，把调用方记在 `continuation` 上，子协程结束再 `Schedule` 调用方。
+`co_await` 一条 `Task` 会在调用方的栈上把子协程 `resume` 到它自己挂起为止。子协程当场跑完，调用方不挂起。子协程自己停住（等回包或定时）时，把调用方记在 `stContinuation` 上，子协程结束再 `Schedule` 调用方。
 
 所以不要在第一次挂起之前层层 `co_await` 子任务，栈会随层数涨。`StartTask` 只入队，不加栈。
 
@@ -34,8 +34,8 @@
 
 ```cpp
 HandleRpc<AllEchoReq>([](const AllEchoReq& req, AllEchoRes& res) -> OI::Rpc::RpcTask {
-    res.data = req.data;
-    res.code = 1;
+    res.stData = req.stData;
+    res.iCode = 1;
     co_return 0;
 });
 ```
@@ -136,14 +136,14 @@ int32_t ret = co_await RpcCall(client, req, output);
 
 `GetRet()` 返回 `int32_t`。`GetRes()` 在成功时返回引用，结果对象必须仍然存活；也可 `auto res = result.GetRes()` 复制响应，或 `auto res = std::move(result).GetRes()` 转移响应。错误时访问响应抛出 `std::logic_error`，不会把默认响应伪装成成功。结果字段通过这两个方法访问。
 
-服务端推荐只接收 `(req, res)`，注册只写请求类型 `HandleRpc<Req>`，响应类型自动配对。需要连接信息时接收 `(const RpcContext&, req, res)`，上下文包含 `token`、`manager` 引用和 `sid`，仅在本次处理期间有效。旧五参数 `(token, mgr, sid, req, res)` 继续兼容。协程处理函数返回 `OI::Rpc::RpcTask`，用 `co_return int32_t` 返回状态码；同步处理函数直接返回 `int32_t`。原来的 `coro::Task` 处理函数继续兼容，正常结束视为成功：
+服务端推荐只接收 `(req, res)`，注册只写请求类型 `HandleRpc<Req>`，响应类型自动配对。需要连接信息时接收 `(const RpcContext&, req, res)`，上下文包含 `iToken`、`stManager` 引用和 `iSessionId`，仅在本次处理期间有效。旧五参数 `(token, mgr, sid, req, res)` 继续兼容。协程处理函数返回 `OI::Rpc::RpcTask`，用 `co_return int32_t` 返回状态码；同步处理函数直接返回 `int32_t`。原来的 `coro::Task` 处理函数继续兼容，正常结束视为成功：
 
 ```cpp
 HandleRpc<HoldReq>([](const HoldReq& req, HoldRes& res) -> OI::Rpc::RpcTask {
-    if (req.delay_ms < 0) {
+    if (req.iDelayMilliseconds < 0) {
         co_return 1001;
     }
-    res.mark = req.mark;
+    res.iMark = req.iMark;
     co_return 0;
 });
 ```
@@ -157,9 +157,9 @@ HandleRpc<HoldReq>([](const HoldReq& req, HoldRes& res) -> OI::Rpc::RpcTask {
 ```cpp
 static OI_RPC_HANDLER(Hold, HandleHold)
 {
-    if (req.delay_ms < 0) co_return 1001;
-    if (req.delay_ms > 0) co_await coro::yield(req.delay_ms);
-    res.mark = req.mark;
+    if (stRequest.iDelayMilliseconds < 0) co_return 1001;
+    if (stRequest.iDelayMilliseconds > 0) co_await coro::yield(stRequest.iDelayMilliseconds);
+    stResponse.iMark = stRequest.iMark;
     co_return 0;
 }
 
@@ -167,6 +167,6 @@ static OI_RPC_HANDLER(Hold, HandleHold)
 OI_RPC_BIND(Hold, HandleHold);
 ```
 
-`OI_RPC_HANDLER(Name, Function)` 用于协程函数声明或定义，提供 `req`（const 引用）和 `res` 参数，函数体用 `co_return int32_t`。`OI_RPC_SYNC_HANDLER` 用于同步处理，函数体用 `return int32_t`。`OI_RPC_CONTEXT_HANDLER` 额外提供 `context`，按需访问 token、manager 和 sid。头文件声明可写 `OI_RPC_HANDLER(Hold, HandleHold);`。宏本身不加 static，文件内部函数可自行加 static。
+`OI_RPC_HANDLER(Name, Function)` 用于协程函数声明或定义，提供 `stRequest`（const 引用）和 `stResponse` 参数，函数体用 `co_return int32_t`。`OI_RPC_SYNC_HANDLER` 用于同步处理，函数体用 `return int32_t`。`OI_RPC_CONTEXT_HANDLER` 额外提供 `stContext`，按需访问 iToken、stManager 和 iSessionId。头文件声明可写 `OI_RPC_HANDLER(Hold, HandleHold);`。宏本身不加 static，文件内部函数可自行加 static。
 
 `OI_RPC_BIND(Name, Function)` 使用请求关联的响应类型注册，不增加运行时包装层。也可传函数对象或 lambda；实例成员函数需绑定对象，且对象必须活到所有请求处理结束。原模板接口仍可直接使用，不按 NameReq/NameRes 命名的协议可用模板注册。

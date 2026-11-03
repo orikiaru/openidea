@@ -16,75 +16,75 @@ namespace
 {
 class RedisEv : public ::OI::Net::Channel
 {
-	redisAsyncContext* _ac;
-	int32_t _mask;
-	bool _in_io;
-	bool _dead;
+	redisAsyncContext* m_pAsyncContext;
+	int32_t m_iMask;
+	bool m_bInIo;
+	bool m_bDead;
 public:
-	RedisEv(::OI::Net::NetSocket sock, redisAsyncContext* ac)
-		: ::OI::Net::Channel(sock, NULL), _ac(ac), _mask(0), _in_io(false), _dead(false)
+	RedisEv(::OI::Net::NetSocket stSockParam, redisAsyncContext* pAsyncContextParam)
+		: ::OI::Net::Channel(stSockParam, NULL), m_pAsyncContext(pAsyncContextParam), m_iMask(0), m_bInIo(false), m_bDead(false)
 	{
 	}
 	void DataIn()
 	{
-		_in_io = true;
-		if (_ac)
+		m_bInIo = true;
+		if (m_pAsyncContext)
 		{
-			redisAsyncHandleRead(_ac);
+			redisAsyncHandleRead(m_pAsyncContext);
 		}
 	}
 	void DataOut()
 	{
-		_in_io = true;
-		if (_ac)
+		m_bInIo = true;
+		if (m_pAsyncContext)
 		{
-			redisAsyncHandleWrite(_ac);
+			redisAsyncHandleWrite(m_pAsyncContext);
 		}
 	}
 	bool TryClose()
 	{
-		if (!_dead)
+		if (!m_bDead)
 		{
-			_in_io = false;
+			m_bInIo = false;
 			return false;
 		}
 		::OI::Net::Poll::GetInstance().IOEventUnRegister(this, false);
 		delete this;
 		return true;
 	}
-	void Add(int32_t bit)
+	void Add(int32_t iBitParam)
 	{
-		_mask |= bit;
+		m_iMask |= iBitParam;
 		Touch();
 	}
-	void Del(int32_t bit)
+	void Del(int32_t iBitParam)
 	{
-		_mask &= ~bit;
+		m_iMask &= ~iBitParam;
 		Touch();
 	}
 	void Touch()
 	{
-		if (_dead)
+		if (m_bDead)
 		{
 			return;
 		}
-		if (_poll_token == NULL)
+		if (pPollToken == NULL)
 		{
-			if (_mask == 0)
+			if (m_iMask == 0)
 			{
 				return;
 			}
 			::OI::Net::Poll::GetInstance().IOEventRegister(this,
-				(_mask & ::OI::Net::IO_EV_READ) != 0, (_mask & ::OI::Net::IO_EV_WRITE) != 0);
+				(m_iMask & ::OI::Net::IO_EV_READ) != 0, (m_iMask & ::OI::Net::IO_EV_WRITE) != 0);
 			return;
 		}
-		::OI::Net::Poll::GetInstance().IOEventMod(this, _mask);
+		::OI::Net::Poll::GetInstance().IOEventMod(this, m_iMask);
 	}
 	void Cleanup()
 	{
-		_ac = NULL;
-		_dead = true;
-		if (_in_io)
+		m_pAsyncContext = NULL;
+		m_bDead = true;
+		if (m_bInIo)
 		{
 			return;
 		}
@@ -93,154 +93,154 @@ public:
 	}
 };
 
-void EvAddRead(void* p) { ((RedisEv*)p)->Add(::OI::Net::IO_EV_READ); }
-void EvDelRead(void* p) { ((RedisEv*)p)->Del(::OI::Net::IO_EV_READ); }
-void EvAddWrite(void* p) { ((RedisEv*)p)->Add(::OI::Net::IO_EV_WRITE); }
-void EvDelWrite(void* p) { ((RedisEv*)p)->Del(::OI::Net::IO_EV_WRITE); }
-void EvCleanup(void* p) { ((RedisEv*)p)->Cleanup(); }
+void EvAddRead(void* pPointerParam) { ((RedisEv*)pPointerParam)->Add(::OI::Net::IO_EV_READ); }
+void EvDelRead(void* pPointerParam) { ((RedisEv*)pPointerParam)->Del(::OI::Net::IO_EV_READ); }
+void EvAddWrite(void* pPointerParam) { ((RedisEv*)pPointerParam)->Add(::OI::Net::IO_EV_WRITE); }
+void EvDelWrite(void* pPointerParam) { ((RedisEv*)pPointerParam)->Del(::OI::Net::IO_EV_WRITE); }
+void EvCleanup(void* pPointerParam) { ((RedisEv*)pPointerParam)->Cleanup(); }
 
-int AttachRedis(redisAsyncContext* ac)
+int AttachRedis(redisAsyncContext* pAsyncContextParam)
 {
-	if (!ac || ac->ev.data != NULL)
+	if (!pAsyncContextParam || pAsyncContextParam->ev.data != NULL)
 	{
 		return REDIS_ERR;
 	}
-	::OI::Net::NetSocket sock;
-	sock.Attach(ac->c.fd);
-	RedisEv* ev = new RedisEv(sock, ac);
-	ac->ev.addRead = EvAddRead;
-	ac->ev.delRead = EvDelRead;
-	ac->ev.addWrite = EvAddWrite;
-	ac->ev.delWrite = EvDelWrite;
-	ac->ev.cleanup = EvCleanup;
-	ac->ev.data = ev;
+	::OI::Net::NetSocket stSock;
+	stSock.Attach(pAsyncContextParam->c.fd);
+	RedisEv* pEv = new RedisEv(stSock, pAsyncContextParam);
+	pAsyncContextParam->ev.addRead = EvAddRead;
+	pAsyncContextParam->ev.delRead = EvDelRead;
+	pAsyncContextParam->ev.addWrite = EvAddWrite;
+	pAsyncContextParam->ev.delWrite = EvDelWrite;
+	pAsyncContextParam->ev.cleanup = EvCleanup;
+	pAsyncContextParam->ev.data = pEv;
 	return REDIS_OK;
 }
 
-void AppendBulk(::OI::Base::Bytes& out, const char* s, size_t n)
+void AppendBulk(::OI::Base::Bytes& stOutputParam, const char* pTextParam, size_t iNumberParam)
 {
-	char hdr[64];
-	int hn = snprintf(hdr, sizeof(hdr), "$%zu\r\n", n);
-	out.Append(hdr, (size_t)hn);
-	if (n && s)
+	char vHdr[64];
+	int iHn = snprintf(vHdr, sizeof(vHdr), "$%zu\r\n", iNumberParam);
+	stOutputParam.Append(vHdr, (size_t)iHn);
+	if (iNumberParam && pTextParam)
 	{
-		out.Append(s, n);
+		stOutputParam.Append(pTextParam, iNumberParam);
 	}
-	out.Append("\r\n", 2);
+	stOutputParam.Append("\r\n", 2);
 }
 
-void AppendReply(::OI::Base::Bytes& out, const redisReply* reply)
+void AppendReply(::OI::Base::Bytes& stOutputParam, const redisReply* pReplyParam)
 {
-	if (!reply)
+	if (!pReplyParam)
 	{
-		out.Append("$-1\r\n", 5);
+		stOutputParam.Append("$-1\r\n", 5);
 		return;
 	}
-	char hdr[64];
-	int hn = 0;
-	switch (reply->type)
+	char vHdr[64];
+	int iHn = 0;
+	switch (pReplyParam->type)
 	{
 	case REDIS_REPLY_STATUS:
-		out.Append("+", 1);
-		if (reply->str)
+		stOutputParam.Append("+", 1);
+		if (pReplyParam->str)
 		{
-			out.Append(reply->str, reply->len);
+			stOutputParam.Append(pReplyParam->str, pReplyParam->len);
 		}
-		out.Append("\r\n", 2);
+		stOutputParam.Append("\r\n", 2);
 		break;
 	case REDIS_REPLY_ERROR:
-		out.Append("-", 1);
-		if (reply->str)
+		stOutputParam.Append("-", 1);
+		if (pReplyParam->str)
 		{
-			out.Append(reply->str, reply->len);
+			stOutputParam.Append(pReplyParam->str, pReplyParam->len);
 		}
-		out.Append("\r\n", 2);
+		stOutputParam.Append("\r\n", 2);
 		break;
 	case REDIS_REPLY_INTEGER:
 	case REDIS_REPLY_BOOL:
-		hn = snprintf(hdr, sizeof(hdr), ":%lld\r\n", reply->integer);
-		out.Append(hdr, (size_t)hn);
+		iHn = snprintf(vHdr, sizeof(vHdr), ":%lld\r\n", pReplyParam->integer);
+		stOutputParam.Append(vHdr, (size_t)iHn);
 		break;
 	case REDIS_REPLY_NIL:
-		out.Append("$-1\r\n", 5);
+		stOutputParam.Append("$-1\r\n", 5);
 		break;
 	case REDIS_REPLY_STRING:
-		AppendBulk(out, reply->str, reply->len);
+		AppendBulk(stOutputParam, pReplyParam->str, pReplyParam->len);
 		break;
 	case REDIS_REPLY_ARRAY:
-		hn = snprintf(hdr, sizeof(hdr), "*%zu\r\n", reply->elements);
-		out.Append(hdr, (size_t)hn);
-		for (size_t i = 0; i < reply->elements; ++i)
+		iHn = snprintf(vHdr, sizeof(vHdr), "*%zu\r\n", pReplyParam->elements);
+		stOutputParam.Append(vHdr, (size_t)iHn);
+		for (size_t iIndexLocal = 0; iIndexLocal < pReplyParam->elements; ++iIndexLocal)
 		{
-			AppendReply(out, reply->element[i]);
+			AppendReply(stOutputParam, pReplyParam->element[iIndexLocal]);
 		}
 		break;
 	default:
-		out.Append("-ERR reply\r\n", 12);
+		stOutputParam.Append("-ERR reply\r\n", 12);
 		break;
 	}
 }
 
-void AppendErr(::OI::Base::Bytes& out, const char* text)
+void AppendErr(::OI::Base::Bytes& stOutputParam, const char* pTextParam)
 {
-	out.Append("-", 1);
-	out.Append(text, strlen(text));
-	out.Append("\r\n", 2);
+	stOutputParam.Append("-", 1);
+	stOutputParam.Append(pTextParam, strlen(pTextParam));
+	stOutputParam.Append("\r\n", 2);
 }
 
-void OnReply(redisAsyncContext*, void* reply, void* priv)
+void OnReply(redisAsyncContext*, void* pReplyParam, void* pPrivParam)
 {
-	sid_t sid = (sid_t)(intptr_t)priv;
+	sid_t iSessionIdLocal = (sid_t)(intptr_t)pPrivParam;
 	// 单线程进程，回包缓冲复用一块，不必每条回执分配。
-	static ::OI::Base::Bytes out;
-	out.Clear();
-	if (!reply)
+	static ::OI::Base::Bytes stOutput;
+	stOutput.Clear();
+	if (!pReplyParam)
 	{
-		AppendErr(out, "ERR redis down");
+		AppendErr(stOutput, "ERR redis down");
 	}
 	else
 	{
-		AppendReply(out, (redisReply*)reply);
-		freeReplyObject(reply);
+		AppendReply(stOutput, (redisReply*)pReplyParam);
+		freeReplyObject(pReplyParam);
 	}
-	if (!RedisServer::GetInstance().SendBytes(sid, out)) RedisServer::GetInstance().CloseSession(sid);
+	if (!RedisServer::GetInstance().SendBytes(iSessionIdLocal, stOutput)) RedisServer::GetInstance().CloseSession(iSessionIdLocal);
 }
 
-void OnConnect(redisAsyncContext* c, int status)
+void OnConnect(redisAsyncContext* pCharacterParam, int iStatusParam)
 {
-	RedisLink* link = (RedisLink*)c->data;
-	if (status != REDIS_OK)
+	RedisLink* pLink = (RedisLink*)pCharacterParam->data;
+	if (iStatusParam != REDIS_OK)
 	{
-		LOG_ERROR("RedisServer hiredis connect %s", c->c.errstr);
-		link->ac = NULL;
-		RedisServer::GetInstance().ArmReconnect(link);
+		LOG_ERROR("RedisServer hiredis connect %s", pCharacterParam->c.errstr);
+		pLink->pAsyncContext = NULL;
+		RedisServer::GetInstance().ArmReconnect(pLink);
 		return;
 	}
-	LOG_TRACE("RedisServer hiredis up index=%d", link->index);
+	LOG_TRACE("RedisServer hiredis up index=%d", pLink->iIndex);
 }
 
-void OnDisconnect(const redisAsyncContext* c, int status)
+void OnDisconnect(const redisAsyncContext* pCharacterParam, int iStatusParam)
 {
-	(void)status;
-	RedisLink* link = (RedisLink*)c->data;
-	LOG_TRACE("RedisServer hiredis down index=%d", link->index);
-	link->ac = NULL;
-	RedisServer::GetInstance().ArmReconnect(link);
+	(void)iStatusParam;
+	RedisLink* pLink = (RedisLink*)pCharacterParam->data;
+	LOG_TRACE("RedisServer hiredis down index=%d", pLink->iIndex);
+	pLink->pAsyncContext = NULL;
+	RedisServer::GetInstance().ArmReconnect(pLink);
 }
 }
 
-RedisServer::RedisServer() : _connections(1), _next(0)
+RedisServer::RedisServer() : m_iConnections(1), m_iNext(0)
 {
 }
 
 RedisServer::~RedisServer()
 {
-	for (size_t i = 0; i < _links.size(); ++i)
+	for (size_t iIndexLocal = 0; iIndexLocal < m_vLinks.size(); ++iIndexLocal)
 	{
-		if (_links[i].ac)
+		if (m_vLinks[iIndexLocal].pAsyncContext)
 		{
-			redisAsyncFree(_links[i].ac);
-			_links[i].ac = NULL;
+			redisAsyncFree(m_vLinks[iIndexLocal].pAsyncContext);
+			m_vLinks[iIndexLocal].pAsyncContext = NULL;
 		}
 	}
 }
@@ -251,24 +251,24 @@ bool RedisServer::Init()
 	{
 		return false;
 	}
-	if (!TryGetConfig("Redis.ip", _redis_ip) || !TryGetConfig("Redis.port", _redis_port))
+	if (!TryGetConfig("Redis.ip", m_sRedisIp) || !TryGetConfig("Redis.port", m_sRedisPort))
 	{
 		LOG_ERROR("RedisServer missing Redis.ip or Redis.port");
 		return false;
 	}
-	_connections = 1;
-	TryGetConfig("Redis.connections", _connections);
-	if (_connections < 1)
+	m_iConnections = 1;
+	TryGetConfig("Redis.connections", m_iConnections);
+	if (m_iConnections < 1)
 	{
-		_connections = 1;
+		m_iConnections = 1;
 	}
-	_links.resize((size_t)_connections);
-	for (int i = 0; i < _connections; ++i)
+	m_vLinks.resize((size_t)m_iConnections);
+	for (int iIndexLocal = 0; iIndexLocal < m_iConnections; ++iIndexLocal)
 	{
-		_links[(size_t)i].index = i;
-		Open(&_links[(size_t)i]);
+		m_vLinks[(size_t)iIndexLocal].iIndex = iIndexLocal;
+		Open(&m_vLinks[(size_t)iIndexLocal]);
 	}
-	LOG_TRACE("RedisServer connections=%d", _connections);
+	LOG_TRACE("RedisServer connections=%d", m_iConnections);
 	return true;
 }
 
@@ -277,81 +277,81 @@ bool RedisServer::Init()
 	return new RedisServerSession(this);
 }
 
-void RedisServer::OnAddSession(::OI::Net::Session* pSession)
+void RedisServer::OnAddSession(::OI::Net::Session* pSessionParam)
 {
-	int n = 0;
-	if (!_links.empty())
+	int iNumber = 0;
+	if (!m_vLinks.empty())
 	{
-		n = _next % (int)_links.size();
-		++_next;
+		iNumber = m_iNext % (int)m_vLinks.size();
+		++m_iNext;
 	}
-	((RedisServerSession*)pSession)->Bind(n);
-	LOG_TRACE("RedisServer::OnAddSession sid=%d link=%d", pSession->GetSessionID(), n);
+	((RedisServerSession*)pSessionParam)->Bind(iNumber);
+	LOG_TRACE("RedisServer::OnAddSession sid=%d link=%d", pSessionParam->GetSessionID(), iNumber);
 }
 
-void RedisServer::OnDelSession(const ::OI::Net::Session* pSession)
+void RedisServer::OnDelSession(const ::OI::Net::Session* pSessionParam)
 {
-	LOG_TRACE("RedisServer::OnDelSession sid=%d", pSession->GetSessionID());
+	LOG_TRACE("RedisServer::OnDelSession sid=%d", pSessionParam->GetSessionID());
 }
 
-void RedisServer::Open(RedisLink* link)
+void RedisServer::Open(RedisLink* pLinkParam)
 {
-	if (link->ac)
+	if (pLinkParam->pAsyncContext)
 	{
 		return;
 	}
-	redisAsyncContext* ac = redisAsyncConnect(_redis_ip.c_str(), std::atoi(_redis_port.c_str()));
-	if (!ac)
+	redisAsyncContext* pAsyncContextLocal = redisAsyncConnect(m_sRedisIp.c_str(), std::atoi(m_sRedisPort.c_str()));
+	if (!pAsyncContextLocal)
 	{
-		ArmReconnect(link);
+		ArmReconnect(pLinkParam);
 		return;
 	}
-	ac->data = link;
-	ac->c.flags |= REDIS_NO_AUTO_FREE_REPLIES;
-	if (ac->err)
+	pAsyncContextLocal->data = pLinkParam;
+	pAsyncContextLocal->c.flags |= REDIS_NO_AUTO_FREE_REPLIES;
+	if (pAsyncContextLocal->err)
 	{
-		LOG_ERROR("RedisServer hiredis %s", ac->c.errstr);
-		redisAsyncFree(ac);
-		ArmReconnect(link);
+		LOG_ERROR("RedisServer hiredis %s", pAsyncContextLocal->c.errstr);
+		redisAsyncFree(pAsyncContextLocal);
+		ArmReconnect(pLinkParam);
 		return;
 	}
-	if (AttachRedis(ac) != REDIS_OK)
+	if (AttachRedis(pAsyncContextLocal) != REDIS_OK)
 	{
 		LOG_ERROR("RedisServer hiredis attach");
-		redisAsyncFree(ac);
-		ArmReconnect(link);
+		redisAsyncFree(pAsyncContextLocal);
+		ArmReconnect(pLinkParam);
 		return;
 	}
-	link->ac = ac;
-	redisAsyncSetConnectCallbackNC(ac, OnConnect);
-	redisAsyncSetDisconnectCallback(ac, OnDisconnect);
+	pLinkParam->pAsyncContext = pAsyncContextLocal;
+	redisAsyncSetConnectCallbackNC(pAsyncContextLocal, OnConnect);
+	redisAsyncSetDisconnectCallback(pAsyncContextLocal, OnDisconnect);
 }
 
-void RedisServer::ArmReconnect(RedisLink* link)
+void RedisServer::ArmReconnect(RedisLink* pLinkParam)
 {
-	if (link->dialing)
+	if (pLinkParam->bDialing)
 	{
 		return;
 	}
-	link->dialing = true;
-	::OI::Timer::BaseTimerManager::GetInstance().AddTimer([link]() {
-		link->dialing = false;
-		RedisServer::GetInstance().Open(link);
+	pLinkParam->bDialing = true;
+	::OI::Timer::BaseTimerManager::GetInstance().AddTimer([pLinkParam]() {
+		pLinkParam->bDialing = false;
+		RedisServer::GetInstance().Open(pLinkParam);
 	}, 2000);
 }
 
-void RedisServer::Issue(int32_t link, sid_t sid, const char* cmd, size_t len)
+void RedisServer::Issue(int32_t iLinkParam, sid_t iSessionIdParam, const char* pCmdParam, size_t iLengthParam)
 {
-	::OI::Base::Bytes err;
-	if (link < 0 || link >= (int)_links.size() || !_links[(size_t)link].ac || len == 0)
+	::OI::Base::Bytes stErrorLocal;
+	if (iLinkParam < 0 || iLinkParam >= (int)m_vLinks.size() || !m_vLinks[(size_t)iLinkParam].pAsyncContext || iLengthParam == 0)
 	{
-		AppendErr(err, "ERR redis down");
-		if (!SendBytes(sid, err)) CloseSession(sid);
+		AppendErr(stErrorLocal, "ERR redis down");
+		if (!SendBytes(iSessionIdParam, stErrorLocal)) CloseSession(iSessionIdParam);
 		return;
 	}
-	if (redisAsyncFormattedCommand(_links[(size_t)link].ac, OnReply, (void*)(intptr_t)sid, cmd, len) != REDIS_OK)
+	if (redisAsyncFormattedCommand(m_vLinks[(size_t)iLinkParam].pAsyncContext, OnReply, (void*)(intptr_t)iSessionIdParam, pCmdParam, iLengthParam) != REDIS_OK)
 	{
-		AppendErr(err, "ERR redis down");
-		if (!SendBytes(sid, err)) CloseSession(sid);
+		AppendErr(stErrorLocal, "ERR redis down");
+		if (!SendBytes(iSessionIdParam, stErrorLocal)) CloseSession(iSessionIdParam);
 	}
 }

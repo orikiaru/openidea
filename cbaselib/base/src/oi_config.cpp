@@ -5,28 +5,28 @@
 namespace OI { namespace Base {
 Config::Config()
 {
-	_toml_config = cpptoml::make_table();
+	m_pTomlConfig = cpptoml::make_table();
 }
 
-bool Config::Parse(const std::string& conf_file_name)
+bool Config::Parse(const std::string& sConfFileNameParam)
 {
-	std::shared_ptr<cpptoml::table> config;
+	std::shared_ptr<cpptoml::table> pConfig;
 	try
 	{
-		config = cpptoml::parse_file(conf_file_name);
+		pConfig = cpptoml::parse_file(sConfFileNameParam);
 	}
-	catch (const cpptoml::parse_exception & e)
+	catch (const cpptoml::parse_exception & stErrorLocal)
 	{
-		std::cerr << "Failed to parse " << conf_file_name << ": " << e.what() << std::endl;
+		std::cerr << "Failed to parse " << sConfFileNameParam << ": " << stErrorLocal.what() << std::endl;
 		return false;
 	}
-	for (auto it = config->begin(); it != config->end(); ++it)
+	for (const auto& [sName, pValue] : *pConfig)
 	{
-		if (_toml_config->contains(it->first))
+		if (m_pTomlConfig->contains(sName))
 		{
 			//TODO LOGWarning
 		}
-		_toml_config->insert(it->first, it->second);
+		m_pTomlConfig->insert(sName, pValue);
 	}
 	return true;
 }

@@ -18,8 +18,8 @@ class Poll
 {
 	DECLARE_SINGLETON(Poll)
 	Poll() {}
-	std::thread::id	_loop_thread;
-	std::thread		_thread;
+	std::thread::id	m_stLoopThread;
+	std::thread		m_stThread;
 public:
 	~Poll();
 
@@ -28,25 +28,25 @@ public:
 
 	bool InLoopThread() const
 	{
-		return std::this_thread::get_id() == _loop_thread;
+		return std::this_thread::get_id() == m_stLoopThread;
 	}
 	// 套接字事件只从 Channel 的 DataIn / DataOut 进来。只在 poll 线程里用。
 	::uv_loop_s* Loop();
 	// 已经在 poll 线程就直接执行，否则丢进 libuv 再执行。定时器轮子只能在这条线程上改。
-	void CallOnLoop(void (*fn)(void*), void* arg);
+	void CallOnLoop(void (*fnFunctionParam)(void*), void* pArgumentParam);
 
-	void IOEventRegister(Channel* pChannel, bool allow_read = true, bool allow_write = false);
-	void IOEventMod(Channel* pChannel, int new_mask);
+	void IOEventRegister(Channel* pChannelParam, bool bAllowReadParam = true, bool bAllowWriteParam = false);
+	void IOEventMod(Channel* pChannelParam, int iNewMaskParam);
 	// 只在 poll 线程调用。先摘掉事件，ms 毫秒后恢复成暂停前的掩码。通道在这段时间里不能删。
-	void PauseEvents(Channel* pChannel, unsigned ms);
+	void PauseEvents(Channel* pChannelParam, unsigned iMillisecondsParam);
 	// close_fd 为假时只摘掉监听，套接字留给调用方关。
-	void IOEventUnRegister(Channel* pChannel, bool close_fd = true);
-	static void* StartThreadPollWait(void* arg);
+	void IOEventUnRegister(Channel* pChannelParam, bool bCloseDescriptorParam = true);
+	static void* StartThreadPollWait(void* pArgumentParam);
 	void StopAndJoin();
 	// wait_ms 为 0 时只试一次已经就绪的事件，不睡。否则堵住等网络或定时器。
-	void PollWait(int wait_ms = 1000);
+	void PollWait(int iWaitMillisecondsParam = 1000);
 	// libuv 重复定时器。循环起来之前调用，到点在 poll 线程执行 fn。
-	void ArmTick(unsigned repeat_ms, void (*fn)());
+	void ArmTick(unsigned iRepeatMillisecondsParam, void (*fnFunctionParam)());
 };
 
 }}

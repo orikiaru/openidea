@@ -10,9 +10,9 @@
 #include "oi_thread.h"
 
 namespace OI { namespace Thread {
-static std::string GetPrioConfigString(PRIO_ENUM prio)
+static std::string GetPrioConfigString(PRIO_ENUM iPriorityParam)
 {
-	switch (prio)
+	switch (iPriorityParam)
 	{
 	case PRIO_ENUM::PRIO_NORMAL:
 		return "normal";
@@ -31,34 +31,34 @@ static std::string GetPrioConfigString(PRIO_ENUM prio)
 static constexpr int kDefaultThreadCount = 3;
 bool ThreadPool::Init()
 {
-	int64_t max_task_count = 0;
-	if (TryGetConfig("ThreadPool.max_task_count", max_task_count))
+	int64_t iMaxTaskCountLocal = 0;
+	if (TryGetConfig("ThreadPool.max_task_count", iMaxTaskCountLocal))
 	{
-		if (max_task_count <= 0 || max_task_count > (int64_t)UINT32_MAX)
+		if (iMaxTaskCountLocal <= 0 || iMaxTaskCountLocal > (int64_t)UINT32_MAX)
 		{
-			fprintf(stderr, "ThreadPool.max_task_count=%lld must be in [1, %u]\n", (long long)max_task_count, UINT32_MAX);
+			fprintf(stderr, "ThreadPool.max_task_count=%lld must be in [1, %u]\n", (long long)iMaxTaskCountLocal, UINT32_MAX);
 			return false;
 		}
-		_max_task_count = (uint32_t)max_task_count;
+		iMaxTaskCount = (uint32_t)iMaxTaskCountLocal;
 	}
 #ifdef _SINGLE_THREAD_
-	for(int i = PRIO_NORMAL; i < PRIO_NUM; ++i)
+	for(int iIndexLocal = PRIO_NORMAL; iIndexLocal < PRIO_NUM; ++iIndexLocal)
 	{
-		ThreadData& thread_data = _thread_data[i];
-		thread_data._thread_count = 1;
+		ThreadData& stThreadData = vThreadData[iIndexLocal];
+		stThreadData.iThreadCount = 1;
 	}
 #else
-	for(int i = PRIO_NORMAL; i < PRIO_NUM; ++i)
+	for(int iIndexLocal = PRIO_NORMAL; iIndexLocal < PRIO_NUM; ++iIndexLocal)
 	{
-		ThreadData& thread_data = _thread_data[i];
+		ThreadData& stThreadData = vThreadData[iIndexLocal];
 
-		thread_data._thread_count = kDefaultThreadCount;
-		std::string config_key = "ThreadPool." + GetPrioConfigString((PRIO_ENUM)i);
-		TryGetConfigAndReturnFalse(config_key, thread_data._thread_count);
+		stThreadData.iThreadCount = kDefaultThreadCount;
+		std::string sConfigKey = "ThreadPool." + GetPrioConfigString((PRIO_ENUM)iIndexLocal);
+		TryGetConfigAndReturnFalse(sConfigKey, stThreadData.iThreadCount);
 
-		if (i == PRIO_ENUM::PRIO_QUEUE)
+		if (iIndexLocal == PRIO_ENUM::PRIO_QUEUE)
 		{
-			thread_data._thread_count = 1;
+			stThreadData.iThreadCount = 1;
 		}
 
 	}
@@ -66,63 +66,63 @@ bool ThreadPool::Init()
 	return true;
 }
 
-Task* FetchTask(ThreadPool::ThreadData* p_data)
+Task* FetchTask(ThreadPool::ThreadData* pDataParam)
 {
-	assert(p_data);
+	assert(pDataParam);
 	Task* pTask = NULL;
-	if(p_data->_task_count)
+	if(pDataParam->iTaskCount)
 	{
-		pTask = p_data->_task_list.front();	
-		p_data->_task_list.pop_front();
-		p_data->_task_count --;
+		pTask = pDataParam->vTaskList.front();
+		pDataParam->vTaskList.pop_front();
+		pDataParam->iTaskCount --;
 	}
 
 	return pTask;
 }
 
-static void WorkerMain(ThreadPool::ThreadData* p_data)
+static void WorkerMain(ThreadPool::ThreadData* pDataParam)
 {
 	ThreadPool::InitIgnoreSig();
-	assert(p_data);
-	unsigned coro_streak = 0;
+	assert(pDataParam);
+	unsigned iCoroutineStreak = 0;
 	for (;;)
 	{
 		Task* pTask = NULL;
-		std::coroutine_handle<> coro;
+		std::coroutine_handle<> stCoroutine;
 		{
-			std::unique_lock<std::mutex> lock(p_data->_mutex);
-			p_data->_idle++;
-			p_data->_cond.wait(lock, [&]() {
-				return p_data->_task_count > 0 || p_data->_coro_count > 0 || ThreadPool::GetInstance().Stopping();
+			std::unique_lock<std::mutex> stLock(pDataParam->stMutex);
+			pDataParam->iIdleThreadCount++;
+			pDataParam->stCondition.wait(stLock, [&]() {
+				return pDataParam->iTaskCount > 0 || pDataParam->iCoroutineCount > 0 || ThreadPool::GetInstance().Stopping();
 			});
-			p_data->_idle--;
+			pDataParam->iIdleThreadCount--;
 			// 停了就走。否则 poll 上的定时器会一直塞任务，join 等不到。
 			if (ThreadPool::GetInstance().Stopping())
 			{
 				return;
 			}
-			if (p_data->_coro_count > 0 && (p_data->_task_count == 0 || coro_streak < 32))
+			if (pDataParam->iCoroutineCount > 0 && (pDataParam->iTaskCount == 0 || iCoroutineStreak < 32))
 			{
-				coro = p_data->_coros.front();
-				p_data->_coros.pop_front();
-				p_data->_coro_count--;
-				if (coro_streak < 32) ++coro_streak;
+				stCoroutine = pDataParam->vCoroutines.front();
+				pDataParam->vCoroutines.pop_front();
+				pDataParam->iCoroutineCount--;
+				if (iCoroutineStreak < 32) ++iCoroutineStreak;
 			}
 			else
 			{
-				coro_streak = 0;
-				pTask = p_data->_task_list.front();
-				p_data->_task_list.pop_front();
-				p_data->_task_count--;
+				iCoroutineStreak = 0;
+				pTask = pDataParam->vTaskList.front();
+				pDataParam->vTaskList.pop_front();
+				pDataParam->iTaskCount--;
 			}
 		}
-		if (coro)
+		if (stCoroutine)
 		{
 			// 只 resume。跑完的根协程由 SetAfterResume 登记的函数释放。
-			coro.resume();
-			if (ThreadPool::GetInstance()._after_resume)
+			stCoroutine.resume();
+			if (ThreadPool::GetInstance().fnAfterResume)
 			{
-				ThreadPool::GetInstance()._after_resume();
+				ThreadPool::GetInstance().fnAfterResume();
 			}
 		}
 		else
@@ -132,63 +132,63 @@ static void WorkerMain(ThreadPool::ThreadData* p_data)
 	}
 }
 
-void ThreadPool::PostCoroutine(std::coroutine_handle<> handle)
+void ThreadPool::PostCoroutine(std::coroutine_handle<> stHandleParam)
 {
-	if (!handle)
+	if (!stHandleParam)
 	{
 		return;
 	}
 #ifndef _SINGLE_THREAD_
-	ThreadData& thread_data = _thread_data[PRIO_NORMAL];
-	bool wake = false;
+	ThreadData& stThreadData = vThreadData[PRIO_NORMAL];
+	bool bWake = false;
 	{
-		std::lock_guard<std::mutex> lock(thread_data._mutex);
-		thread_data._coros.push_back(handle);
-		thread_data._coro_count++;
-		wake = thread_data._idle > 0;
+		std::lock_guard<std::mutex> stLock(stThreadData.stMutex);
+		stThreadData.vCoroutines.push_back(stHandleParam);
+		stThreadData.iCoroutineCount++;
+		bWake = stThreadData.iIdleThreadCount > 0;
 	}
-	if (wake)
+	if (bWake)
 	{
-		thread_data._cond.notify_one();
+		stThreadData.stCondition.notify_one();
 	}
 #else
-	(void)handle;
+	(void)stHandleParam;
 #endif
 }
 
-void ThreadPool::RequestStop(int code)
+void ThreadPool::RequestStop(int iCodeParam)
 {
 	{
-		std::lock_guard<std::mutex> lock(_stop_mu);
-		if (!_stop.exchange(true))
+		std::lock_guard<std::mutex> stLock(stStopMutex);
+		if (!bStop.exchange(true))
 		{
-			_exit_code = code;
+			iExitCode = iCodeParam;
 		}
 	}
-	_stop_cond.notify_one();
-	for (int i = PRIO_NORMAL; i < PRIO_NUM; ++i)
+	stStopCondition.notify_one();
+	for (int iIndexLocal = PRIO_NORMAL; iIndexLocal < PRIO_NUM; ++iIndexLocal)
 	{
 		// 与 wait 的谓词检查握手，避免检查 false 后、真正入睡前漏掉通知。
-		{ std::lock_guard<std::mutex> lock(_thread_data[i]._mutex); }
-		_thread_data[i]._cond.notify_all();
+		{ std::lock_guard<std::mutex> stLock(vThreadData[iIndexLocal].stMutex); }
+		vThreadData[iIndexLocal].stCondition.notify_all();
 	}
 }
 
-bool ThreadPool::CreateSpecThread(std::thread& out, void* (*thread_handle)(void*), void* arg)
+bool ThreadPool::CreateSpecThread(std::thread& stOutputParam, void* (*fnThreadHandleParam)(void*), void* pArgumentParam)
 {
 #ifndef _SINGLE_THREAD_
 	InitIgnoreSig();
 	try
 	{
 		// 新线程等 out 写好再跑。线程函数里常拿自己的 id 和 out.get_id() 比。
-		std::promise<void> go;
-		std::shared_future<void> started = go.get_future().share();
-		std::thread worker([thread_handle, arg, started]() {
-			started.wait();
-			thread_handle(arg);
+		std::promise<void> stGo;
+		std::shared_future<void> stStarted = stGo.get_future().share();
+		std::thread stWorker([fnThreadHandleParam, pArgumentParam, stStarted]() {
+			stStarted.wait();
+			fnThreadHandleParam(pArgumentParam);
 		});
-		out = std::move(worker);
-		go.set_value();
+		stOutputParam = std::move(stWorker);
+		stGo.set_value();
 	}
 	catch (...)
 	{
@@ -196,40 +196,40 @@ bool ThreadPool::CreateSpecThread(std::thread& out, void* (*thread_handle)(void*
 	}
 	return true;
 #else
-	(void)out;
-	(void)thread_handle;
-	(void)arg;
+	(void)stOutputParam;
+	(void)fnThreadHandleParam;
+	(void)pArgumentParam;
 	assert(false && "ThreadPool::CreateSpecThread is singlethread");
 	return false;
 #endif
 }
 
-void ThreadPool::SetDrain(bool (*fn)())
+void ThreadPool::SetDrain(bool (*fnFunctionParam)())
 {
-	_drain = fn;
+	fnDrain = fnFunctionParam;
 }
 
-void ThreadPool::SetPending(bool (*fn)())
+void ThreadPool::SetPending(bool (*fnFunctionParam)())
 {
-	_pending = fn;
+	fnPending = fnFunctionParam;
 }
 
-void ThreadPool::SetAfterResume(void (*fn)())
+void ThreadPool::SetAfterResume(void (*fnFunctionParam)())
 {
-	_after_resume = fn;
+	fnAfterResume = fnFunctionParam;
 }
 
 void ThreadPool::PumpOnce()
 {
 #ifdef _SINGLE_THREAD_
 	// 普通 Task 也只跑此刻队列里的。执行中再投的留到 poll 之后，避免自己把 poll 饿死。
-	for (int i = PRIO_NUM - 1; i >= PRIO_NORMAL; --i)
+	for (int iIndexLocal = PRIO_NUM - 1; iIndexLocal >= PRIO_NORMAL; --iIndexLocal)
 	{
-		ThreadData& thread_data = _thread_data[i];
-		unsigned int n = thread_data._task_count;
-		for (unsigned int k = 0; k < n; ++k)
+		ThreadData& stThreadData = vThreadData[iIndexLocal];
+		unsigned int iNumber = stThreadData.iTaskCount;
+		for (unsigned int iItemIndex = 0; iItemIndex < iNumber; ++iItemIndex)
 		{
-			Task* pTask = FetchTask(&thread_data);
+			Task* pTask = FetchTask(&stThreadData);
 			if (!pTask)
 			{
 				break;
@@ -237,24 +237,24 @@ void ThreadPool::PumpOnce()
 			pTask->Exec();
 		}
 	}
-	if (_drain)
+	if (fnDrain)
 	{
-		_drain();
+		fnDrain();
 	}
-	bool pending = _pending && _pending();
-	if (!pending)
+	bool bPending = fnPending && fnPending();
+	if (!bPending)
 	{
-		for (int i = PRIO_NORMAL; i < PRIO_NUM; ++i)
+		for (int iIndexLocal = PRIO_NORMAL; iIndexLocal < PRIO_NUM; ++iIndexLocal)
 		{
-			if (_thread_data[i]._task_count)
+			if (vThreadData[iIndexLocal].iTaskCount)
 			{
-				pending = true;
+				bPending = true;
 				break;
 			}
 		}
 	}
 	// 队列里还有下一轮，就只试一次网络；谁都不跑了才堵住等。
-	::OI::Net::Poll::GetInstance().PollWait(pending ? 0 : 1000);
+	::OI::Net::Poll::GetInstance().PollWait(bPending ? 0 : 1000);
 #else
 	assert(false && "PumpOnce is single-thread only");
 #endif
@@ -271,29 +271,29 @@ void ThreadPool::MultiThreadStartWork()
 #ifndef _SINGLE_THREAD_
 	//以上是主线程需要先忽略掉的信号
 	ThreadPool::InitIgnoreSig();
-	std::vector<std::thread> workers;
-	for (int i = PRIO_NORMAL; i < PRIO_NUM; ++i)
+	std::vector<std::thread> vWorkers;
+	for (int iIndexLocal = PRIO_NORMAL; iIndexLocal < PRIO_NUM; ++iIndexLocal)
 	{
-		ThreadData& thread_data = _thread_data[i];
-		for (int n = 0; n < thread_data._thread_count; ++n)
+		ThreadData& stThreadData = vThreadData[iIndexLocal];
+		for (int iNumber = 0; iNumber < stThreadData.iThreadCount; ++iNumber)
 		{
-			workers.emplace_back(WorkerMain, &thread_data);
+			vWorkers.emplace_back(WorkerMain, &stThreadData);
 		}
 	}
 
 	{
-		std::unique_lock<std::mutex> lock(_stop_mu);
-		_stop_cond.wait(lock, [&]() { return _stop.load(); });
+		std::unique_lock<std::mutex> stLock(stStopMutex);
+		stStopCondition.wait(stLock, [&]() { return bStop.load(); });
 	}
-	for (int i = PRIO_NORMAL; i < PRIO_NUM; ++i)
+	for (int iIndexLocal = PRIO_NORMAL; iIndexLocal < PRIO_NUM; ++iIndexLocal)
 	{
 		// 与 wait 的谓词检查握手，避免检查 false 后、真正入睡前漏掉通知。
-		{ std::lock_guard<std::mutex> lock(_thread_data[i]._mutex); }
-		_thread_data[i]._cond.notify_all();
+		{ std::lock_guard<std::mutex> stLock(vThreadData[iIndexLocal].stMutex); }
+		vThreadData[iIndexLocal].stCondition.notify_all();
 	}
-	for (size_t i = 0; i < workers.size(); ++i)
+	for (size_t iIndexLocal = 0; iIndexLocal < vWorkers.size(); ++iIndexLocal)
 	{
-		workers[i].join();
+		vWorkers[iIndexLocal].join();
 	}
 	// 工作线程已经退出，不会再往 poll 投任务。
 	::OI::Net::Poll::GetInstance().StopAndJoin();
@@ -309,33 +309,33 @@ void ThreadPool::StartWork()
 #endif
 }
 
-bool ThreadPool::AddTask(Task* pTask)
+bool ThreadPool::AddTask(Task* pTaskParam)
 {
-	assert(pTask);
-	int prio = pTask->_prio;
-	assert(prio >= PRIO_NORMAL && prio < PRIO_NUM);
+	assert(pTaskParam);
+	int iPriorityLocal = pTaskParam->iPriority;
+	assert(iPriorityLocal >= PRIO_NORMAL && iPriorityLocal < PRIO_NUM);
 #ifdef _SINGLE_THREAD_
-	ThreadData& thread_data = _thread_data[prio];	
-	if(thread_data._task_count >= _max_task_count)
+	ThreadData& stThreadData = vThreadData[iPriorityLocal];
+	if(stThreadData.iTaskCount >= iMaxTaskCount)
 	{
-		SAFE_DELETE(pTask);
+		SAFE_DELETE(pTaskParam);
 		return false;
 	}
-	thread_data._task_count ++;
-	thread_data._task_list.push_back(pTask);
+	stThreadData.iTaskCount ++;
+	stThreadData.vTaskList.push_back(pTaskParam);
 #else
-	ThreadData& thread_data = _thread_data[prio];	
-	std::lock_guard<std::mutex> lock(thread_data._mutex);
-	if(thread_data._task_count >= _max_task_count)
+	ThreadData& stThreadData = vThreadData[iPriorityLocal];
+	std::lock_guard<std::mutex> stLock(stThreadData.stMutex);
+	if(stThreadData.iTaskCount >= iMaxTaskCount)
 	{
-		SAFE_DELETE(pTask);
+		SAFE_DELETE(pTaskParam);
 		return false;
 	}
-	thread_data._task_count ++;
-	thread_data._task_list.push_back(pTask);
-	if(thread_data._task_count == 1)
+	stThreadData.iTaskCount ++;
+	stThreadData.vTaskList.push_back(pTaskParam);
+	if(stThreadData.iTaskCount == 1)
 	{
-		thread_data._cond.notify_all();
+		stThreadData.stCondition.notify_all();
 	}
 #endif
 	return true;
@@ -352,9 +352,9 @@ void ThreadPool::InitIgnoreSig()
 }
 
 
-void ThreadPool::InitUnIgnoreSig(int sig)
+void ThreadPool::InitUnIgnoreSig(int iSigParam)
 {
-	std::signal(sig, SIG_DFL);
+	std::signal(iSigParam, SIG_DFL);
 }
 
 

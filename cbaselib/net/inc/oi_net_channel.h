@@ -10,10 +10,10 @@ namespace OI { namespace Net {
 class NetChannel : public Channel
 {
 protected:
-	::OI::Base::Bytes		_ibuff;
-	::OI::Base::Bytes		_obuff;
+	::OI::Base::Bytes		stInputBuffer;
+	::OI::Base::Bytes		stOutputBuffer;
 public:
-	NetChannel(NetSocket , Session* pSession);
+	NetChannel(NetSocket , Session* pSessionParam);
 	virtual ~NetChannel();
 	//epoll事件回调接口
 	virtual void DataIn() = 0;		//real_data_handle	

@@ -1,23 +1,23 @@
 #include "test_board.h"
 #include "oi_thread.h"
 
-TestBoard::TestBoard() : _left(0), _code(0)
+TestBoard::TestBoard() : m_iLeft(0), m_iCode(0)
 {
 }
 
 void TestBoard::Arm()
 {
-	_left.fetch_add(1);
+	m_iLeft.fetch_add(1);
 }
 
-void TestBoard::Done(int code)
+void TestBoard::Done(int iCodeParam)
 {
-	if (code != 0)
+	if (iCodeParam != 0)
 	{
-		_code.store(code);
+		m_iCode.store(iCodeParam);
 	}
-	if (_left.fetch_sub(1) == 1)
+	if (m_iLeft.fetch_sub(1) == 1)
 	{
-		::OI::Thread::ThreadPool::GetInstance().RequestStop(_code.load());
+		::OI::Thread::ThreadPool::GetInstance().RequestStop(m_iCode.load());
 	}
 }

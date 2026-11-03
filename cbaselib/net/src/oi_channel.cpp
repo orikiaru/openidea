@@ -6,52 +6,52 @@ namespace OI { namespace Net {
 
 Channel::~Channel()
 {
-	if (_poll_token)
+	if (pPollToken)
 	{
 		Poll::GetInstance().IOEventUnRegister(this);
 	}
-	NetOs_Close(_socket.GetSocket());
-	_socket.Detach();
+	NetOs_Close(stSocket.GetSocket());
+	stSocket.Detach();
 }
 
 void Channel::AllowSend()
 {
-	::OI::Thread::MutexGuard l(_locker);
+	::OI::Thread::MutexGuard stLock(stLocker);
 	// 关闭中的会话也要触发一次 IO，让 TryClose 回收空闲连接，不能等对端发数据。
-	if (_p_session && (0 == (_event_mask & IO_EV_WRITE)))
+	if (pSession && (0 == (iEventMask & IO_EV_WRITE)))
 	{
-		_event_mask |= IO_EV_WRITE;
-		Poll::GetInstance().IOEventMod(this, _event_mask);
+		iEventMask |= IO_EV_WRITE;
+		Poll::GetInstance().IOEventMod(this, iEventMask);
 	}
 }
 
 void Channel::ForbidSend()
 {
-	::OI::Thread::MutexGuard l(_locker);
-	if (_p_session && !_p_session->IsClosed() && (_event_mask & IO_EV_WRITE))
+	::OI::Thread::MutexGuard stLock(stLocker);
+	if (pSession && !pSession->IsClosed() && (iEventMask & IO_EV_WRITE))
 	{
-		_event_mask &= ~IO_EV_WRITE;
-		Poll::GetInstance().IOEventMod(this, _event_mask);
+		iEventMask &= ~IO_EV_WRITE;
+		Poll::GetInstance().IOEventMod(this, iEventMask);
 	}
 }
 
 void Channel::AllowRead()
 {
-	::OI::Thread::MutexGuard l(_locker);
-	if (_p_session && !_p_session->IsClosed() && (0 == (_event_mask & IO_EV_READ)))
+	::OI::Thread::MutexGuard stLock(stLocker);
+	if (pSession && !pSession->IsClosed() && (0 == (iEventMask & IO_EV_READ)))
 	{
-		_event_mask |= IO_EV_READ;
-		Poll::GetInstance().IOEventMod(this, _event_mask);
+		iEventMask |= IO_EV_READ;
+		Poll::GetInstance().IOEventMod(this, iEventMask);
 	}
 }
 
 void Channel::ForbidRead()
 {
-	::OI::Thread::MutexGuard l(_locker);
-	if (_p_session && !_p_session->IsClosed() && (_event_mask & IO_EV_READ))
+	::OI::Thread::MutexGuard stLock(stLocker);
+	if (pSession && !pSession->IsClosed() && (iEventMask & IO_EV_READ))
 	{
-		_event_mask &= ~IO_EV_READ;
-		Poll::GetInstance().IOEventMod(this, _event_mask);
+		iEventMask &= ~IO_EV_READ;
+		Poll::GetInstance().IOEventMod(this, iEventMask);
 	}
 }
 }}

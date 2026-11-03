@@ -9,14 +9,14 @@ class LogMgr
 {
 	DECLARE_SINGLETON(LogMgr)
 	LogMgr();
-	bool _on;
-	int32_t _tasks;
-	int32_t _line;
-	int64_t _bytes;
-	int32_t _drain_sec;
-	std::atomic<int64_t> _sent;
-	std::atomic<int32_t> _done;
-	std::chrono::steady_clock::time_point _start;
+	bool m_bEnabled;
+	int32_t m_iTaskCount;
+	int32_t m_iLineBytes;
+	int64_t m_iTargetBytes;
+	int32_t m_iDrainSeconds;
+	std::atomic<int64_t> m_iSent;
+	std::atomic<int32_t> m_iDone;
+	std::chrono::steady_clock::time_point m_stStart;
 public:
 	void Load();
 	void Start();

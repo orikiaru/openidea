@@ -1,5 +1,6 @@
 from enum import Enum
 from common import loginfo
+from field_naming import ValidFieldName
 
 class SerializeDataType(Enum):
     PROTOCOL = 1
@@ -12,6 +13,7 @@ class ClassMember:
         self.type = None
         self.value = None
         self.seq = None
+        self.json_name = None
     def GetName(self):
         return self.name
     def GetType(self):
@@ -22,6 +24,7 @@ class ClassMember:
         return self.seq
     def ParseMember(self, member_xml):
         self.name = member_xml.get("name")
+        self.json_name = member_xml.get("json") or self.name
         self.type = member_xml.get("type")
         self.value = member_xml.get("default")
         seq_text = member_xml.get("seq")
@@ -127,7 +130,16 @@ class SerializeData:
     # 字段号必须写在协议里。缺号、重号都是协议错，生成器不补。
     def AssignFieldSeq(self):
         used = set()
+        json_names = set()
         for member in self.members:
+            if not ValidFieldName(member.type, member.name):
+                loginfo("invalid field name proto=", self.name, ",field=", member.name, ",type=", member.type)
+                return False
+            json_name = member.json_name or member.name
+            if json_name in json_names:
+                loginfo("duplicate JSON name proto=", self.name, ",json=", json_name)
+                return False
+            json_names.add(json_name)
             if member.seq is None:
                 loginfo("field number required proto=", self.name, ",field=", member.GetName())
                 return False

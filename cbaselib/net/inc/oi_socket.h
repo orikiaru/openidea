@@ -6,11 +6,11 @@ class SessionManager;
 
 class NetAddr
 {
-	int32_t	_proto_type;
-	::OI::Base::Bytes	_addr_data;
+	int32_t	m_iProtocolType;
+	::OI::Base::Bytes	m_stAddressData;
 public:
 	NetAddr();
-	bool		Init(SessionManager* pMgr);
+	bool		Init(SessionManager* pMgrParam);
 	bool		IsValidAttr() const;
 	sockaddr*	NetAttrPtr();
 	socklen_t	NetAttrLen();
@@ -18,13 +18,13 @@ public:
 
 class NetSocket
 {
-	NetAddr			_addr;
-	net_socket_t	_sid;
-	uint32_t		_mask;
+	NetAddr			m_stAddress;
+	net_socket_t	m_iSocketDescriptor;
+	uint32_t		m_iMask;
 public:
 	NetSocket();
 	virtual ~NetSocket() {}
-	bool Init(net_socket_t sid, SessionManager* pMgr);
+	bool Init(net_socket_t iSessionIdParam, SessionManager* pMgrParam);
 
 	bool IsBind();
 	void SetBind();
@@ -39,21 +39,21 @@ public:
 	void SetAccept();
 
 	bool IsAsync();
-	void SetAsync(bool async);
+	void SetAsync(bool bAsyncParam);
 public:
-	bool CreateSocket(SessionManager* pMgr, bool async);
-	bool SocketBind(SessionManager* pMgr);
-	bool SocketListen(SessionManager* pMgr);
-	bool SocketListenAndBind(SessionManager* pMgr);
-	bool SocketConnect(SessionManager* pMgr);
+	bool CreateSocket(SessionManager* pMgrParam, bool bAsyncParam);
+	bool SocketBind(SessionManager* pMgrParam);
+	bool SocketListen(SessionManager* pMgrParam);
+	bool SocketListenAndBind(SessionManager* pMgrParam);
+	bool SocketConnect(SessionManager* pMgrParam);
 	//accept一个套接字,返回-1失败,返回0说明没有可接受的了
-	int SocketAcceptOne(SessionManager* pMgr);
-	NetAddr GetNetAddr(SessionManager* pMgr);
+	int SocketAcceptOne(SessionManager* pMgrParam);
+	NetAddr GetNetAddr(SessionManager* pMgrParam);
 public:
-	net_socket_t GetSocket() const	{ return _sid; }
-	void Attach(net_socket_t sid) { _sid = sid; }
-	void Detach() { _sid = INVALID_SOCKET_ID; }
-	bool IsValidAttr() const		{ return _addr.IsValidAttr(); }
-	NetAddr& GetAddr()				{ return _addr; }
+	net_socket_t GetSocket() const	{ return m_iSocketDescriptor; }
+	void Attach(net_socket_t iSessionIdParam) { m_iSocketDescriptor = iSessionIdParam; }
+	void Detach() { m_iSocketDescriptor = INVALID_SOCKET_ID; }
+	bool IsValidAttr() const		{ return m_stAddress.IsValidAttr(); }
+	NetAddr& GetAddr()				{ return m_stAddress; }
 };
 }}

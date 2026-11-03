@@ -3,14 +3,14 @@
 #include "oi_base.h"
 #include "registry_server.h"
 
-int main(int argc, char* argv[])
+int main(int iArgumentCountParam, char* vArgumentsParam[])
 {
-	(void)argc;
-	(void)argv;
-	int code = ::OI::Base::StartFramework("../config/registry.toml");
-	if (code != 0)
+	(void)iArgumentCountParam;
+	(void)vArgumentsParam;
+	int iCodeLocal = ::OI::Base::StartFramework("../config/registry.toml");
+	if (iCodeLocal != 0)
 	{
-		return code;
+		return iCodeLocal;
 	}
 	::OI::Log::Init();
 

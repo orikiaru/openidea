@@ -5,257 +5,257 @@ namespace OI { namespace Redis {
 
 // 每条 Redis 命令一层薄封装。协程拿到 RedisCall 再 co_await，同步直接返回 RedisResult。
 
-inline RedisCall RedisPing(RedisResult* out = nullptr)
+inline RedisCall RedisPing(RedisResult* pOutputParam = nullptr)
 {
-	std::vector<std::string> args;
-	args.push_back("PING");
-	return RedisClient::GetInstance().Call(std::move(args), out);
+	std::vector<std::string> vArgumentsLocal;
+	vArgumentsLocal.push_back("PING");
+	return RedisClient::GetInstance().Call(std::move(vArgumentsLocal), pOutputParam);
 }
 
 inline RedisResult RedisPingSync()
 {
-	std::vector<std::string> args;
-	args.push_back("PING");
-	return CallRedisSync(std::move(args));
+	std::vector<std::string> vArgumentsLocal;
+	vArgumentsLocal.push_back("PING");
+	return CallRedisSync(std::move(vArgumentsLocal));
 }
 
-inline RedisCall RedisGet(const std::string& key, RedisResult* out = nullptr)
+inline RedisCall RedisGet(const std::string& sKeyParam, RedisResult* pOutputParam = nullptr)
 {
-	std::vector<std::string> args;
-	args.push_back("GET");
-	args.push_back(key);
-	return RedisClient::GetInstance().Call(std::move(args), out);
+	std::vector<std::string> vArgumentsLocal;
+	vArgumentsLocal.push_back("GET");
+	vArgumentsLocal.push_back(sKeyParam);
+	return RedisClient::GetInstance().Call(std::move(vArgumentsLocal), pOutputParam);
 }
 
-inline RedisResult RedisGetSync(const std::string& key)
+inline RedisResult RedisGetSync(const std::string& sKeyParam)
 {
-	std::vector<std::string> args;
-	args.push_back("GET");
-	args.push_back(key);
-	return CallRedisSync(std::move(args));
+	std::vector<std::string> vArgumentsLocal;
+	vArgumentsLocal.push_back("GET");
+	vArgumentsLocal.push_back(sKeyParam);
+	return CallRedisSync(std::move(vArgumentsLocal));
 }
 
-inline RedisCall RedisSet(const std::string& key, const std::string& value, RedisResult* out = nullptr)
+inline RedisCall RedisSet(const std::string& sKeyParam, const std::string& sValueParam, RedisResult* pOutputParam = nullptr)
 {
-	std::vector<std::string> args;
-	args.push_back("SET");
-	args.push_back(key);
-	args.push_back(value);
-	return RedisClient::GetInstance().Call(std::move(args), out);
+	std::vector<std::string> vArgumentsLocal;
+	vArgumentsLocal.push_back("SET");
+	vArgumentsLocal.push_back(sKeyParam);
+	vArgumentsLocal.push_back(sValueParam);
+	return RedisClient::GetInstance().Call(std::move(vArgumentsLocal), pOutputParam);
 }
 
-inline RedisResult RedisSetSync(const std::string& key, const std::string& value)
+inline RedisResult RedisSetSync(const std::string& sKeyParam, const std::string& sValueParam)
 {
-	std::vector<std::string> args;
-	args.push_back("SET");
-	args.push_back(key);
-	args.push_back(value);
-	return CallRedisSync(std::move(args));
+	std::vector<std::string> vArgumentsLocal;
+	vArgumentsLocal.push_back("SET");
+	vArgumentsLocal.push_back(sKeyParam);
+	vArgumentsLocal.push_back(sValueParam);
+	return CallRedisSync(std::move(vArgumentsLocal));
 }
 
-inline RedisCall RedisDel(const std::string& key, RedisResult* out = nullptr)
+inline RedisCall RedisDel(const std::string& sKeyParam, RedisResult* pOutputParam = nullptr)
 {
-	std::vector<std::string> args;
-	args.push_back("DEL");
-	args.push_back(key);
-	return RedisClient::GetInstance().Call(std::move(args), out);
+	std::vector<std::string> vArgumentsLocal;
+	vArgumentsLocal.push_back("DEL");
+	vArgumentsLocal.push_back(sKeyParam);
+	return RedisClient::GetInstance().Call(std::move(vArgumentsLocal), pOutputParam);
 }
 
-inline RedisResult RedisDelSync(const std::string& key)
+inline RedisResult RedisDelSync(const std::string& sKeyParam)
 {
-	std::vector<std::string> args;
-	args.push_back("DEL");
-	args.push_back(key);
-	return CallRedisSync(std::move(args));
+	std::vector<std::string> vArgumentsLocal;
+	vArgumentsLocal.push_back("DEL");
+	vArgumentsLocal.push_back(sKeyParam);
+	return CallRedisSync(std::move(vArgumentsLocal));
 }
 
-inline RedisCall RedisIncr(const std::string& key, RedisResult* out = nullptr)
+inline RedisCall RedisIncr(const std::string& sKeyParam, RedisResult* pOutputParam = nullptr)
 {
-	std::vector<std::string> args;
-	args.push_back("INCR");
-	args.push_back(key);
-	return RedisClient::GetInstance().Call(std::move(args), out);
+	std::vector<std::string> vArgumentsLocal;
+	vArgumentsLocal.push_back("INCR");
+	vArgumentsLocal.push_back(sKeyParam);
+	return RedisClient::GetInstance().Call(std::move(vArgumentsLocal), pOutputParam);
 }
 
-inline RedisResult RedisIncrSync(const std::string& key)
+inline RedisResult RedisIncrSync(const std::string& sKeyParam)
 {
-	std::vector<std::string> args;
-	args.push_back("INCR");
-	args.push_back(key);
-	return CallRedisSync(std::move(args));
+	std::vector<std::string> vArgumentsLocal;
+	vArgumentsLocal.push_back("INCR");
+	vArgumentsLocal.push_back(sKeyParam);
+	return CallRedisSync(std::move(vArgumentsLocal));
 }
 
-inline RedisCall RedisExpire(const std::string& key, const std::string& seconds, RedisResult* out = nullptr)
+inline RedisCall RedisExpire(const std::string& sKeyParam, const std::string& sSecondsParam, RedisResult* pOutputParam = nullptr)
 {
-	std::vector<std::string> args;
-	args.push_back("EXPIRE");
-	args.push_back(key);
-	args.push_back(seconds);
-	return RedisClient::GetInstance().Call(std::move(args), out);
+	std::vector<std::string> vArgumentsLocal;
+	vArgumentsLocal.push_back("EXPIRE");
+	vArgumentsLocal.push_back(sKeyParam);
+	vArgumentsLocal.push_back(sSecondsParam);
+	return RedisClient::GetInstance().Call(std::move(vArgumentsLocal), pOutputParam);
 }
 
-inline RedisCall RedisHSet(const std::string& key, const std::string& field, const std::string& value, RedisResult* out = nullptr)
+inline RedisCall RedisHSet(const std::string& sKeyParam, const std::string& sFieldParam, const std::string& sValueParam, RedisResult* pOutputParam = nullptr)
 {
-	std::vector<std::string> args;
-	args.push_back("HSET");
-	args.push_back(key);
-	args.push_back(field);
-	args.push_back(value);
-	return RedisClient::GetInstance().Call(std::move(args), out);
+	std::vector<std::string> vArgumentsLocal;
+	vArgumentsLocal.push_back("HSET");
+	vArgumentsLocal.push_back(sKeyParam);
+	vArgumentsLocal.push_back(sFieldParam);
+	vArgumentsLocal.push_back(sValueParam);
+	return RedisClient::GetInstance().Call(std::move(vArgumentsLocal), pOutputParam);
 }
 
-inline RedisResult RedisHSetSync(const std::string& key, const std::string& field, const std::string& value)
+inline RedisResult RedisHSetSync(const std::string& sKeyParam, const std::string& sFieldParam, const std::string& sValueParam)
 {
-	std::vector<std::string> args;
-	args.push_back("HSET");
-	args.push_back(key);
-	args.push_back(field);
-	args.push_back(value);
-	return CallRedisSync(std::move(args));
+	std::vector<std::string> vArgumentsLocal;
+	vArgumentsLocal.push_back("HSET");
+	vArgumentsLocal.push_back(sKeyParam);
+	vArgumentsLocal.push_back(sFieldParam);
+	vArgumentsLocal.push_back(sValueParam);
+	return CallRedisSync(std::move(vArgumentsLocal));
 }
 
-inline RedisCall RedisHGet(const std::string& key, const std::string& field, RedisResult* out = nullptr)
+inline RedisCall RedisHGet(const std::string& sKeyParam, const std::string& sFieldParam, RedisResult* pOutputParam = nullptr)
 {
-	std::vector<std::string> args;
-	args.push_back("HGET");
-	args.push_back(key);
-	args.push_back(field);
-	return RedisClient::GetInstance().Call(std::move(args), out);
+	std::vector<std::string> vArgumentsLocal;
+	vArgumentsLocal.push_back("HGET");
+	vArgumentsLocal.push_back(sKeyParam);
+	vArgumentsLocal.push_back(sFieldParam);
+	return RedisClient::GetInstance().Call(std::move(vArgumentsLocal), pOutputParam);
 }
 
-inline RedisResult RedisHGetSync(const std::string& key, const std::string& field)
+inline RedisResult RedisHGetSync(const std::string& sKeyParam, const std::string& sFieldParam)
 {
-	std::vector<std::string> args;
-	args.push_back("HGET");
-	args.push_back(key);
-	args.push_back(field);
-	return CallRedisSync(std::move(args));
+	std::vector<std::string> vArgumentsLocal;
+	vArgumentsLocal.push_back("HGET");
+	vArgumentsLocal.push_back(sKeyParam);
+	vArgumentsLocal.push_back(sFieldParam);
+	return CallRedisSync(std::move(vArgumentsLocal));
 }
 
-inline RedisCall RedisLPush(const std::string& key, const std::string& value, RedisResult* out = nullptr)
+inline RedisCall RedisLPush(const std::string& sKeyParam, const std::string& sValueParam, RedisResult* pOutputParam = nullptr)
 {
-	std::vector<std::string> args;
-	args.push_back("LPUSH");
-	args.push_back(key);
-	args.push_back(value);
-	return RedisClient::GetInstance().Call(std::move(args), out);
+	std::vector<std::string> vArgumentsLocal;
+	vArgumentsLocal.push_back("LPUSH");
+	vArgumentsLocal.push_back(sKeyParam);
+	vArgumentsLocal.push_back(sValueParam);
+	return RedisClient::GetInstance().Call(std::move(vArgumentsLocal), pOutputParam);
 }
 
-inline RedisCall RedisLTrim(const std::string& key, const std::string& start, const std::string& stop, RedisResult* out = nullptr)
+inline RedisCall RedisLTrim(const std::string& sKeyParam, const std::string& sStartParam, const std::string& sStopParam, RedisResult* pOutputParam = nullptr)
 {
-	std::vector<std::string> args;
-	args.push_back("LTRIM");
-	args.push_back(key);
-	args.push_back(start);
-	args.push_back(stop);
-	return RedisClient::GetInstance().Call(std::move(args), out);
+	std::vector<std::string> vArgumentsLocal;
+	vArgumentsLocal.push_back("LTRIM");
+	vArgumentsLocal.push_back(sKeyParam);
+	vArgumentsLocal.push_back(sStartParam);
+	vArgumentsLocal.push_back(sStopParam);
+	return RedisClient::GetInstance().Call(std::move(vArgumentsLocal), pOutputParam);
 }
 
-inline RedisCall RedisLRange(const std::string& key, const std::string& start, const std::string& stop, RedisResult* out = nullptr)
+inline RedisCall RedisLRange(const std::string& sKeyParam, const std::string& sStartParam, const std::string& sStopParam, RedisResult* pOutputParam = nullptr)
 {
-	std::vector<std::string> args;
-	args.push_back("LRANGE");
-	args.push_back(key);
-	args.push_back(start);
-	args.push_back(stop);
-	return RedisClient::GetInstance().Call(std::move(args), out);
+	std::vector<std::string> vArgumentsLocal;
+	vArgumentsLocal.push_back("LRANGE");
+	vArgumentsLocal.push_back(sKeyParam);
+	vArgumentsLocal.push_back(sStartParam);
+	vArgumentsLocal.push_back(sStopParam);
+	return RedisClient::GetInstance().Call(std::move(vArgumentsLocal), pOutputParam);
 }
 
-inline RedisCall RedisSAdd(const std::string& key, const std::string& member, RedisResult* out = nullptr)
+inline RedisCall RedisSAdd(const std::string& sKeyParam, const std::string& sMemberParam, RedisResult* pOutputParam = nullptr)
 {
-	std::vector<std::string> args;
-	args.push_back("SADD");
-	args.push_back(key);
-	args.push_back(member);
-	return RedisClient::GetInstance().Call(std::move(args), out);
+	std::vector<std::string> vArgumentsLocal;
+	vArgumentsLocal.push_back("SADD");
+	vArgumentsLocal.push_back(sKeyParam);
+	vArgumentsLocal.push_back(sMemberParam);
+	return RedisClient::GetInstance().Call(std::move(vArgumentsLocal), pOutputParam);
 }
 
-inline RedisCall RedisSIsMember(const std::string& key, const std::string& member, RedisResult* out = nullptr)
+inline RedisCall RedisSIsMember(const std::string& sKeyParam, const std::string& sMemberParam, RedisResult* pOutputParam = nullptr)
 {
-	std::vector<std::string> args;
-	args.push_back("SISMEMBER");
-	args.push_back(key);
-	args.push_back(member);
-	return RedisClient::GetInstance().Call(std::move(args), out);
+	std::vector<std::string> vArgumentsLocal;
+	vArgumentsLocal.push_back("SISMEMBER");
+	vArgumentsLocal.push_back(sKeyParam);
+	vArgumentsLocal.push_back(sMemberParam);
+	return RedisClient::GetInstance().Call(std::move(vArgumentsLocal), pOutputParam);
 }
-inline RedisCall RedisPing(RedisResult& out)
+inline RedisCall RedisPing(RedisResult& stOutputParam)
 {
-	return RedisPing(&out);
-}
-
-inline RedisCall RedisGet(const std::string& key, RedisResult& out)
-{
-	return RedisGet(key, &out);
+	return RedisPing(&stOutputParam);
 }
 
-inline RedisCall RedisSet(const std::string& key, const std::string& value, RedisResult& out)
+inline RedisCall RedisGet(const std::string& sKeyParam, RedisResult& stOutputParam)
 {
-	return RedisSet(key, value, &out);
+	return RedisGet(sKeyParam, &stOutputParam);
 }
 
-inline RedisCall RedisDel(const std::string& key, RedisResult& out)
+inline RedisCall RedisSet(const std::string& sKeyParam, const std::string& sValueParam, RedisResult& stOutputParam)
 {
-	return RedisDel(key, &out);
+	return RedisSet(sKeyParam, sValueParam, &stOutputParam);
 }
 
-inline RedisCall RedisIncr(const std::string& key, RedisResult& out)
+inline RedisCall RedisDel(const std::string& sKeyParam, RedisResult& stOutputParam)
 {
-	return RedisIncr(key, &out);
+	return RedisDel(sKeyParam, &stOutputParam);
 }
 
-inline RedisCall RedisExpire(const std::string& key, const std::string& seconds, RedisResult& out)
+inline RedisCall RedisIncr(const std::string& sKeyParam, RedisResult& stOutputParam)
 {
-	return RedisExpire(key, seconds, &out);
+	return RedisIncr(sKeyParam, &stOutputParam);
 }
 
-inline RedisCall RedisHSet(const std::string& key, const std::string& field, const std::string& value, RedisResult& out)
+inline RedisCall RedisExpire(const std::string& sKeyParam, const std::string& sSecondsParam, RedisResult& stOutputParam)
 {
-	return RedisHSet(key, field, value, &out);
+	return RedisExpire(sKeyParam, sSecondsParam, &stOutputParam);
 }
 
-inline RedisCall RedisHGet(const std::string& key, const std::string& field, RedisResult& out)
+inline RedisCall RedisHSet(const std::string& sKeyParam, const std::string& sFieldParam, const std::string& sValueParam, RedisResult& stOutputParam)
 {
-	return RedisHGet(key, field, &out);
+	return RedisHSet(sKeyParam, sFieldParam, sValueParam, &stOutputParam);
 }
 
-inline RedisCall RedisLPush(const std::string& key, const std::string& value, RedisResult& out)
+inline RedisCall RedisHGet(const std::string& sKeyParam, const std::string& sFieldParam, RedisResult& stOutputParam)
 {
-	return RedisLPush(key, value, &out);
+	return RedisHGet(sKeyParam, sFieldParam, &stOutputParam);
 }
 
-inline RedisCall RedisLTrim(const std::string& key, const std::string& start, const std::string& stop, RedisResult& out)
+inline RedisCall RedisLPush(const std::string& sKeyParam, const std::string& sValueParam, RedisResult& stOutputParam)
 {
-	return RedisLTrim(key, start, stop, &out);
+	return RedisLPush(sKeyParam, sValueParam, &stOutputParam);
 }
 
-inline RedisCall RedisLRange(const std::string& key, const std::string& start, const std::string& stop, RedisResult& out)
+inline RedisCall RedisLTrim(const std::string& sKeyParam, const std::string& sStartParam, const std::string& sStopParam, RedisResult& stOutputParam)
 {
-	return RedisLRange(key, start, stop, &out);
+	return RedisLTrim(sKeyParam, sStartParam, sStopParam, &stOutputParam);
 }
 
-inline RedisCall RedisSAdd(const std::string& key, const std::string& member, RedisResult& out)
+inline RedisCall RedisLRange(const std::string& sKeyParam, const std::string& sStartParam, const std::string& sStopParam, RedisResult& stOutputParam)
 {
-	return RedisSAdd(key, member, &out);
+	return RedisLRange(sKeyParam, sStartParam, sStopParam, &stOutputParam);
 }
 
-inline RedisCall RedisSIsMember(const std::string& key, const std::string& member, RedisResult& out)
+inline RedisCall RedisSAdd(const std::string& sKeyParam, const std::string& sMemberParam, RedisResult& stOutputParam)
 {
-	return RedisSIsMember(key, member, &out);
+	return RedisSAdd(sKeyParam, sMemberParam, &stOutputParam);
 }
 
-inline RedisCall RedisExpire(const std::string& key, std::chrono::seconds ttl, RedisResult* out = nullptr)
+inline RedisCall RedisSIsMember(const std::string& sKeyParam, const std::string& sMemberParam, RedisResult& stOutputParam)
 {
-	return RedisExpire(key, std::to_string(ttl.count()), out);
+	return RedisSIsMember(sKeyParam, sMemberParam, &stOutputParam);
 }
 
-inline RedisCall RedisLTrim(const std::string& key, int64_t start, int64_t stop, RedisResult* out = nullptr)
+inline RedisCall RedisExpire(const std::string& sKeyParam, std::chrono::seconds stTimeToLiveParam, RedisResult* pOutputParam = nullptr)
 {
-	return RedisLTrim(key, std::to_string(start), std::to_string(stop), out);
+	return RedisExpire(sKeyParam, std::to_string(stTimeToLiveParam.count()), pOutputParam);
 }
 
-inline RedisCall RedisLRange(const std::string& key, int64_t start, int64_t stop, RedisResult* out = nullptr)
+inline RedisCall RedisLTrim(const std::string& sKeyParam, int64_t iStartParam, int64_t iStopParam, RedisResult* pOutputParam = nullptr)
 {
-	return RedisLRange(key, std::to_string(start), std::to_string(stop), out);
+	return RedisLTrim(sKeyParam, std::to_string(iStartParam), std::to_string(iStopParam), pOutputParam);
+}
+
+inline RedisCall RedisLRange(const std::string& sKeyParam, int64_t iStartParam, int64_t iStopParam, RedisResult* pOutputParam = nullptr)
+{
+	return RedisLRange(sKeyParam, std::to_string(iStartParam), std::to_string(iStopParam), pOutputParam);
 }
 
 }}

@@ -4,20 +4,20 @@ namespace OI { namespace Net {
 class SessionManager;
 class ConnectChannel : public Channel
 {
-	bool _close;
-	SessionManager* _p_session_mgr;
+	bool m_bClose;
+	SessionManager* m_pSessionManager;
 public:
-	ConnectChannel(NetSocket s, SessionManager* pMgr) :Channel(s, 0), _close(false), _p_session_mgr(pMgr) {}
+	ConnectChannel(NetSocket stTextParam, SessionManager* pMgrParam) :Channel(stTextParam, 0), m_bClose(false), m_pSessionManager(pMgrParam) {}
 	virtual void DataIn();
 	virtual void DataOut();
 	virtual bool TryClose();
 private:
-	void Close()	{ _close = true; }
-	bool IsClosed() { return _close;	 }
+	void Close()	{ m_bClose = true; }
+	bool IsClosed() { return m_bClose;	 }
 	bool CheckTcpConnect();
 public:
-	static bool StartConnect(SessionManager* pMgr, bool async);
+	static bool StartConnect(SessionManager* pMgrParam, bool bAsyncParam);
 private:
-	static bool StartTcpConnect(SessionManager* pMgr, bool async);
+	static bool StartTcpConnect(SessionManager* pMgrParam, bool bAsyncParam);
 };
 }}

@@ -7,15 +7,15 @@ class Session;
 class Channel
 {
 public:
-	int32_t		_event_mask;
-	void*		_poll_token;
+	int32_t		iEventMask;
+	void*		pPollToken;
 protected:
-	NetSocket	_socket;
-	Session*	_p_session;
-	::OI::Thread::Mutex		_locker;
+	NetSocket	stSocket;
+	Session*	pSession;
+	::OI::Thread::Mutex		stLocker;
 public:
 	friend class Poll;
-	Channel(NetSocket s, Session* pSession) :_event_mask(0), _poll_token(NULL), _socket(s), _p_session(pSession) {}
+	Channel(NetSocket stTextParam, Session* pSessionParam) :iEventMask(0), pPollToken(NULL), stSocket(stTextParam), pSession(pSessionParam) {}
 	virtual ~Channel();
 
 public:
@@ -25,7 +25,7 @@ public:
 
 public:
 	// 套接字交给调用方关闭。析构看到的是无效号，不会再关一次。
-	void DetachSocket() { _socket.Detach(); }
+	void DetachSocket() { stSocket.Detach(); }
 	void AllowSend();
 	void ForbidSend();
 	void AllowRead();

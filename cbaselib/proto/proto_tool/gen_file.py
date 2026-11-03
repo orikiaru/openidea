@@ -86,8 +86,8 @@ class GenFile:
         for p in self.proto_parse.serialize_datas:
             if(p.GetType() != SerializeDataType.RPC):
                 continue
-            lines.append("template<> struct RpcProtoId<::OI::RpcData::%s> { using Response = ::OI::RpcData::%s; static const proto_type_t value = %s; };" % (p.GetReq(), p.GetRes(), p.GetID()))
-            lines.append("template<> struct RpcProtoId<::OI::RpcData::%s> { static const proto_type_t value = %s; };" % (p.GetRes(), p.GetResID()))
+            lines.append("template<> struct RpcProtoId<::OI::RpcData::%s> { using Response = ::OI::RpcData::%s; static const proto_type_t iValue = %s; };" % (p.GetReq(), p.GetRes(), p.GetID()))
+            lines.append("template<> struct RpcProtoId<::OI::RpcData::%s> { static const proto_type_t iValue = %s; };" % (p.GetRes(), p.GetResID()))
         lines.append("}}")
         lines.append("")
         write_utf8(os.path.join(write_path, "rpc_ids.h"), "\n".join(lines) + "\n")

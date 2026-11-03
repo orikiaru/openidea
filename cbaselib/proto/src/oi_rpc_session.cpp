@@ -8,34 +8,34 @@ void ProtoSession::OnDataIn()
 {
 	// 一包就是 协议id + 总大小 + 序列化结构。对不上或者解析失败，丢掉这一包。
 	// 借 _ibuff 的内存原地解析，不整块拷一份。
-	::OI::Base::BytesStream os;
-	os.Swap(_ibuff);
-	while (os.RemainSize())
+	::OI::Base::BytesStream stOutputStream;
+	stOutputStream.Swap(stInputBuffer);
+	while (stOutputStream.RemainSize())
 	{
-		os.StartTransaction();
-		uint32_t id = 0;
-		uint32_t size = 0;
-		::OI::Base::PbHeaderState st = os.PreparePbHeader(id, size);
-		if (st == ::OI::Base::PB_HEADER_NEED_MORE)
+		stOutputStream.StartTransaction();
+		uint32_t iIdLocal = 0;
+		uint32_t iSize = 0;
+		::OI::Base::PbHeaderState iSt = stOutputStream.PreparePbHeader(iIdLocal, iSize);
+		if (iSt == ::OI::Base::PB_HEADER_NEED_MORE)
 		{
-			os.RollBack();
+			stOutputStream.RollBack();
 			break;
 		}
-		if (st != ::OI::Base::PB_HEADER_OK)
+		if (iSt != ::OI::Base::PB_HEADER_OK)
 		{
 			PassiveClose(PARSER_ERR_OTHER);
 			break;
 		}
-		::OI::Base::BytesStream body;
-		if (size > 0)
+		::OI::Base::BytesStream stBody;
+		if (iSize > 0)
 		{
-			body.Append(os.GetCurPtr(), size);
+			stBody.Append(stOutputStream.GetCurPtr(), iSize);
 		}
-		os.AddCurPos(size);
-		DeliverRpc((proto_type_t)id, body, _p_session_mgr, _session_id);
+		stOutputStream.AddCurPos(iSize);
+		DeliverRpc((proto_type_t)iIdLocal, stBody, pSessionManager, iSessionId);
 	}
-	_ibuff.Swap(os);
-	_ibuff.Erase(0, os.GetCurPos());
+	stInputBuffer.Swap(stOutputStream);
+	stInputBuffer.Erase(0, stOutputStream.GetCurPos());
 }
 
 void ProtoSession::OnDataOut()
