@@ -60,6 +60,7 @@ def run(case, args):
                 for flag in ("echo", "log", "redis", "hold"):
                     text = replace(text, flag, "true" if mode == flag else "false")
                 if mode == "hold":
+                    text = replace(text, "max_task_count", "1")
                     # Hold 的迟到回包晚 5 秒；后续 PING 的预算必须覆盖这段排队。
                     text = replace(text, "timeout_ms", "8000")
                 if case == "disk-full":
@@ -175,16 +176,20 @@ def run(case, args):
                 print(output.name, output.read_text(errors="replace")[-6000:], flush=True)
             raise
         finally:
+            stuck = []
             for proc in reversed(procs):
                 if proc.poll() is None:
                     proc.terminate()
                     try:
                         proc.wait(timeout=3)
                     except subprocess.TimeoutExpired:
+                        stuck.append(str(proc.args))
                         proc.kill()
                         proc.wait()
             for handle in handles:
                 handle.close()
+            if stuck:
+                raise RuntimeError("graceful shutdown timed out: " + ", ".join(stuck))
 
 
 if __name__ == "__main__":

@@ -30,6 +30,20 @@ std::atomic<uint64_t> g_task_uid(1);
 
 namespace coro
 {
+namespace { std::atomic<TaskErrorHandler> g_error_handler{nullptr}; }
+void SetTaskErrorHandler(TaskErrorHandler handler) { g_error_handler.store(handler); }
+void ReportTaskError(Token token, std::exception_ptr error) noexcept
+{
+	if (auto handler = g_error_handler.load())
+	{
+		try { handler(token, error); return; }
+		catch (...) { fprintf(stderr, "coroutine error handler threw\n"); }
+	}
+	try { std::rethrow_exception(error); }
+	catch (const std::exception& e) { fprintf(stderr, "coroutine %llu failed: %s\n", (unsigned long long)token, e.what()); }
+	catch (...) { fprintf(stderr, "coroutine %llu failed\n", (unsigned long long)token); }
+}
+
 TaskUid AllocTaskUid()
 {
 	TaskUid uid = g_task_uid.fetch_add(1, std::memory_order_relaxed);

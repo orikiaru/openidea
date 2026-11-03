@@ -72,3 +72,27 @@ if (result) { /* result.value 是响应，result.code 是传输结果 */ }
 应用层时间统一由 `oi_duration.h` 构造：`OI::Timer::Milliseconds(n)`、`Seconds(n)`、`Minutes(n)`、`Hours(n)`、`Days(n)`。这些函数保留时长类型，可以直接传给 `yield` 和 RPC，无需引入字面量名字空间。
 
 `Days(n)` 是每单位 24 小时的持续时长；日历跨天、跨周等刷新判断仍使用时间辅助接口。
+
+## 异常和任务作用域
+
+子任务的异常在父任务 `co_await` 处重新抛出，可以用 try/catch 捕获。独立根任务异常默认打印到 stderr，也可用 `SetTaskErrorHandler` 设置线程安全的错误处理函数。
+
+`TaskScope` 持有一组任务；`scope.Start(fn)` 的 fn 接收 `(coro::Token, coro::StopToken)`，循环检查 `StopRequested()`。`RequestStop()` 关闭入口并请求协作停止，`co_await scope.Join()` 等待所有任务完成后转交第一个异常。Join 本身也关闭入口。模块销毁前必须先完成 Join，再停止框架线程池。析构只请求停止，不能代替异步 Join。
+
+停止不强拆正在等待的 RPC、Redis 或定时器：它们正常完成或超时后任务检查停止标记；因此作用域任务需要设置有限超时，避免无限等待。捕获裸 this 的生命周期由模块 Join 保证。
+
+首次连接前的 RPC 默认最多等待 65536 条、64MiB；可通过 `SetPendingCallLimits(count, bytes)` 调整，0 表示不允许排队。达到任意限额返回 `OI_ERR_BUSY`，超时删除通过调用号索引完成。
+
+```cpp
+coro::TaskScope tasks;
+tasks.Start([](coro::Token token, coro::StopToken stop) -> coro::Task {
+    while (!stop.StopRequested()) {
+        // 一轮业务；网络调用必须给出有限超时。
+        co_await coro::yield(OI::Timer::Milliseconds(100));
+    }
+});
+// 模块退出协程内，先关闭任务，再销毁业务数据。
+tasks.RequestStop();
+try { co_await tasks.Join(); }
+catch (const std::exception& e) { /* 记录错误，任务已经全部结束 */ }
+```

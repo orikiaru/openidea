@@ -15,12 +15,13 @@
 #include "oi_lock.h"
 #include <type_traits>
 #include <utility>
+#include <memory>
 #include <chrono>
 namespace OI { namespace Timer {
 
 typedef std::deque<TimerLevel> TimerLevelVector;
 
-// 到点后把 lambda 拷贝进线程池。lambda 是 ()，要用的数据自己捕获。
+// 到点后在时间轮工作线程放锁执行。lambda 是 ()，要用的数据自己捕获。
 template<typename F>
 class FnTimer : public BaseTimer
 {
@@ -29,13 +30,9 @@ public:
 	explicit FnTimer(F fn) : _fn(std::move(fn)) {}
 	bool OnTimer()
 	{
-		F copied = _fn;
-		// 跟时间轮同一条有序队列，紧跟这次 Update。不丢到普通队列里排队。
-		if (!::OI::Thread::ThreadPool::GetInstance().AddTask(std::move(copied), ::OI::Thread::PRIO_QUEUE))
-		{
-			fprintf(stderr, "timer callback dropped: ThreadPool queue full\n");
-		}
-		delete this;
+		// Update 已在有序工作线程上，且已释放时间轮锁；直接执行，不能受普通任务限额影响。
+		std::unique_ptr<FnTimer> self(this);
+		_fn();
 		return END_TIMER;
 	}
 };

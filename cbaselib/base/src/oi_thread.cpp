@@ -165,6 +165,8 @@ void ThreadPool::RequestStop(int code)
 	_stop_cond.notify_one();
 	for (int i = PRIO_NORMAL; i < PRIO_NUM; ++i)
 	{
+		// 与 wait 的谓词检查握手，避免检查 false 后、真正入睡前漏掉通知。
+		{ std::lock_guard<std::mutex> lock(_thread_data[i]._mutex); }
 		_thread_data[i]._cond.notify_all();
 	}
 }
@@ -278,6 +280,8 @@ void ThreadPool::MultiThreadStartWork()
 	}
 	for (int i = PRIO_NORMAL; i < PRIO_NUM; ++i)
 	{
+		// 与 wait 的谓词检查握手，避免检查 false 后、真正入睡前漏掉通知。
+		{ std::lock_guard<std::mutex> lock(_thread_data[i]._mutex); }
 		_thread_data[i]._cond.notify_all();
 	}
 	for (size_t i = 0; i < workers.size(); ++i)

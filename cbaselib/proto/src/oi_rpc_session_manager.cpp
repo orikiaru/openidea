@@ -46,66 +46,70 @@ bool ProtoClientManager::SendRawOrPend(const ::OI::Base::Bytes& data, size_t max
 bool ProtoClientManager::TryPendCall(uint64_t call_id, const ::OI::Base::Bytes& data)
 {
 	{
-		::OI::Thread::SpinLockGuard l(_client_locker);
-		if (_ever_connected || (_conn && _ssid != INVALID_SID))
+		::OI::Thread::SpinLockGuard lock(_client_locker);
+		if (_ever_connected || (_conn && _ssid != INVALID_SID)) return false;
+		if (_held_calls.size() < _held_max_count && _held_bytes <= _held_max_bytes
+			&& data.Size() <= _held_max_bytes - _held_bytes)
 		{
-			return false;
+			// 先标记再入队；超时回调会在本锁释放后删除。已经超时则不再留副本。
+			if (!MarkRpcAwaitingConnect(call_id)) return true;
+			_held_calls.push_back(HeldCall{call_id, data});
+			_held_index.emplace(call_id, std::prev(_held_calls.end()));
+			_held_bytes += data.Size();
+			return true;
 		}
-		// 和入队放在同一把锁里。放锁后 FlushHeldCalls 才能取到它，ClaimRpcSend 清标记一定在这之后。
-		MarkRpcAwaitingConnect(call_id);
-		HeldCall held;
-		held.call_id = call_id;
-		held.data = data;
-		_held_calls.push_back(held);
 	}
+	// 不持客户端锁唤醒，回调允许再次发起请求。
+	WakeRpcCall(call_id, OI_ERR_BUSY, nullptr);
 	return true;
 }
 
 void ProtoClientManager::DropPendingCall(uint64_t call_id)
 {
-	::OI::Thread::SpinLockGuard l(_client_locker);
-	for (std::deque<HeldCall>::iterator it = _held_calls.begin(); it != _held_calls.end(); ++it)
-	{
-		if (it->call_id == call_id)
-		{
-			_held_calls.erase(it);
-			return;
-		}
-	}
+	::OI::Thread::SpinLockGuard lock(_client_locker);
+	auto it = _held_index.find(call_id);
+	if (it == _held_index.end()) return;
+	_held_bytes -= it->second->data.Size();
+	_held_calls.erase(it->second);
+	_held_index.erase(it);
 }
 
 void ProtoClientManager::FlushHeldCalls(sid_t sid)
 {
-	std::deque<HeldCall> held;
+	std::list<HeldCall> held;
 	{
 		::OI::Thread::SpinLockGuard l(_client_locker);
 		held.swap(_held_calls);
+		_held_index.clear();
+		_held_bytes = 0;
 	}
-	for (size_t i = 0; i < held.size(); ++i)
+	for (const auto& call : held)
 	{
-		if (!ClaimRpcSend(held[i].call_id, sid))
+		if (!ClaimRpcSend(call.call_id, sid))
 		{
 			continue;
 		}
-		if (!SendBytes(sid, held[i].data))
+		if (!SendBytes(sid, call.data))
 		{
-			WakeRpcCall(held[i].call_id, OI_ERR_FAIL, NULL);
+			WakeRpcCall(call.call_id, OI_ERR_FAIL, NULL);
 		}
 	}
 }
 
 void ProtoClientManager::FailHeldCalls()
 {
-	std::deque<HeldCall> held;
+	std::list<HeldCall> held;
 	{
 		::OI::Thread::SpinLockGuard l(_client_locker);
 		held.swap(_held_calls);
+		_held_index.clear();
+		_held_bytes = 0;
 		_pending.clear();
 		_pending_bytes = 0;
 	}
-	for (size_t i = 0; i < held.size(); ++i)
+	for (const auto& call : held)
 	{
-		WakeRpcCall(held[i].call_id, OI_ERR_CONNECT, NULL);
+		WakeRpcCall(call.call_id, OI_ERR_CONNECT, NULL);
 	}
 }
 

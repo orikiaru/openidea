@@ -88,6 +88,7 @@ RpcCallShard& ShardOf(uint64_t call_id)
 
 void FinishRpcSlot(RpcCoroSlot& slot, int32_t code, ::OI::Base::BytesStream* body)
 {
+	if (slot.awaiting_connect) slot.mgr->DropPendingCall(slot.call_id);
 	if (body)
 	{
 		if (slot.decode)
@@ -160,10 +161,6 @@ void SweepRpcCalls()
 	{
 		// 还没连上就到期，按连接失败返回，不占超时码。
 		int32_t code = fired[i].awaiting_connect ? OI_ERR_CONNECT : OI_ERR_TIMEOUT;
-		if (fired[i].awaiting_connect && fired[i].mgr)
-		{
-			fired[i].mgr->DropPendingCall(fired[i].call_id);
-		}
 		FinishRpcSlot(fired[i], code, NULL);
 	}
 }
@@ -184,16 +181,17 @@ void ArmRpcSweep(void*)
 }
 }
 
-void MarkRpcAwaitingConnect(uint64_t call_id)
+bool MarkRpcAwaitingConnect(uint64_t call_id)
 {
 	RpcCallShard& shard = ShardOf(call_id);
 	::OI::Thread::MutexGuard lock(shard.mu);
 	std::unordered_map<uint64_t, RpcCoroSlot>::iterator it = shard.slots.find(call_id);
 	if (it == shard.slots.end())
 	{
-		return;
+		return false;
 	}
 	it->second.awaiting_connect = true;
+	return true;
 }
 
 bool ClaimRpcSend(uint64_t call_id, sid_t sid)

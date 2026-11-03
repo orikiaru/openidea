@@ -1,6 +1,8 @@
 #pragma once
 #include <string>
 #include <deque>
+#include <list>
+#include <unordered_map>
 #include "oi_session_manager.h"
 #include "oi_rpc_session.h"
 #include "oi_rpc_call.h"
@@ -46,7 +48,11 @@ class ProtoClientManager : public ProtoSessionManager
 		::OI::Base::Bytes data;
 	};
 	std::deque<::OI::Base::Bytes> _pending;
-	std::deque<HeldCall> _held_calls;
+	std::list<HeldCall> _held_calls;
+	std::unordered_map<uint64_t, std::list<HeldCall>::iterator> _held_index;
+	size_t _held_bytes = 0;
+	size_t _held_max_count = 65536;
+	size_t _held_max_bytes = 64 * 1024 * 1024;
 	size_t		_pending_bytes;
 	bool		_ever_connected;
 	::OI::Thread::SpinLock	_client_locker;
@@ -103,6 +109,12 @@ public:
 	virtual int32_t UnavailableCode()
 	{
 		return IsConnect() ? OI_ERR_FAIL : OI_ERR_CONNECT;
+	}
+	void SetPendingCallLimits(size_t count, size_t bytes)
+	{
+		::OI::Thread::SpinLockGuard lock(_client_locker);
+		_held_max_count = count;
+		_held_max_bytes = bytes;
 	}
 	bool TryPendCall(uint64_t call_id, const ::OI::Base::Bytes& data) override;
 	void DropPendingCall(uint64_t call_id) override;

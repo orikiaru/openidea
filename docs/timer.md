@@ -29,7 +29,7 @@ libuv 到点只调用 `OnSignal`。`OnSignal` 把 `Update` 丢进线程池，不
 
 `Init` 会检查上面三项配置，不合法就往 stderr 打原因并返回 false，进程退出。
 
-回调时间按 `offset_ms` 对齐，用 `steady_clock` 计时。系统校时不影响相对延时，日历时间单独从系统时钟更新。没走完的一跳留到下次；外部 `AddTimer` 向上取整到到期 tick，不会提前触发。线程调度和回调执行仍可能造成额外延迟。`OnTimer` 返回 true 再挂上的周期定时器按逻辑 tick 续，停顿之后错过的跳会补上。`AddTimer(lambda)` 的 lambda 进有序队列，紧跟这次 `Update`，不排在普通任务后面。
+回调时间按 `offset_ms` 对齐，用 `steady_clock` 计时。系统校时不影响相对延时，日历时间单独从系统时钟更新。没走完的一跳留到下次；外部 `AddTimer` 向上取整到到期 tick，不会提前触发。线程调度和回调执行仍可能造成额外延迟。`OnTimer` 返回 true 再挂上的周期定时器按逻辑 tick 续，停顿之后错过的跳会补上。`AddTimer(lambda)` 的 lambda 在 `Update` 摘除定时器、释放轮锁后直接执行，不再二次入队，因此不受普通任务容量限制；回调应保持短小，耗时工作交给协程。
 
 业务侧用 `AddTimer(fn, millisecond)`，或者传入一个 `BaseTimer`。
 

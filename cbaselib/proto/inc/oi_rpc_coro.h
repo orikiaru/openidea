@@ -32,6 +32,10 @@ void Schedule(std::coroutine_handle<> handle);
 // 根协程跑完后不能在 final_suspend 里销毁自己。登记下来，等 resume 返回再释放。
 void DetachFinished(std::coroutine_handle<> handle);
 void DrainDetached();
+using TaskErrorHandler = void (*)(Token, std::exception_ptr);
+// 在工作线程调用；处理函数必须线程安全，不允许抛异常。nullptr 恢复默认 stderr 报告。
+void SetTaskErrorHandler(TaskErrorHandler handler);
+void ReportTaskError(Token token, std::exception_ptr error) noexcept;
 
 // 单线程就绪队列。Poll 只跑进入时已经在队列里的句柄，这一轮新挂上的留到 poll 之后。
 class StScheduler
@@ -90,6 +94,7 @@ struct TaskState
 {
 	// 保活 StartTask 的闭包；协程 lambda 的捕获仍属于闭包对象。
 	std::shared_ptr<void> callable;
+	std::exception_ptr error;
 	Token uid;
 	std::coroutine_handle<> continuation;
 	bool detached;
@@ -98,7 +103,11 @@ struct TaskState
 	std::suspend_always initial_suspend() noexcept { return {}; }
 	TaskFinalSuspend final_suspend() noexcept { return {}; }
 	void return_void() {}
-	void unhandled_exception() { std::terminate(); }
+	void unhandled_exception() noexcept
+	{
+		error = std::current_exception();
+		if (detached) ReportTaskError(uid, error);
+	}
 };
 
 // 一条任务。Start 丢进队列；co_await 就是调用它，跑完回到调用方。
@@ -144,7 +153,7 @@ struct Task
 		handle.resume();
 		return !handle.promise().ready.exchange(true, std::memory_order_acq_rel);
 	}
-	void await_resume() const noexcept {}
+	void await_resume() const { if (handle && handle.promise().error) std::rethrow_exception(handle.promise().error); }
 };
 
 template<typename F>
@@ -158,6 +167,91 @@ Token StartTask(F&& fn)
 	task.Start();
 	return token;
 }
+
+// 协作停止：不会销毁仍被 IO/定时器引用的帧。模块销毁前必须 await Join。
+class StopToken
+{
+	std::shared_ptr<std::atomic<bool>> _stop;
+public:
+	explicit StopToken(std::shared_ptr<std::atomic<bool>> stop) : _stop(std::move(stop)) {}
+	bool StopRequested() const { return _stop->load(std::memory_order_acquire); }
+};
+
+class TaskScope
+{
+	struct State
+	{
+		::OI::Thread::Mutex mutex;
+		std::shared_ptr<std::atomic<bool>> stop = std::make_shared<std::atomic<bool>>(false);
+		size_t active = 0;
+		std::vector<std::coroutine_handle<>> waiters;
+		bool closed = false;
+		std::exception_ptr error;
+	};
+	std::shared_ptr<State> _state = std::make_shared<State>();
+	template<typename F>
+	static Task Run(std::shared_ptr<State> state, F fn, Token token)
+	{
+		try { co_await fn(token, StopToken(state->stop)); }
+		catch (...)
+		{
+			::OI::Thread::MutexGuard lock(state->mutex);
+			if (!state->error) state->error = std::current_exception();
+			state->stop->store(true, std::memory_order_release);
+		}
+		std::vector<std::coroutine_handle<>> waiters;
+		{
+			::OI::Thread::MutexGuard lock(state->mutex);
+			if (--state->active == 0) waiters.swap(state->waiters);
+		}
+		for (auto waiter : waiters) Schedule(waiter);
+	}
+	struct JoinAwaiter
+	{
+		std::shared_ptr<State> state;
+		bool await_ready() const noexcept { return false; }
+		bool await_suspend(std::coroutine_handle<> waiter)
+		{
+			::OI::Thread::MutexGuard lock(state->mutex);
+			state->closed = true;
+			if (state->active == 0) return false;
+			state->waiters.push_back(waiter);
+			return true;
+		}
+		void await_resume()
+		{
+			::OI::Thread::MutexGuard lock(state->mutex);
+			if (state->error) std::rethrow_exception(state->error);
+		}
+	};
+	static Task Wait(std::shared_ptr<State> state)
+	{
+		co_await JoinAwaiter{std::move(state)};
+	}
+public:
+	TaskScope() = default;
+	TaskScope(const TaskScope&) = delete;
+	TaskScope& operator=(const TaskScope&) = delete;
+	~TaskScope() { RequestStop(); }
+	void RequestStop()
+	{
+		::OI::Thread::MutexGuard lock(_state->mutex);
+		_state->closed = true;
+		_state->stop->store(true, std::memory_order_release);
+	}
+	template<typename F>
+	Token Start(F&& fn)
+	{
+		::OI::Thread::MutexGuard lock(_state->mutex);
+		if (_state->closed) throw std::logic_error("TaskScope is closed");
+		Token token = AllocTaskUid();
+		auto task = Run(_state, std::forward<F>(fn), token);
+		task.handle.promise().uid = token;
+		++_state->active;
+		return task.Start();
+	}
+	Task Join() { return Wait(_state); }
+};
 
 }
 

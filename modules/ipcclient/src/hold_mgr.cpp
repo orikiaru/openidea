@@ -92,6 +92,31 @@ static coro::Task RaceOne(sid_t sid, int32_t index, int32_t mark, int32_t delay,
 coro::Task HoldMgr::Pump()
 {
 	int bad = 0;
+	// 子任务异常跨挂起点传回父任务；作用域关闭后不再接受任务。
+	auto throwing = [](coro::Token, coro::StopToken) -> coro::Task {
+		co_await coro::yield(::OI::Timer::Milliseconds(10));
+		throw std::runtime_error("scope regression");
+	};
+	coro::TaskScope failures;
+	failures.Start(throwing);
+	bool caught = false;
+	try { co_await failures.Join(); }
+	catch (const std::runtime_error&) { caught = true; }
+	if (!caught) ++bad;
+	coro::TaskScope scope;
+	std::atomic<int> finished{0}, started{0};
+	for (int i = 0; i < 128; ++i)
+		scope.Start([&finished, &started](coro::Token, coro::StopToken stop) -> coro::Task {
+			++started;
+			while (!stop.StopRequested()) co_await coro::yield(::OI::Timer::Milliseconds(10));
+			++finished;
+		});
+	while (started.load() != 128) co_await coro::yield(::OI::Timer::Milliseconds(10));
+	scope.RequestStop();
+	co_await scope.Join();
+	if (finished.load() != 128) ++bad;
+	try { scope.Start(throwing); ++bad; } catch (const std::logic_error&) {}
+	printf("hold scope finished=%d caught=%d bad=%d\n", finished.load(), caught, bad);
 	// 真正的带捕获协程 lambda：临时闭包离开后、挂起恢复后仍访问捕获。
 	struct Captures { std::atomic<int> done{0}; std::atomic<int> bad{0}; };
 	auto captures = std::make_shared<Captures>();
@@ -107,6 +132,38 @@ coro::Task HoldMgr::Pump()
 	while (captures->done.load(std::memory_order_acquire) < 32) co_await coro::yield(::OI::Timer::Milliseconds(10));
 	bad += captures->bad.load();
 	printf("hold captured tasks done=%d bad=%d\n", captures->done.load(), captures->bad.load());
+
+	// 使用真实待连接队列验证条数、字节限制以及取消后的容量恢复。
+	struct PendingClient : OI::Rpc::ProtoClientManager
+	{
+		void OnClientConnect(OI::Net::Session*) override {}
+		void OnClientDisconnect(const OI::Net::Session*) override {}
+	} pending;
+	pending.SetPendingCallLimits(1, 8);
+	OI::Base::BytesStream frame;
+	frame << uint64_t(1);
+	int first = 0, second = 0;
+	auto bind = [&](int& result) {
+		return OI::Rpc::BindRpcCall(&pending, INVALID_SID, 0, {}, &result, 0, {}, []() {});
+	};
+	auto a = bind(first);
+	pending.TryPendCall(a, frame.GetMutableBuff());
+	auto b = bind(second);
+	pending.TryPendCall(b, frame.GetMutableBuff());
+	if (second != OI_ERR_BUSY) ++bad;
+	OI::Rpc::WakeRpcCall(a, OI_ERR_TIMEOUT, nullptr);
+	second = 0;
+	b = bind(second);
+	pending.TryPendCall(b, frame.GetMutableBuff());
+	if (second != 0) ++bad;
+	pending.FailHeldCalls();
+	if (second != OI_ERR_CONNECT) ++bad;
+	pending.SetPendingCallLimits(8, 7);
+	second = 0;
+	b = bind(second);
+	pending.TryPendCall(b, frame.GetMutableBuff());
+	if (second != OI_ERR_BUSY) ++bad;
+	printf("hold pending limits bad=%d\n", bad);
 
 	// 只在内部配对入口注入错误来源，不构造另一套网络客户端。
 	auto& mgr = IpcClient::GetInstance();
