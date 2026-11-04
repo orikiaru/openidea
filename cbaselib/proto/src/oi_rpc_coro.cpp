@@ -26,6 +26,18 @@ void PostTask(std::coroutine_handle<> stHandleParam)
 }
 
 std::atomic<uint64_t> g_task_uid(1);
+
+// 纯协程程序也必须接入主循环和帧回收；不能依赖链接器恰好拉入 RPC/HTTP 的目标文件。
+struct SchedulerRegistration
+{
+	SchedulerRegistration()
+	{
+		auto& stPool = OI::Thread::ThreadPool::GetInstance();
+		stPool.SetDrain(coro::StScheduler::Poll);
+		stPool.SetPending(coro::StScheduler::Queued);
+		stPool.SetAfterResume(coro::DrainDetached);
+	}
+} g_stSchedulerRegistration;
 }
 
 namespace coro

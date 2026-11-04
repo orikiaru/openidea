@@ -28,6 +28,10 @@
 
 多线程由 `ThreadPool::PostCoroutine` 把句柄放进工人队列。工人只 `resume`，不在工人里销毁协程帧。根协程在 `final_suspend` 里 `DetachFinished`，`resume` 返回后 `DrainDetached` 再销毁。
 
+子协程发布完成标记后，父协程可立即消费结果并销毁子帧。因此 final_suspend 必须先缓存 continuation 和 detached 状态，发布后只用局部值，不再读取 promise。
+
+调度和根帧回收钩子由协程运行时自身注册，不依赖应用调用 RPC 或 HTTP。静态链接的纯协程路径用 `python3 tools/check_coro_runtime.py --asan` 验证两种线程模式的 yield、结果返回和闭包释放；业务收发仍使用 ipcclient 的 HoldMgr 回归。
+
 ## 服务端
 
 `HandleRpc` 包一层：解包，`co_await` 业务任务，再把回包写出去。请求和回包的包体都以 8 字节调用号开头，客户端按调用号认回包，所以回包不用按接受顺序排队，处理完就发。
@@ -112,7 +116,7 @@ if (result.GetRet() != 0) { co_return; }
 auto& res = result.GetRes(); // 自动配对的响应类型
 ```
 
-连接管理器在调用时取当前会话号，首次连接前仍按原规则排队。需要指定会话时使用 `RpcCall(manager, sid, req, duration)`。旧的显式响应模板、输出引用接口均保留；新接口只接受明确的时长类型。创建等待对象时复制请求，调用方可用 `std::move(req)` 交出大请求以避免复制。未使用的任务或 RPC 等待对象会产生 nodiscard 编译诊断。
+不指定 sid 的接口在实际 await 提交时选择当前会话，并在同一客户端临界区决定排队或绑定回包来源；构造等待对象不会截取会话号，首次连接前仍按原规则排队。可以先创建等待对象，等连接成功后再 await。需要固定会话时使用 `RpcCall(manager, sid, req, duration)`，此接口不会自动改发到新连接。旧的显式响应模板、输出引用接口均保留；新接口只接受明确的时长类型。创建等待对象时复制请求，调用方可用 `std::move(req)` 交出大请求以避免复制。未使用的任务或 RPC 等待对象会产生 nodiscard 编译诊断。
 
 多线程工作线程在同一优先级普通任务等待时，最多连续执行 32 次协程恢复后取一次普通任务，防止持续 yield(0) 的协程饿死普通任务。单线程同步适配器与主循环共用 PumpOnce，推进普通任务、协程和 IO；不要从网络回调中使用同步适配器。
 

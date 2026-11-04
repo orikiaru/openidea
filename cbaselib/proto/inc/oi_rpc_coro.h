@@ -87,15 +87,18 @@ struct TaskFinalSuspend
 	void await_suspend(std::coroutine_handle<Promise> stHandleParam) const noexcept
 	{
 		auto& stPromise = stHandleParam.promise();
+		// 发布完成后，父协程可能立即读取结果并销毁子帧。后续只能使用局部副本。
+		const auto stContinuationLocal = stPromise.stContinuation;
+		const bool bDetachedLocal = stPromise.bDetached;
 		if (stPromise.bReady.exchange(true, std::memory_order_acq_rel))
 		{
-			if (stPromise.stContinuation)
+			if (stContinuationLocal)
 			{
-				Schedule(stPromise.stContinuation);
+				Schedule(stContinuationLocal);
 			}
 			return;
 		}
-		if (stPromise.bDetached)
+		if (bDetachedLocal)
 		{
 			DetachFinished(stHandleParam);
 		}
@@ -536,6 +539,7 @@ struct [[nodiscard]] RpcCallAwaiter
 {
 	static_assert(RpcProtoId<Req>::iValue == RpcProtoId<Res>::iValue, "RPC request/response protocol mismatch");
 	::OI::Net::SessionManager* pManager;
+	ProtoClientManager* pClient = nullptr; // 便捷调用在提交时选择会话，显式 sid 调用仍固定会话。
 	sid_t iSessionId;
 	Req* pRequest;
 	Res* pResponse;
@@ -554,7 +558,7 @@ struct [[nodiscard]] RpcCallAwaiter
 	}
 	RpcCallAwaiter(const RpcCallAwaiter&) = delete;
 	RpcCallAwaiter(RpcCallAwaiter&& stOtherParam) noexcept
-	    : pManager(stOtherParam.pManager), iSessionId(stOtherParam.iSessionId), pRequest(stOtherParam.pRequest), pResponse(stOtherParam.pResponse), iResult(stOtherParam.iResult),
+	    : pManager(stOtherParam.pManager), pClient(stOtherParam.pClient), iSessionId(stOtherParam.iSessionId), pRequest(stOtherParam.pRequest), pResponse(stOtherParam.pResponse), iResult(stOtherParam.iResult),
 	      iTimeoutMilliseconds(stOtherParam.iTimeoutMilliseconds), stHandle(stOtherParam.stHandle), iGate(stOtherParam.iGate.load(std::memory_order_relaxed)),
 	      bReplied(false), stSubmissionError(std::move(stOtherParam.stSubmissionError))
 	{
@@ -592,7 +596,11 @@ struct [[nodiscard]] RpcCallAwaiter
 			stBody << (iCallIdLocal | (uint64_t)RPC_REQ_MASK);
 			pRequest->serialize(stBody);
 			::OI::Base::BytesStream stFrame = EncodePbFrame(RpcProtoId<Req>::iValue, stBody);
-			if (pManager->TryPendCall(iCallIdLocal, stFrame.GetMutableBuff()))
+			if (pClient)
+			{
+				pClient->SubmitCall(iCallIdLocal, stFrame.GetMutableBuff());
+			}
+			else if (pManager->TryPendCall(iCallIdLocal, stFrame.GetMutableBuff()))
 			{
 			}
 			else if (!pManager->SendBytes(iSessionId, stFrame.GetMutableBuff()))
@@ -712,7 +720,9 @@ template <typename Req>
 auto RpcCall(ProtoClientManager& stManagerParam, Req& stRequestParam, typename RpcProtoId<Req>::Response& stResponseParam,
     std::chrono::milliseconds stTimeoutParam = ::OI::Timer::Seconds(180))
 {
-	return RpcCall(stManagerParam, stManagerParam.ConnectedSid(), stRequestParam, stResponseParam, stTimeoutParam);
+	auto stCall = RpcCall(stManagerParam, INVALID_SID, stRequestParam, stResponseParam, stTimeoutParam);
+	stCall.pClient = &stManagerParam;
+	return stCall;
 }
 
 // 拥有请求和响应，应用不必跨挂起维护输出引用。
@@ -721,10 +731,11 @@ struct [[nodiscard]] RpcValueAwaiter : RpcCallAwaiter<Req, Res>
 {
 	Req stRequest;
 	Res stResponse{};
-	RpcValueAwaiter(::OI::Net::SessionManager& stManagerParam, sid_t iSessionIdParam, Req stRequestParam, std::chrono::milliseconds stTimeoutParam)
+	RpcValueAwaiter(::OI::Net::SessionManager& stManagerParam, sid_t iSessionIdParam, Req stRequestParam, std::chrono::milliseconds stTimeoutParam, ProtoClientManager* pClientParam = nullptr)
 	    : stRequest(std::move(stRequestParam))
 	{
 		this->pManager = &stManagerParam;
+		this->pClient = pClientParam;
 		this->iSessionId = iSessionIdParam;
 		this->iTimeoutMilliseconds = stTimeoutParam.count();
 	}
@@ -760,7 +771,7 @@ auto RpcCall(ProtoClientManager& stManagerParam, Req stRequestParam,
     std::chrono::milliseconds stTimeoutParam = ::OI::Timer::Seconds(180))
     -> RpcValueAwaiter<Req, typename RpcProtoId<Req>::Response>
 {
-	return {stManagerParam, stManagerParam.ConnectedSid(), std::move(stRequestParam), stTimeoutParam};
+	return {stManagerParam, INVALID_SID, std::move(stRequestParam), stTimeoutParam, &stManagerParam};
 }
 
 }

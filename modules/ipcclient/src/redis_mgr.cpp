@@ -435,6 +435,68 @@ coro::Task RedisMgr::Check()
 	{
 		++m_iFailed;
 	}
+	// 同一个等待对象只能提交一次；重复或并发 await 必须在发送前拒绝，不能重复写 Redis。
+	int iSingleUseBad = 0;
+	std::vector<std::string> vSingleUseKeys{"DEL", "oi-single-use", "oi-concurrent-use"};
+	if (!(co_await OI::Redis::CallRedis(std::move(vSingleUseKeys))))
+	{
+		++iSingleUseBad;
+	}
+	auto stSingleUse = OI::Redis::RedisIncr("oi-single-use");
+	if (!IntIs(co_await stSingleUse, 1))
+	{
+		++iSingleUseBad;
+	}
+	try
+	{
+		(void)(co_await stSingleUse);
+		++iSingleUseBad;
+	}
+	catch (const std::logic_error&)
+	{
+	}
+	if (!BulkIs(co_await OI::Redis::RedisGet("oi-single-use"), "1", 1))
+	{
+		++iSingleUseBad;
+	}
+	struct SingleUseResult
+	{
+		std::atomic<int> iAccepted{0};
+		std::atomic<int> iRejected{0};
+	};
+	auto pSingleUseResult = std::make_shared<SingleUseResult>();
+	auto pSharedCall = std::make_shared<OI::Redis::RedisCall>(OI::Redis::RedisIncr("oi-concurrent-use"));
+	coro::TaskScope stSingleUseTasks;
+	for (int iIndex = 0; iIndex < 2; ++iIndex)
+	{
+		stSingleUseTasks.Start([pSharedCall, pSingleUseResult](coro::Token, coro::StopToken) -> coro::Task
+		{
+			try
+			{
+				if (IntIs(co_await *pSharedCall, 1))
+				{
+					++pSingleUseResult->iAccepted;
+				}
+			}
+			catch (const std::logic_error&)
+			{
+				++pSingleUseResult->iRejected;
+			}
+		});
+	}
+	co_await stSingleUseTasks.Join();
+	if (pSingleUseResult->iAccepted != 1 || pSingleUseResult->iRejected != 1 ||
+	    !BulkIs(co_await OI::Redis::RedisGet("oi-concurrent-use"), "1", 1))
+	{
+		++iSingleUseBad;
+	}
+	std::vector<std::string> vCleanupKeys{"DEL", "oi-single-use", "oi-concurrent-use"};
+	if (!(co_await OI::Redis::CallRedis(std::move(vCleanupKeys))))
+	{
+		++iSingleUseBad;
+	}
+	m_iFailed += iSingleUseBad;
+	LOG_TRACE("redis single use bad=%d", iSingleUseBad);
 	::OI::Redis::RedisResult stSet;
 	{
 		::OI::Redis::RedisCall stCall = ::OI::Redis::RedisSet("rk", "hello", stSet);
@@ -566,7 +628,10 @@ coro::Task RedisMgr::Check()
 		++iScriptBad;
 	}
 	const std::vector<std::vector<std::string>> vDebugCommands{
-	    {"sCrIpT", "dEbUg", "YES"}, {"SCRIPT", "DEBUG", "SYNC"}, {"script", "debug", "NO"}, {"SCRIPT", std::string("DEBUG\0suffix", 12), "SYNC"}};
+	    {"sCrIpT", "dEbUg", "YES"}, {"SCRIPT", "DEBUG", "SYNC"}, {"script", "debug", "NO"}, {"SCRIPT", std::string("DEBUG\0suffix", 12), "SYNC"},
+	    {"PMONITOR"}, {"pMoNiToR"}, {"MONITOR\r\nignored"}, {"PMONITOR\r\nignored"},
+	    {"SUBSCRIBE\r\nignored", "topic"}, {"PSUBSCRIBE\r\nignored", "topic"},
+	    {"UNSUBSCRIBE\r\nignored"}, {"PUNSUBSCRIBE\r\nignored"}};
 	for (const auto& vArguments : vDebugCommands)
 	{
 		auto stRejected = co_await OI::Redis::CallRedis(vArguments);

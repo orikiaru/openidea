@@ -2,6 +2,7 @@
 #include "redis_server.h"
 #include "oi_log.h"
 #include <string>
+#include <string_view>
 
 namespace
 {
@@ -125,6 +126,20 @@ bool ChangesConnection(const char* pBeginParam, const char* pEndParam)
 		{
 			iCharacter = (char)(iCharacter - 'a' + 'A');
 		}
+	}
+	// hiredis async.c 先跳过可选的 P，再按包含 CRLF 的固定前缀识别，忽略命令名长度。
+	// PMONITOR 或 MONITOR\r\n<后缀> 即使被 Redis 拒绝，也已改变共享上游的回调状态。
+	// 同时覆盖订阅分支；SUBSCRIBE 只有带后续参数时才会改变 hiredis 状态。
+	std::string_view sAsyncCommand(sCommand);
+	if (sAsyncCommand.starts_with('P'))
+	{
+		sAsyncCommand.remove_prefix(1);
+	}
+	if (sAsyncCommand == "MONITOR" || sAsyncCommand.starts_with("MONITOR\r\n") ||
+	    sAsyncCommand == "UNSUBSCRIBE" || sAsyncCommand.starts_with("UNSUBSCRIBE\r\n") ||
+	    (iCount >= 2 && (sAsyncCommand == "SUBSCRIBE" || sAsyncCommand.starts_with("SUBSCRIBE\r\n"))))
+	{
+		return true;
 	}
 	// ScanCommand 已校验完整 RESP；仅检查 SCRIPT 的子命令，保留 LOAD/EXISTS 等正常功能。
 	if (sCommand == "SCRIPT" && iCount >= 2)

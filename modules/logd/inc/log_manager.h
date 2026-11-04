@@ -1,9 +1,11 @@
 #pragma once
 #include <map>
+#include <deque>
 #include "oi_base.h"
 #include "oi_singleton.h"
 
 class LogFileInstance;
+class LogServerSession;
 
 class LogManager : public ::OI::Timer::BaseTimer
 {
@@ -25,6 +27,21 @@ class LogManager : public ::OI::Timer::BaseTimer
 	//日志lv对应的文件和缓存包装
 	typedef std::map<LOG_LEVEL, LogFileInstance*> LogFileMap;
 	LogFileMap m_mLogFileMap;
+	::OI::Thread::Mutex m_stBacklogLocker;
+	::OI::Thread::MutexCond m_stBacklogCondition;
+	size_t m_iMaxPendingBytes = 64 * 1024 * 1024;
+	size_t m_iPendingBytes = 0;
+	size_t m_iPeakPendingBytes = 0;
+	size_t m_iPauseCount = 0;
+	struct WaitingLog
+	{
+		LogServerSession* pSession;
+		size_t iBytes;
+	};
+	std::deque<WaitingLog> m_vWaitingSessions;
+	LogServerSession* m_pResumingSession = nullptr;
+	bool m_bResumePosted = false;
+	bool m_bStopping = false;
 
 	//日志文件根目录
 	std::string m_sLogRootPath;    //日志根目录
@@ -38,11 +55,19 @@ class LogManager : public ::OI::Timer::BaseTimer
 	// StartWork 返回后调用。join 各级写线程，返回时日志都已落盘。
 	void Stop();
 
-	// b 的内容会被移进写盘队列
-	void WriteLog(LOG_LEVEL iLevelParam, ::OI::Base::Bytes& stSecondParam);
+	// 满时不消费正文；网络会话登记恢复，本地调用直接返回 false。
+	bool WriteLog(LOG_LEVEL iLevelParam, const char* pTextParam, size_t iLengthParam,
+	    LogServerSession* pSessionParam = nullptr);
+	// poll 单次解析达到预算，保留下一帧并排到等待队列尾部。
+	void DeferWrite(LogServerSession* pSessionParam, size_t iLengthParam);
 
   private:
 	friend class LogFileInstance;
+	void CompleteWrite(size_t iBytesParam);
+	void QueueWaiter(LogServerSession* pSessionParam, size_t iBytesParam);
+	void ScheduleResume();
+	static void ResumeOnLoop(void* pArgumentParam);
+	void ResumeWaiting(bool bShutdownParam);
 	bool StartLogInstanceWork();
 	bool OpenAllLogFile();
 	bool CheckAndCreateRootPath();

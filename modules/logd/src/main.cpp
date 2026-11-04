@@ -7,9 +7,7 @@
 // logd 自己的日志直接进本地文件，不作为日志客户端连自己。
 static bool WriteSelfLog(LOG_LEVEL iLevelParam, const char* pTextParam, size_t iLengthParam)
 {
-	::OI::Base::Bytes stBody(pTextParam, iLengthParam);
-	LogManager::GetInstance().WriteLog(iLevelParam, stBody);
-	return true;
+	return LogManager::GetInstance().WriteLog(iLevelParam, pTextParam, iLengthParam);
 }
 
 int main(int iArgumentCountParam, char* vArgumentsParam[])

@@ -17,26 +17,6 @@ namespace OI
 namespace Rpc
 {
 
-static bool DrainStCoro()
-{
-	return coro::StScheduler::Poll();
-}
-
-static bool PendingStCoro()
-{
-	return coro::StScheduler::Queued();
-}
-
-static struct StDrainReg
-{
-	StDrainReg()
-	{
-		::OI::Thread::ThreadPool::GetInstance().SetDrain(DrainStCoro);
-		::OI::Thread::ThreadPool::GetInstance().SetPending(PendingStCoro);
-		::OI::Thread::ThreadPool::GetInstance().SetAfterResume(coro::DrainDetached);
-	}
-} g_st_drain_reg;
-
 namespace
 {
 typedef std::function<coro::Task(coro::Token, ::OI::Net::SessionManager*, sid_t, ::OI::Base::BytesStream)> RpcHandleFn;

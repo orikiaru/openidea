@@ -15,6 +15,10 @@ pull_ms = 1000
 
 [Log]
 root_path = "./logs"
+# 所有级别共享的待写字节上限，包含正在写入/尚未 fflush 的批次及每条时间前缀。
+# 最小 8388616（最大合法正文 + 9 字节时间前缀）；不是进程 RSS 或接收缓冲上限。
+# 满时暂停网络读取；本地日志返回 false，不阻塞 poll，也不另建无界缓存。
+max_pending_bytes = 67108864
 
 [ThreadPool]
 normal = 3 #标准线程池数

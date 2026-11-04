@@ -48,6 +48,31 @@ bool ProtoClientManager::SendRawOrPend(const ::OI::Base::Bytes& stDataParam, siz
 	return SendBytes(iSessionIdLocal, stDataParam);
 }
 
+bool ProtoClientManager::HoldCallLocked(uint64_t iCallIdParam, const ::OI::Base::Bytes& stDataParam)
+{
+	if (m_vHeldCalls.size() >= m_iHeldMaxCount || m_iHeldBytes > m_iHeldMaxBytes || stDataParam.Size() > m_iHeldMaxBytes - m_iHeldBytes)
+	{
+		return false;
+	}
+	// 先标记再入队；超时回调会在客户端锁释放后删除。已经超时则不再留副本。
+	if (!MarkRpcAwaitingConnect(iCallIdParam))
+	{
+		return true;
+	}
+	m_vHeldCalls.push_back(HeldCall{iCallIdParam, stDataParam});
+	try
+	{
+		m_mHeldIndex.emplace(iCallIdParam, std::prev(m_vHeldCalls.end()));
+	}
+	catch (...)
+	{
+		m_vHeldCalls.pop_back();
+		throw;
+	}
+	m_iHeldBytes += stDataParam.Size();
+	return true;
+}
+
 bool ProtoClientManager::TryPendCall(uint64_t iCallIdParam, const ::OI::Base::Bytes& stDataParam)
 {
 	{
@@ -56,30 +81,50 @@ bool ProtoClientManager::TryPendCall(uint64_t iCallIdParam, const ::OI::Base::By
 		{
 			return false;
 		}
-		if (m_vHeldCalls.size() < m_iHeldMaxCount && m_iHeldBytes <= m_iHeldMaxBytes && stDataParam.Size() <= m_iHeldMaxBytes - m_iHeldBytes)
+		if (HoldCallLocked(iCallIdParam, stDataParam))
 		{
-			// 先标记再入队；超时回调会在本锁释放后删除。已经超时则不再留副本。
-			if (!MarkRpcAwaitingConnect(iCallIdParam))
-			{
-				return true;
-			}
-			m_vHeldCalls.push_back(HeldCall{iCallIdParam, stDataParam});
-			try
-			{
-				m_mHeldIndex.emplace(iCallIdParam, std::prev(m_vHeldCalls.end()));
-			}
-			catch (...)
-			{
-				m_vHeldCalls.pop_back();
-				throw;
-			}
-			m_iHeldBytes += stDataParam.Size();
 			return true;
 		}
 	}
 	// 不持客户端锁唤醒，回调允许再次发起请求。
 	WakeRpcCall(iCallIdParam, OI_ERR_BUSY, nullptr);
 	return true;
+}
+
+void ProtoClientManager::SubmitCall(uint64_t iCallIdParam, const ::OI::Base::Bytes& stDataParam)
+{
+	sid_t iSessionIdLocal = INVALID_SID;
+	int32_t iFailure = OI_ERR_CONNECT;
+	{
+		::OI::Thread::SpinLockGuard stLock(m_stClientLocker);
+		if (m_bConnected && m_iSessionId != INVALID_SID)
+		{
+			iSessionIdLocal = m_iSessionId;
+			// 来源匹配必须与发送目标一致；已经超时的调用不再发出。
+			if (!ClaimRpcSend(iCallIdParam, iSessionIdLocal))
+			{
+				return;
+			}
+		}
+		else if (!m_bEverConnected)
+		{
+			if (HoldCallLocked(iCallIdParam, stDataParam))
+			{
+				return;
+			}
+			iFailure = OI_ERR_BUSY;
+		}
+	}
+	if (iSessionIdLocal != INVALID_SID)
+	{
+		if (SendBytes(iSessionIdLocal, stDataParam))
+		{
+			return;
+		}
+		iFailure = UnavailableCode();
+	}
+	// 完成可能反过来删除待发项，不能持客户端锁唤醒。
+	WakeRpcCall(iCallIdParam, iFailure, nullptr);
 }
 
 void ProtoClientManager::DropPendingCall(uint64_t iCallIdParam)

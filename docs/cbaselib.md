@@ -16,9 +16,15 @@
 
 `logger` 是日志客户端，类型在 `OI::Log`。业务进程用它把日志发到 `logd`。`logd` 自己的服务端在 `modules/logd`。`SendLog` 在日志服还没连上时先攒着，待发超过 4MB 就返回 false，调用方自己决定要不要再试。
 
+logd 的 `[Log] max_pending_bytes` 默认 64MiB，所有日志级别共享，包含排队和正在写入、尚未 fflush 的批次及时间前缀。满时保留完整输入帧并暂停该连接读取，写线程完成后通过 poll 恢复；连接关闭后仍排空已读取的完整帧。进程正常退出先排空等待会话，再 join 写线程。本地日志返回 false 表示当前不能接纳，仍已按原规则输出到 stdout；不能在 poll 中阻塞等待磁盘。此限额不含接收缓冲、内核缓冲及分配器开销，不是 RSS 上限。
+
+`python3 tools/run_regressions.py --case log-backpressure` 使用现有 LogMgr 发送 64MiB、通过临时 LD_PRELOAD 只延迟 logd 写盘线程，核对每条落盘正文、实际字节、队列峰值不超限、发生暂停且最终 pending=0；普通日志用例继续验证 1GiB 吞吐。全套 `--case all` 包含慢盘用例，两种客户端/服务端线程模式均需运行。
+
 `redis` 是连 `redisserver` 的客户端，类型在 `OI::Redis`，字节是 RESP，不进 proto。一条连接上的命令按发送顺序对回包。超时后这条命令仍留在队列里，等它自己的回包来认领，避免后面的应答串位。回包如果再也没来，而连接还在，后面的命令会一直顶在它后面。超时单位是毫秒，来自 `RedisClient.timeout_ms`，由 200 毫秒的周期定时器扫描。先到的那个算数。`RedisResult.iStatus` 区分 Ok、Timeout、Disconnected、InvalidArgument、SendFailed、ServerError、ProtocolError、Busy；`bTimeout` 仅在真正超时时为真。错误回执仍保留在共享 `pReply` 中，`if (result)` 只对 Ok 成立。
 
 推荐 `auto result = co_await RedisGet("key")` 或 `co_await CallRedis({"GET", "key"})`；旧的输出引用接口仍保留。过期时间可用 `RedisExpire("key", OI::Timer::Seconds(60))`，列表范围支持整数下标。`RedisClient.max_pending` 默认 65536，包含已超时但尚未收到回执的配对项，满后返回 Busy，不自动重试或重放写操作。
+
+RedisCall 是单次请求对象，同一个对象只能 await 一次；重复等待、并发等待或等待已移走的对象会在提交前抛出 std::logic_error，不会再次发送写操作。需要再次请求时重新调用 RedisGet / CallRedis 创建对象；要复用已取得的响应，保存 RedisResult。
 
 共享上游连接不支持改变连接状态的命令（切库、认证、事务、订阅、CLIENT 等）。代理收到这类命令会记录错误并关闭该下游连接，避免本地错误回包与在途回包错位。阻塞命令仍会阻塞共用该上游的其他会话，生产环境应单独部署这类调用。多线程版同步 Redis 调用禁止在 poll 线程执行，会抛出 `std::logic_error`；该线程应使用协程接口。
 
@@ -70,3 +76,5 @@ redisserver 的 `[Redis] max_pending_bytes`（默认 64MiB）和 `max_pending_co
 新增 `--case redis-fairness`：RedisMgr 建立两条真实下游连接，在上游额度为 1、服务端时间轮 tick 为 1000ms 时发送 64+1 条命令；驱动通过 Redis MONITOR 核对后者最迟第三条执行，并检查全部回复和恢复耗时。HoldMgr 同时覆盖不 await 即启动、完成后再 await、首次/重复建连、32 个并发等待者、失败和延迟投递不内联。两项纳入 `--case all`，单、多线程分别复测。
 
 共享 Redis 上游禁止 `SCRIPT DEBUG` 子命令（大小写不敏感，所有模式均拒绝；子命令内嵌 NUL 也拒绝，防止 C 字符串比较截断绕过），避免调试模式污染其他下游的 EVAL/PING；SCRIPT LOAD 和 EVALSHA 保留。普通 RedisMgr 回归强制使用一条上游，以两条下游验证调试命令被断开、另一条仍收到正常脚本结果，并验证重连后的 PING 与脚本加载/执行。
+
+过滤同时覆盖 hiredis 自己识别的异步状态命令，包括 PMONITOR 和命令名内嵌 CRLF 的监控/订阅/退订变体；不能只依赖 Redis 返回未知命令错误，因为 hiredis 在收到回复前就已改变连接状态。这些命令按已有规则关闭发起的下游连接，共享上游及其他下游保持可用。

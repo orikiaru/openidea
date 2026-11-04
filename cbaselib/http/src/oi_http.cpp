@@ -738,27 +738,6 @@ Call::State::~State()
 	DropChannel();
 }
 
-#ifdef _SINGLE_THREAD_
-static bool DrainSt()
-{
-	return coro::StScheduler::Poll();
-}
-
-static bool PendingSt()
-{
-	return coro::StScheduler::Queued();
-}
-
-static struct StReg
-{
-	StReg()
-	{
-		::OI::Thread::ThreadPool::GetInstance().SetDrain(DrainSt);
-		::OI::Thread::ThreadPool::GetInstance().SetPending(PendingSt);
-	}
-} g_st_reg;
-#endif
-
 Call::~Call()
 {
 	if (m_pState)

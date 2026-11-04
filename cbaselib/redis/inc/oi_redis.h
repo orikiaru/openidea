@@ -49,6 +49,8 @@ struct RedisResult
 
 class RedisClient;
 
+// 每个调用只允许 await 一次（包括失败和停止）；重复、并发或移走后 await 抛 std::logic_error。
+// 调用对象和输出引用须覆盖首次 await 的生命周期，不支持并发移动或销毁。
 class RedisCall
 {
 	friend class RedisClient;

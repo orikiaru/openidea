@@ -15,6 +15,8 @@
 #include "oi_redis.h"
 #include "oi_poll.h"
 #include "oi_net_session.h"
+#include "oi_timer_manager.h"
+#include <uv.h>
 #include "test_board.h"
 #include <atomic>
 #include <chrono>
@@ -449,6 +451,241 @@ static coro::TaskResult<int> CheckClientConnect()
 	co_return iBad + pResult->iBad + pBad->load();
 }
 
+struct TimerExceptionProbe
+{
+	uv_timer_t stWatchdog{};
+	std::atomic<int> iExecuted{0};
+	std::atomic<int> iDestroyed{0};
+	std::atomic<bool> bClosed{false};
+	std::atomic<bool> bPassed{false};
+	std::atomic<int64_t> vTicks[5]{};
+	uint64_t iDeadlineMilliseconds = 0;
+};
+
+struct TimerClosureProbe
+{
+	std::shared_ptr<TimerExceptionProbe> pState;
+	explicit TimerClosureProbe(std::shared_ptr<TimerExceptionProbe> pStateParam)
+	    : pState(std::move(pStateParam))
+	{
+	}
+	~TimerClosureProbe()
+	{
+		++pState->iDestroyed;
+	}
+};
+
+static coro::TaskResult<int> CheckTimerExceptions()
+{
+	auto pState = std::make_shared<TimerExceptionProbe>();
+	// 帧持有状态直到 uv_close 回调完成；冻结时间轮也不会阻止独立看门狗。
+	OI::Net::Poll::GetInstance().CallOnLoop([](void* pArgumentParam)
+	{
+		auto* pProbe = static_cast<TimerExceptionProbe*>(pArgumentParam);
+		auto* pLoop = OI::Net::Poll::GetInstance().Loop();
+		if (uv_timer_init(pLoop, &pProbe->stWatchdog) != 0)
+		{
+			pProbe->bClosed = true;
+			return;
+		}
+		pProbe->stWatchdog.data = pProbe;
+		pProbe->iDeadlineMilliseconds = uv_now(pLoop) + 10000;
+		const int iReturnCode = uv_timer_start(&pProbe->stWatchdog, [](uv_timer_t* pTimerParam)
+		{
+			auto* pProbeLocal = static_cast<TimerExceptionProbe*>(pTimerParam->data);
+			const bool bComplete = pProbeLocal->iExecuted == 5 && pProbeLocal->iDestroyed == 5;
+			if (!bComplete && uv_now(pTimerParam->loop) < pProbeLocal->iDeadlineMilliseconds)
+			{
+				return;
+			}
+			pProbeLocal->bPassed = bComplete;
+			uv_timer_stop(pTimerParam);
+			uv_close(reinterpret_cast<uv_handle_t*>(pTimerParam), [](uv_handle_t* pHandleParam)
+			{
+				static_cast<TimerExceptionProbe*>(pHandleParam->data)->bClosed = true;
+			});
+		}, 10, 10);
+		if (iReturnCode != 0)
+		{
+			uv_close(reinterpret_cast<uv_handle_t*>(&pProbe->stWatchdog), [](uv_handle_t* pHandleParam)
+			{
+				static_cast<TimerExceptionProbe*>(pHandleParam->data)->bClosed = true;
+			});
+		}
+	}, pState.get());
+	// 在时间轮回调内布置下一批，记录实际 tick，确保覆盖同批余下回调。
+	OI::Timer::BaseTimerManager::GetInstance().AddTimer([pState]()
+	{
+		auto& stTimers = OI::Timer::BaseTimerManager::GetInstance();
+		for (int iIndex = 0; iIndex < 5; ++iIndex)
+		{
+			auto pClosure = std::make_shared<TimerClosureProbe>(pState);
+			stTimers.AddTimer([pClosure, iIndex]()
+			{
+				auto pProbe = pClosure->pState;
+				pProbe->vTicks[iIndex] = OI::Timer::BaseTimerManager::GetInstance().GetCurTick();
+				++pProbe->iExecuted;
+				if (iIndex == 0)
+				{
+					throw std::runtime_error("hold timer std exception");
+				}
+				if (iIndex == 2)
+				{
+					throw 73;
+				}
+			}, iIndex == 4 ? stTimers.GetTickOffsetMS() * 3 : 0);
+		}
+	}, 0);
+	while (!pState->bClosed.load())
+	{
+		co_await coro::yield(0);
+	}
+	int iBad = pState->bPassed ? 0 : 1;
+	if (pState->vTicks[0] != pState->vTicks[1].load() || pState->vTicks[2] != pState->vTicks[3].load() || pState->vTicks[4] <= pState->vTicks[3].load())
+	{
+		++iBad;
+	}
+	printf("hold timer exceptions executed=%d destroyed=%d bad=%d\n", pState->iExecuted.load(), pState->iDestroyed.load(), iBad);
+	fflush(stdout);
+	co_return iBad;
+}
+
+static coro::TaskResult<int> ResultStressChild(int iValueParam)
+{
+	if (iValueParam & 1)
+	{
+		co_await coro::yield(0);
+	}
+	if (iValueParam % 8 == 2 || iValueParam % 8 == 3)
+	{
+		throw std::runtime_error("hold nested result exception");
+	}
+	if (iValueParam % 8 == 4 || iValueParam % 8 == 5)
+	{
+		throw iValueParam;
+	}
+	co_return iValueParam;
+}
+
+static coro::TaskResult<int> ResultStressParent(int iValueParam)
+{
+	co_return (co_await ResultStressChild(iValueParam)) + 1;
+}
+
+static coro::TaskResult<int> CheckNestedResults()
+{
+	struct Results
+	{
+		std::atomic<int> iCompleted{0};
+		std::atomic<int> iCaught{0};
+		std::atomic<int> iBad{0};
+	};
+	auto pResults = std::make_shared<Results>();
+	coro::TaskScope stTasks;
+	for (int iWorker = 0; iWorker < 64; ++iWorker)
+	{
+		stTasks.Start([pResults, iWorker](coro::Token, coro::StopToken) -> coro::Task
+		{
+			for (int iIndex = 0; iIndex < 512; ++iIndex)
+			{
+				const int iValue = iWorker * 512 + iIndex;
+				try
+				{
+					const int iResult = co_await ResultStressParent(iValue);
+					if (iResult != iValue + 1 || (iValue % 8 >= 2 && iValue % 8 <= 5))
+					{
+						++pResults->iBad;
+					}
+				}
+				catch (const std::runtime_error& stError)
+				{
+					++pResults->iCaught;
+					if ((iValue % 8 != 2 && iValue % 8 != 3) || std::strcmp(stError.what(), "hold nested result exception") != 0)
+					{
+						++pResults->iBad;
+					}
+				}
+				catch (int iError)
+				{
+					++pResults->iCaught;
+					if ((iValue % 8 != 4 && iValue % 8 != 5) || iError != iValue)
+					{
+						++pResults->iBad;
+					}
+				}
+				catch (...)
+				{
+					++pResults->iBad;
+				}
+				++pResults->iCompleted;
+			}
+		});
+	}
+	co_await stTasks.Join();
+	if (pResults->iCompleted != 32768 || pResults->iCaught != 16384)
+	{
+		++pResults->iBad;
+	}
+	printf("hold nested results completed=%d caught=%d bad=%d\n", pResults->iCompleted.load(), pResults->iCaught.load(), pResults->iBad.load());
+	fflush(stdout);
+	co_return pResults->iBad.load();
+}
+
+class DeferredRpcProbe : public OI::Rpc::ProtoClientManager
+{
+  public:
+	DeferredRpcProbe()
+	{
+		DefaultInit("127.0.0.1", "17981");
+	}
+	void OnClientConnect(OI::Net::Session*) override
+	{
+	}
+	void OnClientDisconnect(const OI::Net::Session*) override
+	{
+	}
+};
+
+static coro::TaskResult<int> CheckDeferredRpcSession()
+{
+	static DeferredRpcProbe stClient;
+	OI::RpcData::HoldReq stRequest;
+	stRequest.iDelayMilliseconds = 0;
+	stRequest.iMark = 31415;
+	OI::RpcData::HoldRes stOutput;
+	stOutput.iMark = -1;
+	auto stValueWait = OI::Rpc::RpcCall(stClient, stRequest, OI::Timer::Seconds(3));
+	auto stOutputWait = OI::Rpc::RpcCall(stClient, stRequest, stOutput, OI::Timer::Seconds(3));
+	int iBad = 0;
+	int iValueCode = OI_ERR_CONNECT;
+	int iOutputCode = OI_ERR_CONNECT;
+	int iPinnedCode = 0;
+	if (!(co_await stClient.StartClient()))
+	{
+		++iBad;
+	}
+	else
+	{
+		auto stValue = co_await stValueWait;
+		iValueCode = stValue.GetRet();
+		iOutputCode = co_await stOutputWait;
+		if (iValueCode != 0 || stValue.GetRes().iMark != 31415 || iOutputCode != 0 || stOutput.iMark != 31415)
+		{
+			++iBad;
+		}
+		auto stPinned = co_await OI::Rpc::RpcCall(stClient, INVALID_SID, stRequest, OI::Timer::Seconds(3));
+		iPinnedCode = stPinned.GetRet();
+		if (iPinnedCode != OI_ERR_FAIL)
+		{
+			++iBad;
+		}
+	}
+	stClient.CloseAllSessions();
+	printf("hold deferred rpc value=%d output=%d pinned=%d bad=%d\n", iValueCode, iOutputCode, iPinnedCode, iBad);
+	fflush(stdout);
+	co_return iBad;
+}
+
 static coro::TaskResult<int> CheckConnectionIsolation()
 {
 	int iBad = 0;
@@ -524,7 +761,17 @@ static coro::TaskResult<int> CheckConnectionIsolation()
 
 coro::Task HoldMgr::Pump()
 {
-	int iBadLocal = CheckBinaryBool();
+	int iBadLocal = co_await CheckTimerExceptions();
+	if (iBadLocal != 0)
+	{
+		printf("hold done bad=%d\n", iBadLocal);
+		fflush(stdout);
+		TestBoard::GetInstance().Done(1);
+		co_return;
+	}
+	iBadLocal += co_await CheckNestedResults();
+	iBadLocal += co_await CheckDeferredRpcSession();
+	iBadLocal += CheckBinaryBool();
 	printf("hold binary bool bad=%d\n", iBadLocal);
 	iBadLocal += co_await CheckClientConnect();
 	printf("hold coroutine connect bad=%d\n", iBadLocal);

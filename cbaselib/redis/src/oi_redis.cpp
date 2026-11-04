@@ -60,6 +60,7 @@ struct RedisCall::State
 	std::atomic<int32_t> iGate;
 	std::atomic<int32_t> iWon;
 	std::atomic<int32_t> iReferences;
+	std::atomic<bool> bAwaitStarted{false};
 	sid_t iSessionId;
 	::OI::Thread::Mutex stMutex;
 	::OI::Thread::MutexCond stConditionVariable;
@@ -187,6 +188,11 @@ RedisResult RedisCall::await_resume()
 
 bool RedisCall::Suspend(std::coroutine_handle<> stHandleParam)
 {
+	// 在写入等待句柄、检查停止或提交命令前认领；失败也不能重放写操作。
+	if (!m_pState || m_pState->bAwaitStarted.exchange(true, std::memory_order_acq_rel))
+	{
+		throw std::logic_error("RedisCall can only be awaited once and must not be moved from");
+	}
 	if (::OI::Thread::ThreadPool::GetInstance().StopRequested())
 	{
 		return false;
@@ -250,7 +256,11 @@ RedisResult RedisClient::CallSync(std::vector<std::string> vArgumentsParam)
 
 void RedisClient::Submit(void* pStateParam)
 {
-	GetInstance().Enqueue((RedisCall::State*)pStateParam);
+	auto pState = static_cast<RedisCall::State*>(pStateParam);
+	// 排队期间由调用方保活；回调内立即完成可能唤醒并释放调用方，另持引用到返回。
+	pState->iReferences.fetch_add(1, std::memory_order_relaxed);
+	std::unique_ptr<RedisCall::State, decltype(&Release)> pHeld(pState, &Release);
+	GetInstance().Enqueue(pState);
 }
 
 void RedisClient::SweepTimeout(void*)

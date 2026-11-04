@@ -54,7 +54,11 @@ void LogFileInstance::OnCreateNewFile(FILE* pNewFileParam)
 		assert(m_vFiles[1] == NULL);
 		m_vFiles[1] = pNewFileParam;
 	}
-	Active();
+	{
+		::OI::Thread::MutexGuard stLock(m_stCacheLocker);
+		m_bRotationPending = true;
+		Active();
+	}
 }
 
 bool LogFileInstance::StartWriteThread()
@@ -125,11 +129,6 @@ void* LogFileInstance::WriteLogThreadHandle(void* pArgumentParam)
 	return NULL;
 }
 
-std::string LogFileInstance::GetLogTiTle()
-{
-	return m_pManager->GetLogTitle();
-}
-
 static void DiskFailure(const char* pOperationParam)
 {
 	const int iError = errno;
@@ -158,86 +157,46 @@ void LogFileInstance::WriteLog()
 {
 	assert(std::this_thread::get_id() == m_stThread.get_id());
 	m_bWorking = true;
-
-	// 攒到一块再写。压力上来时大约 8MB 刷一次，队列空了把尾巴刷掉。
-	const size_t iItemIndexChunk = 8 * 1024 * 1024;
-	::OI::Base::Bytes stTmp;
-	stTmp.Reserve(iItemIndexChunk);
-	int64_t iUnflushed = 0;
 	for (;;)
 	{
+		LogCacheList vWriting;
+		bool bStop = false;
+		{
+			::OI::Thread::MutexGuard stLock(m_stCacheLocker);
+			while (m_vLogs.empty() && !m_bQuit && !m_bRotationPending)
+			{
+				Passive();
+			}
+			bStop = m_vLogs.empty() && m_bQuit;
+			m_bRotationPending = false;
+			vWriting.swap(m_vLogs);
+		}
 		FILE* pFile = GetActiveFile();
 		if (!pFile)
 		{
 			errno = EBADF;
 			DiskFailure("missing active file");
 		}
-
-		LogCacheList vTmpLogs;
-		m_stCacheLocker.Lock();
-		vTmpLogs.swap(m_vLogs);
-		if (vTmpLogs.empty() && stTmp.Size() == 0)
+		if (bStop)
 		{
-			if (m_bQuit)
-			{
-				m_stCacheLocker.UnLock();
-				if (fflush(pFile) != 0)
-				{
-					DiskFailure("fflush");
-				}
-				return;
-			}
-			Passive();
-			m_stCacheLocker.UnLock();
+			return;
+		}
+		if (vWriting.empty())
+		{
 			continue;
 		}
-		m_stCacheLocker.UnLock();
-
-		if (!vTmpLogs.empty())
+		size_t iWrittenBytes = 0;
+		for (const auto& stLog : vWriting)
 		{
-			const std::string sTimeTitle = GetLogTiTle();
-			size_t iTitleLength = sTimeTitle.size();
-			for (const auto& stLog : vTmpLogs)
-			{
-				if (iTitleLength > 0)
-				{
-					stTmp.Append(sTimeTitle.data(), iTitleLength);
-				}
-				stTmp.Append(stLog);
-				if (stTmp.Size() >= iItemIndexChunk)
-				{
-					if (pFile && WriteAll(pFile, stTmp.Begin(), stTmp.Size()))
-					{
-						iUnflushed += (int64_t)stTmp.Size();
-					}
-					stTmp.Reserve(0);
-					if (pFile && iUnflushed >= (int64_t)iItemIndexChunk)
-					{
-						if (fflush(pFile) != 0)
-						{
-							DiskFailure("fflush");
-						}
-						iUnflushed = 0;
-					}
-				}
-			}
+			WriteAll(pFile, stLog.Data(), stLog.Size());
+			iWrittenBytes += stLog.Size();
 		}
-
-		if (vTmpLogs.empty() && stTmp.Size() > 0)
+		if (fflush(pFile) != 0)
 		{
-			if (pFile)
-			{
-				WriteAll(pFile, stTmp.Begin(), stTmp.Size());
-			}
-			stTmp.Reserve(0);
-			if (pFile)
-			{
-				if (fflush(pFile) != 0)
-				{
-					DiskFailure("fflush");
-				}
-			}
-			iUnflushed = 0;
+			DiskFailure("fflush");
 		}
+		// 移到写线程不释放额度；成功 fflush 且释放批次内存后才允许重新入队。
+		vWriting.clear();
+		m_pManager->CompleteWrite(iWrittenBytes);
 	}
 }

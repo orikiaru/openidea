@@ -31,6 +31,10 @@ def bytes_on_disk(root):
     return sum(p.stat().st_size for p in root.rglob("*") if p.is_file() and not p.is_symlink())
 
 
+def log_payload_on_disk(root):
+    return sum(p.stat().st_size for p in root.rglob("info") if p.is_file() and not p.is_symlink())
+
+
 def reset_connections():
     # 故障注入：收到 RST 后不能在会话表留下已释放的指针。
     for _ in range(100):
@@ -84,7 +88,7 @@ class RawHttpRegression(socketserver.BaseRequestHandler):
 
 def run(case, args):
     mode = "hold" if case.startswith("clock-") else ("echo" if case in ("reset", "registry") else case)
-    mode = "log" if case == "disk-full" else mode
+    mode = "log" if case in ("disk-full", "log-backpressure") else mode
     mode = "redis" if case.startswith("redis-") else mode
     fairness = case == "redis-fairness"
     pressure = case.startswith("redis-backpressure-") or fairness
@@ -107,6 +111,8 @@ def run(case, args):
             text = (REPO / "deploy/config" / (name + ".toml")).read_text(encoding="utf-8-sig")
             if name == "logd":
                 text = replace(text, "root_path", '"' + str(logs) + '"')
+                if case == "log-backpressure":
+                    text = replace(text, "max_pending_bytes", str(8 * 1024**2 + 8))
             if name == "redisserver" and case == "redis":
                 text = replace(text, "connections", "1")
             if name == "redisserver" and pressure:
@@ -141,6 +147,10 @@ def run(case, args):
                     text = text.replace("[LogClient]", "[LogClient]\nmax_send_queue_bytes = 262144")
                 if case == "disk-full":
                     text = replace(text, "bytes", "131072")
+                if case == "log-backpressure":
+                    text = replace(text, "line", "131072")
+                    text = replace(text, "bytes", str(64 * 1024**2))
+                    text = replace(text, "drain_sec", "2")
             (cfg / (name + ".toml")).write_text(text, encoding="utf-8")
         if case == "disk-full":
             dated = logs / datetime.datetime.now().strftime("%y_%m_%d")
@@ -178,7 +188,13 @@ def run(case, args):
                 for name in ("ipcclient", "ipcserver"):
                     with (cfg / (name + ".toml")).open("a", encoding="utf-8") as config:
                         config.write("\n[Regression]\nencoding_failure = true\nregistry_checks = true\nhttp_port = %d\n" % http_fixture.server_address[1])
-            logd, logpath = start("logd")
+            log_env = None
+            if case == "log-backpressure":
+                slow_write = root / "slow-write.so"
+                subprocess.run(["gcc", "-shared", "-fPIC", "-O2", "-Wall", "-Werror",
+                                str(REPO / "tools/log_slow_write.c"), "-o", str(slow_write), "-ldl", "-pthread"], check=True)
+                log_env = dict(os.environ, LD_PRELOAD=str(slow_write))
+            logd, logpath = start("logd", env=log_env)
             # 日志服没有 ready 文本，端口探测只用来确认监听，不发送日志。
             deadline = time.monotonic() + 10
             while True:
@@ -224,6 +240,8 @@ def run(case, args):
                 db_paused = True
                 rss_before = int(re.search(r"VmRSS:\s+(\d+)", Path("/proc/%d/status" % rs.pid).read_text()).group(1))
             started = time.monotonic()
+            last_growth = started
+            last_log_bytes = log_payload_on_disk(logs)
             client, clientpath = start("ipcclient", env=env)
             deadline = started + (20 if pressure or case == "redis-shutdown" else 210)
             while client.poll() is None:
@@ -240,7 +258,11 @@ def run(case, args):
                         print(case, "paused RSS KiB before=", rss_before, "after=", rss_paused, flush=True)
                         db.send_signal(signal.SIGCONT)
                         db_paused = False
-                if bytes_on_disk(logs) > CAP:
+                log_bytes = bytes_on_disk(logs)
+                payload_bytes = log_payload_on_disk(logs) if mode == "log" else 0
+                if payload_bytes > last_log_bytes:
+                    last_growth, last_log_bytes = time.monotonic(), payload_bytes
+                if log_bytes > CAP:
                     raise RuntimeError("test log exceeds 2GiB limit")
                 if case == "disk-full" and logd.poll() is not None:
                     message = logpath.read_text(errors="replace")
@@ -291,8 +313,12 @@ def run(case, args):
                     assert "redis pending limit bad=0" in text
                 else:
                     assert "redis script isolation bad=0" in text
+                    assert "redis single use bad=0" in text
                     assert re.search(r"redis stress .*bad=0", text)
             elif mode == "hold":
+                assert "hold timer exceptions executed=5 destroyed=5 bad=0" in text
+                assert "hold nested results completed=32768 caught=16384 bad=0" in text
+                assert "hold deferred rpc value=0 output=0 pinned=-1 bad=0" in text
                 assert "hold binary bool bad=0" in text
                 assert "hold connection isolation bad=0" in text
                 assert "hold coroutine connect bad=0" in text
@@ -306,17 +332,33 @@ def run(case, args):
                 assert "hold rpc standardized reply bad=0" in text
                 assert "hold done bad=0" in text
             elif mode == "log":
+                # Stop drains accepted batches; inspect actual files and the final backlog accounting.
+                logd.terminate()
+                logd.wait(timeout=10)
+                assert logd.returncode == 0, logpath.read_text(errors="replace")
                 size = bytes_on_disk(logs)
-                assert 1024**3 <= size < CAP, size
+                line_bytes, target_bytes = (131072, 64 * 1024**2) if case == "log-backpressure" else (65536, 1024**3)
+                assert target_bytes <= size < CAP, size
                 rows = 0
                 for info in logs.rglob("info"):
                     with info.open("rb") as stream:
                         for line in stream:
                             assert re.match(rb"\d{2}:\d{2}:\d{2} ", line), line[:40]
-                            assert len(line) == 65536 + 9 and line[9:-1] == b"L" * 65535
+                            assert len(line) == line_bytes + 9 and line[9:-1] == b"L" * (line_bytes - 1)
                             rows += 1
-                assert rows == 16384, rows
-                print("log written bytes=", size, flush=True)
+                assert rows == target_bytes // line_bytes, rows
+                written_payload = rows * (line_bytes + 9)
+                if written_payload > last_log_bytes:
+                    last_growth = time.monotonic()
+                duration = max(last_growth - started, 0.001)
+                print("log written bytes=", size, "payload_bytes=", written_payload,
+                      "end_to_end_MBps=", round(written_payload / duration / 1024**2, 2), flush=True)
+                if case == "log-backpressure":
+                    backlog = re.search(r"logd backlog peak=(\d+) limit=(\d+) pauses=(\d+) pending=(\d+)", logpath.read_text(errors="replace"))
+                    assert backlog, logpath.read_text(errors="replace")
+                    peak, limit, pauses, pending = map(int, backlog.groups())
+                    assert peak <= limit == 8 * 1024**2 + 8 and pauses > 0 and pending == 0, backlog.group(0)
+                    print(backlog.group(0), flush=True)
             print(case, "PASS seconds=", round(time.monotonic() - started, 2), flush=True)
         except BaseException:
             for output in root.glob("*.out"):
@@ -388,7 +430,7 @@ def run_web(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case", default="all", choices=("all", "echo", "log", "redis", "redis-limit", "redis-shutdown", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "reset", "disk-full", "clock-forward", "clock-back", "registry", "web"))
+    parser.add_argument("--case", default="all", choices=("all", "echo", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "reset", "disk-full", "clock-forward", "clock-back", "registry", "web"))
     parser.add_argument("--bin-dir", type=Path, default=REPO / "deploy/bin")
     parser.add_argument("--redis-binary", type=Path, default=Path("/tmp/redis-7.4.12/src/redis-server"))
     parser.add_argument("--clock-fault-so", type=Path)
@@ -397,7 +439,7 @@ if __name__ == "__main__":
         with socket.socket() as probe:
             probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             probe.bind(("127.0.0.1", port))
-    cases = ("echo", "log", "redis", "redis-limit", "redis-shutdown", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "reset", "disk-full", "registry", "web") if options.case == "all" else (options.case,)
+    cases = ("echo", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "reset", "disk-full", "registry", "web") if options.case == "all" else (options.case,)
     for item in cases:
         if item == "web":
             run_web(options)

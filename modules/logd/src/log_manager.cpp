@@ -2,13 +2,24 @@
 #include <stdio.h>
 #include <string.h>
 #include <cstdlib>
+#include <algorithm>
 #include "oi_timer_helper.h"
 #include "oi_file.h"
 #include "log_file_instance.h"
 #include "oi_config.h"
+#include "oi_log_frame.h"
+#include "log_server_session.h"
 
 bool LogManager::Init()
 {
+	int64_t iLimit = 64 * 1024 * 1024;
+	TryGetConfig("Log.max_pending_bytes", iLimit);
+	if (iLimit < ::OI::Log::LOG_FRAME_MAX + 8 || static_cast<uint64_t>(iLimit) > SIZE_MAX)
+	{
+		fprintf(stderr, "logd Log.max_pending_bytes must be at least %d and fit size_t\n", ::OI::Log::LOG_FRAME_MAX + 8);
+		return false;
+	}
+	m_iMaxPendingBytes = static_cast<size_t>(iLimit);
 	m_iLastTimestamp = ::OI::Timer::GetTime();
 	m_stLastCalendarTime = ::OI::Timer::GetLocalTime();
 	char vInitialTitle[LOG_TITLE_BUFF_SIZE];
@@ -45,10 +56,30 @@ bool LogManager::Init()
 
 void LogManager::Stop()
 {
+	// poll 和普通任务已停止。先同步排空已读的帧，再停止写线程。
+	{
+		::OI::Thread::MutexGuard stLock(m_stBacklogLocker);
+		m_bStopping = true;
+	}
+	for (;;)
+	{
+		ResumeWaiting(true);
+		::OI::Thread::MutexGuard stLock(m_stBacklogLocker);
+		if (m_vWaitingSessions.empty())
+		{
+			break;
+		}
+		if (m_vWaitingSessions.front().iBytes > m_iMaxPendingBytes - m_iPendingBytes)
+		{
+			m_stBacklogCondition.Wait(m_stBacklogLocker);
+		}
+	}
 	for (const auto& [sName, pLogFile] : m_mLogFileMap)
 	{
 		pLogFile->StopWriteThread();
 	}
+	fprintf(stderr, "logd backlog peak=%zu limit=%zu pauses=%zu pending=%zu\n",
+	    m_iPeakPendingBytes, m_iMaxPendingBytes, m_iPauseCount, m_iPendingBytes);
 }
 
 bool LogManager::OnTimer()
@@ -179,9 +210,105 @@ bool LogManager::CheckAndCreateRootPath()
 	return ::OI::File::MakeDirs(m_sCurrentLogPath);
 }
 
-void LogManager::WriteLog(LOG_LEVEL iLevelParam, ::OI::Base::Bytes& stSecondParam)
+bool LogManager::WriteLog(LOG_LEVEL iLevelParam, const char* pTextParam, size_t iLengthParam,
+    LogServerSession* pSessionParam)
 {
-	m_mLogFileMap[iLevelParam]->AddLog(stSecondParam);
+	const std::string sTitle = GetLogTitle();
+	::OI::Thread::MutexGuard stLock(m_stBacklogLocker);
+	if (iLevelParam < 0 || iLevelParam >= LOG_LEVEL_COUNT ||
+	    iLengthParam > m_iMaxPendingBytes - sTitle.size())
+	{
+		return false;
+	}
+	const size_t iBytes = iLengthParam + sTitle.size();
+	const bool bFull = iBytes > m_iMaxPendingBytes - m_iPendingBytes;
+	// 新到的网络帧和本地日志不能越过已有等待者，避免大帧被小帧持续抢占。
+	if (bFull || ((m_pResumingSession || !m_vWaitingSessions.empty()) &&
+	                 (!pSessionParam || pSessionParam != m_pResumingSession)))
+	{
+		if (pSessionParam)
+		{
+			QueueWaiter(pSessionParam, iBytes);
+		}
+		return false;
+	}
+	::OI::Base::Bytes stBody;
+	stBody.Reserve(iBytes);
+	stBody.Append(sTitle.data(), sTitle.size());
+	stBody.Append(pTextParam, iLengthParam);
+	m_mLogFileMap.at(iLevelParam)->AddLog(stBody);
+	m_iPendingBytes += iBytes;
+	m_iPeakPendingBytes = std::max(m_iPeakPendingBytes, m_iPendingBytes);
+	return true;
+}
+
+void LogManager::QueueWaiter(LogServerSession* pSessionParam, size_t iBytesParam)
+{
+	// 调用者持有积压锁；登记和容量检查原子完成，避免遗漏写线程的唤醒。
+	if (iBytesParam > m_iMaxPendingBytes - m_iPendingBytes)
+	{
+		++m_iPauseCount;
+	}
+	m_vWaitingSessions.push_back({pSessionParam, iBytesParam});
+	pSessionParam->AddRef();
+	pSessionParam->WaitForWrite();
+	ScheduleResume();
+}
+
+void LogManager::DeferWrite(LogServerSession* pSessionParam, size_t iLengthParam)
+{
+	const size_t iBytes = iLengthParam + GetLogTitle().size();
+	::OI::Thread::MutexGuard stLock(m_stBacklogLocker);
+	QueueWaiter(pSessionParam, iBytes);
+}
+
+void LogManager::CompleteWrite(size_t iBytesParam)
+{
+	::OI::Thread::MutexGuard stLock(m_stBacklogLocker);
+	assert(iBytesParam <= m_iPendingBytes);
+	m_iPendingBytes -= iBytesParam;
+	m_stBacklogCondition.Signal();
+	ScheduleResume();
+}
+
+void LogManager::ScheduleResume()
+{
+	// 只在队首整帧放得下时投递；满队列不会形成 PostOnLoop 空转。
+	if (!m_bStopping && !m_bResumePosted && !m_pResumingSession && !m_vWaitingSessions.empty() &&
+	    m_vWaitingSessions.front().iBytes <= m_iMaxPendingBytes - m_iPendingBytes)
+	{
+		m_bResumePosted = true;
+		::OI::Net::Poll::GetInstance().PostOnLoop(ResumeOnLoop, this);
+	}
+}
+
+void LogManager::ResumeOnLoop(void* pArgumentParam)
+{
+	static_cast<LogManager*>(pArgumentParam)->ResumeWaiting(false);
+}
+
+void LogManager::ResumeWaiting(bool bShutdownParam)
+{
+	LogServerSession* pSession = nullptr;
+	{
+		::OI::Thread::MutexGuard stLock(m_stBacklogLocker);
+		m_bResumePosted = false;
+		if (m_vWaitingSessions.empty() ||
+		    m_vWaitingSessions.front().iBytes > m_iMaxPendingBytes - m_iPendingBytes)
+		{
+			return;
+		}
+		pSession = m_vWaitingSessions.front().pSession;
+		m_vWaitingSessions.pop_front();
+		m_pResumingSession = pSession;
+	}
+	pSession->ResumeWrite(bShutdownParam);
+	{
+		::OI::Thread::MutexGuard stLock(m_stBacklogLocker);
+		m_pResumingSession = nullptr;
+		ScheduleResume();
+	}
+	pSession->Release();
 }
 
 std::string LogManager::GetLogTitle()

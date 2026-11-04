@@ -103,8 +103,14 @@ void BaseTimerManager::OnSignal()
 	}
 	bool bQueued = ::OI::Thread::ThreadPool::GetInstance().AddTask([]()
 	{
+		struct TickQueuedReset
+		{
+			~TickQueuedReset()
+			{
+				g_tick_queued.store(false);
+			}
+		} stTickQueuedReset;
 		BaseTimerManager::GetInstance().Update();
-		g_tick_queued.store(false);
 	}, ::OI::Thread::PRIO_ENUM::PRIO_QUEUE);
 	if (!bQueued)
 	{
@@ -153,7 +159,16 @@ void BaseTimerManager::Update()
 		}
 		for (const auto& pTimer : vDue)
 		{
-			run_timer(pTimer);
+			try
+			{
+				run_timer(pTimer);
+			}
+			catch (...)
+			{
+				// 回调可能已经自行销毁定时器（FnTimer 也如此），不能再访问或删除它。
+				// 本次不自动续期，继续执行同一 tick 中其余到期回调。
+				::OI::Thread::ReportTaskError(std::current_exception());
+			}
 		}
 	}
 }

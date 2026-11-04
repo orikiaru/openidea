@@ -70,6 +70,7 @@ class ProtoClientManager : public ProtoSessionManager
 	size_t m_iPendingBytes;
 	bool m_bEverConnected;
 	::OI::Thread::SpinLock m_stClientLocker;
+	bool HoldCallLocked(uint64_t iCallIdParam, const ::OI::Base::Bytes& stDataParam);
 
   public:
 	ProtoClientManager()
@@ -145,6 +146,8 @@ class ProtoClientManager : public ProtoSessionManager
 		m_iHeldMaxBytes = iBytesParam;
 	}
 	bool TryPendCall(uint64_t iCallIdParam, const ::OI::Base::Bytes& stDataParam) override;
+	// 提交时在客户端锁内决定排队或绑定当前 sid，随后发送，避免构造等待对象时截取旧 sid。
+	void SubmitCall(uint64_t iCallIdParam, const ::OI::Base::Bytes& stDataParam);
 	void DropPendingCall(uint64_t iCallIdParam) override;
 	void FlushHeldCalls(sid_t iSessionIdParam);
 	void FailHeldCalls();
