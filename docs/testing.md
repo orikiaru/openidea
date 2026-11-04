@@ -27,7 +27,7 @@ python tools/parallel_matrix.py --windows-redis-binary C:/tools/redis/redis-serv
 
 `--lane windows-mt` 之类只跑其中一路，可分给多个 subagent 各跑一路。临时目录前缀带偏移（`oi-regression-p<偏移>-`），每路清理进程只匹配自己那份工作目录和自己的前缀，不要动别的路。每份各自编译、测试并恢复 MT，不碰主工作目录的 `deploy/bin`；改动跑通后主目录仍要按第 3 节编回 MT。
 
-Windows 侧测试 Redis 用 Windows 原生 `redis-server.exe`（[redis-windows](https://github.com/redis-windows/redis-windows/releases) 的 msys2 便携包，解压即用，不装服务），`--platform both` 用 `--windows-redis-binary` 指定，直接跑 `run_regressions.py` 时用 `--redis-binary`。不要再用 `--redis-wsl`：WSL 的 localhost 转发和 NAT 内网地址在大块双向流量下都会卡死（纯 Python 收发也复现，64MB 下行只收到 3.6MB 就停住），Redis 回压、hold、registry 会假失败。Redis 为脚本独立启动的临时实例，内存上限 1536MiB、关闭持久化，绝不借用现有数据库。
+Windows 侧测试 Redis 用 Windows 原生 `redis-server.exe`（[redis-windows](https://github.com/redis-windows/redis-windows/releases) 的 msys2 便携包，解压即用，不装服务），`--platform both` 用 `--windows-redis-binary` 指定，直接跑 `run_regressions.py` 时用 `--redis-binary`。不要再用 `--redis-wsl`：WSL 的 localhost 转发和 NAT 内网地址在大块双向流量下都会卡死（纯 Python 收发也复现，64MB 下行只收到 3.6MB 就停住），Redis 回压、hold、registry 会假失败。怀疑链路时先用不经被测代码的探针：`tools/diag/redis_link_probe.py --native <exe>` 或 `--wsl [--host <WSL 地址>]` 测大块 ECHO 和 BLPOP 后 PING；`tools/diag/tcp_bulk.py` 测纯 TCP 下行、上行、双向各 64MiB，输出 `STALL` 即链路问题。Redis 为脚本独立启动的临时实例，内存上限 1536MiB、关闭持久化，绝不借用现有数据库。
 
 ## 3. 推荐的一键矩阵
 
@@ -113,7 +113,9 @@ git diff --check
 
 ## 7. 四路并行的 subagent 提示词范本
 
-先由主对话做一次全局清理：Windows 杀 `ExecutablePath` 在 `F:\openidea\`、`F:\oi-par\`、`*oi-regression-*`、原生 Redis 目录下的进程，以及命令行含 `run_regressions|test_matrix|parallel_matrix|redis_fixture|http_fixture` 的 Python；WSL 杀 `/root/oi-par/`、`oi-regression-` 相关进程和不在 6379 上的 `redis-server`。然后问用户选模型，四个 subagent 同时在后台派发，每个一路，按下表替换范本里的占位符。
+进程清理统一用 `tools/kill_test_procs.py`：Windows 按可执行文件路径、命令行和本路 Redis 端口（16380+偏移）匹配，不按进程名；WSL 只杀测试进程和本路端口的 `redis-server`，保留 6379，不执行 `wsl --shutdown`。`--dry-run` 只列不杀。
+
+先由主对话做一次全局清理 `python tools/kill_test_procs.py`，然后问用户选模型，四个 subagent 同时在后台派发，每个一路，按下表替换范本里的占位符。
 
 | `<LANE>` | `<OFFSET>` | `<OTHERS>` | `<MODE_NOTE>` |
 | --- | --- | --- | --- |
@@ -122,30 +124,14 @@ git diff --check
 | linux-mt | 2000 | windows-mt / windows-st / linux-st | 在 WSL /root/oi-par/linux-mt 编译 MT，Redis 用 /usr/bin/redis-server |
 | linux-st | 3000 | windows-mt / windows-st / linux-mt | 在 WSL /root/oi-par/linux-st 编译 ST，最后恢复 MT，Redis 用 /usr/bin/redis-server |
 
-`<CLEANUP>` 按平台二选一，只匹配本路，不得放宽：
-
-```powershell
-# Windows 路
-Get-CimInstance Win32_Process | Where-Object { ($_.ExecutablePath -like 'F:\oi-par\<LANE>\*') -or ($_.CommandLine -like '*oi-regression-p<OFFSET>-*') -or ($_.CommandLine -like '*oi-regression-web-p<OFFSET>-*') -or ($_.CommandLine -like '*oi-par\<LANE>*') -or ($_.CommandLine -like '*oi-par/<LANE>*') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
-# 原生 Redis 命令行只有相对路径 ../redis.conf，按本路端口 16380+<OFFSET> 找监听进程
-Get-NetTCPConnection -LocalPort (16380 + <OFFSET>) -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }
-```
-
-```powershell
-# Linux 路
-# 模式首字符加方括号，避免 pkill -f 命中执行它的 bash 自己
-wsl -u root -- bash -c 'pkill -9 -f "[/]root/oi-par/<LANE>/"; pkill -9 -f "[o]i-regression-p<OFFSET>-"; pkill -9 -f "[o]i-regression-web-p<OFFSET>-"; true'
-Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*--lane <LANE>*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
-```
-
 范本：
 
 ````text
 你在 Windows 宿主上为仓库 F:\openidea 跑回归矩阵的其中一路：**<LANE>**（端口偏移 <OFFSET>）。另外三路（<OTHERS>）正由别的 agent 同时跑，绝不能杀或动它们的进程和目录。WSL 里用户自己的 Redis 在 6379，绝不能杀。只跑测试和报告，不要改仓库任何文件，不要 git commit/push。用中文回报。
 
 ## 清理（开始前和结束后各做一次，只清自己这一路）
-<CLEANUP>
-不要按进程名杀任何东西（系统有个叫 Registry 的进程不能碰），不要 pkill redis-server，不要用比上面更宽的匹配。
+在 F:\openidea 下执行 python tools/kill_test_procs.py --lane <LANE>，退出码非 0 表示还有残留，把输出报上来。
+不要自己另写清理命令，不要按进程名杀任何东西（系统有个叫 Registry 的进程不能碰），不要 pkill redis-server，不要执行 wsl --shutdown。
 
 ## 运行
 在 F:\openidea 下执行（可能 30-60 分钟；放后台、定期轮询日志，不要中途打断或重启）：

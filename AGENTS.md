@@ -21,7 +21,7 @@
 
 # 回声和日志要分开测
 
-每次测试前后都把本项目相关进程全部停掉重来，关不掉的直接强杀：Windows 按可执行文件路径（`F:\openidea\` 下或 `oi-regression-*` 临时目录）匹配，不按进程名，系统自带同名的 `Registry` 进程不能碰；WSL 里杀掉测试起的 `redis-server` 和 `redis_fixture.py`，保留用户 6379 上的 Redis。上一轮的残留进程不能带进下一轮。
+每次测试前后都把本项目相关进程全部停掉重来，关不掉的直接强杀：Windows 按可执行文件路径（`F:\openidea\` 下或 `oi-regression-*` 临时目录）匹配，不按进程名，系统自带同名的 `Registry` 进程不能碰；WSL 里杀掉测试起的 `redis-server` 和 `redis_fixture.py`，保留用户 6379 上的 Redis。上一轮的残留进程不能带进下一轮。清理用 `python tools/kill_test_procs.py`（并行时加 `--lane`），不要另写清理命令。
 
 编译和回归一律交给 subagent 跑，主对话不直接跑矩阵。启动前用提问让用户选 subagent 的模型，用户选定后再派发；默认四路并行，按 `docs/testing.md` 第 7 节的范本同时派四个 subagent；subagent 回报每个平台、线程模式和用例的通过、失败、环境阻塞，以及失败日志的关键行。
 
