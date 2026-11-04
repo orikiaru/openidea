@@ -14,7 +14,6 @@ class RedisMgr
 	int32_t m_iSeconds;
 	int32_t m_iTimeoutMilliseconds;
 	int32_t m_iFailed;
-	std::atomic<int32_t> m_iDone;
 	std::atomic<int64_t> m_iOperations;
 	std::atomic<int32_t> m_iBad;
 	std::chrono::steady_clock::time_point m_stStart;
@@ -26,7 +25,7 @@ class RedisMgr
 		return m_bEnabled;
 	}
 	void Start();
-	void NoteDone();
+	void Report();
 	void SyncStress(int iIdParam);
 	coro::Task Pump();
 	coro::Task Check();

@@ -26,6 +26,7 @@ hold = false
 
 [TestEcho]
 total = 1000000
+inflight = 2048 # 同时在途的回声数，不要超过服务端 [Rpc] session_max_inflight_count
 timeout_ms = 180000
 
 [TestLog]

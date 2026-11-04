@@ -7,7 +7,7 @@
 
 LogMgr::LogMgr()
     : m_bEnabled(false), m_iTaskCount(8), m_iLineBytes(64 * 1024), m_iTargetBytes(1024LL * 1024 * 1024),
-      m_iDrainSeconds(15), m_iSent(0), m_iDone(0)
+      m_iDrainSeconds(15), m_iSent(0)
 {
 }
 
@@ -28,13 +28,40 @@ void LogMgr::Start()
 	}
 	m_stStart = std::chrono::steady_clock::now();
 	TestBoard::GetInstance().Arm();
+	coro::StartTask([](coro::Token)
+	{
+		return LogMgr::GetInstance().Run();
+	});
+}
+
+coro::Task LogMgr::Run()
+{
+	std::vector<coro::Task> vPumps;
 	for (int iIndexLocal = 0; iIndexLocal < m_iTaskCount; ++iIndexLocal)
 	{
-		coro::StartTask([](coro::Token)
-		{
-			return LogMgr::GetInstance().Pump();
-		});
+		vPumps.push_back(Pump());
 	}
+	for (const auto& stPump : vPumps)
+	{
+		co_await stPump;
+	}
+	long long iMillisecondsLocal = std::chrono::duration_cast<std::chrono::milliseconds>(
+	    std::chrono::steady_clock::now() - m_stStart)
+	                                   .count();
+	if (iMillisecondsLocal < 1)
+	{
+		iMillisecondsLocal = 1;
+	}
+	long long iSentLocal = m_iSent.load();
+	printf("log tasks=%d sent=%lld ms=%lld enqueue_rate=%lldMB/s\n",
+	    m_iTaskCount, iSentLocal, iMillisecondsLocal, iSentLocal / iMillisecondsLocal * 1000 / (1024 * 1024));
+	fflush(stdout);
+	if (m_iDrainSeconds > 0)
+	{
+		// 单线程只有这一条线程。sleep 会把 poll 冻住，套接字里的日志发不出去。
+		co_await coro::yield(m_iDrainSeconds * 1000);
+	}
+	TestBoard::GetInstance().Done(0);
 }
 
 coro::Task LogMgr::Pump()
@@ -60,25 +87,4 @@ coro::Task LogMgr::Pump()
 		// 同一协程复用 payload；每条后让出，让 poll 排空缓冲并给其他业务运行机会。
 		co_await coro::yield(0);
 	}
-	if (m_iDone.fetch_add(1) + 1 == m_iTaskCount)
-	{
-		long long iMillisecondsLocal = std::chrono::duration_cast<std::chrono::milliseconds>(
-		    std::chrono::steady_clock::now() - m_stStart)
-		                                   .count();
-		if (iMillisecondsLocal < 1)
-		{
-			iMillisecondsLocal = 1;
-		}
-		long long iSentLocal = m_iSent.load();
-		printf("log tasks=%d sent=%lld ms=%lld enqueue_rate=%lldMB/s\n",
-		    m_iTaskCount, iSentLocal, iMillisecondsLocal, iSentLocal / iMillisecondsLocal * 1000 / (1024 * 1024));
-		fflush(stdout);
-		if (m_iDrainSeconds > 0)
-		{
-			// 单线程只有这一条线程。sleep 会把 poll 冻住，套接字里的日志发不出去。
-			co_await coro::yield(m_iDrainSeconds * 1000);
-		}
-		TestBoard::GetInstance().Done(0);
-	}
-	co_return;
 }

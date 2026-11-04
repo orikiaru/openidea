@@ -34,10 +34,12 @@ def main():
     parser.add_argument("--cmake")
     parser.add_argument("--jobs", type=int, default=8)
     parser.add_argument("--redis-binary", default="/tmp/redis-7.4.12/src/redis-server")
+    parser.add_argument("--windows-redis-binary", help="--platform both: native Windows redis-server.exe for the Windows side")
     parser.add_argument("--redis-wsl", action="store_true")
     parser.add_argument("--wsl-user", default="jxy")
     parser.add_argument("--artifacts", type=Path)
     parser.add_argument("--case", default="all")
+    parser.add_argument("--port-offset", type=int, default=0, help="passed to run_regressions.py; parallel work copies need distinct offsets")
     parser.add_argument("--mode", choices=("all", "mt", "st"), default="all")
     parser.add_argument("--asan", action="store_true", help="Linux pure coroutine ASan check")
     parser.add_argument("--clock-faults", action="store_true", help="Linux optional wall-clock fault cases")
@@ -51,8 +53,8 @@ def main():
             parser.error("--platform both is launched on the Windows host")
         native = [sys.executable, str(Path(__file__).resolve()), "--artifacts", str(output / "windows"),
                   "--case", args.case, "--mode", args.mode, "--jobs", str(args.jobs), "--wsl-user", args.wsl_user,
-                  "--redis-binary", args.redis_binary]
-        if args.redis_wsl:
+                  "--redis-binary", args.windows_redis_binary or args.redis_binary]
+        if args.redis_wsl and not args.windows_redis_binary:
             native.append("--redis-wsl")
         if args.cmake:
             native += ["--cmake", args.cmake]
@@ -118,7 +120,8 @@ def main():
                 failed = True
                 break
             test = [sys.executable, ROOT / "tools/run_regressions.py", "--case", args.case,
-                    "--bin-dir", binary, "--redis-binary", args.redis_binary, "--artifacts", output / mode]
+                    "--bin-dir", binary, "--redis-binary", args.redis_binary, "--artifacts", output / mode,
+                    "--port-offset", args.port_offset]
             if args.redis_wsl:
                 test += ["--redis-wsl", "--wsl-user", args.wsl_user]
             failed |= bool(run(mode + "-tests", test))

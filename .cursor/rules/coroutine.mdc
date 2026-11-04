@@ -9,9 +9,11 @@ alwaysApply: false
 
 应用层空等必须先对上 `modules/ipcclient/src/log_mgr.cpp` 的 `Pump`：`co_await coro::yield(毫秒)`。对上了再写。不要用 `sleep`、`sleep_for`、`Sleep`、`usleep`。单线程睡下去，poll 停转。
 
-`co_await` 一条还没停过的 `Task` 会在调用方栈上往下 `resume`。不要在第一次挂起前层层 `co_await` 子任务。没有 `YieldToPool`、`Park`、`Wake`。
+任务创建即运行：协程里调用协程函数，会在调用方栈上跑到第一次挂起再返回。不要在第一次挂起前层层调用子任务。带捕获的协程 lambda 必须经 `StartTask` 或 `TaskScope::Start` 启动。没有 `YieldToPool`、`Park`、`Wake`。
 
-标准用例是服务端原样回包，以及客户端把下一批放进 `StartTask`：
+等一批任务：在协程里直接调用协程函数拿到 Task，放进 vector 再逐个 `co_await`，结果用 `TaskResult<T>` 带回。不要用原子计数加 `yield` 轮询等子任务，也不要只为汇合去开 `TaskScope`。一个测试项写成一个函数，返回自己的失败数。
+
+标准用例是服务端原样回包，以及客户端在根任务里起固定数量的工作协程，每个循环领编号、发一次、等回包，在途数量不超过服务端额度，全部结束后统一汇报：
 
 ```cpp
 static OI_RPC_SYNC_HANDLER(AllEcho, HandleAllEcho)
@@ -23,9 +25,36 @@ static OI_RPC_SYNC_HANDLER(AllEcho, HandleAllEcho)
 ```
 
 ```cpp
-coro::StartTask([n](coro::Token) {
-    return RunOne(n);
+coro::StartTask([](coro::Token) {
+    return EchoMgr::GetInstance().Run();
 });
+
+coro::Task EchoMgr::Run()
+{
+    std::vector<coro::Task> vWorkers;
+    for (int32_t iWorker = 0; iWorker < iWorkers; ++iWorker)
+    {
+        vWorkers.push_back(Pump());
+    }
+    for (const auto& stWorker : vWorkers)
+    {
+        co_await stWorker;
+    }
+    Report();
+}
+
+coro::Task EchoMgr::Pump()
+{
+    for (;;)
+    {
+        const int32_t iNumber = m_iNext.fetch_add(1);
+        if (iNumber >= m_iTotal)
+        {
+            co_return;
+        }
+        co_await RunOne(iNumber);
+    }
+}
 ```
 
 服务端要等，照 `Hold`：`co_await coro::yield(stRequest.iDelayMilliseconds)` 再填回包。`yield` 也接受 `OI::Timer::MS`。捕获的引用不要当协程状态用，参数才进帧。

@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstring>
 #include <memory>
+#include <vector>
 
 #ifdef _SINGLE_THREAD_
 static const char* kMode = "st";
@@ -301,7 +302,7 @@ static coro::Task RunOne(int iNumberParam)
 }
 
 EchoMgr::EchoMgr()
-    : m_bEnabled(true), m_bStack(false), m_iTotal(1000000), m_iTimeoutMilliseconds(180000), m_iSessionId(0),
+    : m_bEnabled(true), m_bStack(false), m_iTotal(1000000), m_iInflight(2048), m_iTimeoutMilliseconds(180000), m_iNext(0), m_iSessionId(0),
       m_iDone(0), m_iOk(0), m_iRpcFail(0), m_iMismatch(0), m_iGapDiffer(0),
       m_iSampleSent(0), m_iSampleReceived(0), m_iSampleCode(0), m_bHaveSample(false)
 {
@@ -312,6 +313,11 @@ void EchoMgr::Load()
 	TryGetConfig("Test.echo", m_bEnabled);
 	TryGetConfig("Test.stack", m_bStack);
 	TryGetConfig("TestEcho.total", m_iTotal);
+	TryGetConfig("TestEcho.inflight", m_iInflight);
+	if (m_iInflight < 1)
+	{
+		m_iInflight = 1;
+	}
 	TryGetConfig("TestEcho.timeout_ms", m_iTimeoutMilliseconds);
 }
 
@@ -337,48 +343,36 @@ void EchoMgr::ArmTimeout()
 	}, m_iTimeoutMilliseconds);
 }
 
+static coro::TaskResult<bool> StackOne(int iNumberParam, std::shared_ptr<std::atomic<int32_t>> pDoneParam)
+{
+	::OI::RpcData::AllEchoReq stRequestLocal;
+	FillAllTypes(stRequestLocal.stData, iNumberParam);
+	auto stResult = co_await IpcClient::GetInstance().CallAny<::OI::RpcData::AllEchoRes>(stRequestLocal, ::OI::Timer::Seconds(20));
+	pDoneParam->fetch_add(1);
+	co_return stResult.GetRet() == OI_OK&& stResult.GetRes().iCode == 1;
+}
+
 coro::Task EchoMgr::StackProbe()
 {
-	struct Gate
-	{
-		std::atomic<int32_t> iDone{0};
-		std::atomic<int32_t> iOk{0};
-	};
-	auto pGate = std::make_shared<Gate>();
 	TestBoard::GetInstance().Arm();
+	// 只用来打印中途进度；结果从任务本身取。
+	auto pDone = std::make_shared<std::atomic<int32_t>>(0);
+	std::vector<coro::TaskResult<bool>> vCalls;
 	for (int iNumber = 0; iNumber < 3; ++iNumber)
 	{
-		coro::StartTask([pGate, iNumber](coro::Token) -> coro::Task
-		{
-			::OI::RpcData::AllEchoReq stRequestLocal;
-			FillAllTypes(stRequestLocal.stData, iNumber);
-			auto stResult = co_await IpcClient::GetInstance().CallAny<::OI::RpcData::AllEchoRes>(stRequestLocal, ::OI::Timer::Seconds(20));
-			int iReturnCodeLocal = stResult.GetRet();
-			::OI::RpcData::AllEchoRes stResponseLocal;
-			if (iReturnCodeLocal == 0)
-			{
-				stResponseLocal = stResult.GetRes();
-			}
-			if (iReturnCodeLocal == OI_OK && stResponseLocal.iCode == 1)
-			{
-				pGate->iOk.fetch_add(1);
-			}
-			pGate->iDone.fetch_add(1);
-			co_return;
-		});
+		vCalls.push_back(StackOne(iNumber, pDone));
 	}
 	co_await coro::yield(400);
-	printf("stack holding done=%d\n", pGate->iDone.load());
+	printf("stack holding done=%d\n", pDone->load());
+	fflush(stdout);
+	int iOkLocal = 0;
+	for (const auto& stCall : vCalls)
+	{
+		iOkLocal += co_await stCall ? 1 : 0;
+	}
+	printf("stack flush ok=%d done=%d\n", iOkLocal, pDone->load());
 	fflush(stdout);
 	int iSpins = 0;
-	while (pGate->iDone.load() < 3 && iSpins++ < 400)
-	{
-		co_await coro::yield(50);
-	}
-	int iOkLocal = pGate->iOk.load();
-	printf("stack flush ok=%d done=%d\n", iOkLocal, pGate->iDone.load());
-	fflush(stdout);
-	iSpins = 0;
 	while (IpcClient::GetInstance().IsConnect() && iSpins++ < 200)
 	{
 		co_await coro::yield(50);
@@ -408,38 +402,38 @@ void EchoMgr::Start(sid_t iSessionIdParam)
 	TestBoard::GetInstance().Arm();
 	coro::StartTask([](coro::Token)
 	{
-		return EchoMgr::GetInstance().Pump(0);
+		return EchoMgr::GetInstance().Run();
 	});
 }
 
-coro::Task EchoMgr::Pump(int iIndexParam)
+coro::Task EchoMgr::Run()
 {
-	if (iIndexParam >= m_iTotal)
+	m_iNext.store(0);
+	// 在途数量等于工作协程数，不超过服务端每条会话的额度，不会被回 Busy。
+	const int32_t iWorkers = m_iInflight < m_iTotal ? m_iInflight : m_iTotal;
+	std::vector<coro::Task> vWorkers;
+	for (int32_t iWorker = 0; iWorker < iWorkers; ++iWorker)
 	{
-		co_return;
+		vWorkers.push_back(Pump());
 	}
-	const int iBatch = 1024;
-	int iEnd = iIndexParam + iBatch;
-	if (iEnd > m_iTotal)
+	for (const auto& stWorker : vWorkers)
 	{
-		iEnd = m_iTotal;
+		co_await stWorker;
 	}
-	for (int iNumber = iIndexParam; iNumber < iEnd; ++iNumber)
+	Report();
+}
+
+coro::Task EchoMgr::Pump()
+{
+	for (;;)
 	{
-		coro::StartTask([iNumber](coro::Token)
+		const int32_t iNumber = m_iNext.fetch_add(1);
+		if (iNumber >= m_iTotal)
 		{
-			return RunOne(iNumber);
-		});
+			co_return;
+		}
+		co_await RunOne(iNumber);
 	}
-	// 下一批不等这一批的回包。单线程主循环会先 poll，再捞这些新挂上的。
-	if (iEnd < m_iTotal)
-	{
-		coro::StartTask([iEnd](coro::Token)
-		{
-			return EchoMgr::GetInstance().Pump(iEnd);
-		});
-	}
-	co_return;
 }
 
 void EchoMgr::OnResult(int iNumberParam, const ::OI::RpcData::AllEchoReq& stRequestParam, const ::OI::RpcData::AllEchoRes& stResponseParam, int iReturnCodeParam, bool bSameParam)
@@ -465,10 +459,12 @@ void EchoMgr::OnResult(int iNumberParam, const ::OI::RpcData::AllEchoReq& stRequ
 	{
 		m_iMismatch += 1;
 	}
-	if (m_iDone.fetch_add(1) + 1 != m_iTotal)
-	{
-		return;
-	}
+	m_iDone.fetch_add(1);
+}
+
+void EchoMgr::Report()
+{
+	::OI::Thread::MutexGuard stLock(m_stMutex);
 	long long iMillisecondsLocal = std::chrono::duration_cast<std::chrono::milliseconds>(
 	    std::chrono::steady_clock::now() - m_stStart)
 	                                   .count();

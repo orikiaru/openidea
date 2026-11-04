@@ -29,6 +29,35 @@ REPO = Path(__file__).resolve().parents[1]
 CAP = 2 * 1024**3
 # Windows 动态端口段（本机 1024-15000）可能被 Hyper-V/WinNAT 保留，测试 Redis 不用 6379。
 REDIS_PORT = 16380
+LOGD_PORT = 19995
+IPC_PORT = 17981
+IPC_FALLBACK_PORT = 17982
+REDIS_SERVER_PORT = 16379
+REGISTRY_PORT = 17990
+GAME_PORTS = (17992, 17993)
+# --port-offset 平移的端口；多份工作目录并行跑时各用一段，互不抢占。
+BASE_PORTS = (REDIS_PORT, LOGD_PORT, IPC_PORT, IPC_FALLBACK_PORT, REDIS_SERVER_PORT, REGISTRY_PORT) + GAME_PORTS
+PORT_OFFSET = 0
+CLIENT_SECONDS = {"hold": 120}
+
+
+def apply_port_offset(offset):
+    global REDIS_PORT, LOGD_PORT, IPC_PORT, IPC_FALLBACK_PORT, REDIS_SERVER_PORT, REGISTRY_PORT, GAME_PORTS, PORT_OFFSET
+    PORT_OFFSET = offset
+    REDIS_PORT += offset
+    LOGD_PORT += offset
+    IPC_PORT += offset
+    IPC_FALLBACK_PORT += offset
+    REDIS_SERVER_PORT += offset
+    REGISTRY_PORT += offset
+    GAME_PORTS = tuple(port + offset for port in GAME_PORTS)
+
+
+def shift_ports(text):
+    def shifted(match):
+        port = int(match.group(2))
+        return match.group(1) + str(port + PORT_OFFSET if port in BASE_PORTS else port) + match.group(3)
+    return re.sub(r'(?m)^(port\s*=\s*")(\d+)(")', shifted, text)
 
 
 def replace(text, key, value):
@@ -46,7 +75,7 @@ def log_payload_on_disk(root):
 def reset_connections():
     # 故障注入：收到 RST 后不能在会话表留下已释放的指针。
     for _ in range(100):
-        with socket.create_connection(("127.0.0.1", 17981), timeout=2) as s:
+        with socket.create_connection(("127.0.0.1", IPC_PORT), timeout=2) as s:
             s.sendall(b"\x00")
             s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("HH" if WINDOWS else "ii", 1, 0))
 
@@ -67,18 +96,18 @@ def rpc_ingress_faults():
             result += part
         return result
 
-    with socket.create_connection(("127.0.0.1", 17981), timeout=1) as stream:
+    with socket.create_connection(("127.0.0.1", IPC_PORT), timeout=1) as stream:
         stream.sendall(struct.pack("<II", 3002, 65537))
         closed(stream)  # 只发头，不应等正文或残包超时。
     for partial in (b"\x01", struct.pack("<IIQ", 3002, 65536, 1 << 63)):
-        with socket.create_connection(("127.0.0.1", 17981), timeout=1) as stream:
+        with socket.create_connection(("127.0.0.1", IPC_PORT), timeout=1) as stream:
             started = time.monotonic()
             stream.sendall(partial)
             time.sleep(0.15)
             stream.sendall(b"\x00")  # 滴流不刷新 250ms 的绝对期限。
             closed(stream)
             assert time.monotonic() - started < 0.39, "partial deadline extended"
-    with socket.create_connection(("127.0.0.1", 17981), timeout=2) as stream:
+    with socket.create_connection(("127.0.0.1", IPC_PORT), timeout=2) as stream:
         for call_id in range(1, 4):
             body = struct.pack("<QIIiIIi", (1 << 63) | call_id, 0, 4, 0, 1, 4, 42)
             body += struct.pack("<II", 99, 65536 - len(body) - 8) + b"x" * (65536 - len(body) - 8)
@@ -143,6 +172,7 @@ def run(case, args):
     mode = "redis" if case.startswith("redis-") else mode
     fairness = case == "redis-fairness"
     pressure = case.startswith("redis-backpressure-") or fairness
+    db = None
     db_paused = False
     pause_at = None
     shutdown_sent = False
@@ -153,14 +183,15 @@ def run(case, args):
     monitor = None
     if resource is not None:
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-    with tempfile.TemporaryDirectory(prefix="oi-regression-") as tmp:
+    # 前缀带偏移，并行时每路只按自己的临时目录清理进程。
+    with tempfile.TemporaryDirectory(prefix="oi-regression-p%d-" % PORT_OFFSET) as tmp:
         root = Path(tmp)
         work, cfg, logs = root / "bin", root / "config", root / "logs"
         for p in (work, cfg, logs):
             p.mkdir()
         for name in ("logd", "ipcclient", "ipcserver", "redisserver") + (("registry",) if case == "registry" or mode == "hold" else ()):
             shutil.copy2(args.bin_dir / (name + SUFFIX), work / (name + SUFFIX))
-            text = (REPO / "deploy/config" / (name + ".toml")).read_text(encoding="utf-8-sig")
+            text = shift_ports((REPO / "deploy/config" / (name + ".toml")).read_text(encoding="utf-8-sig"))
             if name in ("redisserver", "registry"):
                 assert 'port = "6379"' in text, name
                 text = text.replace('port = "6379"', 'port = "%d"' % REDIS_PORT)
@@ -190,7 +221,7 @@ def run(case, args):
                     text += "\n[Regression]\nredis_queue_timeout = true\n"
                 if case == "registry":
                     # 错误的直连后备端口，只有通过注册发现才能完成回声。
-                    text = text.replace('port = "17981"', 'port = "17982"')
+                    text = text.replace('port = "%d"' % IPC_PORT, 'port = "%d"' % IPC_FALLBACK_PORT)
                 if case == "redis-shutdown":
                     text = replace(text, "timeout_ms", "300")
                     text += "\n[Regression]\nredis_shutdown = true\n"
@@ -206,8 +237,8 @@ def run(case, args):
                     text = replace(text, flag, "true" if mode == flag else "false")
                 if mode == "hold":
                     text = replace(text, "max_task_count", "1")
-                    # Hold 的迟到回包晚 5 秒；后续 PING 的预算必须覆盖这段排队。
-                    text = replace(text, "timeout_ms", "8000")
+                    # Hold 的 Redis 迟到回包比超时晚 1 秒；后续 PING 的预算必须覆盖这段排队。
+                    text = replace(text, "timeout_ms", "2000")
                 if mode == "log":
                     text = text.replace("[LogClient]", "[LogClient]\nmax_send_queue_bytes = 262144")
                 if case == "disk-full":
@@ -277,7 +308,7 @@ def run(case, args):
             deadline = time.monotonic() + 10
             while True:
                 try:
-                    with socket.create_connection(("127.0.0.1", 19995), timeout=0.1):
+                    with socket.create_connection(("127.0.0.1", LOGD_PORT), timeout=0.1):
                         break
                 except OSError:
                     if logd.poll() is not None or time.monotonic() > deadline:
@@ -290,8 +321,9 @@ def run(case, args):
                 redis_conf = root / "redis.conf"
                 redis_conf.write_text('bind 127.0.0.1\nport %d\nsave ""\nappendonly no\n' % REDIS_PORT +
                                       'maxmemory 1536mb\nmaxmemory-policy allkeys-lru\n'
-                                      'dir ' + str(root) + '\n')
-                db, dbpath = start("redis", [str(args.redis_binary), str(redis_conf)])
+                                      'dir ' + (str(root) if args.redis_wsl else '..') + '\n')
+                # msys2 版 redis-server.exe 不认盘符绝对路径，原生启动时按 cwd=bin 传相对路径。
+                db, dbpath = start("redis", [str(args.redis_binary), str(redis_conf) if args.redis_wsl else "../redis.conf"])
                 ready(db, dbpath, "Ready to accept connections")
                 if fairness:
                     monitor = socket.create_connection(("127.0.0.1", REDIS_PORT), timeout=2)
@@ -306,11 +338,11 @@ def run(case, args):
             server, serverpath = start("ipcserver")
             ready(server, serverpath, "ipc server listen")
             if mode == "hold":
-                for zone, port in (("1001", "17992"), ("1002", "17993")):
+                for zone, port in zip(("1001", "1002"), GAME_PORTS):
                     text = (cfg / "ipcserver.toml").read_text(encoding="utf-8")
                     text = text.replace('name = "ipcserver"', 'name = "gameserver"', 1)
                     text = re.sub(r"(?m)^id = 1$", 'id = %s\nzone = "%s"' % (zone, zone), text, count=1)
-                    text = text.replace('port = "17981"', 'port = "%s"' % port, 1)
+                    text = text.replace('port = "%d"' % IPC_PORT, 'port = "%d"' % port, 1)
                     path = cfg / ("gameserver-%s.toml" % zone)
                     path.write_text(text, encoding="utf-8")
                     proc, output = start("gameserver-" + zone, [str(work / ("ipcserver" + SUFFIX)), str(path)])
@@ -333,7 +365,8 @@ def run(case, args):
             last_growth = started
             last_log_bytes = log_payload_on_disk(logs)
             client, clientpath = start("ipcclient", env=env)
-            deadline = started + (20 if pressure or case == "redis-shutdown" else 210)
+            # 正常通过时 hold 约 50 秒，其余不超过 35 秒；留三四倍余量，失败时不用干等。
+            deadline = started + (20 if pressure or case == "redis-shutdown" else CLIENT_SECONDS.get(mode, 60))
             while client.poll() is None:
                 if case == "redis-shutdown" and not shutdown_sent and "redis shutdown pending" in clientpath.read_text(encoding="utf-8", errors="replace"):
                     stop(client)
@@ -475,7 +508,16 @@ def run(case, args):
             stuck = []
             for proc in reversed(procs):
                 if proc.poll() is None:
-                    stop(proc)
+                    if proc is db and WINDOWS and not args.redis_wsl:
+                        # msys2 版 redis-server.exe 收不到控制台 Ctrl+C，夹具 Redis 用 SHUTDOWN 正常退出。
+                        try:
+                            with socket.create_connection(("127.0.0.1", REDIS_PORT), timeout=2) as conn:
+                                conn.sendall(b"*2\r\n$8\r\nSHUTDOWN\r\n$6\r\nNOSAVE\r\n")
+                                conn.recv(64)
+                        except OSError:
+                            pass
+                    else:
+                        stop(proc)
                     try:
                         proc.wait(timeout=3)
                     except subprocess.TimeoutExpired:
@@ -500,7 +542,7 @@ def run(case, args):
 
 def run_web(args):
     # 仍使用模块自带的 WebClient 用例，验证字段改名后的 HTTP/JSON/二进制收发。
-    with tempfile.TemporaryDirectory(prefix="oi-regression-web-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="oi-regression-web-p%d-" % PORT_OFFSET) as tmp:
         root = Path(tmp)
         work, cfg = root / "bin", root / "config"
         work.mkdir()
@@ -510,7 +552,7 @@ def run_web(args):
             port = probe.getsockname()[1]
         for name in ("webserver", "webclient"):
             shutil.copy2(args.bin_dir / (name + SUFFIX), work / (name + SUFFIX))
-            text = (REPO / "deploy/config" / (name + ".toml")).read_text(encoding="utf-8-sig")
+            text = shift_ports((REPO / "deploy/config" / (name + ".toml")).read_text(encoding="utf-8-sig"))
             text = text.replace("port = 18080", "port = " + str(port))
             (cfg / (name + ".toml")).write_text(text, encoding="utf-8")
         with (root / "server.out").open("w") as output:
@@ -547,6 +589,7 @@ if __name__ == "__main__":
     parser.add_argument("--redis-wsl", action="store_true", help="Windows: run only the owned Redis fixture in WSL")
     parser.add_argument("--wsl-user", default="jxy")
     parser.add_argument("--artifacts", type=Path, help="retain process output and results.json, not bulk log payload")
+    parser.add_argument("--port-offset", type=int, default=0, help="shift every test port; parallel work copies need distinct offsets")
     options = parser.parse_args()
     if options.redis_wsl and not WINDOWS:
         parser.error("--redis-wsl is only for native Windows tests")
@@ -555,7 +598,8 @@ if __name__ == "__main__":
     if options.artifacts:
         options.artifacts = options.artifacts.resolve()
         options.artifacts.mkdir(parents=True, exist_ok=True)
-    for port in (19995, 17981, 16379, REDIS_PORT, 17990, 17992, 17993):
+    apply_port_offset(options.port_offset)
+    for port in (LOGD_PORT, IPC_PORT, REDIS_SERVER_PORT, REDIS_PORT, REGISTRY_PORT) + GAME_PORTS:
         with socket.socket() as probe:
             probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             probe.bind(("127.0.0.1", port))

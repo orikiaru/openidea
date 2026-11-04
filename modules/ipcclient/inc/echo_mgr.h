@@ -16,7 +16,9 @@ class EchoMgr
 	bool m_bEnabled;
 	bool m_bStack;
 	int32_t m_iTotal;
+	int32_t m_iInflight;
 	int32_t m_iTimeoutMilliseconds;
+	std::atomic<int32_t> m_iNext;
 	sid_t m_iSessionId;
 	std::chrono::steady_clock::time_point m_stStart;
 	std::atomic<int32_t> m_iDone;
@@ -55,5 +57,7 @@ class EchoMgr
 	void Note(const char* pNameParam);
 	void NoteGap();
 	void OnResult(int iNumberParam, const ::OI::RpcData::AllEchoReq& stRequestParam, const ::OI::RpcData::AllEchoRes& stResponseParam, int iReturnCodeParam, bool bSameParam);
-	coro::Task Pump(int iIndexParam);
+	void Report();
+	coro::Task Run();
+	coro::Task Pump();
 };

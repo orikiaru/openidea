@@ -21,6 +21,10 @@
 
 # 回声和日志要分开测
 
+每次测试前后都把本项目相关进程全部停掉重来，关不掉的直接强杀：Windows 按可执行文件路径（`F:\openidea\` 下或 `oi-regression-*` 临时目录）匹配，不按进程名，系统自带同名的 `Registry` 进程不能碰；WSL 里杀掉测试起的 `redis-server` 和 `redis_fixture.py`，保留用户 6379 上的 Redis。上一轮的残留进程不能带进下一轮。
+
+编译和回归一律交给 subagent 跑，主对话不直接跑矩阵。启动前用提问让用户选 subagent 的模型，用户选定后再派发；默认四路并行，按 `docs/testing.md` 第 7 节的范本同时派四个 subagent；subagent 回报每个平台、线程模式和用例的通过、失败、环境阻塞，以及失败日志的关键行。
+
 完整操作规程统一维护在 `docs/testing.md`，跨平台构建/测试/恢复使用 `tools/test_matrix.py`，原生用例入口为 `tools/run_regressions.py`。测试脚本必须留在工程内；报告中区分实际通过、失败和环境阻塞。
 
 有行为的改动，Linux 和 Windows 都要跑。默认还要单线程、多线程各跑一遍，缺一套不算测完。只有改动明确跟线程无关、并且是纯逻辑时，可以不切单线程和多线程；这种例外要在回复里写明。协程、挂起、调度、`Task`、`StartTask`、`co_await`、`yield` 一定涉及单线程和多线程，不能当成纯逻辑跳过。

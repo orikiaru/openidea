@@ -4,7 +4,7 @@
 
 ## 怎么写
 
-调用协程函数就开始执行。要结果就 `co_await` 它返回的 Task；想并发，先调用拿到几个 Task 再逐个 `co_await`。带捕获的协程 lambda 和要在独立调用号下运行的任务用 `coro::StartTask`。让出一段时间用 `co_await coro::yield(毫秒)`。
+调用协程函数就开始执行。要结果就 `co_await` 它返回的 Task；想并发，先调用拿到几个 Task 再逐个 `co_await`，子任务的结果用 `TaskResult<T>` 带回，不用原子计数加 `yield` 轮询。`ipcclient` 的 `HoldMgr::Pump` 按这个写法把每个测试项拆成一个返回失败数的函数。带捕获的协程 lambda 和要在独立调用号下运行的任务用 `coro::StartTask`。让出一段时间用 `co_await coro::yield(毫秒)`。
 
 - `yield(ms)` 在 `ms > 0` 时进时间轮，到点再跑，等待期间不占 CPU
 - `ms <= 0` 只把句柄放回队列，这一轮不再碰它。主循环会先去 poll，再跑新挂上的

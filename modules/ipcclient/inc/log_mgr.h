@@ -15,11 +15,11 @@ class LogMgr
 	int64_t m_iTargetBytes;
 	int32_t m_iDrainSeconds;
 	std::atomic<int64_t> m_iSent;
-	std::atomic<int32_t> m_iDone;
 	std::chrono::steady_clock::time_point m_stStart;
 
   public:
 	void Load();
 	void Start();
+	coro::Task Run();
 	coro::Task Pump();
 };

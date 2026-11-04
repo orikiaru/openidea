@@ -19,22 +19,28 @@ Windows：Python 3.10+、Visual Studio 2022 的“使用 C++ 的桌面开发”�
 
 Linux：WSL 已配置的 Linux 用户、Python 3.8+、cmake、gcc-13/g++-13、make、已编译的 Redis 服务端。源码编译 Redis 可使用已有的 `tools` 外部依赖目录，默认路径 `/tmp/redis-7.4.12/src/redis-server`；路径不存在必须提供 `--redis-binary`，脚本不会下载不明 Redis 二进制。
 
-测试占用本机端口 19995、17981、16379、16380、17990、17992、17993。测试 Redis 用 16380，不用 6379：Windows 动态端口段可能被 Hyper-V/WinNAT 保留，本机已有的 6379 Redis 也不会和测试冲突。复制出的 `redisserver.toml`、`registry.toml` 由脚本改到 16380，仓库里的配置仍是 6379。运行前脚本探测占用；不杀其他人的服务。两端共享本机端口，**不要并行跑平台或线程模式**。
+测试占用本机端口 19995、17981、16379、16380、17990、17992、17993。测试 Redis 用 16380，不用 6379：Windows 动态端口段可能被 Hyper-V/WinNAT 保留，本机已有的 6379 Redis 也不会和测试冲突。复制出的 `redisserver.toml`、`registry.toml` 由脚本改到 16380，仓库里的配置仍是 6379。运行前脚本探测占用；不杀其他人的服务。同一份工作目录内不要并行；要并行就用 `tools/parallel_matrix.py`，它把工作目录同步成四份（Windows 在 `F:/oi-par`，Linux 在 WSL 的 `/root/oi-par`），Windows MT/ST、Linux MT/ST 各用一份，`--port-offset` 依次为 0、1000、2000、3000，所有测试端口整体平移，互不抢占：
 
-Windows 使用 `--redis-wsl` 时只有测试 Redis 在 WSL，所有待测模块仍为 Windows `.exe`。需要 WSL 的 localhost 转发可用。Redis 为脚本独立启动的临时实例，内存上限 1536MiB、关闭持久化，绝不借用现有数据库。
+```powershell
+python tools/parallel_matrix.py --windows-redis-binary C:/tools/redis/redis-server.exe --artifacts C:/Users/Admin/openidea-test-results/parallel
+```
+
+`--lane windows-mt` 之类只跑其中一路，可分给多个 subagent 各跑一路。临时目录前缀带偏移（`oi-regression-p<偏移>-`），每路清理进程只匹配自己那份工作目录和自己的前缀，不要动别的路。每份各自编译、测试并恢复 MT，不碰主工作目录的 `deploy/bin`；改动跑通后主目录仍要按第 3 节编回 MT。
+
+Windows 侧测试 Redis 用 Windows 原生 `redis-server.exe`（[redis-windows](https://github.com/redis-windows/redis-windows/releases) 的 msys2 便携包，解压即用，不装服务），`--platform both` 用 `--windows-redis-binary` 指定，直接跑 `run_regressions.py` 时用 `--redis-binary`。不要再用 `--redis-wsl`：WSL 的 localhost 转发和 NAT 内网地址在大块双向流量下都会卡死（纯 Python 收发也复现，64MB 下行只收到 3.6MB 就停住），Redis 回压、hold、registry 会假失败。Redis 为脚本独立启动的临时实例，内存上限 1536MiB、关闭持久化，绝不借用现有数据库。
 
 ## 3. 推荐的一键矩阵
 
 Windows 宿主 PowerShell，同一次调用顺序运行 Windows、Linux：
 
 ```powershell
-python tools/test_matrix.py --platform both --redis-wsl --wsl-user jxy --asan --clock-faults
+python tools/test_matrix.py --platform both --wsl-user jxy --windows-redis-binary C:/tools/redis/redis-server.exe --asan --clock-faults
 ```
 
 只跑 Windows：
 
 ```powershell
-python tools/test_matrix.py --redis-wsl --wsl-user jxy --build-dir build-win
+python tools/test_matrix.py --redis-binary C:/tools/redis/redis-server.exe --build-dir build-win
 ```
 
 只跑 Linux，在 WSL：
@@ -46,7 +52,7 @@ python3 tools/test_matrix.py --build-dir "$HOME/openidea-build-gcc13" --asan --c
 自定义路径示例：
 
 ```powershell
-python tools/test_matrix.py --platform both --redis-wsl --wsl-user jxy --linux-build-dir /home/jxy/openidea-build-gcc13 --redis-binary /tmp/redis-7.4.12/src/redis-server --artifacts C:/Users/Admin/openidea-test-results/manual-run
+python tools/test_matrix.py --platform both --wsl-user jxy --linux-build-dir /home/jxy/openidea-build-gcc13 --redis-binary /tmp/redis-7.4.12/src/redis-server --windows-redis-binary C:/tools/redis/redis-server.exe --artifacts C:/Users/Admin/openidea-test-results/manual-run
 ```
 
 矩阵脚本会：记录源码身份 → 配置 MT → 编译所有模块 → 跑全部用例 → 配置 ST → 编译 → 跑同样用例 → 可选扩展测试 → 在 finally 中恢复 MT 且关闭测试注入并重新编译。任何一步失败，最终退出码非零。平台间串行运行。
@@ -70,14 +76,15 @@ python3 tools/run_regressions.py --case all --artifacts /tmp/oi-test-artifacts
 Windows 原生直接运行时，要选择带 exe 的 Release 目录：
 
 ```powershell
-python tools/run_regressions.py --case all --bin-dir deploy/bin/Release --redis-wsl --wsl-user jxy --artifacts C:/Users/Admin/openidea-test-results/direct
+python tools/run_regressions.py --case all --bin-dir deploy/bin/Release --redis-binary C:/tools/redis/redis-server.exe --artifacts C:/Users/Admin/openidea-test-results/direct
 ```
 
 Windows 的日志故障测试要求该产物以 `-DOI_ENABLE_TEST_HOOKS=ON` 构建。矩阵入口自动设置和恢复；直接运行入口检查构建标记，缺失则失败，不能跳过。
 
 主要成功标记：
 
-- echo / registry：`ok=1000000 mismatch=0 rpc_fail=0`，连接只启动一次。
+- echo / registry：`ok=1000000 mismatch=0 rpc_fail=0`，连接只启动一次。客户端同时在途的请求数由 `[TestEcho] inflight` 限定（默认 2048），必须低于服务端 `[Rpc] session_max_inflight_count`，否则多线程下会被回 `OI_ERR_BUSY`。
+- 客户端时限：跑 hold 那套的用例（含 rpc-admission、clock）120 秒，Redis 压力类和 redis-shutdown 20 秒，其余 60 秒。超时按失败处理并打印客户端输出。
 - log：逐条核对实际磁盘记录、字节数和内容；端到端速度以落盘字节除以客户端开始到文件最后增长的时间，不能拿 enqueue_rate 代替。
 - redis：`redis integrity ok`、压力统计 `bad=0`；同时验证毫秒 TTL、单次请求等待、脚本隔离、断线、队列超时及限流。
 - hold：`hold done bad=0`；覆盖多等待者、异常、RPC 接纳上限、请求生命周期、服务名/分区路由及批量调用。测试脚本额外启动两个 gameserver 分区（1001/1002），不能只起默认 ipcserver 就冒充全量。
@@ -104,7 +111,58 @@ git diff --check
 
 交给下一位 AI 时必须列出：实际测试的平台/编译器/线程模式、结果目录、失败或阻塞项、是否恢复 MT、是否关闭测试注入、是否清理临时数据。缺 SDK、缺 Redis、编译失败或操作被拦截，都只能记录为阻塞/失败；不能写“全量通过”。
 
-## 7. 2026-11-04 验证记录
+## 7. 四路并行的 subagent 提示词范本
+
+先由主对话做一次全局清理：Windows 杀 `ExecutablePath` 在 `F:\openidea\`、`F:\oi-par\`、`*oi-regression-*`、原生 Redis 目录下的进程，以及命令行含 `run_regressions|test_matrix|parallel_matrix|redis_fixture|http_fixture` 的 Python；WSL 杀 `/root/oi-par/`、`oi-regression-` 相关进程和不在 6379 上的 `redis-server`。然后问用户选模型，四个 subagent 同时在后台派发，每个一路，按下表替换范本里的占位符。
+
+| `<LANE>` | `<OFFSET>` | `<OTHERS>` | `<MODE_NOTE>` |
+| --- | --- | --- | --- |
+| windows-mt | 0 | windows-st / linux-mt / linux-st | 在 F:\oi-par\windows-mt 编译 MT |
+| windows-st | 1000 | windows-mt / linux-mt / linux-st | 在 F:\oi-par\windows-st 编译 ST，最后恢复 MT |
+| linux-mt | 2000 | windows-mt / windows-st / linux-st | 在 WSL /root/oi-par/linux-mt 编译 MT，Redis 用 /usr/bin/redis-server |
+| linux-st | 3000 | windows-mt / windows-st / linux-mt | 在 WSL /root/oi-par/linux-st 编译 ST，最后恢复 MT，Redis 用 /usr/bin/redis-server |
+
+`<CLEANUP>` 按平台二选一，只匹配本路，不得放宽：
+
+```powershell
+# Windows 路
+Get-CimInstance Win32_Process | Where-Object { ($_.ExecutablePath -like 'F:\oi-par\<LANE>\*') -or ($_.CommandLine -like '*oi-regression-p<OFFSET>-*') -or ($_.CommandLine -like '*oi-regression-web-p<OFFSET>-*') -or ($_.CommandLine -like '*oi-par\<LANE>*') -or ($_.CommandLine -like '*oi-par/<LANE>*') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+# 原生 Redis 命令行只有相对路径 ../redis.conf，按本路端口 16380+<OFFSET> 找监听进程
+Get-NetTCPConnection -LocalPort (16380 + <OFFSET>) -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }
+```
+
+```powershell
+# Linux 路
+# 模式首字符加方括号，避免 pkill -f 命中执行它的 bash 自己
+wsl -u root -- bash -c 'pkill -9 -f "[/]root/oi-par/<LANE>/"; pkill -9 -f "[o]i-regression-p<OFFSET>-"; pkill -9 -f "[o]i-regression-web-p<OFFSET>-"; true'
+Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*--lane <LANE>*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+```
+
+范本：
+
+````text
+你在 Windows 宿主上为仓库 F:\openidea 跑回归矩阵的其中一路：**<LANE>**（端口偏移 <OFFSET>）。另外三路（<OTHERS>）正由别的 agent 同时跑，绝不能杀或动它们的进程和目录。WSL 里用户自己的 Redis 在 6379，绝不能杀。只跑测试和报告，不要改仓库任何文件，不要 git commit/push。用中文回报。
+
+## 清理（开始前和结束后各做一次，只清自己这一路）
+<CLEANUP>
+不要按进程名杀任何东西（系统有个叫 Registry 的进程不能碰），不要 pkill redis-server，不要用比上面更宽的匹配。
+
+## 运行
+在 F:\openidea 下执行（可能 30-60 分钟；放后台、定期轮询日志，不要中途打断或重启）：
+python tools/parallel_matrix.py --lane <LANE> --jobs 4 --windows-redis-binary <WINDOWS_REDIS> --artifacts <ARTIFACTS>/par-<LANE>
+它会<MODE_NOTE>，跑 test_matrix.py（内部 run_regressions.py --case all）。总日志在 artifacts 目录的 <LANE>.log，结果在 parallel.json，子目录 <LANE> 里有 test_matrix 报告和各用例日志。环境问题导致失败就记录原因，不要改代码绕过。
+
+## 回报
+1. 退出码、耗时；
+2. 每个用例：通过 / 失败 / 环境阻塞（用报告里的用例名）；
+3. 失败用例的日志关键行（bad=、mismatch=、rpc_fail=、超时、断言、崩溃、服务端报错）及日志路径；
+4. 前后清理是否完成、有无残留。
+只报告看到的证据，不要猜。
+````
+
+本机当前取值：`<WINDOWS_REDIS>` 为 `C:/Users/jiangxueyang/tools/redis-8.10.3/Redis-8.10.3-Windows-x64-msys2/redis-server.exe`，`<ARTIFACTS>` 为 `C:/Users/jiangxueyang/openidea-test-results`。四路都回报后，主对话汇总逐例结果；全部通过才算这一轮测完。
+
+## 8. 2026-11-04 验证记录
 
 - Windows：MSVC 19.41.34123、SDK 10.0.26100，原生 x64 Release，MT/ST 各 18 项通过。
 - Linux：WSL GCC 13.1，MT/ST 各 18 项通过；两模式前跳/后跳故障和纯协程 ASan 均通过。响应结果顺序修复后又跑完两模式全量及 ASan。
@@ -112,4 +170,4 @@ git diff --check
 - 最终 Linux 证据在 WSL `~/openidea-test-results/final-20261104-response-fix`；校时证据在宿主 `~/openidea-test-results/final-20261104/linux`。
 - 最终四组逐例结果汇总在宿主 `~/openidea-test-results/final-20261104/verified.json`，共 72 项。日志与大文件不入库。
 - 本轮修复 Windows 分支变量重命名遗漏、系统 min/max 宏干扰、RPC 解码和响应移动的顺序，以及 Windows 到 WSL 的路径传递；相关失败日志保留在原结果目录。
-- 早期 Linux MT 压测曾返回 291 次 OI_ERR_BUSY，独立复测及后续完整矩阵均通过。开放式百万请求压力在积压时可以触发容量保护，不能把重试通过等同于任何负载都不会限流。
+- 早期 Linux MT 压测曾返回 291 次 OI_ERR_BUSY，独立复测及后续完整矩阵均通过。开放式百万请求压力在积压时可以触发容量保护，不能把重试通过等同于任何负载都不会限流。回声客户端此后改为固定数量的工作协程，在途数不超过 `inflight`。
