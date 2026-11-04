@@ -646,6 +646,278 @@ class DeferredRpcProbe : public OI::Rpc::ProtoClientManager
 	}
 };
 
+template <typename T>
+static coro::TaskResult<int> CheckSingleUse(std::shared_ptr<T> pCallParam)
+{
+	struct Counts
+	{
+		std::atomic<int> iAccepted{0};
+		std::atomic<int> iRejected{0};
+	};
+	std::shared_ptr<Counts> pCounts = std::make_shared<Counts>();
+	coro::TaskScope stTasks;
+	for (int iIndex = 0; iIndex < 2; ++iIndex)
+	{
+		stTasks.Start([pCallParam, pCounts](coro::Token, coro::StopToken) -> coro::Task
+		{
+			try
+			{
+				co_await *pCallParam;
+				++pCounts->iAccepted;
+			}
+			catch (const std::logic_error&)
+			{
+				++pCounts->iRejected;
+			}
+		});
+	}
+	co_await stTasks.Join();
+	try
+	{
+		co_await *pCallParam;
+		++pCounts->iAccepted;
+	}
+	catch (const std::logic_error&)
+	{
+		++pCounts->iRejected;
+	}
+	co_return pCounts->iAccepted == 1 && pCounts->iRejected == 2 ? 0 : 1;
+}
+
+class SharedConnectProbe : public DeferredRpcProbe
+{
+  public:
+	void Pending()
+	{
+		bConnectPending = true;
+	}
+	void Finish()
+	{
+		AbortSession(iConnectGeneration);
+	}
+	void OnConnectFailed() override
+	{
+	}
+};
+
+static coro::TaskResult<int> CheckAwaitOwnership()
+{
+	int iBad = 0;
+	OI::RpcData::HoldReq stRequest;
+	stRequest.iDelayMilliseconds = 50;
+	stRequest.iMark = 123;
+	auto stRpc = OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequest, OI::Timer::Seconds(3));
+	auto pRpc = std::make_shared<decltype(stRpc)>(std::move(stRpc));
+	try
+	{
+		co_await stRpc;
+		++iBad;
+	}
+	catch (const std::logic_error&)
+	{
+	}
+	iBad += co_await CheckSingleUse(pRpc);
+	OI::RpcData::HoldRes stOutput;
+	auto stOutputWait = OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequest, stOutput, OI::Timer::Seconds(3));
+	iBad += co_await CheckSingleUse(std::make_shared<decltype(stOutputWait)>(std::move(stOutputWait)));
+	if (stOutput.iMark != 123)
+	{
+		++iBad;
+	}
+	try
+	{
+		auto stInvalidMove = std::move(*pRpc);
+		++iBad;
+	}
+	catch (const std::logic_error&)
+	{
+	}
+	OI::Http::Client stInvalidHttp("", 0);
+	auto stHttp = stInvalidHttp.Get("/", {});
+	auto pHttp = std::make_shared<OI::Http::Call>(std::move(stHttp));
+	try
+	{
+		co_await stHttp;
+		++iBad;
+	}
+	catch (const std::logic_error&)
+	{
+	}
+	iBad += co_await CheckSingleUse(pHttp);
+	int32_t iHttpPort = 0;
+	TryGetConfig("Regression.http_port", iHttpPort);
+	if (iHttpPort > 0)
+	{
+		OI::Http::Client stHttpClient("127.0.0.1", iHttpPort);
+		iBad += co_await CheckSingleUse(std::make_shared<OI::Http::Call>(stHttpClient.Get("/good", {})));
+	}
+	static SharedConnectProbe stClient;
+	OI::Net::Poll::GetInstance().CallOnLoop([](void*)
+	{
+		stClient.Pending();
+	}, nullptr);
+	auto pConnect = std::make_shared<OI::Net::SessionManager::ConnectAwaiter>(stClient.StartClient());
+	auto pStarted = std::make_shared<std::atomic<int>>(0);
+	auto pBad = std::make_shared<std::atomic<int>>(0);
+	coro::TaskScope stTasks;
+	for (int iIndex = 0; iIndex < 32; ++iIndex)
+	{
+		stTasks.Start([pConnect, pStarted, pBad](coro::Token, coro::StopToken) -> coro::Task
+		{
+			++*pStarted;
+			if (co_await *pConnect)
+			{
+				++*pBad;
+			}
+		});
+	}
+	while (pStarted->load() != 32)
+	{
+		co_await coro::yield(0);
+	}
+	OI::Net::Poll::GetInstance().CallOnLoop([](void*)
+	{
+		stClient.Finish();
+	}, nullptr);
+	co_await stTasks.Join();
+	if (co_await *pConnect)
+	{
+		++iBad;
+	}
+	iBad += pBad->load();
+	auto stMovedConnect = std::move(*pConnect);
+	try
+	{
+		co_await *pConnect;
+		++iBad;
+	}
+	catch (const std::logic_error&)
+	{
+	}
+	if (co_await stMovedConnect)
+	{
+		++iBad;
+	}
+	// 固定不存在的 sid 不得进入首次连接队列，也不能等待超时。
+	static DeferredRpcProbe stPinnedClient;
+	const auto stBefore = OI::Rpc::GetRpcWaitStats();
+	auto stPinned = co_await OI::Rpc::RpcCall(stPinnedClient, sid_t(12345), stRequest, OI::Timer::Seconds(30));
+	const auto stAfter = OI::Rpc::GetRpcWaitStats();
+	if (stPinned.GetRet() != OI_ERR_CONNECT || stAfter.iCalls != stBefore.iCalls)
+	{
+		++iBad;
+	}
+	printf("hold await ownership shared=32 bad=%d\n", iBad);
+	fflush(stdout);
+	co_return iBad;
+}
+
+static coro::TaskResult<int> CheckRpcAdmission()
+{
+	struct Results
+	{
+		std::atomic<int> iOk{0};
+		std::atomic<int> iBusy{0};
+		std::atomic<int> iBad{0};
+		std::atomic<int> vAccepted[3]{};
+	};
+	static DeferredRpcProbe vClients[3];
+	int iBad = 0;
+	for (auto& stClient : vClients)
+	{
+		if (!(co_await stClient.StartClient()))
+		{
+			co_return 1;
+		}
+	}
+	for (int iRound = 0; iRound < 3; ++iRound)
+	{
+		auto pResults = std::make_shared<Results>();
+		coro::TaskScope stTasks;
+		for (int iClient = 0; iClient < 3; ++iClient)
+		{
+			for (int iIndex = 0; iIndex < 2; ++iIndex)
+			{
+				stTasks.Start([pResults, iClient](coro::Token, coro::StopToken) -> coro::Task
+				{
+					OI::RpcData::HoldReq stRequest;
+					stRequest.iDelayMilliseconds = 1000;
+					stRequest.iMark = 71;
+					auto stResult = co_await OI::Rpc::RpcCall(vClients[iClient], stRequest, OI::Timer::Seconds(5));
+					if (stResult.GetRet() == 0 && stResult.GetRes().iMark == 71)
+					{
+						++pResults->iOk;
+						++pResults->vAccepted[iClient];
+					}
+					else if (stResult.GetRet() == OI_ERR_BUSY)
+					{
+						++pResults->iBusy;
+					}
+					else
+					{
+						++pResults->iBad;
+					}
+				});
+			}
+		}
+		co_await stTasks.Join();
+		if (pResults->iOk != 2 || pResults->iBusy != 4 || pResults->iBad != 0)
+		{
+			++iBad;
+		}
+		for (const auto& iAccepted : pResults->vAccepted)
+		{
+			if (iAccepted.load() > 1)
+			{
+				++iBad;
+			}
+		}
+		printf("hold rpc admission round=%d ok=%d busy=%d bad=%d\n", iRound, pResults->iOk.load(), pResults->iBusy.load(), iBad);
+		co_await coro::yield(50);
+	}
+	// 超大请求拒绝不占额度，错误回执也必须归还；随后正常请求仍可执行。
+	bool bBytes = false;
+	TryGetConfig("Regression.rpc_admission_bytes", bBytes);
+	if (bBytes)
+	{
+		struct LargeRequest : OI::RpcData::HoldReq
+		{
+			OI::Base::BytesStream& serialize(OI::Base::BytesStream& stOutputParam) const override
+			{
+				HoldReq::serialize(stOutputParam);
+				stOutputParam.WritePb(99, std::string(128, 'x'));
+				return stOutputParam;
+			}
+		} stLarge;
+		OI::RpcData::HoldReq& stBase = stLarge;
+		OI::RpcData::HoldRes stOutput;
+		if ((co_await OI::Rpc::RpcCall(vClients[0], stBase, stOutput, OI::Timer::Seconds(3))) != OI_ERR_BUSY)
+		{
+			++iBad;
+		}
+	}
+	for (int iKind = 0; iKind < 4; ++iKind)
+	{
+		OI::RpcData::HoldReq stRequest;
+		stRequest.iDelayMilliseconds = iKind == 0 ? -1 : 0;
+		stRequest.iMark = iKind == 1 ? -2147483600 : (iKind == 2 ? -2147483599 : 71);
+		auto stResult = co_await OI::Rpc::RpcCall(vClients[0], stRequest, OI::Timer::Seconds(3));
+		const int iExpected = iKind == 0 ? 1001 : (iKind < 3 ? OI_ERR_FAIL : 0);
+		if (stResult.GetRet() != iExpected)
+		{
+			++iBad;
+		}
+		co_await coro::yield(50);
+	}
+	for (auto& stClient : vClients)
+	{
+		stClient.CloseAllSessions();
+	}
+	printf("hold rpc admission done bad=%d\n", iBad);
+	fflush(stdout);
+	co_return iBad;
+}
+
 static coro::TaskResult<int> CheckDeferredRpcSession()
 {
 	static DeferredRpcProbe stClient;
@@ -761,6 +1033,14 @@ static coro::TaskResult<int> CheckConnectionIsolation()
 
 coro::Task HoldMgr::Pump()
 {
+	bool bAdmission = false;
+	TryGetConfig("Regression.rpc_admission", bAdmission);
+	if (bAdmission)
+	{
+		const int iBad = co_await CheckRpcAdmission();
+		TestBoard::GetInstance().Done(iBad ? 1 : 0);
+		co_return;
+	}
 	int iBadLocal = co_await CheckTimerExceptions();
 	if (iBadLocal != 0)
 	{
@@ -771,6 +1051,7 @@ coro::Task HoldMgr::Pump()
 	}
 	iBadLocal += co_await CheckNestedResults();
 	iBadLocal += co_await CheckDeferredRpcSession();
+	iBadLocal += co_await CheckAwaitOwnership();
 	iBadLocal += CheckBinaryBool();
 	printf("hold binary bool bad=%d\n", iBadLocal);
 	iBadLocal += co_await CheckClientConnect();
@@ -1104,11 +1385,12 @@ coro::Task HoldMgr::Pump()
 		void OnClientDisconnect(const OI::Net::Session*) override
 		{
 		}
-		bool TryPendCall(uint64_t iIdParam, const OI::Base::Bytes& stDataParam) override
+		void SubmitCall(uint64_t iIdParam, const OI::Base::Bytes& stDataParam) override
 		{
 			if (!iFailureMode)
 			{
-				return ProtoClientManager::TryPendCall(iIdParam, stDataParam);
+				ProtoClientManager::SubmitCall(iIdParam, stDataParam);
+				return;
 			}
 			if (iFailureMode == 2)
 			{
@@ -1265,7 +1547,7 @@ coro::Task HoldMgr::Pump()
 		{
 			try
 			{
-				co_await OI::Rpc::RpcCall(stPending, INVALID_SID, stOrdinary, stUnused, OI::Timer::Milliseconds(50));
+				co_await OI::Rpc::RpcCall(stPending, stOrdinary, stUnused, OI::Timer::Milliseconds(50));
 			}
 			catch (const std::runtime_error&)
 			{

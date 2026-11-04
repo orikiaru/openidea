@@ -87,7 +87,7 @@ class RawHttpRegression(socketserver.BaseRequestHandler):
 
 
 def run(case, args):
-    mode = "hold" if case.startswith("clock-") else ("echo" if case in ("reset", "registry") else case)
+    mode = "hold" if case.startswith(("clock-", "rpc-admission-")) else ("echo" if case in ("reset", "registry") else case)
     mode = "log" if case in ("disk-full", "log-backpressure") else mode
     mode = "redis" if case.startswith("redis-") else mode
     fairness = case == "redis-fairness"
@@ -113,6 +113,8 @@ def run(case, args):
                 text = replace(text, "root_path", '"' + str(logs) + '"')
                 if case == "log-backpressure":
                     text = replace(text, "max_pending_bytes", str(8 * 1024**2 + 8))
+            if name == "ipcserver" and case.startswith("rpc-admission-"):
+                text = text[:text.index("[Rpc]")]
             if name == "redisserver" and case == "redis":
                 text = replace(text, "connections", "1")
             if name == "redisserver" and pressure:
@@ -188,6 +190,11 @@ def run(case, args):
                 for name in ("ipcclient", "ipcserver"):
                     with (cfg / (name + ".toml")).open("a", encoding="utf-8") as config:
                         config.write("\n[Regression]\nencoding_failure = true\nregistry_checks = true\nhttp_port = %d\n" % http_fixture.server_address[1])
+            if case.startswith("rpc-admission-"):
+                with (cfg / "ipcclient.toml").open("a") as config:
+                    config.write("rpc_admission = true\nrpc_admission_bytes = %s\n" % ("true" if case.endswith("bytes") else "false"))
+                with (cfg / "ipcserver.toml").open("a") as config:
+                    config.write("\n[Rpc]\nmax_inflight_count = %d\nsession_max_inflight_count = %d\nmax_inflight_bytes = %d\nsession_max_inflight_bytes = %d\n" % ((100, 100, 64, 32) if case.endswith("bytes") else (2, 1, 1048576, 1048576)))
             log_env = None
             if case == "log-backpressure":
                 slow_write = root / "slow-write.so"
@@ -315,10 +322,14 @@ def run(case, args):
                     assert "redis script isolation bad=0" in text
                     assert "redis single use bad=0" in text
                     assert re.search(r"redis stress .*bad=0", text)
+            elif case.startswith("rpc-admission-"):
+                assert "hold rpc admission done bad=0" in text
+                assert text.count("ok=2 busy=4 bad=0") == 3
             elif mode == "hold":
                 assert "hold timer exceptions executed=5 destroyed=5 bad=0" in text
                 assert "hold nested results completed=32768 caught=16384 bad=0" in text
                 assert "hold deferred rpc value=0 output=0 pinned=-1 bad=0" in text
+                assert "hold await ownership shared=32 bad=0" in text
                 assert "hold binary bool bad=0" in text
                 assert "hold connection isolation bad=0" in text
                 assert "hold coroutine connect bad=0" in text
@@ -430,7 +441,7 @@ def run_web(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case", default="all", choices=("all", "echo", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "reset", "disk-full", "clock-forward", "clock-back", "registry", "web"))
+    parser.add_argument("--case", default="all", choices=("all", "echo", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "clock-forward", "clock-back", "registry", "web"))
     parser.add_argument("--bin-dir", type=Path, default=REPO / "deploy/bin")
     parser.add_argument("--redis-binary", type=Path, default=Path("/tmp/redis-7.4.12/src/redis-server"))
     parser.add_argument("--clock-fault-so", type=Path)
@@ -439,7 +450,7 @@ if __name__ == "__main__":
         with socket.socket() as probe:
             probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             probe.bind(("127.0.0.1", port))
-    cases = ("echo", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "reset", "disk-full", "registry", "web") if options.case == "all" else (options.case,)
+    cases = ("echo", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "registry", "web") if options.case == "all" else (options.case,)
     for item in cases:
         if item == "web":
             run_web(options)

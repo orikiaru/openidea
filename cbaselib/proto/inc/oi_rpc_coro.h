@@ -547,6 +547,7 @@ struct [[nodiscard]] RpcCallAwaiter
 	int64_t iTimeoutMilliseconds;
 	std::coroutine_handle<> stHandle;
 	std::atomic<int32_t> iGate;
+	std::atomic<bool> bAwaitStarted{false};
 	// 回包原样留到 await_resume 再解，解包跑在工人上，不占 IO 线程。
 	::OI::Base::BytesStream stReply;
 	bool bReplied;
@@ -557,12 +558,24 @@ struct [[nodiscard]] RpcCallAwaiter
 	{
 	}
 	RpcCallAwaiter(const RpcCallAwaiter&) = delete;
-	RpcCallAwaiter(RpcCallAwaiter&& stOtherParam) noexcept
-	    : pManager(stOtherParam.pManager), pClient(stOtherParam.pClient), iSessionId(stOtherParam.iSessionId), pRequest(stOtherParam.pRequest), pResponse(stOtherParam.pResponse), iResult(stOtherParam.iResult),
+	RpcCallAwaiter(RpcCallAwaiter&& stOtherParam)
+	    : pManager(ClaimMove(stOtherParam)), pClient(stOtherParam.pClient), iSessionId(stOtherParam.iSessionId), pRequest(stOtherParam.pRequest), pResponse(stOtherParam.pResponse), iResult(stOtherParam.iResult),
 	      iTimeoutMilliseconds(stOtherParam.iTimeoutMilliseconds), stHandle(stOtherParam.stHandle), iGate(stOtherParam.iGate.load(std::memory_order_relaxed)),
 	      bReplied(false), stSubmissionError(std::move(stOtherParam.stSubmissionError))
 	{
 		stOtherParam.stHandle = nullptr;
+	}
+	static ::OI::Net::SessionManager* ClaimMove(RpcCallAwaiter& stOtherParam)
+	{
+		stOtherParam.ClaimAwait();
+		return stOtherParam.pManager;
+	}
+	void ClaimAwait()
+	{
+		if (bAwaitStarted.exchange(true, std::memory_order_acq_rel))
+		{
+			throw std::logic_error("RpcCall can only be awaited once; cannot reuse or move a submitted call");
+		}
 	}
 
 	bool await_ready() const noexcept
@@ -571,6 +584,12 @@ struct [[nodiscard]] RpcCallAwaiter
 	}
 	template <typename Promise>
 	bool await_suspend(std::coroutine_handle<Promise> stHandleParam)
+	{
+		ClaimAwait();
+		return Suspend(stHandleParam);
+	}
+	template <typename Promise>
+	bool Suspend(std::coroutine_handle<Promise> stHandleParam)
 	{
 		stHandle = stHandleParam;
 		iResult = OI_ERR_FAIL;
@@ -599,9 +618,6 @@ struct [[nodiscard]] RpcCallAwaiter
 			if (pClient)
 			{
 				pClient->SubmitCall(iCallIdLocal, stFrame.GetMutableBuff());
-			}
-			else if (pManager->TryPendCall(iCallIdLocal, stFrame.GetMutableBuff()))
-			{
 			}
 			else if (!pManager->SendBytes(iSessionId, stFrame.GetMutableBuff()))
 			{
@@ -742,9 +758,10 @@ struct [[nodiscard]] RpcValueAwaiter : RpcCallAwaiter<Req, Res>
 	template <typename Promise>
 	bool await_suspend(std::coroutine_handle<Promise> stHandleParam)
 	{
+		this->ClaimAwait();
 		this->pRequest = &stRequest;
 		this->pResponse = &stResponse;
-		return RpcCallAwaiter<Req, Res>::await_suspend(stHandleParam);
+		return RpcCallAwaiter<Req, Res>::Suspend(stHandleParam);
 	}
 	RpcResult<Res> await_resume()
 	{

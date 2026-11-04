@@ -12,6 +12,7 @@
 #include <vector>
 #include <memory>
 #include <limits>
+#include <stdexcept>
 namespace OI
 {
 namespace Net
@@ -59,11 +60,15 @@ struct SessionManager::ConnectWait
 	OI::Thread::Mutex stMutex;
 	bool bDone = false;
 	bool bResult = false;
-	std::atomic<int> iGate{0};
-	std::coroutine_handle<> stHandle;
-	void (*fnSchedule)(std::coroutine_handle<>) = nullptr;
+	struct Waiter
+	{
+		std::coroutine_handle<> stHandle;
+		void (*fnSchedule)(std::coroutine_handle<>);
+	};
+	std::vector<Waiter> vWaiters;
 	void Finish(bool bResultParam)
 	{
+		std::vector<Waiter> vReady;
 		{
 			OI::Thread::MutexGuard stLock(stMutex);
 			if (bDone)
@@ -72,11 +77,12 @@ struct SessionManager::ConnectWait
 			}
 			bResult = bResultParam;
 			bDone = true;
+			vReady.swap(vWaiters);
 		}
-		// 回调先到只发布结果；调用方已挂起才排队恢复，禁止直接 resume。
-		if (iGate.exchange(1, std::memory_order_acq_rel) == 2)
+		// 登记与完成共用锁；出锁后只访问局部列表，允许等待者立即恢复。
+		for (const auto& stWaiter : vReady)
 		{
-			fnSchedule(stHandle);
+			stWaiter.fnSchedule(stWaiter.stHandle);
 		}
 	}
 };
@@ -91,15 +97,18 @@ bool SessionManager::ConnectAwaiter::Suspend(std::coroutine_handle<> stHandlePar
 {
 	// 局部引用保活，发布挂起后工人可以立即恢复并销毁 awaiter。
 	auto pWait = m_pWait;
+	if (!pWait)
+	{
+		throw std::logic_error("cannot await a moved-from connection");
+	}
 	OI::Thread::MutexGuard stLock(pWait->stMutex);
 	// 已完成对象可以再次 await；不能把完成门重新改成挂起状态。
 	if (pWait->bDone)
 	{
 		return false;
 	}
-	pWait->stHandle = stHandleParam;
-	pWait->fnSchedule = fnScheduleParam;
-	return pWait->iGate.exchange(2, std::memory_order_acq_rel) != 1;
+	pWait->vWaiters.push_back({stHandleParam, fnScheduleParam});
+	return true;
 }
 
 bool SessionManager::ConnectAwaiter::await_resume() const noexcept

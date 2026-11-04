@@ -50,7 +50,7 @@ class Call
 	{
 		return false;
 	}
-	void await_suspend(std::coroutine_handle<> stHandleParam) noexcept;
+	void await_suspend(std::coroutine_handle<> stHandleParam);
 	Response await_resume();
 };
 

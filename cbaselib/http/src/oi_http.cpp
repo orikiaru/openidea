@@ -1,4 +1,5 @@
 #include "oi_http.h"
+#include <stdexcept>
 #include "oi_channel.h"
 #include "oi_net_os.h"
 #include "oi_poll.h"
@@ -164,6 +165,7 @@ struct Call::State
 	std::coroutine_handle<> stHandle;
 	std::atomic<int32_t> iDone;
 	std::atomic<int32_t> iWoke;
+	std::atomic<bool> bAwaitStarted{false};
 	// Call、超时定时器、域名解析各持一份。定时器不能取消，请求结束后它还会来。
 	std::atomic<int32_t> iReferences;
 	uv_getaddrinfo_t stDns;
@@ -746,8 +748,12 @@ Call::~Call()
 	}
 }
 
-void Call::await_suspend(std::coroutine_handle<> stHandleParam) noexcept
+void Call::await_suspend(std::coroutine_handle<> stHandleParam)
 {
+	if (!m_pState || m_pState->bAwaitStarted.exchange(true, std::memory_order_acq_rel))
+	{
+		throw std::logic_error("HTTP Call can only be awaited once and must not be moved from");
+	}
 	m_pState->stHandle = stHandleParam;
 	::OI::Net::Poll::GetInstance().CallOnLoop(State::Start, m_pState);
 }
@@ -759,8 +765,7 @@ Response Call::await_resume()
 	stOutput.sBody = std::move(m_pState->sBody);
 	stOutput.bFail = m_pState->bFailed || m_pState->iStatus == 0;
 	stOutput.sError = std::move(m_pState->sError);
-	m_pState->Release();
-	m_pState = nullptr;
+	// 状态由 Call 析构释放，保留消费标记以安全拒绝重复/并发等待。
 	return stOutput;
 }
 

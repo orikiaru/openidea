@@ -78,3 +78,5 @@ redisserver 的 `[Redis] max_pending_bytes`（默认 64MiB）和 `max_pending_co
 共享 Redis 上游禁止 `SCRIPT DEBUG` 子命令（大小写不敏感，所有模式均拒绝；子命令内嵌 NUL 也拒绝，防止 C 字符串比较截断绕过），避免调试模式污染其他下游的 EVAL/PING；SCRIPT LOAD 和 EVALSHA 保留。普通 RedisMgr 回归强制使用一条上游，以两条下游验证调试命令被断开、另一条仍收到正常脚本结果，并验证重连后的 PING 与脚本加载/执行。
 
 过滤同时覆盖 hiredis 自己识别的异步状态命令，包括 PMONITOR 和命令名内嵌 CRLF 的监控/订阅/退订变体；不能只依赖 Redis 返回未知命令错误，因为 hiredis 在收到回复前就已改变连接状态。这些命令按已有规则关闭发起的下游连接，共享上游及其他下游保持可用。
+
+HTTP Call 与 RPC/Redis 请求一样只能 await 一次，重复等待、并发等待或等待已移走对象会抛出 std::logic_error；要重复请求须重新调用 Get/Post。建连等待对象则支持多个协程共享结果，区别在于不会重复提交业务请求。

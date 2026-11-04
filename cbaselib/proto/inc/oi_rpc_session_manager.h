@@ -31,6 +31,10 @@ class ProtoSessionManager : public ::OI::Net::SessionManager
 	ProtoSessionManager()
 	{
 	}
+	bool Init() override
+	{
+		return InitRpcAdmission() && ::OI::Net::SessionManager::Init();
+	}
 	virtual const std::string GetIDString()
 	{
 		return "ProtoSessionManager";
@@ -147,7 +151,7 @@ class ProtoClientManager : public ProtoSessionManager
 	}
 	bool TryPendCall(uint64_t iCallIdParam, const ::OI::Base::Bytes& stDataParam) override;
 	// 提交时在客户端锁内决定排队或绑定当前 sid，随后发送，避免构造等待对象时截取旧 sid。
-	void SubmitCall(uint64_t iCallIdParam, const ::OI::Base::Bytes& stDataParam);
+	virtual void SubmitCall(uint64_t iCallIdParam, const ::OI::Base::Bytes& stDataParam);
 	void DropPendingCall(uint64_t iCallIdParam) override;
 	void FlushHeldCalls(sid_t iSessionIdParam);
 	void FailHeldCalls();

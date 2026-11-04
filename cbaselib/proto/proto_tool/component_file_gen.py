@@ -166,7 +166,7 @@ __COMPONENT_NAME__::~__COMPONENT_NAME__()
 
 bool __COMPONENT_NAME__::Init()
 {
-	return OI::Net::SessionManager::Init();
+	return OI::Rpc::ProtoSessionManager::Init();
 }
 
 const std::string __COMPONENT_NAME__::GetIDString()
@@ -205,7 +205,7 @@ const std::string __COMPONENT_NAME__::GetIDString()
 
 bool __COMPONENT_NAME__::Init()
 {
-	return OI::Net::SessionManager::Init();
+	return OI::Rpc::ProtoSessionManager::Init();
 }
 
 void __COMPONENT_NAME__::OnAddSession(OI::Net::Session* pSession)

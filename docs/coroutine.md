@@ -186,8 +186,18 @@ client.StartClient(); // 不等待：调用时就发起非阻塞建连，忽略�
 if (!(co_await client.StartClient())) co_return; // 等建连成功，再处理后续逻辑。
 ```
 
-已有连接时返回成功；并发调用等待同一代连接，不重复创建 socket。失败、服务地址切换、停止入口后返回 false。等待只挂起协程，完成排回现有调度队列，不直接 resume。可以先 `auto connecting = client.StartClient();`，之后再 `co_await connecting`；即便连接先完成也不会丢唤醒。返回对象仅可移动，不可复制；同一对象完成后可再次 await，但不能由多个协程同时 await 同一个对象（并发调用分别使用 StartClient 返回的对象）。
+已有连接时返回成功；并发调用等待同一代连接，不重复创建 socket。失败、服务地址切换、停止入口后返回 false。等待只挂起协程，完成排回现有调度队列，不直接 resume。可以先 `auto connecting = client.StartClient();`，之后再 `co_await connecting`；即便连接先完成也不会丢唤醒。返回对象仅可移动，不可复制；同一对象支持多个协程同时 await；完成后也可再次 await，所有等待者读取同一代连接结果。等待已移走的对象会抛出 std::logic_error。
 
 管理器必须覆盖网络操作和等待者的生命周期；全局停止前仍按 TaskScope 约定 Join。接口不提供单独连接超时参数，失败时间由网络连接结果决定。旧 `StartClient(false)` 同步入口和独立 `Connect()` 入口已移除，应用等待建连统一使用 `co_await StartClient()`。
 
 建连等待在启动 socket 前登记；完成时先摘取该代等待者，再执行连接成功回调。成功回调内关闭旧连接并再次 StartClient，新一代不会收到旧连接的成功结果。HoldMgr 覆盖该重入场景，要求首次 true、下一次连接拒绝 false。
+
+## 请求消费与服务端容量
+
+RPC 请求等待对象只能 await 一次；重复、并发等待及等待已移走的对象会在修改句柄或提交之前抛出 `std::logic_error`。已提交的 RPC 对象也不能再移动。需要重新发送就重新创建 RpcCall；复用回执请保存 RpcResult。显式 sid 的重载始终固定会话，首次连接前也不排队；只有自动选会话的重载可以等待首次建连。
+
+服务端在创建处理协程之前检查 `[Rpc]` 的进程总量和每条会话额度：`max_inflight_count` 默认 65536，`max_inflight_bytes` 默认 67108864，`session_max_inflight_count` 默认 4096，`session_max_inflight_bytes` 默认 16777216。各项必须为正整数。字节统计收到的请求包体（含调用号），不等于整个进程 RSS；业务生成的响应、外部资源和网络输入缓冲另计。
+
+超限立即回标准 `OI_ERR_BUSY`，不创建业务协程；错误回执无法发送时关闭会话。额度由原有根协程闭包中的可移动 RAII 对象持有，额度凭证不新增包装协程或单独堆分配；正常完成、业务异常、响应编码失败都自动归还。断连不提前释放仍在执行的业务额度，避免借助重连绕过进程限额。业务端收到 Busy 后自行决定退避，框架不自动重放写请求。
+
+`HoldMgr` 保留共享建连、请求重复/并发/移后使用、首次连接前固定 sid 的回归。`python3 tools/run_regressions.py --case rpc-admission-count` 和 `rpc-admission-bytes` 用临时限额验证多连接过载、标准 Busy 回执、额度恢复与错误路径；均已纳入 `--case all`。

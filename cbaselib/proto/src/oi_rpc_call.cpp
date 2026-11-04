@@ -3,6 +3,7 @@
 #include "oi_poll.h"
 #include "oi_rpc_coro.h"
 #include "oi_thread.h"
+#include "oi_config.h"
 #include <atomic>
 #include <chrono>
 #include <deque>
@@ -20,6 +21,102 @@ namespace Rpc
 namespace
 {
 typedef std::function<coro::Task(coro::Token, ::OI::Net::SessionManager*, sid_t, ::OI::Base::BytesStream)> RpcHandleFn;
+
+struct RpcAdmission
+{
+	struct Usage
+	{
+		size_t iCount = 0;
+		size_t iBytes = 0;
+	};
+	::OI::Thread::Mutex stMutex;
+	Usage stTotal;
+	std::map<std::pair<::OI::Net::SessionManager*, sid_t>, Usage> mSessions;
+	size_t iMaxCount = 65536;
+	size_t iMaxBytes = 64 * 1024 * 1024;
+	size_t iSessionMaxCount = 4096;
+	size_t iSessionMaxBytes = 16 * 1024 * 1024;
+	RpcAdmission()
+	{
+		ReadLimit("Rpc.max_inflight_count", iMaxCount);
+		ReadLimit("Rpc.max_inflight_bytes", iMaxBytes);
+		ReadLimit("Rpc.session_max_inflight_count", iSessionMaxCount);
+		ReadLimit("Rpc.session_max_inflight_bytes", iSessionMaxBytes);
+	}
+	static void ReadLimit(const char* pKeyParam, size_t& iLimitParam)
+	{
+		int64_t iValue = static_cast<int64_t>(iLimitParam);
+		TryGetConfig(pKeyParam, iValue);
+		if (iValue <= 0 || static_cast<uint64_t>(iValue) > SIZE_MAX)
+		{
+			throw std::invalid_argument(pKeyParam);
+		}
+		iLimitParam = static_cast<size_t>(iValue);
+	}
+};
+
+RpcAdmission& Admission()
+{
+	static RpcAdmission stAdmission;
+	return stAdmission;
+}
+
+struct RpcAdmissionLease
+{
+	std::pair<::OI::Net::SessionManager*, sid_t> stKey;
+	size_t iBytes = 0;
+	bool bAcquired = false;
+	RpcAdmissionLease() = default;
+	RpcAdmissionLease(const RpcAdmissionLease&) = delete;
+	RpcAdmissionLease(RpcAdmissionLease&& stOtherParam) noexcept
+	    : stKey(stOtherParam.stKey), iBytes(stOtherParam.iBytes), bAcquired(std::exchange(stOtherParam.bAcquired, false))
+	{
+	}
+	~RpcAdmissionLease()
+	{
+		if (!bAcquired)
+		{
+			return;
+		}
+		auto& stAdmission = Admission();
+		::OI::Thread::MutexGuard stLock(stAdmission.stMutex);
+		auto it = stAdmission.mSessions.find(stKey);
+		--stAdmission.stTotal.iCount;
+		stAdmission.stTotal.iBytes -= iBytes;
+		it->second.iBytes -= iBytes;
+		if (--it->second.iCount == 0)
+		{
+			stAdmission.mSessions.erase(it);
+		}
+	}
+};
+
+std::optional<RpcAdmissionLease> AcquireRpc(::OI::Net::SessionManager* pManagerParam, sid_t iSessionIdParam, size_t iBytesParam)
+{
+	auto& stAdmission = Admission();
+	::OI::Thread::MutexGuard stLock(stAdmission.stMutex);
+	const auto stKey = std::make_pair(pManagerParam, iSessionIdParam);
+	auto it = stAdmission.mSessions.find(stKey);
+	const auto stUsage = it == stAdmission.mSessions.end() ? RpcAdmission::Usage{} : it->second;
+	if (stAdmission.stTotal.iCount >= stAdmission.iMaxCount ||
+	    iBytesParam > stAdmission.iMaxBytes - stAdmission.stTotal.iBytes ||
+	    stUsage.iCount >= stAdmission.iSessionMaxCount ||
+	    iBytesParam > stAdmission.iSessionMaxBytes - stUsage.iBytes)
+	{
+		return {};
+	}
+	// 所有可能分配的操作先完成，再一次性扣额度；构造或提交失败由 lease 归还。
+	RpcAdmissionLease stLease;
+	auto& stSession = stAdmission.mSessions[stKey];
+	stLease.stKey = stKey;
+	stLease.iBytes = iBytesParam;
+	stLease.bAcquired = true;
+	++stSession.iCount;
+	stSession.iBytes += iBytesParam;
+	++stAdmission.stTotal.iCount;
+	stAdmission.stTotal.iBytes += iBytesParam;
+	return stLease;
+}
 
 struct RpcExpire
 {
@@ -218,6 +315,20 @@ RpcWaitStats GetRpcWaitStats()
 	return stStats;
 }
 
+bool InitRpcAdmission()
+{
+	try
+	{
+		(void)Admission();
+		return true;
+	}
+	catch (const std::exception& stError)
+	{
+		fprintf(stderr, "invalid RPC admission configuration: %s\n", stError.what());
+		return false;
+	}
+}
+
 bool MarkRpcAwaitingConnect(uint64_t iCallIdParam)
 {
 	RpcCallShard& stShard = ShardOf(iCallIdParam);
@@ -387,9 +498,22 @@ bool DeliverRpc(proto_type_t iIdParam, ::OI::Base::BytesStream& stBodyParam, ::O
 		}
 		else
 		{
-			coro::StartTask([pHandle, pManagerParam, iSessionIdParam, &stBodyParam](coro::Token iTokenParam)
+			auto stLease = AcquireRpc(pManagerParam, iSessionIdParam, stBodyParam.Size());
+			if (!stLease)
 			{
-				return (*pHandle)(iTokenParam, pManagerParam, iSessionIdParam, std::move(stBodyParam));
+				::OI::Base::BytesStream stReply;
+				stReply << (iRaw & ~(uint64_t)RPC_REQ_MASK) << int32_t(OI_ERR_BUSY);
+				auto stFrame = EncodePbFrame(iIdParam, stReply);
+				if (!pManagerParam->SendBytes(iSessionIdParam, stFrame.GetMutableBuff()))
+				{
+					pManagerParam->CloseSession(iSessionIdParam);
+				}
+				return true;
+			}
+			// lease 随根协程闭包存活；业务异常、回包失败和正常结束均自动归还额度。
+			coro::StartTask([stLease = std::move(stLease), pHandle, pManagerParam, iSessionIdParam, stBody = std::move(stBodyParam)](coro::Token iTokenParam) mutable
+			{
+				return (*pHandle)(iTokenParam, pManagerParam, iSessionIdParam, std::move(stBody));
 			});
 		}
 	}

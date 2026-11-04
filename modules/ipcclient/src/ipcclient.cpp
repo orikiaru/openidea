@@ -11,7 +11,7 @@ IpcClient::~IpcClient()
 
 bool IpcClient::Init()
 {
-	if (!::OI::Net::SessionManager::Init())
+	if (!::OI::Rpc::ProtoSessionManager::Init())
 	{
 		return false;
 	}

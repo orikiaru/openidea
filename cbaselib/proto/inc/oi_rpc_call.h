@@ -16,6 +16,8 @@ struct RpcWaitStats
 	size_t iBuckets = 0;
 };
 RpcWaitStats GetRpcWaitStats();
+// 读取进程级 RPC 在途限制；非法配置令模块初始化失败。
+bool InitRpcAdmission();
 
 bool MarkRpcAwaitingConnect(uint64_t iCallIdParam);
 bool ClaimRpcSend(uint64_t iCallIdParam, sid_t iSessionIdParam);

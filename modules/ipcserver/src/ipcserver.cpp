@@ -59,6 +59,10 @@ struct EncodingFailureResponse : OI::RpcData::HoldRes
 };
 static OI::Rpc::RpcTask HandleEncodingRegression(const OI::RpcData::HoldReq& stRequestParam, EncodingFailureResponse& stResponseParam)
 {
+	if (stRequestParam.iMark == -2147483599)
+	{
+		throw std::runtime_error("injected server handler failure");
+	}
 	int32_t iResult = co_await HandleHold(stRequestParam, stResponseParam);
 	stResponseParam.bThrow = stRequestParam.iMark == -2147483600;
 	co_return iResult;
@@ -79,7 +83,7 @@ bool IpcServer::Init()
 			    OI::Rpc::RpcProtoId<OI::RpcData::HoldRes>::iValue, iTokenParam, pManagerParam, iSessionIdParam, std::move(stBodyParam));
 		});
 	}
-	return ::OI::Net::SessionManager::Init();
+	return ::OI::Rpc::ProtoSessionManager::Init();
 }
 
 static std::string HtmlTitle(const std::string& sHtmlParam)
