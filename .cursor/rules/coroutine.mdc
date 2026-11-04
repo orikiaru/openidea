@@ -14,11 +14,12 @@ alwaysApply: false
 标准用例是服务端原样回包，以及客户端把下一批放进 `StartTask`：
 
 ```cpp
-HandleRpc<AllEchoReq, AllEchoRes>([](coro::Token, SessionManager*, sid_t, AllEchoReq& req, AllEchoRes& res) -> coro::Task {
-    res.data = req.data;
-    res.code = 1;
-    co_return;
-});
+static OI_RPC_SYNC_HANDLER(AllEcho, HandleAllEcho)
+{
+    stResponse.stData = stRequest.stData;
+    stResponse.iCode = 1;
+    return 0;
+}
 ```
 
 ```cpp
@@ -27,4 +28,4 @@ coro::StartTask([n](coro::Token) {
 });
 ```
 
-服务端要等，照 `Hold`：`co_await coro::yield(req.delay_ms)` 再填回包。捕获的引用不要当协程状态用，参数才进帧。
+服务端要等，照 `Hold`：`co_await coro::yield(stRequest.iDelayMilliseconds)` 再填回包。`yield` 也接受 `OI::Timer::MS`。捕获的引用不要当协程状态用，参数才进帧。

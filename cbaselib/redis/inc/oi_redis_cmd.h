@@ -246,9 +246,9 @@ inline RedisCall RedisSIsMember(const std::string& sKeyParam, const std::string&
 	return RedisSIsMember(sKeyParam, sMemberParam, &stOutputParam);
 }
 
-inline RedisCall RedisExpire(const std::string& sKeyParam, std::chrono::seconds stTimeToLiveParam, RedisResult* pOutputParam = nullptr)
+inline RedisCall RedisExpire(const std::string& sKeyParam, ::OI::Timer::MS stTimeToLiveParam, RedisResult* pOutputParam = nullptr)
 {
-	return RedisExpire(sKeyParam, std::to_string(stTimeToLiveParam.count()), pOutputParam);
+	return RedisClient::GetInstance().Call({"PEXPIRE", sKeyParam, std::to_string(stTimeToLiveParam.iMilliseconds)}, pOutputParam);
 }
 
 inline RedisCall RedisLTrim(const std::string& sKeyParam, int64_t iStartParam, int64_t iStopParam, RedisResult* pOutputParam = nullptr)

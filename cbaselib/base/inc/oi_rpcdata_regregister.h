@@ -16,16 +16,18 @@ class RegRegister : public ::OI::Rpc::RpcData
 	int32_t iId{};
 	std::string sIp{};
 	std::string sPort{};
+	std::string sZone{};
 
 	explicit RegRegister()
 	{
 	}
-	RegRegister(const std::string& l_name, const int32_t& l_id, const std::string& l_ip, const std::string& l_port)
+	RegRegister(const std::string& l_name, const int32_t& l_id, const std::string& l_ip, const std::string& l_port, const std::string& l_zone = std::string())
 	{
 		sName = l_name;
 		iId = l_id;
 		sIp = l_ip;
 		sPort = l_port;
+		sZone = l_zone;
 	}
 	virtual ::OI::Base::BytesStream& serialize(::OI::Base::BytesStream& os) const
 	{
@@ -33,6 +35,7 @@ class RegRegister : public ::OI::Rpc::RpcData
 		os.WritePb(1, iId);
 		os.WritePb(2, sIp);
 		os.WritePb(3, sPort);
+		os.WritePb(4, sZone);
 		return os;
 	}
 	virtual ::OI::Base::BytesStream& deserialize(::OI::Base::BytesStream& os)
@@ -55,6 +58,9 @@ class RegRegister : public ::OI::Rpc::RpcData
 				break;
 			case 3:
 				os.ReadPb(field_size, sPort);
+				break;
+			case 4:
+				os.ReadPb(field_size, sZone);
 				break;
 			default:
 				os.SkipPb(field_size);
@@ -85,6 +91,10 @@ class RegRegister : public ::OI::Rpc::RpcData
 		{
 			return false;
 		}
+		if (in.isMember("zone") && !::OI::Rpc::FromJsonValue(in["zone"], sZone))
+		{
+			return false;
+		}
 		return true;
 	}
 	bool FromJson(const std::string& text)
@@ -107,6 +117,7 @@ class RegRegister : public ::OI::Rpc::RpcData
 		::OI::Rpc::ToJsonValue(out["id"], iId);
 		::OI::Rpc::ToJsonValue(out["ip"], sIp);
 		::OI::Rpc::ToJsonValue(out["port"], sPort);
+		::OI::Rpc::ToJsonValue(out["zone"], sZone);
 	}
 	std::string ToJson() const
 	{

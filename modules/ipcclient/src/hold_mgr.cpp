@@ -8,6 +8,8 @@
 #include "oi_rpcdata_jsonall.h"
 #include <limits>
 #include "oi_config.h"
+#include "oi_rpcdata_allechoreq.h"
+#include "oi_rpcdata_allechores.h"
 #include "oi_rpcdata_holdreq.h"
 #include "oi_rpcdata_holdres.h"
 #include "ipcclient.h"
@@ -19,13 +21,13 @@
 #include <uv.h>
 #include "test_board.h"
 #include <atomic>
-#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 HoldMgr::HoldMgr()
     : m_bEnabled(false), m_iSessionId(0), m_iRedisTimeoutMilliseconds(25000)
@@ -62,11 +64,9 @@ static long long CpuMs(std::clock_t iBeginParam)
 	return (long long)dMilliseconds;
 }
 
-static long long WallMs(std::chrono::steady_clock::time_point stBeginParam)
+static long long WallMs(int64_t iBeginMillisecondsParam)
 {
-	return std::chrono::duration_cast<std::chrono::milliseconds>(
-	    std::chrono::steady_clock::now() - stBeginParam)
-	    .count();
+	return ::OI::Timer::SteadyMilliseconds() - iBeginMillisecondsParam;
 }
 
 static bool Pong(const ::OI::Redis::RedisResult& stResultParam)
@@ -90,15 +90,14 @@ struct RaceBox
 	}
 };
 
-static coro::Task RaceOne(sid_t iSessionIdParam, int32_t iIndexParam, int32_t iMarkParam, int32_t iDelayParam, std::shared_ptr<RaceBox> pBoxParam)
+static coro::Task RaceOne(int32_t iIndexParam, int32_t iMarkParam, int32_t iDelayParam, std::shared_ptr<RaceBox> pBoxParam)
 {
 	::OI::RpcData::HoldReq stOne;
-	::OI::RpcData::HoldRes stBack;
 	stOne.iDelayMilliseconds = iDelayParam;
 	stOne.iMark = iMarkParam;
-	int iCodeLocal = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), iSessionIdParam, stOne, stBack, 10);
-	pBoxParam->vReturnCodes[iIndexParam] = iCodeLocal;
-	pBoxParam->vMarks[iIndexParam] = stBack.iMark;
+	auto stResult = co_await IpcClient::GetInstance().CallAny<::OI::RpcData::HoldRes>(stOne, ::OI::Timer::Seconds(10));
+	pBoxParam->vReturnCodes[iIndexParam] = stResult.GetRet();
+	pBoxParam->vMarks[iIndexParam] = stResult.GetRet() == 0 ? stResult.GetRes().iMark : 0;
 	pBoxParam->iFinished.fetch_add(1, std::memory_order_release);
 	co_return;
 }
@@ -366,8 +365,8 @@ static coro::TaskResult<int> CheckClientConnect()
 	static ClientConnectProbe stEager("17981"), stDelayedAwait("17981");
 	stEager.StartClient();
 	auto stConnecting = stDelayedAwait.StartClient();
-	const auto stDeadline = std::chrono::steady_clock::now() + OI::Timer::Seconds(3);
-	while ((stEager.Connections() != 1 || stDelayedAwait.Connections() != 1) && std::chrono::steady_clock::now() < stDeadline)
+	const int64_t iDeadline = ::OI::Timer::SteadyMilliseconds() + ::OI::Timer::MS(::OI::Timer::Seconds(3)).iMilliseconds;
+	while ((stEager.Connections() != 1 || stDelayedAwait.Connections() != 1) && ::OI::Timer::SteadyMilliseconds() < iDeadline)
 	{
 		co_await coro::yield(1);
 	}
@@ -904,6 +903,19 @@ static coro::TaskResult<int> CheckAwaitOwnership()
 	OI::RpcData::HoldReq stRequest;
 	stRequest.iDelayMilliseconds = 50;
 	stRequest.iMark = 123;
+	// 先解码再移动响应：避免构造结果时提前取走仍未填充的对象。
+	auto stDecodeProbe = OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequest);
+	OI::RpcData::HoldRes stDecodedSource;
+	stDecodedSource.iMark = 456;
+	stDecodeProbe.stReply << int32_t(0);
+	stDecodedSource.serialize(stDecodeProbe.stReply);
+	stDecodeProbe.pResponse = &stDecodeProbe.stResponse;
+	stDecodeProbe.bReplied = true;
+	auto stDecodedResult = stDecodeProbe.await_resume();
+	if (stDecodedResult.GetRet() != 0 || stDecodedResult.GetRes().iMark != 456)
+	{
+		++iBad;
+	}
 	auto stRpc = OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequest, OI::Timer::Seconds(3));
 	auto pRpc = std::make_shared<decltype(stRpc)>(std::move(stRpc));
 	try
@@ -1161,8 +1173,8 @@ static coro::TaskResult<int> CheckConnectionIsolation()
 	int iBad = 0;
 	auto& stClient = IpcClient::GetInstance();
 	auto& stRedis = OI::Redis::RedisClient::GetInstance();
-	const auto stDeadline = std::chrono::steady_clock::now() + OI::Timer::Seconds(5);
-	while (!stRedis.IsConnect() && std::chrono::steady_clock::now() < stDeadline)
+	const int64_t iDeadline = ::OI::Timer::SteadyMilliseconds() + ::OI::Timer::MS(::OI::Timer::Seconds(5)).iMilliseconds;
+	while (!stRedis.IsConnect() && ::OI::Timer::SteadyMilliseconds() < iDeadline)
 	{
 		co_await coro::yield(1);
 	}
@@ -1183,7 +1195,7 @@ static coro::TaskResult<int> CheckConnectionIsolation()
 			OI::Log::LogClient::GetInstance().StartClient();
 			OI::RpcData::HoldReq stRequest;
 			stRequest.iMark = 10000 + iIndex;
-			auto stResult = co_await OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequest, OI::Timer::Seconds(3));
+			auto stResult = co_await IpcClient::GetInstance().CallAny<OI::RpcData::HoldRes>(stRequest, OI::Timer::Seconds(3));
 			if (stResult.GetRet() != 0 || stResult.GetRes().iMark != stRequest.iMark)
 			{
 				++*pBad;
@@ -1227,6 +1239,199 @@ static coro::TaskResult<int> CheckConnectionIsolation()
 		++iBad;
 	}
 	co_return iBad + pBad->load() + pProbe->iBad;
+}
+
+class ZoneService final : public ::OI::Rpc::ProtoClientManager
+{
+  public:
+	explicit ZoneService(std::string sNameParam)
+	{
+		sServiceName = std::move(sNameParam);
+	}
+	const std::string GetIDString()
+	{
+		return "ZoneService";
+	}
+	void OnClientConnect(::OI::Net::Session*)
+	{
+	}
+	void OnClientDisconnect(const ::OI::Net::Session*)
+	{
+	}
+};
+
+static coro::TaskResult<int> CheckNamedServiceRpc()
+{
+	int iBad = 0;
+	static ZoneService stGames("gameserver");
+	auto& stIpc = IpcClient::GetInstance();
+	::OI::RpcData::AllEchoReq stRequest;
+	int iGlobal = 0;
+	int iAny = 0;
+	int iZone = 0;
+	int iBatch = 0;
+	for (int iTry = 0; iTry < 10; ++iTry)
+	{
+		auto stGlobal = co_await stIpc.CallAny<::OI::RpcData::AllEchoRes>(stRequest, ::OI::Timer::Seconds(3));
+		auto stAny = co_await stGames.CallAny<::OI::RpcData::AllEchoRes>(stRequest, ::OI::Timer::Seconds(3));
+		auto stZone = co_await stGames.Call<::OI::RpcData::AllEchoRes>(1001, stRequest, ::OI::Timer::Seconds(3));
+		auto vBatch = co_await stGames.CallAll<::OI::RpcData::AllEchoRes>(stRequest, ::OI::Timer::Seconds(3));
+		iGlobal = stGlobal.GetRet() == 0 && stGlobal.GetRes().iCode == 1 ? 1 : 0;
+		iAny = stAny.GetRet() == 0 && stAny.GetRes().iCode == 1 ? 1 : 0;
+		iZone = stZone.GetRet() == 0 && stZone.GetRes().iCode == 1 ? 1 : 0;
+		iBatch = 0;
+		for (const auto& stItem : vBatch)
+		{
+			if (stItem.GetRet() == 0 && stItem.GetRes().iCode == 1)
+			{
+				++iBatch;
+			}
+		}
+		if (iGlobal == 1 && iAny == 1 && iZone == 1 && iBatch == 2)
+		{
+			break;
+		}
+		co_await coro::yield(::OI::Timer::Milliseconds(200));
+	}
+	if (iGlobal != 1 || iAny != 1 || iZone != 1 || iBatch != 2)
+	{
+		++iBad;
+	}
+	auto stWrongZone = co_await stIpc.Call<::OI::RpcData::AllEchoRes>(1001, stRequest, ::OI::Timer::Seconds(3));
+	int iWrong = stWrongZone.GetRet() == OI_ERR_FAIL ? 1 : 0;
+	if (iWrong != 1)
+	{
+		++iBad;
+	}
+	auto stMissed = co_await stGames.Call<::OI::RpcData::AllEchoRes>(9999, stRequest, ::OI::Timer::Seconds(3));
+	int iMiss = stMissed.GetRet() == OI_ERR_CONNECT ? 1 : 0;
+	if (iMiss != 1)
+	{
+		++iBad;
+	}
+	std::vector<int32_t> vBothZones{1001, 1002};
+	auto vMany = co_await stGames.CallMany<::OI::RpcData::AllEchoRes>(vBothZones, stRequest, ::OI::Timer::Seconds(3));
+	int iMany = 0;
+	if (vMany.size() == vBothZones.size())
+	{
+		for (const auto& stItem : vMany)
+		{
+			if (stItem.GetRet() == 0 && stItem.GetRes().iCode == 1)
+			{
+				++iMany;
+			}
+		}
+	}
+	std::vector<int32_t> vPartialZones{1001, 9999};
+	auto vPartial = co_await stGames.CallMany<::OI::RpcData::AllEchoRes>(vPartialZones, stRequest, ::OI::Timer::Seconds(3));
+	int iSlot = vPartial.size() == 2 && vPartial[0].GetRet() == 0 && vPartial[0].GetRes().iCode == 1 && vPartial[1].GetRet() == OI_ERR_CONNECT ? 1 : 0;
+	auto vEmptyMany = co_await stGames.CallMany<::OI::RpcData::AllEchoRes>(std::vector<int32_t>{}, stRequest, ::OI::Timer::Seconds(3));
+	auto vGlobalMany = co_await stIpc.CallMany<::OI::RpcData::AllEchoRes>(vBothZones, stRequest, ::OI::Timer::Seconds(3));
+	if (iMany != 2 || iSlot != 1 || vEmptyMany.size() != 1 || vEmptyMany[0].GetRet() != OI_ERR_FAIL || vGlobalMany.size() != 1 || vGlobalMany[0].GetRet() != OI_ERR_FAIL)
+	{
+		++iBad;
+	}
+	::OI::RpcData::HoldReq stHold;
+	stHold.iDelayMilliseconds = 400;
+	stHold.iMark = 77;
+	int64_t iBegin = ::OI::Timer::SteadyMilliseconds();
+	auto vHeld = co_await stGames.CallAll<::OI::RpcData::HoldRes>(stHold, ::OI::Timer::Seconds(3));
+	long long iElapsed = ::OI::Timer::SteadyMilliseconds() - iBegin;
+	int iHeldOk = 0;
+	for (const auto& stItem : vHeld)
+	{
+		if (stItem.GetRet() == 0 && stItem.GetRes().iMark == 77)
+		{
+			++iHeldOk;
+		}
+	}
+	if (iHeldOk != 2 || iElapsed >= 700)
+	{
+		++iBad;
+	}
+	printf("hold service rpc global=%d any=%d zone=%d batch=%d many=%d slot=%d elapsed_ms=%lld wrong=%d miss=%d bad=%d\n", iGlobal, iAny, iZone, iBatch, iMany, iSlot, iElapsed, iWrong, iMiss, iBad);
+	// 服务名只在入口解析；局部字符串和请求销毁后，延迟启动仍能正确发送。
+	static ZoneService stOfflineWatcher("ipcserver");
+	OI::Base::ServiceTable::GetInstance().Watch(&stOfflineWatcher, "ipcserver");
+	auto stFallback = OI::Rpc::RouteService(&stOfflineWatcher, "ipcserver", OI::Rpc::ServicePick::Any, "");
+	if (stFallback.iStatus != OI::Rpc::ServiceRouteStatus::Ok || stFallback.vClients.size() != 1 || stFallback.vClients[0] == &stOfflineWatcher)
+	{
+		++iBad;
+	}
+	auto stDeferred = []()
+	{
+		::OI::RpcData::HoldReq stLocal;
+		stLocal.iMark = 913;
+		std::string sTarget = "gameserver.*";
+		auto stTask = OI::Rpc::RpcCallBatch<OI::RpcData::HoldRes>(sTarget, stLocal, OI::Timer::Seconds(3));
+		sTarget = "invalid.*";
+		return stTask;
+	}();
+	auto stDeferredMany = []()
+	{
+		::OI::RpcData::HoldReq stLocal;
+		stLocal.iMark = 914;
+		return stGames.CallMany<OI::RpcData::HoldRes>({1001, 1002}, stLocal, OI::Timer::Seconds(3));
+	}();
+	co_await coro::yield(0);
+	auto vDeferred = co_await stDeferred;
+	if (vDeferred.size() != 2)
+	{
+		++iBad;
+	}
+	for (const auto& stItem : vDeferred)
+	{
+		if (stItem.GetRet() != 0 || stItem.GetRes().iMark != 913)
+		{
+			++iBad;
+		}
+	}
+	for (const auto& stItem : co_await stDeferredMany)
+	{
+		if (stItem.GetRet() != 0 || stItem.GetRes().iMark != 914)
+		{
+			++iBad;
+		}
+	}
+	auto stSingle = stGames.Call<OI::RpcData::HoldRes>(1001, stHold, OI::Timer::Seconds(3));
+	auto pSingle = std::make_shared<decltype(stSingle)>(std::move(stSingle));
+	auto pSuccess = std::make_shared<std::atomic<int>>(0);
+	auto pRejected = std::make_shared<std::atomic<int>>(0);
+	coro::TaskScope stContenders;
+	for (int iIndex = 0; iIndex < 8; ++iIndex)
+	{
+		stContenders.Start([pSingle, pSuccess, pRejected](coro::Token, coro::StopToken) -> coro::Task
+		{
+			try
+			{
+				auto stReply = co_await *pSingle;
+				if (stReply.GetRet() == 0 && stReply.GetRes().iMark == 77)
+				{
+					++*pSuccess;
+				}
+			}
+			catch (const std::logic_error&)
+			{
+				++*pRejected;
+			}
+		});
+	}
+	co_await stContenders.Join();
+	try
+	{
+		(void)co_await *pSingle;
+		++iBad;
+	}
+	catch (const std::logic_error&)
+	{
+	}
+	if (pSuccess->load() != 1 || pRejected->load() != 7)
+	{
+		++iBad;
+	}
+	printf("hold named rpc ownership success=%d rejected=%d bad=%d\n", pSuccess->load(), pRejected->load(), iBad);
+	fflush(stdout);
+	co_return iBad;
 }
 
 coro::Task HoldMgr::Pump()
@@ -1284,6 +1489,7 @@ coro::Task HoldMgr::Pump()
 		co_await stLookups.Join();
 		iBadLocal += pLookupBad->load();
 		printf("hold registry pairing bad=%d\n", iBadLocal);
+		iBadLocal += co_await CheckNamedServiceRpc();
 	}
 
 	iBadLocal += CheckJsonDecoding();
@@ -1305,8 +1511,8 @@ coro::Task HoldMgr::Pump()
 			++iBadLocal;
 		}
 		pOwner.reset();
-		const auto stDeadline = std::chrono::steady_clock::now() + OI::Timer::Seconds(3);
-		while (!pWeak.expired() && std::chrono::steady_clock::now() < stDeadline)
+		const int64_t iDeadline = ::OI::Timer::SteadyMilliseconds() + ::OI::Timer::MS(::OI::Timer::Seconds(3)).iMilliseconds;
+		while (!pWeak.expired() && ::OI::Timer::SteadyMilliseconds() < iDeadline)
 		{
 			co_await coro::yield(1);
 		}
@@ -1323,8 +1529,8 @@ coro::Task HoldMgr::Pump()
 	{
 		++iBadLocal;
 	}
-	const auto stTaskDeadline = std::chrono::steady_clock::now() + OI::Timer::Seconds(3);
-	while (!pOrdinary->load() && std::chrono::steady_clock::now() < stTaskDeadline)
+	const int64_t iTaskDeadline = ::OI::Timer::SteadyMilliseconds() + ::OI::Timer::MS(::OI::Timer::Seconds(3)).iMilliseconds;
+	while (!pOrdinary->load() && ::OI::Timer::SteadyMilliseconds() < iTaskDeadline)
 	{
 		co_await coro::yield(1);
 	}
@@ -1348,8 +1554,8 @@ coro::Task HoldMgr::Pump()
 			++iBadLocal;
 		}
 		stRequest.iMark = 92;
-		iResult = co_await OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequest, stResponse, OI::Timer::Seconds(2));
-		if (iResult != 0 || stResponse.iMark != 92)
+		auto stRecovered = co_await IpcClient::GetInstance().CallAny<OI::RpcData::HoldRes>(stRequest, OI::Timer::Seconds(2));
+		if (stRecovered.GetRet() != 0 || stRecovered.GetRes().iMark != 92)
 		{
 			++iBadLocal;
 		}
@@ -1452,12 +1658,13 @@ coro::Task HoldMgr::Pump()
 	// 持续就绪的协程不能饿死同优先级普通任务。
 	std::atomic<bool> bOrdinaryDone{false};
 	coro::TaskScope stBusyScope;
-	const auto stFairnessBegin = std::chrono::steady_clock::now();
+	const int64_t iFairnessBegin = ::OI::Timer::SteadyMilliseconds();
+	const int64_t iFairnessLimit = ::OI::Timer::MS(::OI::Timer::Seconds(3)).iMilliseconds;
 	for (int iIndexLocal = 0; iIndexLocal < 64; ++iIndexLocal)
 	{
-		stBusyScope.Start([&bOrdinaryDone, stFairnessBegin](coro::Token, coro::StopToken stStopParam) -> coro::Task
+		stBusyScope.Start([&bOrdinaryDone, iFairnessBegin, iFairnessLimit](coro::Token, coro::StopToken stStopParam) -> coro::Task
 		{
-			while (!bOrdinaryDone.load() && !stStopParam.StopRequested() && std::chrono::steady_clock::now() - stFairnessBegin < OI::Timer::Seconds(3))
+			while (!bOrdinaryDone.load() && !stStopParam.StopRequested() && ::OI::Timer::SteadyMilliseconds() - iFairnessBegin < iFairnessLimit)
 			{
 				co_await coro::yield(0);
 			}
@@ -1476,7 +1683,7 @@ coro::Task HoldMgr::Pump()
 	{
 		co_await coro::yield(0);
 	}
-	if (WallMs(stFairnessBegin) > 1500)
+	if (WallMs(iFairnessBegin) > 1500)
 	{
 		++iBadLocal;
 	}
@@ -1627,7 +1834,7 @@ coro::Task HoldMgr::Pump()
 		pSessionLocal->Release();
 	}
 	printf("hold preconnect send budget bad=%d\n", iBadLocal);
-	// 可选上下文跨挂起保持有效，旧五参数无返回值处理函数仍可注册。
+	// 标准回调的可选上下文跨挂起保持有效。
 	{
 		using Req = OI::RpcData::HoldReq;
 		using Res = OI::RpcData::HoldRes;
@@ -1652,17 +1859,7 @@ coro::Task HoldMgr::Pump()
 			co_return 1001;
 		};
 		co_await OI::Rpc::RunHandledRpc<Req, Res>(fnContextHandler, OI::Rpc::RpcProtoId<Res>::iValue, 88, &stPending, 77, fnBody());
-		auto fnLegacyHandler = [&](coro::Token iTokenParam, OI::Net::SessionManager* pManagerParam, sid_t iSessionIdParam, Req&, Res&) -> coro::Task
-		{
-			if (iTokenParam != 88 || pManagerParam != &stPending || iSessionIdParam != 77)
-			{
-				++iBadLocal;
-			}
-			++iCallbacks;
-			co_return;
-		};
-		co_await OI::Rpc::RunHandledRpc<Req, Res>(fnLegacyHandler, OI::Rpc::RpcProtoId<Res>::iValue, 88, &stPending, 77, fnBody());
-		if (iCallbacks != 2)
+		if (iCallbacks != 1)
 		{
 			++iBadLocal;
 		}
@@ -1900,14 +2097,14 @@ coro::Task HoldMgr::Pump()
 
 	stRequestLocal.iDelayMilliseconds = 0;
 	stRequestLocal.iMark = 1;
-	auto stDirect = co_await ::OI::Rpc::RpcCall(stManagerLocal, stRequestLocal, ::OI::Timer::Seconds(10));
+	auto stDirect = co_await IpcClient::GetInstance().CallAny<::OI::RpcData::HoldRes>(stRequestLocal, ::OI::Timer::Seconds(10));
 	if (!stDirect || stDirect.GetRes().iMark != 1)
 	{
 		++iBadLocal;
 	}
 	static_assert(std::is_same_v<decltype(stDirect.GetRet()), int32_t>);
 	stRequestLocal.iDelayMilliseconds = -1;
-	auto stFailed = co_await ::OI::Rpc::RpcCall(stManagerLocal, stRequestLocal);
+	auto stFailed = co_await IpcClient::GetInstance().CallAny<::OI::RpcData::HoldRes>(stRequestLocal);
 	if (stFailed.GetRet() != 1001 || stFailed)
 	{
 		++iBadLocal;
@@ -1982,14 +2179,19 @@ coro::Task HoldMgr::Pump()
 	}
 	printf("hold rpc standardized reply bad=%d\n", iBadLocal);
 	stRequestLocal.iDelayMilliseconds = 600;
-	auto stShortWait = co_await ::OI::Rpc::RpcCall<::OI::RpcData::HoldRes>(stManagerLocal, m_iSessionId, stRequestLocal, ::OI::Timer::Milliseconds(150));
+	auto stShortWait = co_await IpcClient::GetInstance().CallAny<::OI::RpcData::HoldRes>(stRequestLocal, ::OI::Timer::Milliseconds(150));
 	if (stShortWait.GetRet() != OI_ERR_TIMEOUT)
 	{
 		++iBadLocal;
 	}
 	co_await coro::yield(::OI::Timer::Milliseconds(700));
 	stRequestLocal.iDelayMilliseconds = 0;
-	int iReturnCodeLocal = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), m_iSessionId, stRequestLocal, stResponseLocal, 10);
+	auto stEarly = co_await IpcClient::GetInstance().CallAny<::OI::RpcData::HoldRes>(stRequestLocal, ::OI::Timer::Seconds(10));
+	int iReturnCodeLocal = stEarly.GetRet();
+	if (iReturnCodeLocal == 0)
+	{
+		stResponseLocal = stEarly.GetRes();
+	}
 	printf("hold rpc early ret=%d mark=%d\n", iReturnCodeLocal, stResponseLocal.iMark);
 	fflush(stdout);
 	if (iReturnCodeLocal != 0 || stResponseLocal.iMark != 1)
@@ -1998,11 +2200,12 @@ coro::Task HoldMgr::Pump()
 	}
 
 	std::clock_t iCpuBegin = std::clock();
-	auto stWallBegin = std::chrono::steady_clock::now();
+	int64_t iWallBegin = ::OI::Timer::SteadyMilliseconds();
 	stRequestLocal.iDelayMilliseconds = 10000;
 	stRequestLocal.iMark = 2;
 	stResponseLocal.iMark = 0;
-	iReturnCodeLocal = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), m_iSessionId, stRequestLocal, stResponseLocal, 2);
+	auto stTimeout = co_await IpcClient::GetInstance().CallAny<::OI::RpcData::HoldRes>(stRequestLocal, ::OI::Timer::Seconds(2));
+	iReturnCodeLocal = stTimeout.GetRet();
 	printf("hold rpc timeout ret=%d\n", iReturnCodeLocal);
 	fflush(stdout);
 	if (iReturnCodeLocal != OI_ERR_TIMEOUT)
@@ -2012,13 +2215,15 @@ coro::Task HoldMgr::Pump()
 	// 回包还在路上。让这一下把迟到的包和已经武装的超时定时器都消化掉。
 	co_await coro::yield(10000);
 	printf("hold rpc late-reply cpu_ms=%lld wall_ms=%lld\n",
-	    CpuMs(iCpuBegin), WallMs(stWallBegin));
+	    CpuMs(iCpuBegin), WallMs(iWallBegin));
 	fflush(stdout);
 
 	stRequestLocal.iDelayMilliseconds = 0;
 	stRequestLocal.iMark = 3;
 	stResponseLocal.iMark = 0;
-	iReturnCodeLocal = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), m_iSessionId, stRequestLocal, stResponseLocal, 10);
+	auto stFollow = co_await IpcClient::GetInstance().CallAny<::OI::RpcData::HoldRes>(stRequestLocal, ::OI::Timer::Seconds(10));
+	iReturnCodeLocal = stFollow.GetRet();
+	stResponseLocal.iMark = iReturnCodeLocal == 0 ? stFollow.GetRes().iMark : 0;
 	printf("hold rpc follow ret=%d mark=%d\n", iReturnCodeLocal, stResponseLocal.iMark);
 	fflush(stdout);
 	if (iReturnCodeLocal != 0 || stResponseLocal.iMark != 3)
@@ -2030,16 +2235,15 @@ coro::Task HoldMgr::Pump()
 	const int iNumber = 8;
 	// 每个调用自己持有一份。没写完之前，这里退出也不会把盒子释放掉。
 	std::shared_ptr<RaceBox> pBox(new RaceBox());
-	sid_t iSessionIdLocal = m_iSessionId;
 	iCpuBegin = std::clock();
-	stWallBegin = std::chrono::steady_clock::now();
+	iWallBegin = ::OI::Timer::SteadyMilliseconds();
 	for (int iIndexLocal = 0; iIndexLocal < iNumber; ++iIndexLocal)
 	{
 		int iMark = 100 + iIndexLocal;
 		int iDelay = vDelays[iIndexLocal];
-		coro::StartTask([iMark, iDelay, iIndexLocal, pBox, iSessionIdLocal](coro::Token)
+		coro::StartTask([iMark, iDelay, iIndexLocal, pBox](coro::Token)
 		{
-			return RaceOne(iSessionIdLocal, iIndexLocal, iMark, iDelay, pBox);
+			return RaceOne(iIndexLocal, iMark, iDelay, pBox);
 		});
 	}
 	// 单次超时是 10 秒。等都写完再读，避免读到写了一半的结果。
@@ -2074,7 +2278,7 @@ coro::Task HoldMgr::Pump()
 	}
 	iBadLocal += iRaceBad;
 	printf("hold rpc race n=%d done=%d reply=%d timeout=%d bad=%d cpu_ms=%lld wall_ms=%lld\n",
-	    iNumber, iDoneLocal, iReplyNumber, iTimeoutNumber, iRaceBad, CpuMs(iCpuBegin), WallMs(stWallBegin));
+	    iNumber, iDoneLocal, iReplyNumber, iTimeoutNumber, iRaceBad, CpuMs(iCpuBegin), WallMs(iWallBegin));
 	fflush(stdout);
 
 	int iSpins = 0;
@@ -2116,13 +2320,13 @@ coro::Task HoldMgr::Pump()
 		iSeconds = 1;
 	}
 	iCpuBegin = std::clock();
-	stWallBegin = std::chrono::steady_clock::now();
+	iWallBegin = ::OI::Timer::SteadyMilliseconds();
 	::OI::Redis::RedisResult stLate;
 	{
 		stLate = ::OI::Redis::CallRedisSync({"BLPOP", "hold-late", std::to_string(iSeconds + 5)});
 	}
 	printf("hold redis late timeout=%d cpu_ms=%lld wall_ms=%lld\n",
-	    stLate.bTimeout ? 1 : 0, CpuMs(iCpuBegin), WallMs(stWallBegin));
+	    stLate.bTimeout ? 1 : 0, CpuMs(iCpuBegin), WallMs(iWallBegin));
 	fflush(stdout);
 	if (!stLate.bTimeout)
 	{
@@ -2141,7 +2345,7 @@ coro::Task HoldMgr::Pump()
 	}
 
 	iCpuBegin = std::clock();
-	stWallBegin = std::chrono::steady_clock::now();
+	iWallBegin = ::OI::Timer::SteadyMilliseconds();
 	::OI::Redis::RedisResult stRace;
 	{
 		::OI::Redis::RedisCall stCall = ::OI::Redis::CallRedis({"BLPOP", "hold-race", std::to_string(iSeconds)}, stRace);
@@ -2149,7 +2353,7 @@ coro::Task HoldMgr::Pump()
 	}
 	int iNil = stRace.pReply && stRace.pReply->type == REDIS_REPLY_NIL ? 1 : 0;
 	printf("hold redis race timeout=%d nil=%d cpu_ms=%lld wall_ms=%lld\n",
-	    stRace.bTimeout ? 1 : 0, iNil, CpuMs(iCpuBegin), WallMs(stWallBegin));
+	    stRace.bTimeout ? 1 : 0, iNil, CpuMs(iCpuBegin), WallMs(iWallBegin));
 	fflush(stdout);
 	if (!stRace.bTimeout && !iNil)
 	{
@@ -2175,13 +2379,13 @@ coro::Task HoldMgr::Pump()
 		co_await coro::yield(::OI::Timer::Milliseconds(100));
 		IpcClient::GetInstance().CloseSession(iCloseSessionId);
 	});
-	stWallBegin = std::chrono::steady_clock::now();
-	auto stClosed = co_await ::OI::Rpc::RpcCall<::OI::RpcData::HoldRes>(stManagerLocal, m_iSessionId, stRequestLocal, ::OI::Timer::Seconds(10));
-	if (stClosed.GetRet() != OI_ERR_CONNECT || WallMs(stWallBegin) > 2000)
+	iWallBegin = ::OI::Timer::SteadyMilliseconds();
+	auto stClosed = co_await IpcClient::GetInstance().CallAny<::OI::RpcData::HoldRes>(stRequestLocal, ::OI::Timer::Seconds(10));
+	if (stClosed.GetRet() != OI_ERR_CONNECT || WallMs(iWallBegin) > 2000)
 	{
 		++iBadLocal;
 	}
-	printf("hold rpc disconnected code=%d wall_ms=%lld\n", stClosed.GetRet(), WallMs(stWallBegin));
+	printf("hold rpc disconnected code=%d wall_ms=%lld\n", stClosed.GetRet(), WallMs(iWallBegin));
 	printf("hold done bad=%d\n", iBadLocal);
 	fflush(stdout);
 	TestBoard::GetInstance().Done(iBadLocal == 0 ? 0 : 1);

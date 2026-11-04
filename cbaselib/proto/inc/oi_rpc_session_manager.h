@@ -7,6 +7,7 @@
 #include "oi_rpc_session.h"
 #include "oi_rpc_call.h"
 #include "oi_log.h"
+#include "oi_duration.h"
 namespace OI
 {
 namespace Rpc
@@ -173,6 +174,18 @@ class ProtoClientManager : public ProtoSessionManager
 			Reconnect(0);
 		}
 	}
+	// 不带分区号：在当前登记里随机一台。本管理器已经连着这个名字时继续用这条连接。
+	template <typename Res, typename Req>
+	auto CallAny(Req stRequestParam, ::OI::Timer::MS stTimeoutParam = ::OI::Timer::Seconds(180));
+	// 指定分区号，只打这一台。全局服不接受分区号。
+	template <typename Res, typename Req>
+	auto Call(int32_t iZoneIdParam, Req stRequestParam, ::OI::Timer::MS stTimeoutParam = ::OI::Timer::Seconds(180));
+	// 按发送这一刻的名单，向每个分片都发一份。
+	template <typename Res, typename Req>
+	auto CallAll(const Req& stRequestParam, ::OI::Timer::MS stTimeoutParam = ::OI::Timer::Seconds(180));
+	// 只打名单里的这些分区，结果顺序和分区号一致。没登记的那一格记连接失败。
+	template <typename Res, typename Req>
+	auto CallMany(const std::vector<int32_t>& vZoneIdsParam, const Req& stRequestParam, ::OI::Timer::MS stTimeoutParam = ::OI::Timer::Seconds(180));
 	bool SendRaw(const ::OI::Base::Bytes& stDataParam);
 	// 没连上先存着，连上时按顺序补发。存满 max_pending_bytes 再来的丢掉，返回 false
 	bool SendRawOrPend(const ::OI::Base::Bytes& stDataParam, size_t iMaxPendingBytesParam);

@@ -5,7 +5,12 @@
 
 int main(int iArgumentCountParam, char* vArgumentsParam[])
 {
-	int iCodeLocal = ::OI::Base::StartFramework("../config/ipcserver.toml");
+	const char* pConfigPath = "../config/ipcserver.toml";
+	if (iArgumentCountParam > 1 && vArgumentsParam[1] != NULL && vArgumentsParam[1][0] != '\0')
+	{
+		pConfigPath = vArgumentsParam[1];
+	}
+	int iCodeLocal = ::OI::Base::StartFramework(pConfigPath);
 	if (iCodeLocal != 0)
 	{
 		return iCodeLocal;

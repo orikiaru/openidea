@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstdio>
 #include <deque>
+#include <limits>
 #include <vector>
 
 namespace
@@ -202,5 +203,60 @@ bool StScheduler::Queued()
 {
 	::OI::Thread::MutexGuard stLock(g_st_lock);
 	return !g_st_queue.empty();
+}
+}
+
+namespace coro
+{
+SleepMs yield(::OI::Timer::MS stDelayParam)
+{
+	if (stDelayParam.iMilliseconds > (std::numeric_limits<int32_t>::max)())
+	{
+		throw std::out_of_range("yield duration too large");
+	}
+	return yield(stDelayParam.iMilliseconds <= 0 ? 0 : static_cast<int32_t>(stDelayParam.iMilliseconds));
+}
+
+bool TaskScope::JoinAwaiter::await_suspend(std::coroutine_handle<> stWaiterParam)
+{
+	::OI::Thread::MutexGuard stLock(pState->stMutex);
+	pState->bClosed = true;
+	if (pState->iActive == 0)
+	{
+		return false;
+	}
+	pState->vWaiters.push_back(stWaiterParam);
+	return true;
+}
+
+void TaskScope::JoinAwaiter::await_resume()
+{
+	::OI::Thread::MutexGuard stLock(pState->stMutex);
+	if (pState->stError)
+	{
+		std::rethrow_exception(pState->stError);
+	}
+}
+
+Task TaskScope::Wait(std::shared_ptr<State> pStateParam)
+{
+	co_await JoinAwaiter{std::move(pStateParam)};
+}
+
+TaskScope::~TaskScope()
+{
+	RequestStop();
+}
+
+void TaskScope::RequestStop()
+{
+	::OI::Thread::MutexGuard stLock(m_pState->stMutex);
+	m_pState->bClosed = true;
+	m_pState->pStop->store(true, std::memory_order_release);
+}
+
+Task TaskScope::Join()
+{
+	return Wait(m_pState);
 }
 }

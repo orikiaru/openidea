@@ -8,6 +8,7 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 option(OI_IPC_SINGLE_THREAD "Build ipcclient and ipcserver with single-thread scheduling" OFF)
+option(OI_ENABLE_TEST_HOOKS "Enable isolated regression fault injection (never enable in production)" OFF)
 
 # 给 clangd 用。Ninja 配置后会在构建目录写出 compile_commands.json。
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON CACHE BOOL "Write compile_commands.json for clangd" FORCE)
@@ -93,12 +94,12 @@ add_subdirectory(${BASE_LIB_PATH}/http EXCLUDE_FROM_ALL)
 
 set(PROTO_TOOL_PATH ${BASE_LIB_PATH}/proto/proto_tool/main.py)
 set(PROTO_XML_PATH ${MODULES_PATH}/xmlconfig)
-set(PROTO_GEN_PARAM 
-    ${PROTO_XML_PATH}/proto.xml  
-    ${PROTO_XML_PATH}/module.xml 
-    ${PROTO_XML_PATH}/module_component.xml 
-    ${MODULES_PATH}/include 
-    ${MODULES_PATH} 
+set(PROTO_GEN_PARAM
+    ${PROTO_XML_PATH}/proto.xml
+    ${PROTO_XML_PATH}/module.xml
+    ${PROTO_XML_PATH}/module_component.xml
+    ${MODULES_PATH}/include
+    ${MODULES_PATH}
     ${DEPOLY_PATH}
 )
 
@@ -119,6 +120,11 @@ foreach(_mod logd ipcclient ipcserver redisserver webserver webclient registry)
         add_subdirectory(${MODULES_PATH}/${_mod})
     endif()
 endforeach()
+
+if(OI_ENABLE_TEST_HOOKS)
+    target_compile_definitions(logd PRIVATE OI_ENABLE_TEST_HOOKS)
+endif()
+file(GENERATE OUTPUT "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>/oi_test_hooks.txt" CONTENT "${OI_ENABLE_TEST_HOOKS}\n")
 
 
 

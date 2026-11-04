@@ -287,11 +287,17 @@ static coro::Task RunOne(int iNumberParam)
 {
 	::OI::RpcData::AllEchoReq stRequestLocal;
 	FillAllTypes(stRequestLocal.stData, iNumberParam);
-	::OI::RpcData::AllEchoRes stResponseLocal;
-	PoisonAllTypes(stResponseLocal.stData);
-	stResponseLocal.iCode = -1;
-	int iReturnCodeLocal = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), EchoMgr::GetInstance().Sid(), stRequestLocal, stResponseLocal);
-	EchoMgr::GetInstance().OnResult(iNumberParam, stRequestLocal, stResponseLocal, iReturnCodeLocal, DiffAllTypes(stRequestLocal.stData, stResponseLocal.stData));
+	auto stResult = co_await IpcClient::GetInstance().CallAny<::OI::RpcData::AllEchoRes>(stRequestLocal);
+	if (stResult.GetRet() == 0)
+	{
+		const ::OI::RpcData::AllEchoRes& stResponseLocal = stResult.GetRes();
+		EchoMgr::GetInstance().OnResult(iNumberParam, stRequestLocal, stResponseLocal, stResult.GetRet(), DiffAllTypes(stRequestLocal.stData, stResponseLocal.stData));
+	}
+	else
+	{
+		::OI::RpcData::AllEchoRes stResponseLocal;
+		EchoMgr::GetInstance().OnResult(iNumberParam, stRequestLocal, stResponseLocal, stResult.GetRet(), false);
+	}
 }
 
 EchoMgr::EchoMgr()
@@ -346,8 +352,13 @@ coro::Task EchoMgr::StackProbe()
 		{
 			::OI::RpcData::AllEchoReq stRequestLocal;
 			FillAllTypes(stRequestLocal.stData, iNumber);
+			auto stResult = co_await IpcClient::GetInstance().CallAny<::OI::RpcData::AllEchoRes>(stRequestLocal, ::OI::Timer::Seconds(20));
+			int iReturnCodeLocal = stResult.GetRet();
 			::OI::RpcData::AllEchoRes stResponseLocal;
-			int iReturnCodeLocal = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), INVALID_SID, stRequestLocal, stResponseLocal, 20);
+			if (iReturnCodeLocal == 0)
+			{
+				stResponseLocal = stResult.GetRes();
+			}
 			if (iReturnCodeLocal == OI_OK && stResponseLocal.iCode == 1)
 			{
 				pGate->iOk.fetch_add(1);
@@ -375,8 +386,8 @@ coro::Task EchoMgr::StackProbe()
 	co_await coro::yield(4000);
 	::OI::RpcData::AllEchoReq stRequestLocal;
 	FillAllTypes(stRequestLocal.stData, 9);
-	::OI::RpcData::AllEchoRes stResponseLocal;
-	int iReturnCodeLocal = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), INVALID_SID, stRequestLocal, stResponseLocal, 3);
+	auto stResult = co_await IpcClient::GetInstance().CallAny<::OI::RpcData::AllEchoRes>(stRequestLocal, ::OI::Timer::Seconds(3));
+	int iReturnCodeLocal = stResult.GetRet();
 	printf("stack offline ret=%d\n", iReturnCodeLocal);
 	fflush(stdout);
 	TestBoard::GetInstance().Done((iOkLocal == 3 && iReturnCodeLocal == OI_ERR_CONNECT) ? 0 : 1);

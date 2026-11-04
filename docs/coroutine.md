@@ -58,7 +58,9 @@ HandleRpc<AllEchoReq>([](const AllEchoReq& req, AllEchoRes& res) -> OI::Rpc::Rpc
 
 连接建立后用 `StartTask` 拉起任务，任务里 `co_await RpcCall`。等待键是每次调用新分配的调用号，等待表按调用号分片加锁。回包、超时或发送失败只有一个会把这条协程 `Schedule` 回来。迟到的回包发现调用号已经取走，就丢掉，不会配给下一次调用。
 
-整数超时保持以秒为单位，默认 180；也可传 `std::chrono::milliseconds`，例如 `OI::Timer::Milliseconds(500)`、`OI::Timer::Seconds(10)`。由 200 毫秒周期扫描，因此毫秒参数不代表毫秒级唤醒精度。非正超时表示不设截止时间，断连仍会结束等待。`yield` 同样支持时长参数。
+新接口的时长参数是 `OI::Timer::MS`，用 `OI::Timer::Milliseconds(500)`、`Seconds(10)`、`Minutes`、`Hours`、`Days` 构造，默认 `Seconds(180)`。超时统一使用带单位的时长类型，不再接受裸整数秒。由 200 毫秒周期按毫秒分桶扫描，因此 `MS` 不代表毫秒级唤醒精度。非正超时表示不设截止时间，断连仍会结束等待。`yield` 接受毫秒整数，也接受 `MS`。
+
+按服务名调用不传 `sessionid`，见 [服务注册](registry.md)。`CallAny` 不带分区，`Call` 打一个分区，`CallAll` 打当前名单上的每一份，`CallMany` 打给出的分区号列表。`CallAll` 和 `CallMany` 先全部发出，再逐个等。
 
 ```cpp
 coro::StartTask([n](coro::Token) {
@@ -80,7 +82,7 @@ auto& res = result.GetRes();
 
 直接 await 普通 `Task` 不受 `StartTask` 闭包保活保护；不要直接 await 临时的带捕获协程 lambda。
 
-应用层时间统一由 `oi_duration.h` 构造：`OI::Timer::Milliseconds(n)`、`Seconds(n)`、`Minutes(n)`、`Hours(n)`、`Days(n)`。这些函数保留时长类型，可以直接传给 `yield` 和 RPC，无需引入字面量名字空间。
+应用层时长参数统一是 `OI::Timer::MS`。`Milliseconds(n)`、`Seconds(n)`、`Minutes(n)`、`Hours(n)`、`Days(n)` 在构造时换成毫秒，可以直接传给 `yield` 和 RPC。
 
 `Days(n)` 是每单位 24 小时的持续时长；日历跨天、跨周等刷新判断仍使用时间辅助接口。
 
@@ -146,7 +148,7 @@ int32_t ret = co_await RpcCall(client, req, output);
 
 `GetRet()` 返回 `int32_t`。`GetRes()` 在成功时返回引用，结果对象必须仍然存活；也可 `auto res = result.GetRes()` 复制响应，或 `auto res = std::move(result).GetRes()` 转移响应。错误时访问响应抛出 `std::logic_error`，不会把默认响应伪装成成功。结果字段通过这两个方法访问。
 
-服务端推荐只接收 `(req, res)`，注册只写请求类型 `HandleRpc<Req>`，响应类型自动配对。需要连接信息时接收 `(const RpcContext&, req, res)`，上下文包含 `iToken`、`stManager` 引用和 `iSessionId`，仅在本次处理期间有效。旧五参数 `(token, mgr, sid, req, res)` 继续兼容。协程处理函数返回 `OI::Rpc::RpcTask`，用 `co_return int32_t` 返回状态码；同步处理函数直接返回 `int32_t`。原来的 `coro::Task` 处理函数继续兼容，正常结束视为成功：
+服务端推荐只接收 `(req, res)`，注册只写请求类型 `HandleRpc<Req>`，响应类型自动配对。需要连接信息时接收 `(const RpcContext&, req, res)`，上下文包含 `iToken`、`stManager` 引用和 `iSessionId`，仅在本次处理期间有效。协程处理函数返回 `OI::Rpc::RpcTask`，用 `co_return int32_t` 返回状态码；同步处理函数直接返回 `int32_t`。不再接受旧五参数回调或无返回值的 `coro::Task` 处理函数：
 
 ```cpp
 HandleRpc<HoldReq>([](const HoldReq& req, HoldRes& res) -> OI::Rpc::RpcTask {

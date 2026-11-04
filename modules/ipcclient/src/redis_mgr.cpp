@@ -77,8 +77,8 @@ static coro::Task RedisShutdownRegression()
 		TestBoard::GetInstance().Done(1);
 		co_return;
 	}
-	const auto stDeadline = std::chrono::steady_clock::now() + OI::Timer::Seconds(3);
-	while (OI::Redis::RedisClient::GetInstance().PendingCount() == 0 && std::chrono::steady_clock::now() < stDeadline)
+	const int64_t iDeadline = ::OI::Timer::SteadyMilliseconds() + ::OI::Timer::MS(::OI::Timer::Seconds(3)).iMilliseconds;
+	while (OI::Redis::RedisClient::GetInstance().PendingCount() == 0 && ::OI::Timer::SteadyMilliseconds() < iDeadline)
 	{
 		co_await coro::yield(1);
 	}
@@ -120,8 +120,8 @@ static coro::Task RedisPressureRegression(bool bOversizedParam)
 		{
 			++*pBad;
 		}
-		const auto stDeadline = std::chrono::steady_clock::now() + OI::Timer::Seconds(3);
-		while ((!stClient.IsConnect() || stClient.ConnectedSid() == iOldSid) && std::chrono::steady_clock::now() < stDeadline)
+		const int64_t iDeadline = ::OI::Timer::SteadyMilliseconds() + ::OI::Timer::MS(::OI::Timer::Seconds(3)).iMilliseconds;
+		while ((!stClient.IsConnect() || stClient.ConnectedSid() == iOldSid) && ::OI::Timer::SteadyMilliseconds() < iDeadline)
 		{
 			co_await coro::yield(1);
 		}
@@ -238,13 +238,13 @@ static coro::Task RedisFairnessRegression()
 	}
 	LOG_TRACE("redis fairness ready");
 	fflush(stdout);
-	const auto stDeadline = std::chrono::steady_clock::now() + OI::Timer::Seconds(8);
-	while (stFirst.Replies() == 0 && std::chrono::steady_clock::now() < stDeadline)
+	const int64_t iDeadline = ::OI::Timer::SteadyMilliseconds() + ::OI::Timer::MS(::OI::Timer::Seconds(8)).iMilliseconds;
+	while (stFirst.Replies() == 0 && ::OI::Timer::SteadyMilliseconds() < iDeadline)
 	{
 		co_await coro::yield(1);
 	}
 	const auto stStart = std::chrono::steady_clock::now();
-	while ((stFirst.Replies() != 64 || stSecond.Replies() != 1) && std::chrono::steady_clock::now() < stDeadline)
+	while ((stFirst.Replies() != 64 || stSecond.Replies() != 1) && ::OI::Timer::SteadyMilliseconds() < iDeadline)
 	{
 		co_await coro::yield(1);
 	}
@@ -588,6 +588,14 @@ coro::Task RedisMgr::Check()
 	{
 		++m_iFailed;
 	}
+	auto stMilliseconds = co_await ::OI::Redis::RedisExpire("rk-exp", ::OI::Timer::Milliseconds(750));
+	auto stRemaining = co_await ::OI::Redis::CallRedis({"PTTL", "rk-exp"});
+	const bool bMillisecondExpiry = IntIs(stMilliseconds, 1) && stRemaining.pReply && stRemaining.pReply->type == REDIS_REPLY_INTEGER && stRemaining.pReply->integer > 0 && stRemaining.pReply->integer <= 750;
+	if (!bMillisecondExpiry)
+	{
+		++m_iFailed;
+	}
+	LOG_TRACE("redis millisecond expiry bad=%d", bMillisecondExpiry ? 0 : 1);
 	::OI::Redis::RedisResult stHset;
 	{
 		::OI::Redis::RedisCall stCall = ::OI::Redis::RedisHSet("rh", "f", "v", stHset);
@@ -670,8 +678,8 @@ coro::Task RedisMgr::Check()
 		{
 			++iScriptBad;
 		}
-		const auto stDeadline = std::chrono::steady_clock::now() + OI::Timer::Seconds(3);
-		while (stScriptPeer.Replies() < iExpected && std::chrono::steady_clock::now() < stDeadline)
+		const int64_t iDeadline = ::OI::Timer::SteadyMilliseconds() + ::OI::Timer::MS(::OI::Timer::Seconds(3)).iMilliseconds;
+		while (stScriptPeer.Replies() < iExpected && ::OI::Timer::SteadyMilliseconds() < iDeadline)
 		{
 			co_await coro::yield(1);
 		}

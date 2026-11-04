@@ -8,7 +8,13 @@ import datetime
 import os
 from pathlib import Path
 import re
-import resource
+try:
+    import resource
+except ImportError:
+    resource = None
+import json
+import traceback
+from regression_platform import WINDOWS, SUFFIX, launch, stop, pause, rss_kib, WslRedis
 import signal
 import shutil
 import socket
@@ -40,7 +46,7 @@ def reset_connections():
     for _ in range(100):
         with socket.create_connection(("127.0.0.1", 17981), timeout=2) as s:
             s.sendall(b"\x00")
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("HH" if WINDOWS else "ii", 1, 0))
 
 
 def rpc_ingress_faults():
@@ -143,17 +149,18 @@ def run(case, args):
     http_fixture = None
     http_thread = None
     monitor = None
-    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    if resource is not None:
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     with tempfile.TemporaryDirectory(prefix="oi-regression-") as tmp:
         root = Path(tmp)
         work, cfg, logs = root / "bin", root / "config", root / "logs"
         for p in (work, cfg, logs):
             p.mkdir()
         for name in ("logd", "ipcclient", "ipcserver", "redisserver") + (("registry",) if case == "registry" or mode == "hold" else ()):
-            shutil.copy2(args.bin_dir / name, work / name)
+            shutil.copy2(args.bin_dir / (name + SUFFIX), work / (name + SUFFIX))
             text = (REPO / "deploy/config" / (name + ".toml")).read_text(encoding="utf-8-sig")
             if name == "logd":
-                text = replace(text, "root_path", '"' + str(logs) + '"')
+                text = replace(text, "root_path", '"' + logs.as_posix() + '"')
                 if case == "log-backpressure":
                     text = replace(text, "max_pending_bytes", str(8 * 1024**2 + 8))
             if name == "ipcserver" and case.startswith("rpc-admission-"):
@@ -205,7 +212,7 @@ def run(case, args):
                     text = replace(text, "bytes", str(64 * 1024**2))
                     text = replace(text, "drain_sec", "2")
             (cfg / (name + ".toml")).write_text(text, encoding="utf-8")
-        if case == "disk-full":
+        if case == "disk-full" and not WINDOWS:
             dated = logs / datetime.datetime.now().strftime("%y_%m_%d")
             dated.mkdir()
             for level in ("trace", "debug", "info", "warning", "error"):
@@ -213,18 +220,21 @@ def run(case, args):
 
         def start(name, command=None, env=None):
             output = root / (name + ".out")
-            handle = output.open("w")
+            handle = output.open("w", encoding="utf-8")
             handles.append(handle)
-            proc = subprocess.Popen(command or [str(work / name)], cwd=work,
-                                    stdout=handle, stderr=subprocess.STDOUT, env=env,
-                                    start_new_session=True)
+            if name == "redis" and args.redis_wsl:
+                proc = WslRedis(command[0], Path(command[1]), args.wsl_user, cwd=work,
+                                stdout=handle, stderr=subprocess.STDOUT, env=env)
+            else:
+                proc = launch(command or [str(work / (name + SUFFIX))], cwd=work,
+                              stdout=handle, stderr=subprocess.STDOUT, env=env)
             procs.append(proc)
             return proc, output
 
         def ready(proc, path, marker):
             deadline = time.monotonic() + 15
             while time.monotonic() < deadline:
-                text = path.read_text(errors="replace")
+                text = path.read_text(encoding="utf-8", errors="replace")
                 if proc.poll() is not None:
                     raise RuntimeError(text)
                 if marker in text:
@@ -247,11 +257,16 @@ def run(case, args):
                 with (cfg / "ipcserver.toml").open("a") as config:
                     config.write("\n[Rpc]\nmax_inflight_count = %d\nsession_max_inflight_count = %d\nmax_inflight_bytes = %d\nsession_max_inflight_bytes = %d\n" % ((100, 100, 64, 32) if case.endswith("bytes") else (2, 1, 1048576, 1048576)))
             log_env = None
-            if case == "log-backpressure":
+            if case == "log-backpressure" and not WINDOWS:
                 slow_write = root / "slow-write.so"
                 subprocess.run(["gcc", "-shared", "-fPIC", "-O2", "-Wall", "-Werror",
                                 str(REPO / "tools/log_slow_write.c"), "-o", str(slow_write), "-ldl", "-pthread"], check=True)
                 log_env = dict(os.environ, LD_PRELOAD=str(slow_write))
+            if WINDOWS and case in ("disk-full", "log-backpressure"):
+                stamp = args.bin_dir / "oi_test_hooks.txt"
+                if not stamp.exists() or stamp.read_text().strip() != "ON":
+                    raise RuntimeError("Windows fault cases require -DOI_ENABLE_TEST_HOOKS=ON")
+                log_env = dict(os.environ, OI_TEST_LOG_FAULT="full" if case == "disk-full" else "slow")
             logd, logpath = start("logd", env=log_env)
             # 日志服没有 ready 文本，端口探测只用来确认监听，不发送日志。
             deadline = time.monotonic() + 10
@@ -261,10 +276,10 @@ def run(case, args):
                         break
                 except OSError:
                     if logd.poll() is not None or time.monotonic() > deadline:
-                        if case == "disk-full" and "logd " in logpath.read_text(errors="replace"):
+                        if case == "disk-full" and "logd " in logpath.read_text(encoding="utf-8", errors="replace"):
                             print(case, "PASS: disk error detected", flush=True)
                             return
-                        raise RuntimeError(logpath.read_text(errors="replace"))
+                        raise RuntimeError(logpath.read_text(encoding="utf-8", errors="replace"))
                     time.sleep(0.05)
             if mode in ("redis", "hold") or case == "registry":
                 redis_conf = root / "redis.conf"
@@ -285,6 +300,16 @@ def run(case, args):
                     ready(rs, rsp, "redis server listen")
             server, serverpath = start("ipcserver")
             ready(server, serverpath, "ipc server listen")
+            if mode == "hold":
+                for zone, port in (("1001", "17992"), ("1002", "17993")):
+                    text = (cfg / "ipcserver.toml").read_text(encoding="utf-8")
+                    text = text.replace('name = "ipcserver"', 'name = "gameserver"', 1)
+                    text = re.sub(r"(?m)^id = 1$", 'id = %s\nzone = "%s"' % (zone, zone), text, count=1)
+                    text = text.replace('port = "17981"', 'port = "%s"' % port, 1)
+                    path = cfg / ("gameserver-%s.toml" % zone)
+                    path.write_text(text, encoding="utf-8")
+                    proc, output = start("gameserver-" + zone, [str(work / ("ipcserver" + SUFFIX)), str(path)])
+                    ready(proc, output, "ipc server listen")
             if case == "reset":
                 reset_connections()
             if case == "rpc-ingress":
@@ -296,27 +321,27 @@ def run(case, args):
                 env["LD_PRELOAD"] = str(args.clock_fault_so)
                 env["OI_TEST_CLOCK_SHIFT"] = "86400" if case == "clock-forward" else "-3600"
             if pressure:
-                db.send_signal(signal.SIGSTOP)
+                pause(db, True)
                 db_paused = True
-                rss_before = int(re.search(r"VmRSS:\s+(\d+)", Path("/proc/%d/status" % rs.pid).read_text()).group(1))
+                rss_before = rss_kib(rs)
             started = time.monotonic()
             last_growth = started
             last_log_bytes = log_payload_on_disk(logs)
             client, clientpath = start("ipcclient", env=env)
             deadline = started + (20 if pressure or case == "redis-shutdown" else 210)
             while client.poll() is None:
-                if case == "redis-shutdown" and not shutdown_sent and "redis shutdown pending" in clientpath.read_text(errors="replace"):
-                    client.send_signal(signal.SIGTERM)
+                if case == "redis-shutdown" and not shutdown_sent and "redis shutdown pending" in clientpath.read_text(encoding="utf-8", errors="replace"):
+                    stop(client)
                     shutdown_sent = True
                     deadline = time.monotonic() + 3
                 if pressure and db_paused:
-                    if pause_at is None and "redis pressure pause" in rsp.read_text(errors="replace"):
+                    if pause_at is None and "redis pressure pause" in rsp.read_text(encoding="utf-8", errors="replace"):
                         pause_at = time.monotonic()
-                    if pause_at is not None and time.monotonic() - pause_at > 0.5 and (not fairness or "redis fairness ready" in clientpath.read_text(errors="replace")):
-                        rss_paused = int(re.search(r"VmRSS:\s+(\d+)", Path("/proc/%d/status" % rs.pid).read_text()).group(1))
+                    if pause_at is not None and time.monotonic() - pause_at > 0.5 and (not fairness or "redis fairness ready" in clientpath.read_text(encoding="utf-8", errors="replace")):
+                        rss_paused = rss_kib(rs)
                         assert rss_paused < rss_before + 32 * 1024, (rss_before, rss_paused)
                         print(case, "paused RSS KiB before=", rss_before, "after=", rss_paused, flush=True)
-                        db.send_signal(signal.SIGCONT)
+                        pause(db, False)
                         db_paused = False
                 log_bytes = bytes_on_disk(logs)
                 payload_bytes = log_payload_on_disk(logs) if mode == "log" else 0
@@ -325,7 +350,7 @@ def run(case, args):
                 if log_bytes > CAP:
                     raise RuntimeError("test log exceeds 2GiB limit")
                 if case == "disk-full" and logd.poll() is not None:
-                    message = logpath.read_text(errors="replace")
+                    message = logpath.read_text(encoding="utf-8", errors="replace")
                     if logd.returncode != 0 and "failed:" in message:
                         print(case, "PASS: disk error detected", flush=True)
                         return
@@ -334,9 +359,9 @@ def run(case, args):
                     if proc is not client and proc.poll() is not None:
                         raise RuntimeError("service exited: " + str(proc.args))
                 if time.monotonic() > deadline:
-                    raise RuntimeError("client timeout\n" + clientpath.read_text(errors="replace"))
+                    raise RuntimeError("client timeout\n" + clientpath.read_text(encoding="utf-8", errors="replace"))
                 time.sleep(0.1)
-            text = clientpath.read_text(errors="replace")
+            text = clientpath.read_text(encoding="utf-8", errors="replace")
             print(text, flush=True)
             assert client.returncode == 0, (case, client.returncode)
             if mode == "echo":
@@ -366,7 +391,7 @@ def run(case, args):
                     assert duration_ms < 1500, duration_ms
                     print("redis fairness upstream B position=", order.index(b"B") + 1, "duration_ms=", round(duration_ms, 3), flush=True)
                 else: assert "redis pressure done total=64 bad=0" in text
-                samples = re.findall(r"redis pressure pause link=\d+ pending=(\d+) bytes=(\d+)", rsp.read_text(errors="replace"))
+                samples = re.findall(r"redis pressure pause link=\d+ pending=(\d+) bytes=(\d+)", rsp.read_text(encoding="utf-8", errors="replace"))
                 assert samples and all(int(count) <= maximum_count and int(size) <= maximum_bytes for count, size in samples)
                 if case.endswith("count"): assert any(int(count) == maximum_count for count, size in samples)
             elif mode == "redis":
@@ -374,6 +399,7 @@ def run(case, args):
                 if case == "redis-limit":
                     assert "redis pending limit bad=0" in text
                 else:
+                    assert "redis millisecond expiry bad=0" in text
                     assert "redis script isolation bad=0" in text
                     assert "redis single use bad=0" in text
                     assert re.search(r"redis stress .*bad=0", text)
@@ -395,6 +421,8 @@ def run(case, args):
                 assert "hold coroutine connect bad=0" in text
                 assert "hold reentrant connect first=1 retry=0 connections=1 bad=0" in text
                 assert "hold registry pairing bad=0" in text
+                assert re.search(r"hold service rpc global=1 any=1 zone=1 batch=2 many=2 slot=1 elapsed_ms=\d+ wrong=1 miss=1 bad=0", text)
+                assert "hold named rpc ownership success=1 rejected=7 bad=0" in text
                 assert re.search(r"hold http release before=\d+ after=\d+ bad=0", text)
                 assert "hold json validation bad=0" in text
                 assert "hold task exceptions bad=0" in text
@@ -404,9 +432,9 @@ def run(case, args):
                 assert "hold done bad=0" in text
             elif mode == "log":
                 # Stop drains accepted batches; inspect actual files and the final backlog accounting.
-                logd.terminate()
+                stop(logd)
                 logd.wait(timeout=10)
-                assert logd.returncode == 0, logpath.read_text(errors="replace")
+                assert logd.returncode == 0, logpath.read_text(encoding="utf-8", errors="replace")
                 size = bytes_on_disk(logs)
                 line_bytes, target_bytes = (131072, 64 * 1024**2) if case == "log-backpressure" else (65536, 1024**3)
                 assert target_bytes <= size < CAP, size
@@ -425,23 +453,23 @@ def run(case, args):
                 print("log written bytes=", size, "payload_bytes=", written_payload,
                       "end_to_end_MBps=", round(written_payload / duration / 1024**2, 2), flush=True)
                 if case == "log-backpressure":
-                    backlog = re.search(r"logd backlog peak=(\d+) limit=(\d+) pauses=(\d+) pending=(\d+)", logpath.read_text(errors="replace"))
-                    assert backlog, logpath.read_text(errors="replace")
+                    backlog = re.search(r"logd backlog peak=(\d+) limit=(\d+) pauses=(\d+) pending=(\d+)", logpath.read_text(encoding="utf-8", errors="replace"))
+                    assert backlog, logpath.read_text(encoding="utf-8", errors="replace")
                     peak, limit, pauses, pending = map(int, backlog.groups())
                     assert peak <= limit == 8 * 1024**2 + 8 and pauses > 0 and pending == 0, backlog.group(0)
                     print(backlog.group(0), flush=True)
             print(case, "PASS seconds=", round(time.monotonic() - started, 2), flush=True)
         except BaseException:
             for output in root.glob("*.out"):
-                print(output.name, output.read_text(errors="replace")[-6000:], flush=True)
+                print(output.name, output.read_text(encoding="utf-8", errors="replace")[-6000:], flush=True)
             raise
         finally:
             if db_paused and db.poll() is None:
-                db.send_signal(signal.SIGCONT)
+                pause(db, False)
             stuck = []
             for proc in reversed(procs):
                 if proc.poll() is None:
-                    proc.terminate()
+                    stop(proc)
                     try:
                         proc.wait(timeout=3)
                     except subprocess.TimeoutExpired:
@@ -455,6 +483,11 @@ def run(case, args):
                 http_thread.join()
             for handle in handles:
                 handle.close()
+            if args.artifacts:
+                destination = args.artifacts / case
+                destination.mkdir(parents=True, exist_ok=True)
+                for output in root.glob("*.out"):
+                    shutil.copy2(output, destination / output.name)
             if stuck:
                 raise RuntimeError("graceful shutdown timed out: " + ", ".join(stuck))
 
@@ -470,12 +503,12 @@ def run_web(args):
             probe.bind(("127.0.0.1", 0))
             port = probe.getsockname()[1]
         for name in ("webserver", "webclient"):
-            shutil.copy2(args.bin_dir / name, work / name)
+            shutil.copy2(args.bin_dir / (name + SUFFIX), work / (name + SUFFIX))
             text = (REPO / "deploy/config" / (name + ".toml")).read_text(encoding="utf-8-sig")
             text = text.replace("port = 18080", "port = " + str(port))
             (cfg / (name + ".toml")).write_text(text, encoding="utf-8")
         with (root / "server.out").open("w") as output:
-            server = subprocess.Popen([str(work / "webserver")], cwd=work, stdout=output, stderr=subprocess.STDOUT)
+            server = launch([str(work / ("webserver" + SUFFIX))], cwd=work, stdout=output, stderr=subprocess.STDOUT)
             try:
                 deadline = time.monotonic() + 10
                 while True:
@@ -485,13 +518,13 @@ def run_web(args):
                         if server.poll() is not None or time.monotonic() > deadline:
                             raise RuntimeError((root / "server.out").read_text())
                         time.sleep(0.05)
-                client = subprocess.run([str(work / "webclient")], cwd=work, capture_output=True, text=True, timeout=30)
+                client = subprocess.run([str(work / ("webclient" + SUFFIX))], cwd=work, capture_output=True, text=True, timeout=30)
                 print(client.stdout, flush=True)
                 assert client.returncode == 0 and "rpc=1 bin=1 bad=0" in client.stdout, client.stderr
                 print("web PASS", flush=True)
             finally:
                 if server.poll() is None:
-                    server.terminate()
+                    stop(server)
                     try: server.wait(timeout=3)
                     except subprocess.TimeoutExpired:
                         server.kill()
@@ -505,14 +538,38 @@ if __name__ == "__main__":
     parser.add_argument("--bin-dir", type=Path, default=REPO / "deploy/bin")
     parser.add_argument("--redis-binary", type=Path, default=Path("/tmp/redis-7.4.12/src/redis-server"))
     parser.add_argument("--clock-fault-so", type=Path)
+    parser.add_argument("--redis-wsl", action="store_true", help="Windows: run only the owned Redis fixture in WSL")
+    parser.add_argument("--wsl-user", default="jxy")
+    parser.add_argument("--artifacts", type=Path, help="retain process output and results.json, not bulk log payload")
     options = parser.parse_args()
-    for port in (19995, 17981, 16379, 6379, 17990):
+    if options.redis_wsl and not WINDOWS:
+        parser.error("--redis-wsl is only for native Windows tests")
+    if WINDOWS and options.case.startswith("clock-"):
+        parser.error("clock fault injection requires Linux LD_PRELOAD; never silently skip it")
+    if options.artifacts:
+        options.artifacts = options.artifacts.resolve()
+        options.artifacts.mkdir(parents=True, exist_ok=True)
+    for port in (19995, 17981, 16379, 6379, 17990, 17992, 17993):
         with socket.socket() as probe:
             probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             probe.bind(("127.0.0.1", port))
     cases = ("echo", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "registry", "web") if options.case == "all" else (options.case,)
+    results = []
     for item in cases:
-        if item == "web":
-            run_web(options)
-        else:
-            run(item, options)
+        started = time.monotonic()
+        result = {"case": item, "platform": "windows" if WINDOWS else "linux"}
+        try:
+            if item == "web":
+                run_web(options)
+            else:
+                run(item, options)
+            result["status"] = "passed"
+        except Exception as error:
+            result.update(status="failed", error=str(error))
+            traceback.print_exc()
+        finally:
+            result["seconds"] = round(time.monotonic() - started, 3)
+            results.append(result)
+            if options.artifacts:
+                (options.artifacts / "results.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
+    raise SystemExit(1 if any(item["status"] != "passed" for item in results) else 0)

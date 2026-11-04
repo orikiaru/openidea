@@ -21,11 +21,17 @@
 
 # 回声和日志要分开测
 
-`ipcclient` 里四个 Mgr 都要跑到：`EchoMgr`、`LogMgr`、`RedisMgr`、`HoldMgr`。开关在 `deploy/config/ipcclient.toml` 的 `[Test]`：`echo`、`log`、`redis`、`hold`。一次只开一个。单线程和多线程各跑一遍，缺一套不算测完。单线程和多线程指 `ipcclient` 和 `ipcserver`。`logd` 只能多线程。`redisserver` 按它自己的编译选项是单线程。
+完整操作规程统一维护在 `docs/testing.md`，跨平台构建/测试/恢复使用 `tools/test_matrix.py`，原生用例入口为 `tools/run_regressions.py`。测试脚本必须留在工程内；报告中区分实际通过、失败和环境阻塞。
+
+有行为的改动，Linux 和 Windows 都要跑。默认还要单线程、多线程各跑一遍，缺一套不算测完。只有改动明确跟线程无关、并且是纯逻辑时，可以不切单线程和多线程；这种例外要在回复里写明。协程、挂起、调度、`Task`、`StartTask`、`co_await`、`yield` 一定涉及单线程和多线程，不能当成纯逻辑跳过。
+
+单线程和多线程指 `ipcclient` 和 `ipcserver`。`logd` 只能多线程。`redisserver` 按它自己的编译选项是单线程。Linux 在 WSL 里编，构建目录 `~/openidea-build-gcc13`，用 `-DOI_IPC_SINGLE_THREAD=ON` 和 `OFF` 各编一次。Windows 用 `build-win`（Visual Studio 17 2022，x64），同样两种线程模式各编一次。两边的可执行文件都在 `deploy/bin`，换平台或换线程模式之前先编出要跑的那一套。单线程测完把该平台切回多线程再编一次，不要把 `deploy/bin` 留在单线程。回归入口是 `python3 tools/run_regressions.py --case all`。
+
+`ipcclient` 里四个 Mgr 都要跑到：`EchoMgr`、`LogMgr`、`RedisMgr`、`HoldMgr`。开关在 `deploy/config/ipcclient.toml` 的 `[Test]`：`echo`、`log`、`redis`、`hold`。一次只开一个。
 
 测的是 `logd`、`ipcserver`、`ipcclient` 这三个进程。不要另写一个日志客户端。日志从 `LogMgr` 发出，回声从 `EchoMgr` 发出。
 
-产物是 Linux 程序，在 WSL 里编、在 WSL 里跑。构建目录是 `~/openidea-build-gcc13`，可执行文件在 `deploy/bin`。进程的当前目录必须是某层 `bin`，配置在同级的 `config`。`logd` 读 `../config/logd.toml`，另外两个读 `../config/<名字>.toml`。
+Linux 产物在 WSL 里编、在 WSL 里跑。构建目录是 `~/openidea-build-gcc13`，可执行文件在 `deploy/bin`。进程的当前目录必须是某层 `bin`，配置在同级的 `config`。`logd` 读 `../config/logd.toml`，另外两个读 `../config/<名字>.toml`。
 
 跑之前把这三份 toml 拷到临时目录再改，不要改仓库里的那份。日志目录改到 `/tmp` 下面，不要写进仓库。
 
@@ -91,7 +97,7 @@ Redis 也单独测。开关是 `[Test] redis`。先起本机 Redis（`maxmemory 
 - 修改字段时同步修改定义、构造初始化、访问点、协议源文件、生成器和文档；不要只改生成产物。
 - 二进制协议字段号不随命名变化。已有配置键和外部 JSON 键保持兼容，协议可用 `json 原键名` 指定 JSON 名称。
 - 去掉旧下划线后检查参数/局部变量遮蔽成员，尤其 setter 不能变成自赋值；参数/局部变量与成员同名时改用 `Param` / `Local` 后缀，不用 `this->` 掩盖遮蔽。重命名必须跑真实收发回归，不能只看编译。
-- 命名检查：`python3 tools/test_field_names.py`；C++ 成员/参数/局部变量扫描使用安装了 libclang 的 Python 运行 `tools/check_field_names.py --build-dir ~/openidea-build-gcc13`。完整回归使用 `python3 tools/run_regressions.py --case all`，单、多线程分别跑，包含原四类测试以及注册发现、Web 收发。
+- 命名检查：`python3 tools/test_field_names.py`；C++ 成员/参数/局部变量扫描使用安装了 libclang 的 Python 运行 `tools/check_field_names.py --build-dir ~/openidea-build-gcc13`。完整回归使用 `python3 tools/run_regressions.py --case all`，按上面的平台和线程要求跑，包含原四类测试以及注册发现、Web 收发。
 
 # 容器遍历与迭代器
 
@@ -106,4 +112,4 @@ Redis 也单独测。开关是 `[Test] redis`。先起本机 Redis（`maxmemory 
 - 函数、类、名字空间、lambda 等代码块也展开，不压成一行；不改变初始化列表的语义。
 - 使用仓库 `.clang-format`，固定 clang-format 18.1.8；执行 `python3 tools/format_cpp.py`，只检查用 `--check`，工具不在 PATH 时传 `--clang-format`。
 - 第三方源码不格式化；自动生成文件由生成器维护，不手改生成产物。
-- 格式化后检查 diff，并按本文件的流程完成单、多线程回归，不能只以格式检查代替编译和真实收发。
+- 格式化后检查 diff，并按本文件的平台和线程要求完成回归，不能只以格式检查代替编译和真实收发。

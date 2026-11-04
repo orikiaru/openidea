@@ -1,5 +1,7 @@
 # 发出一次调用
 
+这是一条 `RpcCall`。`CallAny` 和 `Call` 选好实例后走这里。`CallAll` 和 `CallMany` 对每一台先 `Submit`，把帧写进发送缓冲，再逐个 `co_await` 已经在途的等待器。
+
 业务协程在主线程的 `StScheduler::Poll` 里跑。挂起前就把帧写进发送缓冲。因为这里就是 poll 线程，打开写事件是当场 `uv_poll_start`。真正 `send` 在这一轮后面的 `PollWait`。
 
 回包、发送失败、超时，这三件事里只有先到的那一件会把协程放回队列。
@@ -26,11 +28,11 @@ sequenceDiagram
     Call->>Call: EncodePbFrame 协议号 长度 包体
     Call->>Sess: SendBytes
     alt 找到会话
-        Sess->>Sess: 追加 _obuff
+        Sess->>Sess: 追加 stOutputBuffer
         Sess->>Tcp: AllowSend
         Tcp->>Main: 当场打开写事件
     else 没有这条会话
-        Call->>Wait: WakeRpcCall 结果 -1
+        Call->>Wait: WakeRpcCall 结果 OI_ERR_FAIL
     end
     alt 回包或失败已经先到
         Call-->>Biz: 不挂起，主线程上 await_resume
@@ -49,4 +51,4 @@ sequenceDiagram
     end
 ```
 
-解包在主线程的 `await_resume`。解出来返回 `0`，解包失败返回 `-1`。没收到回包就返回等待表里已经写下的结果。
+解包在主线程的 `await_resume`。解出来返回 `OI_OK`，解包失败返回 `OI_ERR_FAIL`。没收到回包就返回等待表里已经写下的结果。

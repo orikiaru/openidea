@@ -1,5 +1,7 @@
 #include "oi_timer_helper.h"
 #include "oi_timer_manager.h"
+#include "oi_duration.h"
+#include <chrono>
 
 namespace OI
 {
@@ -121,6 +123,13 @@ bool CrossOf(time_t iOldTimestampParam, time_t iNowTimestampParam, int64_t iOffs
 	}
 	return iNowSlot > iOldSlot;
 }
+}
+
+int64_t SteadyMilliseconds()
+{
+	return std::chrono::duration_cast<std::chrono::milliseconds>(
+	    std::chrono::steady_clock::now().time_since_epoch())
+	    .count();
 }
 
 time_t GetTime()

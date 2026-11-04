@@ -12,3 +12,6 @@
 # Python tools and protocol generator caches
 __pycache__/
 *.py[cod]
+
+# Local code-review working reports
+/reviewsession/

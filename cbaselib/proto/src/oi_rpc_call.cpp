@@ -4,6 +4,9 @@
 #include "oi_rpc_coro.h"
 #include "oi_thread.h"
 #include "oi_config.h"
+#include "oi_registry.h"
+#include <algorithm>
+#include <memory>
 #include <atomic>
 #include <chrono>
 #include <deque>
@@ -578,6 +581,326 @@ bool DeliverRpc(proto_type_t iIdParam, ::OI::Base::BytesStream& stBodyParam, ::O
 	{
 	}
 	return true;
+}
+
+namespace
+{
+bool ValidServiceToken(const std::string& sTextParam)
+{
+	if (sTextParam.empty())
+	{
+		return false;
+	}
+	for (size_t iIndexLocal = 0; iIndexLocal < sTextParam.size(); ++iIndexLocal)
+	{
+		char iCharacter = sTextParam[iIndexLocal];
+		bool bOk = (iCharacter >= 'a' && iCharacter <= 'z') || (iCharacter >= 'A' && iCharacter <= 'Z') || (iCharacter >= '0' && iCharacter <= '9') || iCharacter == '_' || iCharacter == '-';
+		if (!bOk)
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+struct ParsedTarget
+{
+	std::string sName;
+	std::string sZone;
+	bool bAll = false;
+};
+
+bool ParseTarget(const std::string& sTargetParam, ParsedTarget& stTargetParam)
+{
+	if (sTargetParam.size() >= 3 && sTargetParam.compare(sTargetParam.size() - 2, 2, ".*") == 0)
+	{
+		stTargetParam.sName = sTargetParam.substr(0, sTargetParam.size() - 2);
+		stTargetParam.bAll = true;
+		return ValidServiceToken(stTargetParam.sName);
+	}
+	size_t iDot = sTargetParam.find('.');
+	if (iDot == std::string::npos)
+	{
+		stTargetParam.sName = sTargetParam;
+		return ValidServiceToken(stTargetParam.sName);
+	}
+	if (sTargetParam.find('.', iDot + 1) != std::string::npos)
+	{
+		return false;
+	}
+	stTargetParam.sName = sTargetParam.substr(0, iDot);
+	stTargetParam.sZone = sTargetParam.substr(iDot + 1);
+	return ValidServiceToken(stTargetParam.sName) && ValidServiceToken(stTargetParam.sZone);
+}
+
+class RoutedClient : public ProtoClientManager
+{
+	std::string m_sLabel;
+
+  public:
+	explicit RoutedClient(std::string sLabelParam)
+	    : m_sLabel(std::move(sLabelParam))
+	{
+	}
+	const std::string GetIDString()
+	{
+		return m_sLabel;
+	}
+	void Open(const std::string& sIpParam, const std::string& sPortParam)
+	{
+		DefaultInit(sIpParam, sPortParam, ::OI::Net::SESSION_TYPE_TCP);
+		sEndpoint = sIpParam + ":" + sPortParam;
+		bServiceSeen = true;
+	}
+	void OnClientConnect(::OI::Net::Session*)
+	{
+	}
+	void OnClientDisconnect(const ::OI::Net::Session*)
+	{
+	}
+};
+
+ProtoClientManager* ClientFor(const std::string& sIpParam, const std::string& sPortParam)
+{
+	struct Pool
+	{
+		::OI::Thread::Mutex stMutex;
+		std::map<std::string, std::unique_ptr<RoutedClient>> mClients;
+	};
+	static Pool stPool;
+	std::string sKey = sIpParam + ":" + sPortParam;
+	RoutedClient* pClient = NULL;
+	bool bNew = false;
+	{
+		::OI::Thread::MutexGuard stLock(stPool.stMutex);
+		auto stIterator = stPool.mClients.find(sKey);
+		if (stIterator == stPool.mClients.end())
+		{
+			std::unique_ptr<RoutedClient> pNew(new RoutedClient(sKey));
+			pNew->Open(sIpParam, sPortParam);
+			pClient = pNew.get();
+			stPool.mClients.emplace(sKey, std::move(pNew));
+			bNew = true;
+		}
+		else
+		{
+			pClient = stIterator->second.get();
+		}
+	}
+	if (bNew)
+	{
+		pClient->StartClient();
+	}
+	return pClient;
+}
+}
+
+ServiceRoute RouteService(::OI::Net::SessionManager* pManagerParam, const std::string& sNameParam, ServicePick iPickParam, const std::string& sZoneParam)
+{
+	ServiceRoute stRoute;
+	if (!ValidServiceToken(sNameParam) || (iPickParam == ServicePick::Zone && !ValidServiceToken(sZoneParam)))
+	{
+		stRoute.iStatus = ServiceRouteStatus::BadName;
+		return stRoute;
+	}
+	if (iPickParam == ServicePick::Any && pManagerParam)
+	{
+		std::vector<::OI::Net::SessionManager*> vWatchers = ::OI::Base::ServiceTable::GetInstance().Watchers(sNameParam);
+		for (auto* pWatcher : vWatchers)
+		{
+			if (pWatcher != pManagerParam)
+			{
+				continue;
+			}
+			ProtoClientManager* pClient = dynamic_cast<ProtoClientManager*>(pManagerParam);
+			if (pClient && pClient->IsConnect())
+			{
+				stRoute.iStatus = ServiceRouteStatus::Ok;
+				stRoute.vClients.push_back(pClient);
+				return stRoute;
+			}
+		}
+	}
+	int32_t iCode = OI_ERR_FAIL;
+	std::vector<::OI::Base::ServiceInstance> vList;
+	if (!::OI::Base::RegistryClient::GetInstance().PullSync(sNameParam, iCode, vList) || iCode != OI_OK)
+	{
+		stRoute.iStatus = ServiceRouteStatus::Offline;
+		return stRoute;
+	}
+	bool bGlobal = false;
+	bool bZoned = false;
+	std::vector<::OI::Base::ServiceInstance> vMatched;
+	for (const auto& stInst : vList)
+	{
+		if (stInst.sName != sNameParam)
+		{
+			continue;
+		}
+		if (stInst.sZone.empty())
+		{
+			bGlobal = true;
+		}
+		else
+		{
+			bZoned = true;
+		}
+		if (iPickParam == ServicePick::Zone)
+		{
+			if (stInst.sZone == sZoneParam)
+			{
+				vMatched.push_back(stInst);
+			}
+		}
+		else
+		{
+			vMatched.push_back(stInst);
+		}
+	}
+	if (bGlobal && bZoned)
+	{
+		stRoute.iStatus = ServiceRouteStatus::WrongKind;
+		return stRoute;
+	}
+	if (iPickParam == ServicePick::Zone && bGlobal)
+	{
+		stRoute.iStatus = ServiceRouteStatus::WrongKind;
+		return stRoute;
+	}
+	if (vMatched.empty())
+	{
+		stRoute.iStatus = ServiceRouteStatus::Offline;
+		return stRoute;
+	}
+	std::sort(vMatched.begin(), vMatched.end(), [](const ::OI::Base::ServiceInstance& stLeftParam, const ::OI::Base::ServiceInstance& stRightParam)
+	{
+		return stLeftParam.iId < stRightParam.iId;
+	});
+	if (iPickParam == ServicePick::All)
+	{
+		for (const auto& stInst : vMatched)
+		{
+			stRoute.vClients.push_back(ClientFor(stInst.sIp, stInst.sPort));
+		}
+	}
+	else
+	{
+		size_t iPick = 0;
+		if (iPickParam == ServicePick::Any && vMatched.size() > 1)
+		{
+			static std::atomic<uint32_t> iCursor{0};
+			iPick = iCursor.fetch_add(1, std::memory_order_relaxed) % vMatched.size();
+		}
+		const ::OI::Base::ServiceInstance& stInst = vMatched[iPick];
+		ProtoClientManager* pSelf = dynamic_cast<ProtoClientManager*>(pManagerParam);
+		if (pSelf && pSelf->GetStrIP() == stInst.sIp && pSelf->GetStrPort() == stInst.sPort)
+		{
+			stRoute.vClients.push_back(pSelf);
+		}
+		else
+		{
+			stRoute.vClients.push_back(ClientFor(stInst.sIp, stInst.sPort));
+		}
+	}
+	stRoute.iStatus = ServiceRouteStatus::Ok;
+	return stRoute;
+}
+
+ServiceRoute RouteService(const std::string& sTargetParam, bool bBatchParam)
+{
+	ParsedTarget stTarget;
+	if (!ParseTarget(sTargetParam, stTarget) || stTarget.bAll != bBatchParam)
+	{
+		ServiceRoute stRoute;
+		stRoute.iStatus = ServiceRouteStatus::BadName;
+		return stRoute;
+	}
+	ServicePick iPick = ServicePick::Any;
+	if (bBatchParam)
+	{
+		iPick = ServicePick::All;
+	}
+	else if (!stTarget.sZone.empty())
+	{
+		iPick = ServicePick::Zone;
+	}
+	return RouteService(nullptr, stTarget.sName, iPick, stTarget.sZone);
+}
+
+ServiceRoute RouteZones(::OI::Net::SessionManager* pManagerParam, const std::string& sNameParam, const std::vector<int32_t>& vZoneIdsParam)
+{
+	ServiceRoute stRoute;
+	if (!ValidServiceToken(sNameParam) || vZoneIdsParam.empty())
+	{
+		stRoute.iStatus = ServiceRouteStatus::BadName;
+		return stRoute;
+	}
+	std::vector<std::string> vZones;
+	vZones.reserve(vZoneIdsParam.size());
+	for (int32_t iZoneId : vZoneIdsParam)
+	{
+		if (iZoneId < 0)
+		{
+			stRoute.iStatus = ServiceRouteStatus::BadName;
+			return stRoute;
+		}
+		vZones.push_back(std::to_string(iZoneId));
+	}
+	int32_t iCode = OI_ERR_FAIL;
+	std::vector<::OI::Base::ServiceInstance> vList;
+	if (!::OI::Base::RegistryClient::GetInstance().PullSync(sNameParam, iCode, vList) || iCode != OI_OK)
+	{
+		stRoute.iStatus = ServiceRouteStatus::Offline;
+		return stRoute;
+	}
+	bool bGlobal = false;
+	for (const auto& stInst : vList)
+	{
+		if (stInst.sName != sNameParam)
+		{
+			continue;
+		}
+		if (stInst.sZone.empty())
+		{
+			bGlobal = true;
+		}
+	}
+	if (bGlobal)
+	{
+		stRoute.iStatus = ServiceRouteStatus::WrongKind;
+		return stRoute;
+	}
+	for (const auto& sZone : vZones)
+	{
+		const ::OI::Base::ServiceInstance* pBest = nullptr;
+		for (const auto& stInst : vList)
+		{
+			if (stInst.sName != sNameParam || stInst.sZone != sZone)
+			{
+				continue;
+			}
+			if (!pBest || stInst.iId < pBest->iId)
+			{
+				pBest = &stInst;
+			}
+		}
+		if (!pBest)
+		{
+			stRoute.vClients.push_back(nullptr);
+			continue;
+		}
+		ProtoClientManager* pSelf = dynamic_cast<ProtoClientManager*>(pManagerParam);
+		if (pSelf && pSelf->GetStrIP() == pBest->sIp && pSelf->GetStrPort() == pBest->sPort)
+		{
+			stRoute.vClients.push_back(pSelf);
+		}
+		else
+		{
+			stRoute.vClients.push_back(ClientFor(pBest->sIp, pBest->sPort));
+		}
+	}
+	stRoute.iStatus = ServiceRouteStatus::Ok;
+	return stRoute;
 }
 }
 }

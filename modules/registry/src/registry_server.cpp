@@ -76,8 +76,8 @@ bool ValidSpacePart(const std::string& sTextParam)
 	return true;
 }
 
-// 值是 "ip port"。名字、id、地址都一样就是同一个服务，重新登记直接续上；地址不一样才算被别人占了。
-bool ParseValue(const std::string& sValueParam, std::string& sIpParam, std::string& sPortParam)
+// 值是 "ip port" 或 "ip port 分区"。名字、id、地址都一样就是同一个服务，重新登记直接续上；地址不一样才算被别人占了。
+bool ParseValue(const std::string& sValueParam, std::string& sIpParam, std::string& sPortParam, std::string& sZoneParam)
 {
 	size_t iFirst = sValueParam.find(' ');
 	if (iFirst == std::string::npos || iFirst == 0)
@@ -87,6 +87,15 @@ bool ParseValue(const std::string& sValueParam, std::string& sIpParam, std::stri
 	size_t iSecond = sValueParam.find(' ', iFirst + 1);
 	sIpParam = sValueParam.substr(0, iFirst);
 	sPortParam = sValueParam.substr(iFirst + 1, iSecond == std::string::npos ? std::string::npos : iSecond - iFirst - 1);
+	sZoneParam.clear();
+	if (iSecond != std::string::npos)
+	{
+		sZoneParam = sValueParam.substr(iSecond + 1);
+		if (sZoneParam.empty() || sZoneParam.find(' ') != std::string::npos)
+		{
+			return false;
+		}
+	}
 	return !sIpParam.empty() && !sPortParam.empty();
 }
 
@@ -301,6 +310,7 @@ void RegistryServer::PutSnapshot(const Binding& stSecondParam)
 	stInst.iId = stSecondParam.iId;
 	stInst.sIp = stSecondParam.sIp;
 	stInst.sPort = stSecondParam.sPort;
+	stInst.sZone = stSecondParam.sZone;
 	m_vSnapshot.push_back(stInst);
 }
 
@@ -353,7 +363,7 @@ coro::Task RegistryServer::Reload()
 		::OI::Base::ServiceInstance stInst;
 		stInst.sName = StrOf(pName);
 		stInst.iId = atoi(StrOf(pId).c_str());
-		if (ParseValue(StrOf(pValue), stInst.sIp, stInst.sPort))
+		if (ParseValue(StrOf(pValue), stInst.sIp, stInst.sPort, stInst.sZone))
 		{
 			vList.push_back(stInst);
 		}
@@ -487,7 +497,7 @@ void RegistryServer::Handle(::OI::Net::Session* pSessionParam, uint32_t iIdParam
 	{
 		::OI::RpcData::RegRegister stRequestLocal;
 		stRequestLocal.deserialize(stBodyParam);
-		if (stRequestLocal.sName.empty() || stRequestLocal.iId <= 0 || stRequestLocal.sIp.empty() || stRequestLocal.sPort.empty())
+		if (!ValidSpacePart(stRequestLocal.sName) || stRequestLocal.iId <= 0 || stRequestLocal.sIp.empty() || stRequestLocal.sPort.empty() || (!stRequestLocal.sZone.empty() && !ValidSpacePart(stRequestLocal.sZone)))
 		{
 			::OI::RpcData::RegRegisterRes stResponseLocal;
 			stResponseLocal.iCode = OI_ERR_FAIL;
@@ -499,7 +509,12 @@ void RegistryServer::Handle(::OI::Net::Session* pSessionParam, uint32_t iIdParam
 		stSecond.iId = stRequestLocal.iId;
 		stSecond.sIp = stRequestLocal.sIp;
 		stSecond.sPort = stRequestLocal.sPort;
+		stSecond.sZone = stRequestLocal.sZone;
 		stSecond.sValue = stRequestLocal.sIp + " " + stRequestLocal.sPort;
+		if (!stSecond.sZone.empty())
+		{
+			stSecond.sValue += " " + stSecond.sZone;
+		}
 		coro::StartTask([this, iSessionIdLocal, stSecond](coro::Token)
 		{
 			return Register(iSessionIdLocal, stSecond);
@@ -545,7 +560,7 @@ void RegistryServer::Handle(::OI::Net::Session* pSessionParam, uint32_t iIdParam
 				}
 				if (bWant)
 				{
-					stResponseLocal.vList.push_back(::OI::RpcData::RegInstance(stInst.sName, stInst.iId, stInst.sIp, stInst.sPort));
+					stResponseLocal.vList.push_back(::OI::RpcData::RegInstance(stInst.sName, stInst.iId, stInst.sIp, stInst.sPort, stInst.sZone));
 				}
 			}
 		}

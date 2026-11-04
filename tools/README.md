@@ -1,10 +1,14 @@
 # 回归与故障测试
 
+**统一操作规程：[docs/testing.md](../docs/testing.md)。跨平台矩阵入口：`python tools/test_matrix.py --platform both --redis-wsl`（Windows 宿主）。**
+
+下文为单项测试的补充说明，平台环境、完整用例清单和结果判定以统一规程为准。
+
 在 WSL 中执行，复用 `ipcclient` 的四个 Mgr。每个用例创建自己的临时配置和日志目录，退出时清理本次进程和目录。已有端口被占用时直接报错，不终止其他进程。日志超过 2GiB 立即失败，Redis 内存上限为 1536MiB。
 
 ```sh
 cmake -S /mnt/e/openidea -B ~/openidea-build-gcc13 -DOI_IPC_SINGLE_THREAD=OFF
-cmake --build ~/openidea-build-gcc13 --target ipcclient ipcserver logd redisserver -j8
+cmake --build ~/openidea-build-gcc13 -j8
 python3 /mnt/e/openidea/tools/run_regressions.py --case all
 ```
 
@@ -40,9 +44,9 @@ Hold 同时验证连接前原始发送缓存不得超过连接的发送额度，
 
 标准 RPC 回执回归在 Hold 测试内：成功响应、业务错误 1001 的无响应体回执、GetRet/GetRes、错误访问保护、无 sid 输出引用重载、失败保留原响应，以及缺状态码/截断响应；原超时、迟到回包和断连用例继续共用相同调用路径。
 
-服务端回调只接收请求和响应（可选上下文，兼容旧五参数）：回声用同步 int32_t 返回，Hold 用 RpcTask 的 co_return 返回；Hold 另验证带返回值任务挂起后取值与异常传播。
+服务端回调只接收请求和响应（可选上下文）：回声用同步 int32_t 返回，Hold 用 RpcTask 的 co_return 返回；Hold 另验证带返回值任务挂起后取值与异常传播。
 
-命名回调注册使用 OI_RPC_SYNC_HANDLER / OI_RPC_HANDLER 声明和 OI_RPC_BIND 绑定，真实回声与 Hold 网络回归覆盖宏展开路径；可选上下文跨挂起和旧五参数回调在 Hold 内检查。
+命名回调注册使用 OI_RPC_SYNC_HANDLER / OI_RPC_HANDLER 声明和 OI_RPC_BIND 绑定，真实回声与 Hold 网络回归覆盖宏展开路径；可选上下文跨挂起在 Hold 内检查。
 
 字段命名改造后，`--case all` 还包含 `registry` 和 `web`：前者启动独立、限制 1536MiB 的 Redis 与注册服务，将客户端直连后备端口故意改错，验证服务发现和百万次回声；后者使用现有 webserver/webclient 验证 HTTP 查询、JSON、生成协议和二进制 body。均使用临时配置、自动停进程并清理目录。
 

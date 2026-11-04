@@ -158,6 +158,19 @@ bool ServiceTable::Pick(const std::vector<ServiceInstance>& vListParam, const st
 	return true;
 }
 
+std::vector<::OI::Net::SessionManager*> ServiceTable::Watchers(const std::string& sNameParam)
+{
+	std::vector<::OI::Net::SessionManager*> vWatchers;
+	::OI::Thread::MutexGuard stLock(m_stMutex);
+	auto stIterator = m_mServices.find(sNameParam);
+	if (stIterator == m_mServices.end())
+	{
+		return vWatchers;
+	}
+	vWatchers = stIterator->second.vWatchers;
+	return vWatchers;
+}
+
 void ServiceTable::Watch(::OI::Net::SessionManager* pManagerParam, const std::string& sNameParam)
 {
 	::OI::Thread::MutexGuard stLock(m_stMutex);
@@ -362,7 +375,7 @@ bool RegistryClient::Send(uint32_t iIdParam, const ::OI::Rpc::Serialize& stMessa
 
 void RegistryClient::SendRegister()
 {
-	::OI::RpcData::RegRegister stRequestLocal(sServiceName, iServiceId, sServiceIp, sServicePort);
+	::OI::RpcData::RegRegister stRequestLocal(sServiceName, iServiceId, sServiceIp, sServicePort, sServiceZone);
 	Send(PROTO_REG_REGISTER, stRequestLocal);
 }
 
@@ -485,6 +498,7 @@ void RegistryClient::OnFrame(sid_t iSessionIdParam, uint32_t iIdParam, ::OI::Bas
 			stInst.iId = stResponseLocal.vList[iIndexLocal].iId;
 			stInst.sIp = stResponseLocal.vList[iIndexLocal].sIp;
 			stInst.sPort = stResponseLocal.vList[iIndexLocal].sPort;
+			stInst.sZone = stResponseLocal.vList[iIndexLocal].sZone;
 			vList.push_back(stInst);
 		}
 		if (stPending.bSynchronous)
@@ -504,9 +518,11 @@ void RegistryClient::OnFrame(sid_t iSessionIdParam, uint32_t iIdParam, ::OI::Bas
 	}
 }
 
-bool RegistryClient::Lookup(const std::string& sNameParam, std::string& sIpParam, std::string& sPortParam)
+bool RegistryClient::PullSync(const std::string& sNameParam, int32_t& iCodeParam, std::vector<ServiceInstance>& vListParam)
 {
 	::OI::Thread::MutexGuard stSyncLock(stSyncMutex);
+	vListParam.clear();
+	iCodeParam = OI_ERR_FAIL;
 	if (sNameParam.empty() || !Configured())
 	{
 		return false;
@@ -557,8 +573,21 @@ bool RegistryClient::Lookup(const std::string& sNameParam, std::string& sIpParam
 		return false;
 	}
 	::OI::Thread::MutexGuard stResultLock(stPendingMutex);
+	iCodeParam = iCode;
+	vListParam = vResponseList;
+	return true;
+}
+
+bool RegistryClient::Lookup(const std::string& sNameParam, std::string& sIpParam, std::string& sPortParam)
+{
+	int32_t iCodeLocal = OI_ERR_FAIL;
+	std::vector<ServiceInstance> vList;
+	if (!PullSync(sNameParam, iCodeLocal, vList))
+	{
+		return false;
+	}
 	ServiceInstance stPick;
-	if (iCode != OI_OK || !ServiceTable::Pick(vResponseList, sNameParam, 0, stPick))
+	if (iCodeLocal != OI_OK || !ServiceTable::Pick(vList, sNameParam, 0, stPick))
 	{
 		LOG_TRACE("registry lookup %s miss", sNameParam.c_str());
 		return false;
@@ -706,6 +735,32 @@ bool RegistryClient::Publish(const std::string& sSectionParam, const std::string
 	{
 		return true;
 	}
+	std::string sZoneLocal;
+	::OI::Base::Config::GlobalConfig().GetAs("Service.zone", sZoneLocal);
+	auto fnToken = [](const std::string& sTextParam)
+	{
+		if (sTextParam.empty())
+		{
+			return false;
+		}
+		for (size_t iIndexLocal = 0; iIndexLocal < sTextParam.size(); ++iIndexLocal)
+		{
+			char iCharacter = sTextParam[iIndexLocal];
+			bool bOk = (iCharacter >= 'a' && iCharacter <= 'z') || (iCharacter >= 'A' && iCharacter <= 'Z') || (iCharacter >= '0' && iCharacter <= '9') || iCharacter == '_' || iCharacter == '-';
+			if (!bOk)
+			{
+				return false;
+			}
+		}
+		return true;
+	};
+	if (!fnToken(sNameLocal) || (!sZoneLocal.empty() && !fnToken(sZoneLocal)))
+	{
+		fprintf(stderr, "registry publish name=\"%s\" zone=\"%s\" 只能用字母、数字、_、-，名字不能为空，不能带 . 或 *\n", sNameLocal.c_str(), sZoneLocal.c_str());
+		fflush(stderr);
+		LOG_ERROR("registry publish invalid name=%s zone=%s", sNameLocal.c_str(), sZoneLocal.c_str());
+		return false;
+	}
 	int32_t iIdLocal = 0;
 	if (!::OI::Base::Config::GlobalConfig().GetAs("Service.id", iIdLocal) || iIdLocal <= 0)
 	{
@@ -734,6 +789,7 @@ bool RegistryClient::Publish(const std::string& sSectionParam, const std::string
 	iServiceId = iIdLocal;
 	sServiceIp = sAdvertiseIp;
 	sServicePort = sAdvertisePort;
+	sServiceZone = sZoneLocal;
 	bool bGotLocal = false;
 	int32_t iCodeLocal = OI_ERR_FAIL;
 	if (Ensure())

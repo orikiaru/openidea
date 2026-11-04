@@ -1,6 +1,9 @@
 #include <string.h>
 #include <cerrno>
 #include <cstdlib>
+#include <cstring>
+#include <chrono>
+#include <thread>
 #include "log_file_instance.h"
 #include "oi_thread.h"
 #include "oi_log.h"
@@ -30,12 +33,12 @@ bool LogFileInstance::CreateNewFile(const char* pPathParam)
 {
 #ifdef _WIN32
 	FILE* pFile = NULL;
-	if (fopen_s(&pFile, pPathParam, "a+") != 0 || !pFile)
+	if (fopen_s(&pFile, pPathParam, "ab+") != 0 || !pFile)
 	{
 		return false;
 	}
 #else
-	FILE* pFile = fopen(pPathParam, "a+");
+	FILE* pFile = fopen(pPathParam, "ab+");
 	if (!pFile)
 	{
 		return false;
@@ -140,6 +143,22 @@ static void DiskFailure(const char* pOperationParam)
 
 static bool WriteAll(FILE* pFileParam, const char* pDataParam, size_t iSizeParam)
 {
+#ifdef OI_ENABLE_TEST_HOOKS
+	// 只在测试构建生效，只阻塞日志写线程，不阻塞 poll 或业务协程。
+	const char* pFault = std::getenv("OI_TEST_LOG_FAULT");
+	if (pFault && std::strcmp(pFault, "full") == 0)
+	{
+#ifdef _WIN32
+		_set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+#endif
+		errno = ENOSPC;
+		DiskFailure("injected fwrite ENOSPC");
+	}
+	if (pFault && std::strcmp(pFault, "slow") == 0)
+	{
+		std::this_thread::sleep_for(std::chrono::milliseconds(5));
+	}
+#endif
 	while (iSizeParam > 0)
 	{
 		size_t iWrote = fwrite(pDataParam, 1, iSizeParam, pFileParam);

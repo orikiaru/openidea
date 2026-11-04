@@ -10,7 +10,7 @@
 | --- | --- |
 | `svc` | 登记过的名字集合 |
 | `svc:<name>` | 这个名字下登记过的 id 集合 |
-| `svc:<name>:<id>` | 一份实例，值是 `ip port`，带 `expire_ms` 的过期 |
+| `svc:<name>:<id>` | 一份实例，值是 `ip port`，分区服再跟分区号，带 `expire_ms` 的过期 |
 
 ## registry 怎么连 Redis
 
@@ -63,19 +63,20 @@ Redis 连不上或卡住时，登记和续期回失败，客户端下一次心�
 
 ## 全局服和分区服
 
-服务名里不能有 `.` 和 `*`。对端写成下面三种，只认结尾，不在中间搜索。
+服务名里不能有 `.` 和 `*`。分区号单独传入，不拼进服务名。
 
-| 写法 | 含义 |
+| 调用 | 含义 |
 | --- | --- |
-| `logd` | 全局服。登记时不带分区。多份实例时选一台，连上之后固定走这一条，断了再选。 |
-| `gameserver.1001` | 分区服的指定分区。点号后面整段是分区号，登记时带上这个分区。 |
-| `gameserver.*` | 按发送这一刻的登记名单，同时发给每一份。 |
+| `CallAny` | 不带分区号。在当前登记里随机一台。管理器自己已经连着这个名字时，继续用这条连接，断了再选。 |
+| `Call(分区号)` | 只打这个分区。全局服不接受分区号。 |
+| `CallAll` | 调用入口解析当前登记名单，任务运行时同时发给每一份。 |
+| `CallMany(分区号列表)` | 只打 `vector<int32_t>` 里的这些分区，结果顺序和列表一致。没登记的那一格是 `OI_ERR_CONNECT`，不挡住其他分区。空列表、负数分区号、全局服带分区号，整批一个 `OI_ERR_FAIL`。 |
 
-登记时标明自己是全局还是分区。全局服拒绝带分区号的写法，分区服拒绝不带分区号的写法，避免把一封信送到另一类进程上。
+登记时标明自己是全局还是分区。全局服拒绝带分区号的调用，避免把一封信送到另一类进程上。
 
-`name` 和 `name.分区` 一次只打一台。`name.*` 先把这一刻名单上的请求全部发出去，再等各自的回包。总耗时取决于最慢的那一台，不是各台延迟相加。等待表不用改：每个仍是一个调用号、一份回包、唤醒一次。没回来的那个自己超时或断连，不连累另外几个。等待期间新登记的分区不补进这一批。
+`CallAny` 和 `Call` 一次只打一台。`CallAll` 和 `CallMany` 先把要打的请求全部发出去，再等各自的回包。总耗时取决于最慢的一台，不是各台延迟相加。等待表不用改：每个仍是一个调用号、一份回包、唤醒一次。没回来的那个自己超时或断连，不连累另外几个。等待期间新登记的分区不补进这一批，`CallMany` 也不补列表里没写的分区。
 
-分区号只放在服务名后缀里，不编进 `sessionid`，也不编进 IP。同一分区再开一份进程时，仍是多条连接，`sessionid` 负责把回包送回其中一条。
+分区号只作为登记字段和 `Call` 的参数，不编进 `sessionid`，也不编进 IP。同一分区再开一份进程时，仍是多条连接，`sessionid` 负责把回包送回其中一条。
 
 ## 应用侧看不到 Session
 
@@ -83,28 +84,32 @@ Redis 连不上或卡住时，登记和续期回失败，客户端下一次心�
 
 应用只做三件事：声明自己是哪个服务（名字、全局还是分区、编码），登记处理函数，按服务名调用。连接、重连、未连上时的暂存、按名字选实例，都在框架里。
 
-现在回声的处理函数还带着 `SessionManager*` 和 `sid_t`，函数体里却不用。收成下面这样：
+回声已经是这种处理函数，注册在 `ipcserver` 的 `Init`：
 
 ```cpp
-Handle<AllEchoReq, AllEchoRes>([](AllEchoReq& req, AllEchoRes& res) -> coro::Task {
-    res.stData = req.stData;
-    res.iCode = 1;
-    co_return;
-});
+static OI_RPC_SYNC_HANDLER(AllEcho, HandleAllEcho)
+{
+    stResponse.stData = stRequest.stData;
+    stResponse.iCode = 1;
+    return 0;
+}
 ```
 
-发出去也不再传管理器和 `sessionid`：
+发出去不传管理器和 `sessionid`。时长是 `OI::Timer::MS`，不写就用 `Seconds(180)`：
 
 ```cpp
-auto res = co_await RpcCall<AllEchoRes>("ipcserver", req);
-auto one = co_await RpcCall<AllEchoRes>("gameserver.1001", req);
-auto batch = co_await RpcCallBatch<AllEchoRes>("gameserver.*", req);
+auto any = co_await games.CallAny<AllEchoRes>(req);
+auto one = co_await games.Call<AllEchoRes>(1001, req);
+auto some = co_await games.CallMany<AllEchoRes>(std::vector<int32_t>{1001, 1002}, req, OI::Timer::Seconds(3));
+auto all = co_await games.CallAll<AllEchoRes>(req);
 ```
 
-`RpcCallBatch` 自己先把这一批请求都发出去，再逐个等已经在途的等待器，然后把每台的结果一起交回来。调用方不写这个循环。总耗时取决于最慢的一台。某一台超时或断连只记在它自己的结果里。
+服务名在管理器上，调用方不拼 `名字.分区`。`CallAll` 和 `CallMany` 自己先把这一批请求都发出去，再逐个等已经在途的等待器，然后把每台的结果一起交回来。调用方不写这个循环。总耗时取决于最慢的一台。某一台超时或断连只记在它自己的结果里。
 
-现有的 `RpcCall` 把发送写在 `await_suspend` 里。`RpcCallBatch` 不能先造一串还没发送的等待器再挨个 `co_await`，那样会等完一台才发下一台。发送和等待拆开，拆在函数里面。
+单次 `RpcCall` 仍把发送写在 `await_suspend` 里。一批调用不能先造一串还没发送的等待器再挨个 `co_await`，那样会等完一台才发下一台。`CallAll` 和 `CallMany` 在里面先 `Submit` 再等。
 
 日志、Redis、访问本框架里的 HTTP 服务，也是这种调用，编码留在框架里。应用不写会话子类。对外的 HTTP 网址，以及 `redisserver` 背后那台真正的 Redis，不是注册表里的服务，地址仍要配置。
 
 监听方的一条连接在框架内部仍是一个 `sessionid`。处理函数和调用方都看不到它。
+
+批量调用在普通函数入口完成路由解析，内部协程按值持有目标列表和请求。服务名仅在入口借用，创建任务后可以修改或销毁原字符串，再启动任务；目标名单以创建任务时的解析结果为准。路由连接池管理器常驻，不为每次调用新增共享所有权；连接失效仍由发送、断连和超时路径返回错误。

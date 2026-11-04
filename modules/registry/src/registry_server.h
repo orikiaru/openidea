@@ -11,7 +11,7 @@
 // 注册进程。登记写进 Redis，登记的连接断了当场删掉。按 pull_ms 整量拉一次整理好，客户端来拉时直接给。
 // Redis 走 RedisClient 协程，等 Redis 的时候 poll 照转。
 // 所有键都在 oi:{project.env}: 下面，不同项目、不同环境互不可见。
-// svc 是名字集合，svc:<name> 是这个名字的 id 集合，svc:<name>:<id> 是一份实例，值是 "ip port"。
+// svc 是名字集合，svc:<name> 是这个名字的 id 集合，svc:<name>:<id> 是一份实例，值是 "ip port" 或 "ip port 分区"。
 class RegistryServer : public ::OI::Net::SessionManager
 {
 	DECLARE_SINGLETON(RegistryServer)
@@ -36,6 +36,7 @@ class RegistryServer : public ::OI::Net::SessionManager
 		int32_t iId;
 		std::string sIp;
 		std::string sPort;
+		std::string sZone;
 		std::string sValue;
 	};
 	enum

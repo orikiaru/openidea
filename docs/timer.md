@@ -35,6 +35,8 @@ libuv 到点只调用 `OnSignal`。`OnSignal` 把 `Update` 丢进线程池，不
 
 业务侧用 `AddTimer(fn, millisecond)`，或者传入一个 `BaseTimer`。
 
-协程不等在 poll 回调里。`coro::yield(ms)` 在 `ms > 0` 时先切到 poll 线程 `AddTimer`，到点再把协程句柄放回调度队列。`ms <= 0` 不进时间轮，只把句柄放回队列。
+协程不等在 poll 回调里。`coro::yield` 接受毫秒整数，也接受 `OI::Timer::MS`。`MS` 在挂起前换成毫秒。大于 0 时先切到 poll 线程 `AddTimer`，到点再把协程句柄放回调度队列。小于等于 0 不进时间轮，只把句柄放回队列。
 
-RPC 和 Redis 的超时不走这条时间轮。它们各有一个 200 毫秒的周期定时器扫等待队列。RPC 超时的单位是秒。
+应用层时长只有 `OI::Timer::MS`。`Milliseconds`、`Seconds`、`Minutes`、`Hours`、`Days` 在构造时换成毫秒。单调钟用 `SteadyMilliseconds()`，不受系统校时影响。
+
+RPC 和 Redis 的超时不走这条时间轮。它们各有一个 200 毫秒的周期定时器扫等待队列。RPC 按毫秒分桶；传裸整数的旧重载仍把这个整数当成秒，再乘 1000。Redis 超时来自 `RedisClient.timeout_ms`。`RedisExpire` 的参数也是 `MS`，发给 Redis 的 `EXPIRE` 用整秒。

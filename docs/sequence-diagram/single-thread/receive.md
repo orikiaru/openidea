@@ -23,7 +23,7 @@ sequenceDiagram
     Sess->>Sess: OnDataIn
     loop 缓冲里还能切出一帧
         alt 头或包体不够
-            Sess->>Sess: 回滚，字节留在 _ibuff
+            Sess->>Sess: 回滚，字节留在 stInputBuffer
         else 头非法
             Sess->>Sess: PassiveClose
         else 头合法
@@ -35,7 +35,7 @@ sequenceDiagram
                     Wait->>Queue: Schedule
                     Note over Queue: 下一轮主循环才 resume，解包仍在主线程
                 else 已经取走或协议号不符
-                    Rpc->>Rpc: 丢掉，或按 -1 放回队列
+                    Rpc->>Rpc: 丢掉，或按 OI_ERR_FAIL 放回队列
                 end
             else 是请求且注册了处理函数
                 Rpc->>Queue: StartTask 只入队

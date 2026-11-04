@@ -12,7 +12,7 @@
 
 `proto` 是自有协议，类型在 `OI::Rpc`。`Protocol` 是协议基类，`Rpc` 是远程调用。`oi_rpc_coro.h` 是协程任务和 RPC 等待。收包按协议号交给 `DeliverRpc`，不再按协议号克隆存根。`parser` 做组包。`proto_tool` 是 cmake 时跑的 Python 生成器。
 
-`timer` 是分层时间轮，类型在 `OI::Timer`，见 [定时器](timer.md)。
+`timer` 是分层时间轮，类型在 `OI::Timer`，见 [定时器](timer.md)。应用层时长是 `MS`，由 `Milliseconds`、`Seconds`、`Minutes`、`Hours`、`Days` 构造。
 
 `logger` 是日志客户端，类型在 `OI::Log`。业务进程用它把日志发到 `logd`。`logd` 自己的服务端在 `modules/logd`。`SendLog` 在日志服还没连上时先攒着，待发超过 4MB 就返回 false，调用方自己决定要不要再试。
 

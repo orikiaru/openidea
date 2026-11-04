@@ -24,6 +24,7 @@ struct ServiceInstance
 	int32_t iId;
 	std::string sIp;
 	std::string sPort;
+	std::string sZone;
 	ServiceInstance()
 	    : iId(0)
 	{
@@ -44,6 +45,7 @@ class ServiceTable
   public:
 	~ServiceTable();
 	void Watch(::OI::Net::SessionManager* pManagerParam, const std::string& sNameParam);
+	std::vector<::OI::Net::SessionManager*> Watchers(const std::string& sNameParam);
 	std::vector<std::string> Names();
 	// names 是这次拉取问过的名字，list 里没有的就是下线了。
 	void Apply(const std::vector<std::string>& vNamesParam, const std::vector<ServiceInstance>& vListParam);
@@ -76,6 +78,8 @@ class RegistryClient : public ::OI::Net::SessionManager
 	virtual ~RegistryClient();
 	// 没配 [Registry] 或查不到时返回 false，调用方继续用配置里的 ip/port。
 	bool Lookup(const std::string& sNameParam, std::string& sIpParam, std::string& sPortParam);
+	// 同步拉这个名字下的全部分区。调用方在协程里用；单线程会转 poll，多线程等回包。
+	bool PullSync(const std::string& sNameParam, int32_t& iCodeParam, std::vector<ServiceInstance>& vListParam);
 	// StartServer 成功后登记本进程。返回 false 表示不能起：id 不对，或同名同 id 已经在线。
 	bool Publish(const std::string& sSectionParam, const std::string& sIpParam, const std::string& sPortParam);
 	void Watch(::OI::Net::SessionManager* pManagerParam, const std::string& sNameParam);
@@ -113,6 +117,7 @@ class RegistryClient : public ::OI::Net::SessionManager
 	int32_t iServiceId;
 	std::string sServiceIp;
 	std::string sServicePort;
+	std::string sServiceZone;
 	std::atomic<bool> bPublished;
 	std::atomic<bool> bRegistered;
 	std::atomic<bool> bLost;

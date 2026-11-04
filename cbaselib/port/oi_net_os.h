@@ -45,9 +45,9 @@ inline const char* NetOs_StrError(int iErrorParam)
 {
 	static thread_local char vBuffer[128];
 #ifdef _WIN32
-	if (strerror_s(buf, sizeof(buf), err) != 0)
+	if (strerror_s(vBuffer, sizeof(vBuffer), iErrorParam) != 0)
 	{
-		buf[0] = '\0';
+		vBuffer[0] = '\0';
 	}
 #else
 	const char* pText = strerror(iErrorParam);
