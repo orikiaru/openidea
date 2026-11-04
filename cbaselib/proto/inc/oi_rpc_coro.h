@@ -35,6 +35,28 @@ void Schedule(std::coroutine_handle<> stHandleParam);
 // 根协程跑完后不能在 final_suspend 里销毁自己。登记下来，等 resume 返回再释放。
 void DetachFinished(std::coroutine_handle<> stHandleParam, void (*fnReleaseParam)(std::coroutine_handle<>));
 void DrainDetached();
+// 调度器唯一的 resume 入口。期间新建的任务当场跑到第一次挂起，协程外新建的任务入队。
+void ResumeTask(std::coroutine_handle<> stHandleParam);
+bool InTaskResume() noexcept;
+
+// 新任务构造 promise 时取走。只在 StartTask、TaskScope 等框架入口里设置。
+struct TaskLaunch
+{
+	Token iToken = 0;
+	bool bDetached = false;
+	bool bPost = false;
+};
+TaskLaunch TakeTaskLaunch() noexcept;
+class TaskLaunchScope
+{
+	TaskLaunch m_stPrevious;
+
+  public:
+	explicit TaskLaunchScope(TaskLaunch stLaunchParam) noexcept;
+	~TaskLaunchScope();
+	TaskLaunchScope(const TaskLaunchScope&) = delete;
+	TaskLaunchScope& operator=(const TaskLaunchScope&) = delete;
+};
 using TaskErrorHandler = void (*)(Token, std::exception_ptr);
 // 在工作线程调用；处理函数必须线程安全，不允许抛异常。nullptr 恢复默认 stderr 报告。
 void SetTaskErrorHandler(TaskErrorHandler fnHandlerParam);
@@ -75,7 +97,22 @@ struct TaskWaiter
 {
 	std::coroutine_handle<> stParent;
 	TaskWaiter* pNext = nullptr;
-	std::atomic<int> iGate{0}; // 0 登记中，1 已完成，2 已挂起。
+};
+// 协程里新建的任务当场跑；协程外（网络回调、main）新建的或框架要求入队的，放进运行队列。
+struct TaskInitialSuspend
+{
+	bool bInline;
+	bool await_ready() const noexcept
+	{
+		return bInline;
+	}
+	void await_suspend(std::coroutine_handle<> stHandleParam) const noexcept
+	{
+		Schedule(stHandleParam);
+	}
+	void await_resume() const noexcept
+	{
+	}
 };
 struct TaskFinalSuspend
 {
@@ -95,13 +132,9 @@ struct TaskFinalSuspend
 		}
 		while (pWaiter)
 		{
-			// 发布完成后等待者可能立即恢复并销毁节点，只能再用局部副本。
+			// 调度后等待者可能立即恢复并销毁节点，只能再用局部副本。
 			auto* pNext = pWaiter->pNext;
-			const auto stParent = pWaiter->stParent;
-			if (pWaiter->iGate.exchange(1, std::memory_order_acq_rel) == 2)
-			{
-				Schedule(stParent);
-			}
+			Schedule(pWaiter->stParent);
 			pWaiter = pNext;
 		}
 		// 执行引用必须等 resume 返回后才释放，不能在 final_suspend 中销毁帧。
@@ -121,13 +154,22 @@ struct TaskState
 	Token iTaskId = 0;
 	OI::Thread::Mutex stMutex;
 	TaskWaiter* pWaiters = nullptr;
-	std::atomic<size_t> iReferences{1}; // Task 对象、等待者、运行中的帧各自持有引用。
-	bool bStarted = false;
+	std::atomic<size_t> iReferences{2}; // Task 对象、等待者、运行中的帧各自持有引用。创建时即在运行。
 	bool bReady = false;
-	bool bDetached = false;
-	std::suspend_always initial_suspend() noexcept
+	bool bInlineStart = false;
+	std::atomic<bool> bDetached{false};
+	std::atomic<bool> bObserved{false};
+	std::atomic<bool> bErrorReported{false};
+	TaskState()
 	{
-		return {};
+		const TaskLaunch stLaunch = TakeTaskLaunch();
+		iTaskId = stLaunch.iToken;
+		bDetached.store(stLaunch.bDetached, std::memory_order_relaxed);
+		bInlineStart = !stLaunch.bPost && InTaskResume();
+	}
+	TaskInitialSuspend initial_suspend() noexcept
+	{
+		return {bInlineStart};
 	}
 	TaskFinalSuspend final_suspend() noexcept
 	{
@@ -136,7 +178,14 @@ struct TaskState
 	void unhandled_exception() noexcept
 	{
 		stError = std::current_exception();
-		if (bDetached)
+		if (bDetached.load(std::memory_order_acquire))
+		{
+			ReportError();
+		}
+	}
+	void ReportError() noexcept
+	{
+		if (!bErrorReported.exchange(true, std::memory_order_acq_rel))
 		{
 			ReportTaskError(iTaskId, stError);
 		}
@@ -175,6 +224,12 @@ struct BasicTask
 		{
 			if (stHandleParam && stHandleParam.promise().iReferences.fetch_sub(1, std::memory_order_acq_rel) == 1)
 			{
+				// 没有人取走的异常在最后一个引用释放时报告，不会悄悄丢掉。
+				auto& stPromise = stHandleParam.promise();
+				if (stPromise.stError && !stPromise.bObserved.load(std::memory_order_acquire))
+				{
+					stPromise.ReportError();
+				}
 				stHandleParam.destroy();
 			}
 		}
@@ -228,36 +283,28 @@ struct BasicTask
 		return stPromise.iTaskId;
 	}
 
+	// 任务创建即运行。Start 只把它标成独立任务：分配 token、保活闭包、异常直接报告。可重复调用。
 	Token Start(std::shared_ptr<void> pCallableParam = {}, Token iTokenParam = 0) const
 	{
 		if (!stHandle)
 		{
 			throw std::logic_error("cannot start a moved-from Task");
 		}
-		Token iTokenLocal;
-		bool bStart = false;
+		auto& stPromise = stHandle.promise();
+		OI::Thread::MutexGuard stLock(stPromise.stMutex);
+		if (stPromise.iTaskId == 0)
 		{
-			auto& stPromise = stHandle.promise();
-			OI::Thread::MutexGuard stLock(stPromise.stMutex);
-			if (stPromise.iTaskId == 0)
-			{
-				stPromise.iTaskId = iTokenParam ? iTokenParam : AllocTaskUid();
-			}
-			iTokenLocal = stPromise.iTaskId;
-			if (!stPromise.bStarted)
-			{
-				stPromise.pCallable = std::move(pCallableParam);
-				stPromise.bDetached = true;
-				stPromise.bStarted = true;
-				stPromise.iReferences.fetch_add(1, std::memory_order_relaxed);
-				bStart = true;
-			}
+			stPromise.iTaskId = iTokenParam ? iTokenParam : AllocTaskUid();
 		}
-		if (bStart)
+		if (!stPromise.pCallable)
 		{
-			Schedule(stHandle);
+			stPromise.pCallable = std::move(pCallableParam);
 		}
-		return iTokenLocal;
+		if (!stPromise.bDetached.exchange(true, std::memory_order_acq_rel) && stPromise.bReady && stPromise.stError)
+		{
+			stPromise.ReportError();
+		}
+		return stPromise.iTaskId;
 	}
 
 	struct Awaiter : TaskWaiter
@@ -277,46 +324,34 @@ struct BasicTask
 		{
 			promise_type::Release(stChild);
 		}
-		bool await_ready() const noexcept
+		bool await_ready()
 		{
-			return false;
+			// 当场跑完的子任务的执行引用在这里放，不等最外层协程挂起，避免帧堆在线程局部队列里。
+			DrainDetached();
+			auto& stPromise = stChild.promise();
+			OI::Thread::MutexGuard stLock(stPromise.stMutex);
+			return stPromise.bReady;
 		}
 		bool await_suspend(std::coroutine_handle<> stParentParam)
 		{
-			// 登记和完成共用锁；首个等待者负责启动，其他等待者只订阅。
-			const auto stChildLocal = stChild;
-			bool bStart = false;
+			// 登记和完成共用锁。登记后子任务可能在别的线程立即完成并调度本协程，之后不再访问 this。
+			auto& stPromise = stChild.promise();
+			OI::Thread::MutexGuard stLock(stPromise.stMutex);
+			if (stPromise.bReady)
 			{
-				auto& stPromise = stChildLocal.promise();
-				OI::Thread::MutexGuard stLock(stPromise.stMutex);
-				if (stPromise.bReady)
-				{
-					return false;
-				}
-				stParent = stParentParam;
-				pNext = stPromise.pWaiters;
-				stPromise.pWaiters = this;
-				if (!stPromise.bStarted)
-				{
-					stPromise.bStarted = true;
-					stPromise.iReferences.fetch_add(1, std::memory_order_relaxed);
-					bStart = true;
-				}
+				return false;
 			}
-			if (bStart)
-			{
-				stChildLocal.resume();
-				// 子任务这次 resume 已经返回。执行引用在这里放，不等最外层协程挂起，避免同步完成的帧堆在线程局部队列里。
-				DrainDetached();
-			}
-			// 当场完成仍走内联返回；发布挂起后不再访问 this。
-			return iGate.exchange(2, std::memory_order_acq_rel) != 1;
+			stParent = stParentParam;
+			pNext = stPromise.pWaiters;
+			stPromise.pWaiters = this;
+			return true;
 		}
 		T await_resume()
 		{
-			const auto& stPromise = stChild.promise();
+			auto& stPromise = stChild.promise();
 			if (stPromise.stError)
 			{
+				stPromise.bObserved.store(true, std::memory_order_release);
 				std::rethrow_exception(stPromise.stError);
 			}
 			if constexpr (!std::is_void_v<T>)
@@ -340,12 +375,24 @@ using Task = BasicTask<void>;
 template <typename T>
 using TaskResult = BasicTask<T>;
 
+// 在 stLaunchParam 下调用 fnFunctionParam，它新建的第一条任务取走这份启动信息。
+template <typename F>
+auto InvokeTask(TaskLaunch stLaunchParam, F&& fnFunctionParam)
+{
+	TaskLaunchScope stScope(stLaunchParam);
+	return std::forward<F>(fnFunctionParam)();
+}
+
+// 闭包由任务保活，带捕获的协程 lambda 必须经这里启动。任务总是入队，不在调用方栈上跑。
 template <typename F>
 auto StartTask(F&& fnFunctionParam)
 {
 	Token iTokenLocal = AllocTaskUid();
 	auto stCallable = std::make_shared<std::decay_t<F>>(std::forward<F>(fnFunctionParam));
-	auto stTask = (*stCallable)(iTokenLocal);
+	auto stTask = InvokeTask(TaskLaunch{iTokenLocal, true, true}, [&stCallable, iTokenLocal]()
+	{
+		return (*stCallable)(iTokenLocal);
+	});
 	stTask.Start(std::move(stCallable), iTokenLocal);
 	return stTask;
 }
@@ -434,8 +481,11 @@ class TaskScope
 			throw std::logic_error("TaskScope is closed");
 		}
 		Token iTokenLocal = AllocTaskUid();
-		auto stTask = Run(m_pState, std::forward<F>(fnFunctionParam), iTokenLocal);
-		stTask.stHandle.promise().iTaskId = iTokenLocal;
+		// 任务入队后要等这把锁才能结束，计数晚一步加不会被提前减到零。
+		auto stTask = InvokeTask(TaskLaunch{iTokenLocal, true, true}, [this, &fnFunctionParam, iTokenLocal]()
+		{
+			return Run(m_pState, std::forward<F>(fnFunctionParam), iTokenLocal);
+		});
 		++m_pState->iActive;
 		return stTask.Start();
 	}
@@ -510,12 +560,7 @@ coro::Task RunHandledRpc(F fnFunctionParam, proto_type_t iResponseIdParam, coro:
 		{
 			static_assert(std::is_same_v<Return, RpcTask>,
 			    "RPC handler must return RpcTask or int32_t");
-			auto stChild = stInvoke();
-			if (stChild.stHandle)
-			{
-				stChild.stHandle.promise().iTaskId = iTokenParam;
-			}
-			iRetcode = co_await stChild;
+			iRetcode = co_await coro::InvokeTask(coro::TaskLaunch{iTokenParam, false, false}, stInvoke);
 		}
 	}
 	catch (::OI::Base::ParserException&)

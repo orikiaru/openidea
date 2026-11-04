@@ -171,11 +171,14 @@ static void WorkerMain(ThreadPool::ThreadData* pDataParam)
 		}
 		if (stCoroutine)
 		{
-			// 只 resume。跑完的根协程由 SetAfterResume 登记的函数释放。
-			stCoroutine.resume();
-			if (ThreadPool::GetInstance().fnAfterResume)
+			// 只 resume。跑完的根协程由 SetResume 登记的函数释放。
+			if (ThreadPool::GetInstance().fnResume)
 			{
-				ThreadPool::GetInstance().fnAfterResume();
+				ThreadPool::GetInstance().fnResume(stCoroutine);
+			}
+			else
+			{
+				stCoroutine.resume();
 			}
 		}
 		else
@@ -313,9 +316,9 @@ void ThreadPool::SetPending(bool (*fnFunctionParam)())
 	fnPending = fnFunctionParam;
 }
 
-void ThreadPool::SetAfterResume(void (*fnFunctionParam)())
+void ThreadPool::SetResume(void (*fnFunctionParam)(std::coroutine_handle<>))
 {
-	fnAfterResume = fnFunctionParam;
+	fnResume = fnFunctionParam;
 }
 
 void ThreadPool::PumpOnce()

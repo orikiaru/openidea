@@ -54,7 +54,7 @@ class ThreadPool
 	uint32_t iMaxTaskCount = UINT32_MAX;
 	bool (*fnDrain)() = nullptr;
 	bool (*fnPending)() = nullptr;
-	void (*fnAfterResume)() = nullptr;
+	void (*fnResume)(std::coroutine_handle<>) = nullptr;
 	std::atomic<bool> bStop{false};
 	int32_t iExitCode = 0;
 	std::mutex stStopMutex;
@@ -94,8 +94,8 @@ class ThreadPool
 	void SetDrain(bool (*fnFunctionParam)());
 	// 单线程这一轮没跑到、但已经挂进协程队列的。yield(0) 靠它留到下一轮。
 	void SetPending(bool (*fnFunctionParam)());
-	// 协程 resume 返回后调用。用来释放已经跑完的根协程，不在 base 里直接依赖 proto。
-	void SetAfterResume(void (*fnFunctionParam)());
+	// 工人通过它 resume 协程。协程运行时借此标记“正在跑协程”并释放跑完的根协程，不在 base 里直接依赖 proto。
+	void SetResume(void (*fnFunctionParam)(std::coroutine_handle<>));
 
 	// 线程交给 out，由调用方在退出时 join。
 	static bool CreateSpecThread(std::thread& stOutputParam, void* (*fnThreadHandleParam)(void*), void* pArgumentParam);

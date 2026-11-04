@@ -415,6 +415,7 @@ def run(case, args):
                 assert "hold rpc session index calls=4096 bad=0" in text
                 assert "hold timer exceptions executed=5 destroyed=5 bad=0" in text
                 assert "hold nested results completed=32768 caught=16384 bad=0" in text
+                assert "hold hot start inline=1 queued=1 bad=0" in text
                 assert "hold shared tasks waiters=64 bad=0" in text
                 for waiter_count in (2, 8, 64, 256):
                     for shared_mode in range(3):

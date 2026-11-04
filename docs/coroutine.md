@@ -4,17 +4,17 @@
 
 ## 怎么写
 
-要结果就 `co_await`，不等就 `coro::StartTask`。让出一段时间用 `co_await coro::yield(毫秒)`。
+调用协程函数就开始执行。要结果就 `co_await` 它返回的 Task；想并发，先调用拿到几个 Task 再逐个 `co_await`。带捕获的协程 lambda 和要在独立调用号下运行的任务用 `coro::StartTask`。让出一段时间用 `co_await coro::yield(毫秒)`。
 
 - `yield(ms)` 在 `ms > 0` 时进时间轮，到点再跑，等待期间不占 CPU
 - `ms <= 0` 只把句柄放回队列，这一轮不再碰它。主循环会先去 poll，再跑新挂上的
 - 应用层要空等一段时间，只用 `co_await coro::yield(毫秒)`。不要 `sleep`、`sleep_for`、`Sleep`、`usleep`。单线程就这一条线程，睡下去 poll 停转，套接字里的数据发不出去
 
-`co_await` 一条 `Task` 会在调用方的栈上把子协程 `resume` 到它自己挂起为止。子协程当场跑完，调用方不挂起。子协程自己停住（等回包或定时）时，把调用方登记到等待列表，子协程结束后逐个 `Schedule` 等待者。
+任务创建即运行。在协程里调用协程函数，子协程当场在调用方的栈上跑到第一次挂起，再把 Task 返回给调用方；子协程当场跑完，之后的 `co_await` 直接取结果，调用方不挂起。在协程外调用（网络回调、定时器回调、main），子协程只放进运行队列，不在回调线程上跑。子协程停住（等回包或定时）后，`co_await` 把调用方登记到等待列表，子协程结束后逐个 `Schedule` 等待者。
 
-所以不要在第一次挂起之前层层 `co_await` 子任务，栈会随层数涨。`StartTask` 只入队，不加栈。
+所以不要在第一次挂起之前层层调用子任务，栈会随层数涨。`StartTask` 和 `TaskScope::Start` 总是入队，不加栈。
 
-`co_return` 才结束一条 `coro::Task`。同一个 Task / TaskResult 可以重复或并发 `co_await`，任务只执行一次；完成后再等，直接取得已保存的结果或异常。`StartTask` 启动独立任务并返回对应的 Task / TaskResult 实例；可直接 await，也可按值传给多个协程。需要调用号时用 `stTask.GetToken()`。不接返回值仍然正常独立执行，不取消任务。底层 `task.Start()` 幂等，重复启动返回同一个 token，不再次入队。
+`co_return` 才结束一条 `coro::Task`。同一个 Task / TaskResult 可以重复或并发 `co_await`，任务只执行一次；完成后再等，直接取得已保存的结果或异常。`StartTask` 启动独立任务并返回对应的 Task / TaskResult 实例；可直接 await，也可按值传给多个协程。需要调用号时用 `stTask.GetToken()`。不接返回值仍然正常独立执行，不取消任务。底层 `task.Start()` 只把任务标成独立任务（分配 token、异常直接报告），可重复调用，不会再次执行。
 
 Task 对象、每个等待器及运行中的帧各持一份引用。任务对象析构不会取消已启动任务，等待器可独立保活；最后一个引用释放才销毁帧。任务对象可复制或移动；复制只增加共享引用，不复制任务或结果，已经登记的等待不受影响；移后对象再次 Start/await 抛 logic_error。不支持一边移动/销毁同一个 C++ 对象一边从其他线程访问它。
 
@@ -32,7 +32,7 @@ TaskResult 每次等待返回一份结果副本，不移走共享结果。大对
 
 单线程主循环每一轮只跑进入时已经在队列里的普通 `Task`，再 `StScheduler::Poll` 只 `resume` 进入时已经在协程队列里的句柄。这一轮里 `yield(0)` 和 `StartTask` 进的是原队列，这次碰不到。然后如果还有待跑的任务或协程，`PollWait(0)` 只试一次网络；什么都没有才 `PollWait(1000)` 堵住等。
 
-多线程由 `ThreadPool::PostCoroutine` 把句柄放进工人队列。工人只 `resume`，不在工人里销毁协程帧。协程在 `final_suspend` 里登记执行引用回收，这次 `resume` 返回后 `DrainDetached` 再释放该引用。当场跑完的子任务也在这次返回后回收，不等最外层协程挂起。仍有任务对象或等待者时保留帧与结果。
+多线程由 `ThreadPool::PostCoroutine` 把句柄放进工人队列。工人和单线程队列都经 `coro::ResumeTask` 恢复协程，期间新建的任务算作“在协程里”，当场执行。协程在 `final_suspend` 里登记执行引用回收，这次 `resume` 返回后 `DrainDetached` 再释放该引用。当场跑完的子任务在调用方下一次 `co_await` 时回收，不等最外层协程挂起。仍有任务对象或等待者时保留帧与结果。
 
 完成与等待登记使用框架 Mutex，单线程下锁为空操作。等待节点内嵌在父协程帧，不另分配堆节点；唤醒前缓存节点的下一项和父句柄，发布后不再访问可能已经销毁的节点。执行引用保证通知期间子帧仍然有效。
 
@@ -60,7 +60,7 @@ HandleRpc<AllEchoReq>([](const AllEchoReq& req, AllEchoRes& res) -> OI::Rpc::Rpc
 
 新接口的时长参数是 `OI::Timer::MS`，用 `OI::Timer::Milliseconds(500)`、`Seconds(10)`、`Minutes`、`Hours`、`Days` 构造，默认 `Seconds(180)`。超时统一使用带单位的时长类型，不再接受裸整数秒。由 200 毫秒周期按毫秒分桶扫描，因此 `MS` 不代表毫秒级唤醒精度。非正超时表示不设截止时间，断连仍会结束等待。`yield` 接受毫秒整数，也接受 `MS`。
 
-按服务名调用不传 `sessionid`，见 [服务注册](registry.md)。`CallAny` 不带分区，`Call` 打一个分区，`CallAll` 打当前名单上的每一份，`CallMany` 打给出的分区号列表。选实例时挂起等注册表回包，不占线程。`CallAll` 和 `CallMany` 先全部发出，再逐个等。这几个接口返回 `TaskResult`，第一次 `co_await` 才发请求；同一个对象可以给多个协程等，请求只发一次，大家拿同一份结果。
+按服务名调用不传 `sessionid`，见 [服务注册](registry.md)。`CallAny` 不带分区，`Call` 打一个分区，`CallAll` 打当前名单上的每一份，`CallMany` 打给出的分区号列表。选实例时挂起等注册表回包，不占线程。`CallAll` 和 `CallMany` 先全部发出，再逐个等。这几个接口返回 `TaskResult`，调用时就开始选实例并发请求；同一个对象可以给多个协程等，请求只发一次，大家拿同一份结果。
 
 ```cpp
 coro::StartTask([n](coro::Token) {
@@ -80,7 +80,7 @@ if (result.GetRet() != 0) { co_return; }
 auto& res = result.GetRes();
 ```
 
-直接 await 普通 `Task` 不受 `StartTask` 闭包保活保护；不要直接 await 临时的带捕获协程 lambda。
+协程帧只记着 lambda 对象的地址，不复制捕获。直接调用临时的带捕获协程 lambda，lambda 在这一行结束时销毁，第一次挂起之后再读捕获就是悬空访问。带捕获的协程 lambda 必须经 `StartTask` 或 `TaskScope::Start` 启动，它们持有闭包直到任务结束。普通函数和成员函数的参数按值复制进帧，可以直接调用；引用参数要保证对方活到任务结束。
 
 应用层时长参数统一是 `OI::Timer::MS`。`Milliseconds(n)`、`Seconds(n)`、`Minutes(n)`、`Hours(n)`、`Days(n)` 在构造时换成毫秒，可以直接传给 `yield` 和 RPC。
 
@@ -88,7 +88,7 @@ auto& res = result.GetRes();
 
 ## 异常和任务作用域
 
-子任务的异常在父任务 `co_await` 处重新抛出，可以用 try/catch 捕获。独立根任务异常默认打印到 stderr，也可用 `SetTaskErrorHandler` 设置线程安全的错误处理函数。
+子任务的异常在父任务 `co_await` 处重新抛出，可以用 try/catch 捕获。独立根任务异常默认打印到 stderr，也可用 `SetTaskErrorHandler` 设置线程安全的错误处理函数。普通任务的异常如果直到最后一个引用释放都没有被 `co_await` 取走，也交给同一个处理函数，不会悄悄丢掉。
 
 `TaskScope` 持有一组任务；`scope.Start(fn)` 的 fn 接收 `(coro::Token, coro::StopToken)`，循环检查 `StopRequested()`。`RequestStop()` 关闭入口并请求协作停止，`co_await scope.Join()` 等待所有任务完成后转交第一个异常。Join 本身也关闭入口。模块销毁前必须先完成 Join，再停止框架线程池。析构只请求停止，不能代替异步 Join。
 

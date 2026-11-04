@@ -645,6 +645,63 @@ static coro::Task SharedVoidChild(std::shared_ptr<std::atomic<int>> pRunsParam)
 	++*pRunsParam;
 	co_await coro::yield(0);
 }
+static thread_local bool g_bInHotStartCallback = false;
+static coro::Task HotStartChild(std::shared_ptr<std::atomic<int>> pStepParam, std::shared_ptr<std::atomic<bool>> pInCallbackParam = {})
+{
+	if (pInCallbackParam)
+	{
+		pInCallbackParam->store(g_bInHotStartCallback);
+	}
+	pStepParam->store(1);
+	co_await coro::yield(0);
+	pStepParam->store(2);
+}
+static coro::TaskResult<int> CheckHotStart()
+{
+	int iBad = 0;
+	auto pStep = std::make_shared<std::atomic<int>>(0);
+	auto stTask = HotStartChild(pStep);
+	// 返回前已经跑完第一段。挂起后多线程可能已被别的工人跑完，所以不要求恰好停在 1。
+	const int iStepAtCreate = pStep->load();
+	if (iStepAtCreate == 0)
+	{
+		++iBad;
+	}
+	co_await stTask;
+	if (pStep->load() != 2)
+	{
+		++iBad;
+	}
+	// 网络回调不在协程里，新建的任务只入队，不在回调线程上跑。
+	struct Probe
+	{
+		std::atomic<bool> bDone{false};
+		std::optional<coro::Task> stTask;
+		std::shared_ptr<std::atomic<int>> pStep = std::make_shared<std::atomic<int>>(0);
+		std::shared_ptr<std::atomic<bool>> pInCallback = std::make_shared<std::atomic<bool>>(true);
+	};
+	auto pProbe = std::make_shared<Probe>();
+	OI::Net::Poll::GetInstance().PostOnLoop([](void* pArgumentParam)
+	{
+		auto* pProbeLocal = static_cast<Probe*>(pArgumentParam);
+		g_bInHotStartCallback = true;
+		pProbeLocal->stTask.emplace(HotStartChild(pProbeLocal->pStep, pProbeLocal->pInCallback));
+		g_bInHotStartCallback = false;
+		pProbeLocal->bDone.store(true);
+	}, pProbe.get());
+	while (!pProbe->bDone.load())
+	{
+		co_await coro::yield(1);
+	}
+	co_await *pProbe->stTask;
+	if (pProbe->pStep->load() != 2 || pProbe->pInCallback->load())
+	{
+		++iBad;
+	}
+	printf("hold hot start inline=%d queued=%d bad=%d\n", iStepAtCreate != 0 ? 1 : 0, pProbe->pInCallback->load() ? 0 : 1, iBad);
+	fflush(stdout);
+	co_return iBad;
+}
 // 仅用于回归统计；任务的共享所有权由 Task 自己管理。
 struct SharedWaitersState
 {
@@ -816,11 +873,12 @@ static coro::TaskResult<int> CheckSharedTasks()
 	stCopy = *pSelf;
 	stCopy = std::move(*pSelf);
 	co_await stSource;
+	// 协程里新建即运行：被替换掉的任务没人等，也照样跑完一次。
 	auto pUnusedRuns = std::make_shared<std::atomic<int>>(0);
 	auto stReplaced = SharedVoidChild(pUnusedRuns);
 	stReplaced = std::move(stCopy);
 	co_await stReplaced;
-	if (pLifetimeRuns->load() != 2 || pUnusedRuns->load() != 0)
+	if (pLifetimeRuns->load() != 2 || pUnusedRuns->load() != 1)
 	{
 		++*pBad;
 	}
@@ -1454,6 +1512,7 @@ coro::Task HoldMgr::Pump()
 	}
 	iBadLocal += co_await CheckNestedResults();
 	iBadLocal += co_await CheckStartedTaskWaiters();
+	iBadLocal += co_await CheckHotStart();
 	iBadLocal += co_await CheckSharedTasks();
 	iBadLocal += co_await CheckDeferredRpcSession();
 	iBadLocal += co_await CheckAwaitOwnership();

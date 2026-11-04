@@ -36,7 +36,7 @@ struct SchedulerRegistration
 		auto& stPool = OI::Thread::ThreadPool::GetInstance();
 		stPool.SetDrain(coro::StScheduler::Poll);
 		stPool.SetPending(coro::StScheduler::Queued);
-		stPool.SetAfterResume(coro::DrainDetached);
+		stPool.SetResume(coro::ResumeTask);
 	}
 } g_stSchedulerRegistration;
 }
@@ -97,6 +97,36 @@ struct FinishedTask
 	void (*fnRelease)(std::coroutine_handle<>);
 };
 thread_local std::vector<FinishedTask> g_detached_done;
+thread_local int32_t g_iResumeDepth = 0;
+thread_local TaskLaunch g_stLaunch;
+}
+
+void ResumeTask(std::coroutine_handle<> stHandleParam)
+{
+	++g_iResumeDepth;
+	stHandleParam.resume();
+	--g_iResumeDepth;
+	DrainDetached();
+}
+
+bool InTaskResume() noexcept
+{
+	return g_iResumeDepth > 0;
+}
+
+TaskLaunch TakeTaskLaunch() noexcept
+{
+	return std::exchange(g_stLaunch, TaskLaunch{});
+}
+
+TaskLaunchScope::TaskLaunchScope(TaskLaunch stLaunchParam) noexcept
+    : m_stPrevious(std::exchange(g_stLaunch, stLaunchParam))
+{
+}
+
+TaskLaunchScope::~TaskLaunchScope()
+{
+	g_stLaunch = m_stPrevious;
 }
 
 void DetachFinished(std::coroutine_handle<> stHandleParam, void (*fnReleaseParam)(std::coroutine_handle<>))
@@ -191,8 +221,7 @@ bool StScheduler::Poll()
 		std::coroutine_handle<> stHandleLocal = vBatch[iIndexLocal];
 		if (stHandleLocal && !stHandleLocal.done())
 		{
-			stHandleLocal.resume();
-			DrainDetached();
+			ResumeTask(stHandleLocal);
 			bRan = true;
 		}
 	}
