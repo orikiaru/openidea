@@ -24,6 +24,12 @@ static coro::TaskResult<int> Child(int iValueParam)
     co_await coro::yield(0);
     co_return iValueParam;
 }
+static coro::TaskResult<std::string> SharedChild(std::shared_ptr<std::atomic<int>> pRunsParam)
+{
+    ++*pRunsParam;
+    co_await coro::yield(20);
+    co_return std::string(256, 's');
+}
 int main(int iCountParam, char** vArgumentsParam)
 {
     if (iCountParam != 2 || OI::Base::StartFramework(vArgumentsParam[1]))
@@ -42,6 +48,23 @@ int main(int iCountParam, char** vArgumentsParam)
                 ++iBad;
             }
         }
+        auto pRuns = std::make_shared<std::atomic<int>>(0);
+        auto pBad = std::make_shared<std::atomic<int>>(0);
+        auto pShared = std::make_shared<coro::TaskResult<std::string>>(SharedChild(pRuns));
+        coro::TaskScope stWaiters;
+        for (int iIndex = 0; iIndex < 64; ++iIndex)
+        {
+            stWaiters.Start([pShared, pBad](coro::Token, coro::StopToken) -> coro::Task
+            {
+                for (int iRound = 0; iRound < 2; ++iRound)
+                {
+                    if ((co_await *pShared) != std::string(256, 's')) { ++*pBad; }
+                }
+            });
+        }
+        co_await stWaiters.Join();
+        iBad += pBad->load() + (pRuns->load() != 1);
+        std::printf("shared task runs=%d bad=%d\n", pRuns->load(), iBad);
         OI::Thread::ThreadPool::GetInstance().RequestStop(iBad ? 9 : 0);
     });
     pLifetime.reset();
@@ -94,6 +117,7 @@ def main():
             print(mode, result.stdout, result.stderr, flush=True)
             result.check_returncode()
             assert "pure coroutine ret=0 released=1" in result.stdout
+            assert "shared task runs=1 bad=0" in result.stdout
 
 
 if __name__ == "__main__":

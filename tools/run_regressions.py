@@ -384,6 +384,9 @@ def run(case, args):
                 assert "hold rpc session index calls=4096 bad=0" in text
                 assert "hold timer exceptions executed=5 destroyed=5 bad=0" in text
                 assert "hold nested results completed=32768 caught=16384 bad=0" in text
+                assert "hold shared tasks waiters=64 bad=0" in text
+                for shared_mode in range(3):
+                    assert f"hold started task mode={shared_mode} runs=1 awakened=2 mask=3 bad=0" in text
                 assert "hold deferred rpc value=0 output=0 pinned=-1 bad=0" in text
                 assert "hold await ownership shared=32 bad=0" in text
                 assert "hold binary bool bad=0" in text

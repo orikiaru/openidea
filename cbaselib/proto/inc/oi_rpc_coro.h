@@ -32,7 +32,7 @@ TaskUid AllocTaskUid();
 void Schedule(std::coroutine_handle<> stHandleParam);
 
 // 根协程跑完后不能在 final_suspend 里销毁自己。登记下来，等 resume 返回再释放。
-void DetachFinished(std::coroutine_handle<> stHandleParam);
+void DetachFinished(std::coroutine_handle<> stHandleParam, void (*fnReleaseParam)(std::coroutine_handle<>));
 void DrainDetached();
 using TaskErrorHandler = void (*)(Token, std::exception_ptr);
 // 在工作线程调用；处理函数必须线程安全，不允许抛异常。nullptr 恢复默认 stderr 报告。
@@ -76,7 +76,13 @@ inline SleepMs yield(std::chrono::milliseconds stDelayParam)
 	return yield(stDelayParam.count() <= 0 ? 0 : static_cast<int32_t>(stDelayParam.count()));
 }
 
-// 子任务跑完时：调用方已经挂起，就把调用方 Schedule 回去；还没挂起，就只做个标记。
+// 等待节点放在调用方协程帧中，单个或多个等待者都不另分配堆节点。
+struct TaskWaiter
+{
+	std::coroutine_handle<> stParent;
+	TaskWaiter* pNext = nullptr;
+	std::atomic<int> iGate{0}; // 0 登记中，1 已完成，2 已挂起。
+};
 struct TaskFinalSuspend
 {
 	bool await_ready() const noexcept
@@ -87,40 +93,44 @@ struct TaskFinalSuspend
 	void await_suspend(std::coroutine_handle<Promise> stHandleParam) const noexcept
 	{
 		auto& stPromise = stHandleParam.promise();
-		// 发布完成后，父协程可能立即读取结果并销毁子帧。后续只能使用局部副本。
-		const auto stContinuationLocal = stPromise.stContinuation;
-		const bool bDetachedLocal = stPromise.bDetached;
-		if (stPromise.bReady.exchange(true, std::memory_order_acq_rel))
+		TaskWaiter* pWaiter;
 		{
-			if (stContinuationLocal)
+			OI::Thread::MutexGuard stLock(stPromise.stMutex);
+			stPromise.bReady = true;
+			pWaiter = std::exchange(stPromise.pWaiters, nullptr);
+		}
+		while (pWaiter)
+		{
+			// 发布完成后等待者可能立即恢复并销毁节点，只能再用局部副本。
+			auto* pNext = pWaiter->pNext;
+			const auto stParent = pWaiter->stParent;
+			if (pWaiter->iGate.exchange(1, std::memory_order_acq_rel) == 2)
 			{
-				Schedule(stContinuationLocal);
+				Schedule(stParent);
 			}
-			return;
+			pWaiter = pNext;
 		}
-		if (bDetachedLocal)
+		// 执行引用必须等 resume 返回后才释放，不能在 final_suspend 中销毁帧。
+		DetachFinished(stHandleParam, [](std::coroutine_handle<> stHandleLocal)
 		{
-			DetachFinished(stHandleParam);
-		}
+			Promise::Release(std::coroutine_handle<Promise>::from_address(stHandleLocal.address()));
+		});
 	}
 	void await_resume() const noexcept
 	{
 	}
 };
-
 struct TaskState
 {
-	// 保活 StartTask 的闭包；协程 lambda 的捕获仍属于闭包对象。
 	std::shared_ptr<void> pCallable;
 	std::exception_ptr stError;
-	Token iTaskId;
-	std::coroutine_handle<> stContinuation;
-	bool bDetached;
-	std::atomic<bool> bReady;
-	TaskState()
-	    : iTaskId(0), stContinuation(), bDetached(false), bReady(false)
-	{
-	}
+	Token iTaskId = 0;
+	OI::Thread::Mutex stMutex;
+	TaskWaiter* pWaiters = nullptr;
+	std::atomic<size_t> iReferences{1}; // Task 对象、等待者、运行中的帧各自持有引用。
+	bool bStarted = false;
+	bool bReady = false;
+	bool bDetached = false;
 	std::suspend_always initial_suspend() noexcept
 	{
 		return {};
@@ -157,7 +167,7 @@ struct TaskReturn<void>
 	}
 };
 
-// 一条任务。Start 丢进队列；co_await 就是调用它，跑完回到调用方。
+// 一条任务只运行一次，可多次/并发等待；结果和异常保留到最后一个引用释放。
 template <typename T = void>
 struct [[nodiscard]] BasicTask
 {
@@ -167,70 +177,133 @@ struct [[nodiscard]] BasicTask
 		{
 			return BasicTask{std::coroutine_handle<promise_type>::from_promise(*this)};
 		}
+		static void Release(std::coroutine_handle<promise_type> stHandleParam)
+		{
+			if (stHandleParam && stHandleParam.promise().iReferences.fetch_sub(1, std::memory_order_acq_rel) == 1)
+			{
+				stHandleParam.destroy();
+			}
+		}
 	};
-	std::coroutine_handle<promise_type> stHandle;
-	explicit BasicTask(std::coroutine_handle<promise_type> stHandleParam)
+	using Handle = std::coroutine_handle<promise_type>;
+	Handle stHandle;
+	explicit BasicTask(Handle stHandleParam)
 	    : stHandle(stHandleParam)
 	{
 	}
 	BasicTask(BasicTask&& stOtherParam) noexcept
-	    : stHandle(stOtherParam.stHandle)
+	    : stHandle(std::exchange(stOtherParam.stHandle, {}))
 	{
-		stOtherParam.stHandle = {};
 	}
 	BasicTask(const BasicTask&) = delete;
 	~BasicTask()
 	{
-		if (stHandle)
-		{
-			stHandle.destroy();
-		}
+		promise_type::Release(stHandle);
 	}
-	Token Start()
-	{
-		if (stHandle.promise().iTaskId == 0)
-		{
-			stHandle.promise().iTaskId = AllocTaskUid();
-		}
-		Token iTokenLocal = stHandle.promise().iTaskId;
-		// 句柄交给调度器。调用方手里的临时 Task 析构时不能把正在跑的帧释放掉。
-		stHandle.promise().bDetached = true;
-		std::coroutine_handle<> stHandleLocal = stHandle;
-		stHandle = nullptr;
-		Schedule(stHandleLocal);
-		return iTokenLocal;
-	}
-	bool await_ready() const noexcept
-	{
-		return !stHandle || stHandle.done();
-	}
-	// 子协程当场跑完就返回 false，调用方不挂起。
-	// 子协程自己停住（等回包或定时）时，把调用方记在 continuation 上，结束再 Schedule。
-	template <typename Promise>
-	bool await_suspend(std::coroutine_handle<Promise> stParentParam) noexcept
+
+	Token Start(std::shared_ptr<void> pCallableParam = {}, Token iTokenParam = 0)
 	{
 		if (!stHandle)
 		{
+			throw std::logic_error("cannot start a moved-from Task");
+		}
+		Token iTokenLocal;
+		bool bStart = false;
+		{
+			auto& stPromise = stHandle.promise();
+			OI::Thread::MutexGuard stLock(stPromise.stMutex);
+			if (stPromise.iTaskId == 0)
+			{
+				stPromise.iTaskId = iTokenParam ? iTokenParam : AllocTaskUid();
+			}
+			iTokenLocal = stPromise.iTaskId;
+			if (!stPromise.bStarted)
+			{
+				stPromise.pCallable = std::move(pCallableParam);
+				stPromise.bDetached = true;
+				stPromise.bStarted = true;
+				stPromise.iReferences.fetch_add(1, std::memory_order_relaxed);
+				bStart = true;
+			}
+		}
+		if (bStart)
+		{
+			Schedule(stHandle);
+		}
+		return iTokenLocal;
+	}
+
+	struct Awaiter : TaskWaiter
+	{
+		Handle stChild;
+		explicit Awaiter(Handle stChildParam)
+		    : stChild(stChildParam)
+		{
+			if (!stChild)
+			{
+				throw std::logic_error("cannot await a moved-from Task");
+			}
+			stChild.promise().iReferences.fetch_add(1, std::memory_order_relaxed);
+		}
+		Awaiter(const Awaiter&) = delete;
+		~Awaiter()
+		{
+			promise_type::Release(stChild);
+		}
+		bool await_ready() const noexcept
+		{
 			return false;
 		}
-		stHandle.promise().stContinuation = stParentParam;
-		stHandle.resume();
-		return !stHandle.promise().bReady.exchange(true, std::memory_order_acq_rel);
-	}
-	T await_resume()
-	{
-		if (stHandle && stHandle.promise().stError)
+		bool await_suspend(std::coroutine_handle<> stParentParam)
 		{
-			std::rethrow_exception(stHandle.promise().stError);
-		}
-		if constexpr (!std::is_void_v<T>)
-		{
-			if (!stHandle || !stHandle.promise().stResult)
+			// 登记和完成共用锁；首个等待者负责启动，其他等待者只订阅。
+			const auto stChildLocal = stChild;
+			bool bStart = false;
 			{
-				throw std::logic_error("Task has no result");
+				auto& stPromise = stChildLocal.promise();
+				OI::Thread::MutexGuard stLock(stPromise.stMutex);
+				if (stPromise.bReady)
+				{
+					return false;
+				}
+				stParent = stParentParam;
+				pNext = stPromise.pWaiters;
+				stPromise.pWaiters = this;
+				if (!stPromise.bStarted)
+				{
+					stPromise.bStarted = true;
+					stPromise.iReferences.fetch_add(1, std::memory_order_relaxed);
+					bStart = true;
+				}
 			}
-			return std::move(*stHandle.promise().stResult);
+			if (bStart)
+			{
+				stChildLocal.resume();
+			}
+			// 当场完成仍走内联返回；发布挂起后不再访问 this。
+			return iGate.exchange(2, std::memory_order_acq_rel) != 1;
 		}
+		T await_resume()
+		{
+			const auto& stPromise = stChild.promise();
+			if (stPromise.stError)
+			{
+				std::rethrow_exception(stPromise.stError);
+			}
+			if constexpr (!std::is_void_v<T>)
+			{
+				static_assert(std::is_copy_constructible_v<T>, "shared TaskResult needs a copyable result; use shared_ptr<T> for move-only data");
+				if (!stPromise.stResult)
+				{
+					throw std::logic_error("Task has no result");
+				}
+				return *stPromise.stResult; // 不移走共享结果，后续等待者仍得到完整值。
+			}
+		}
+	};
+	Awaiter operator co_await() const
+	{
+		return Awaiter(stHandle);
 	}
 };
 
@@ -244,10 +317,7 @@ Token StartTask(F&& fnFunctionParam)
 	Token iTokenLocal = AllocTaskUid();
 	auto stCallable = std::make_shared<std::decay_t<F>>(std::forward<F>(fnFunctionParam));
 	auto stTask = (*stCallable)(iTokenLocal);
-	stTask.stHandle.promise().pCallable = std::move(stCallable);
-	stTask.stHandle.promise().iTaskId = iTokenLocal;
-	stTask.Start();
-	return iTokenLocal;
+	return stTask.Start(std::move(stCallable), iTokenLocal);
 }
 
 // 协作停止：不会销毁仍被 IO/定时器引用的帧。模块销毁前必须 await Join。

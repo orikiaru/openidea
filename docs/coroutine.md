@@ -10,11 +10,17 @@
 - `ms <= 0` 只把句柄放回队列，这一轮不再碰它。主循环会先去 poll，再跑新挂上的
 - 应用层要空等一段时间，只用 `co_await coro::yield(毫秒)`。不要 `sleep`、`sleep_for`、`Sleep`、`usleep`。单线程就这一条线程，睡下去 poll 停转，套接字里的数据发不出去
 
-`co_await` 一条 `Task` 会在调用方的栈上把子协程 `resume` 到它自己挂起为止。子协程当场跑完，调用方不挂起。子协程自己停住（等回包或定时）时，把调用方记在 `stContinuation` 上，子协程结束再 `Schedule` 调用方。
+`co_await` 一条 `Task` 会在调用方的栈上把子协程 `resume` 到它自己挂起为止。子协程当场跑完，调用方不挂起。子协程自己停住（等回包或定时）时，把调用方登记到等待列表，子协程结束后逐个 `Schedule` 等待者。
 
 所以不要在第一次挂起之前层层 `co_await` 子任务，栈会随层数涨。`StartTask` 只入队，不加栈。
 
-`co_return` 才结束一条 `coro::Task`。`task.Start()` 或 `StartTask` 把句柄交给调度器。调用方手里的临时 `Task` 析构不会释放正在跑的帧。
+`co_return` 才结束一条 `coro::Task`。同一个 Task / TaskResult 可以重复或并发 `co_await`，任务只执行一次；完成后再等，直接取得已保存的结果或异常。`task.Start()` 幂等，重复启动返回同一个 token，不再次入队；启动后仍可以 await。`StartTask` 返回 token，保持原有独立任务入口。
+
+Task 对象、每个等待器及运行中的帧各持一份引用。任务对象析构不会取消已启动任务，等待器可独立保活；最后一个引用释放才销毁帧。任务对象可以移动，已经登记的等待不受影响；移后对象再次 Start/await 抛 logic_error。不支持一边移动/销毁同一个 C++ 对象一边从其他线程访问它。
+
+跨协程共享时可用 `std::make_shared<coro::TaskResult<T>>(任务函数())`，先 `pTask->Start()`，各等待协程按值捕获 `pTask` 并 `co_await *pTask`。任务正常执行，不等等待者到齐：未完成就登记等待，已完成就直接返回保存的结果，不重新入队。创建者释放自己的 shared_ptr 不影响其他持有者。
+
+TaskResult 每次等待返回一份结果副本，不移走共享结果。大对象或不可复制对象使用 `TaskResult<std::shared_ptr<T>>`，多个等待者共享同一个对象；其业务数据的并发读写仍由应用同步。异常保留并在每次 await 时重抛。RPC/Redis/HTTP 请求等待对象仍是单次请求，要共享一次请求，可把请求封装到一个 TaskResult 中。
 
 ## 挂起
 
@@ -26,9 +32,9 @@
 
 单线程主循环每一轮只跑进入时已经在队列里的普通 `Task`，再 `StScheduler::Poll` 只 `resume` 进入时已经在协程队列里的句柄。这一轮里 `yield(0)` 和 `StartTask` 进的是原队列，这次碰不到。然后如果还有待跑的任务或协程，`PollWait(0)` 只试一次网络；什么都没有才 `PollWait(1000)` 堵住等。
 
-多线程由 `ThreadPool::PostCoroutine` 把句柄放进工人队列。工人只 `resume`，不在工人里销毁协程帧。根协程在 `final_suspend` 里 `DetachFinished`，`resume` 返回后 `DrainDetached` 再销毁。
+多线程由 `ThreadPool::PostCoroutine` 把句柄放进工人队列。工人只 `resume`，不在工人里销毁协程帧。协程在 `final_suspend` 里登记执行引用回收，`resume` 返回后 `DrainDetached` 再释放该引用；仍有任务对象或等待者时保留帧与结果。
 
-子协程发布完成标记后，父协程可立即消费结果并销毁子帧。因此 final_suspend 必须先缓存 continuation 和 detached 状态，发布后只用局部值，不再读取 promise。
+完成与等待登记使用框架 Mutex，单线程下锁为空操作。等待节点内嵌在父协程帧，不另分配堆节点；唤醒前缓存节点的下一项和父句柄，发布后不再访问可能已经销毁的节点。执行引用保证通知期间子帧仍然有效。
 
 调度和根帧回收钩子由协程运行时自身注册，不依赖应用调用 RPC 或 HTTP。静态链接的纯协程路径用 `python3 tools/check_coro_runtime.py --asan` 验证两种线程模式的 yield、结果返回和闭包释放；业务收发仍使用 ipcclient 的 HoldMgr 回归。
 

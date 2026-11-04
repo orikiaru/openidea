@@ -631,6 +631,175 @@ static coro::TaskResult<int> CheckNestedResults()
 	co_return pResults->iBad.load();
 }
 
+static coro::TaskResult<std::string> SharedResultChild(std::shared_ptr<std::atomic<int>> pRunsParam, bool bThrowParam)
+{
+	++*pRunsParam;
+	co_await coro::yield(OI::Timer::Milliseconds(20));
+	if (bThrowParam)
+	{
+		throw std::runtime_error("shared task failure");
+	}
+	co_return std::string(256, 's');
+}
+static coro::Task SharedVoidChild(std::shared_ptr<std::atomic<int>> pRunsParam)
+{
+	++*pRunsParam;
+	co_await coro::yield(0);
+}
+struct TwoWaitersState
+{
+	std::atomic<int> iRuns{0};
+	std::atomic<int> iAwakened{0};
+	std::atomic<int> iMask{0};
+	std::atomic<int> iBad{0};
+};
+static coro::TaskResult<int> TwoWaitersChild(std::shared_ptr<TwoWaitersState> pStateParam)
+{
+	++pStateParam->iRuns;
+	// 模拟正常异步工作，到时自行完成，不等任何等待者登记。
+	co_await coro::yield(OI::Timer::Milliseconds(20));
+	co_return 42;
+}
+static coro::TaskResult<int> CheckStartedTaskTwoWaiters()
+{
+	int iBad = 0;
+	for (int iMode = 0; iMode < 3; ++iMode)
+	{
+		auto pState = std::make_shared<TwoWaitersState>();
+		auto pTask = std::make_shared<coro::TaskResult<int>>(TwoWaitersChild(pState));
+		pTask->Start(); // 先独立启动共享任务，两个等待者只负责等待，不负责启动。
+		if (iMode == 2)
+		{
+			// 已完成场景：等任务自然结束，再创建两个等待者。
+			if ((co_await *pTask) != 42)
+			{
+				++pState->iBad;
+			}
+		}
+		coro::TaskScope stWaiters;
+		for (int iIndex = 0; iIndex < 2; ++iIndex)
+		{
+			if (iMode == 1 && iIndex == 1)
+			{
+				// 混合场景：第一个直接等待，第二个在任务完成后才启动。
+				if ((co_await *pTask) != 42)
+				{
+					++pState->iBad;
+				}
+			}
+			stWaiters.Start([pTask, pState, iIndex](coro::Token, coro::StopToken) -> coro::Task
+			{
+				const int iResult = co_await *pTask;
+				if (iResult != 42)
+				{
+					++pState->iBad;
+				}
+				pState->iMask.fetch_or(1 << iIndex);
+				++pState->iAwakened;
+			});
+		}
+		// 等待者各自按值持有 shared_ptr；创建者提前释放也不会使任务失效。
+		pTask.reset();
+		co_await stWaiters.Join();
+		if (pState->iRuns.load() != 1 || pState->iAwakened.load() != 2 || pState->iMask.load() != 3)
+		{
+			++pState->iBad;
+		}
+		printf("hold started task mode=%d runs=%d awakened=%d mask=%d bad=%d\n",
+		    iMode, pState->iRuns.load(), pState->iAwakened.load(), pState->iMask.load(), pState->iBad.load());
+		iBad += pState->iBad.load();
+	}
+	co_return iBad;
+}
+static coro::TaskResult<int> CheckSharedTasks()
+{
+	auto pBad = std::make_shared<std::atomic<int>>(0);
+	for (int iMode = 0; iMode < 2; ++iMode)
+	{
+		auto pRuns = std::make_shared<std::atomic<int>>(0);
+		auto pTask = std::make_shared<coro::TaskResult<std::string>>(SharedResultChild(pRuns, iMode != 0));
+		coro::TaskScope stWaiters;
+		for (int iIndex = 0; iIndex < 64; ++iIndex)
+		{
+			stWaiters.Start([pTask, pBad, iMode](coro::Token, coro::StopToken) -> coro::Task
+			{
+				// 第二遍是完成后再次等待，不能重新执行，也不能拿到被移空的字符串。
+				for (int iRound = 0; iRound < 2; ++iRound)
+				{
+					try
+					{
+						auto sResult = co_await *pTask;
+						if (iMode != 0 || sResult != std::string(256, 's'))
+						{
+							++*pBad;
+						}
+					}
+					catch (const std::runtime_error& stError)
+					{
+						if (iMode == 0 || std::string(stError.what()) != "shared task failure")
+						{
+							++*pBad;
+						}
+					}
+				}
+			});
+		}
+		co_await stWaiters.Join();
+		if (pRuns->load() != 1)
+		{
+			++*pBad;
+		}
+	}
+	auto pRuns = std::make_shared<std::atomic<int>>(0);
+	auto pTask = std::make_shared<coro::Task>(SharedVoidChild(pRuns));
+	coro::TaskScope stStarters;
+	for (int iIndex = 0; iIndex < 64; ++iIndex)
+	{
+		stStarters.Start([pTask](coro::Token, coro::StopToken) -> coro::Task
+		{
+			pTask->Start();
+			pTask->Start();
+			co_await *pTask;
+			co_await *pTask;
+		});
+	}
+	co_await stStarters.Join();
+	if (pRuns->load() != 1)
+	{
+		++*pBad;
+	}
+	// 等待器独立保活：创建等待器后移动/销毁原 Task 仍安全。
+	auto pLifetimeRuns = std::make_shared<std::atomic<int>>(0);
+	auto pLifetimeTask = std::make_unique<coro::TaskResult<std::string>>(SharedResultChild(pLifetimeRuns, false));
+	auto stWaiter = pLifetimeTask->operator co_await();
+	pLifetimeTask.reset();
+	if ((co_await stWaiter) != std::string(256, 's') || pLifetimeRuns->load() != 1)
+	{
+		++*pBad;
+	}
+	auto stSource = SharedVoidChild(pLifetimeRuns);
+	auto stMoved = std::move(stSource);
+	try
+	{
+		co_await stSource;
+		++*pBad;
+	}
+	catch (const std::logic_error&)
+	{
+	}
+	try
+	{
+		stSource.Start();
+		++*pBad;
+	}
+	catch (const std::logic_error&)
+	{
+	}
+	co_await stMoved;
+	printf("hold shared tasks waiters=64 bad=%d\n", pBad->load());
+	co_return pBad->load();
+}
+
 class DeferredRpcProbe : public OI::Rpc::ProtoClientManager
 {
   public:
@@ -1050,6 +1219,8 @@ coro::Task HoldMgr::Pump()
 		co_return;
 	}
 	iBadLocal += co_await CheckNestedResults();
+	iBadLocal += co_await CheckStartedTaskTwoWaiters();
+	iBadLocal += co_await CheckSharedTasks();
 	iBadLocal += co_await CheckDeferredRpcSession();
 	iBadLocal += co_await CheckAwaitOwnership();
 	iBadLocal += CheckBinaryBool();

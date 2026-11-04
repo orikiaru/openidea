@@ -90,14 +90,19 @@ TaskUid AllocTaskUid()
 
 namespace
 {
-thread_local std::vector<std::coroutine_handle<>> g_detached_done;
+struct FinishedTask
+{
+	std::coroutine_handle<> stHandle;
+	void (*fnRelease)(std::coroutine_handle<>);
+};
+thread_local std::vector<FinishedTask> g_detached_done;
 }
 
-void DetachFinished(std::coroutine_handle<> stHandleParam)
+void DetachFinished(std::coroutine_handle<> stHandleParam, void (*fnReleaseParam)(std::coroutine_handle<>))
 {
 	if (stHandleParam)
 	{
-		g_detached_done.push_back(stHandleParam);
+		g_detached_done.push_back({stHandleParam, fnReleaseParam});
 	}
 }
 
@@ -105,11 +110,11 @@ void DrainDetached()
 {
 	while (!g_detached_done.empty())
 	{
-		std::coroutine_handle<> stHandleLocal = g_detached_done.back();
+		const auto stFinished = g_detached_done.back();
 		g_detached_done.pop_back();
-		if (stHandleLocal)
+		if (stFinished.stHandle)
 		{
-			stHandleLocal.destroy();
+			stFinished.fnRelease(stFinished.stHandle);
 		}
 	}
 }
