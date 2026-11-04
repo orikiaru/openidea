@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <memory>
 #include <atomic>
+#include <thread>
 #include <chrono>
 #include <deque>
 #include <list>
@@ -140,6 +141,8 @@ struct RpcCoroSlot
 	proto_type_t iResponseId;
 	uint64_t iCallId;
 	bool bAwaitingConnect;
+	bool bGuardArmed = false;
+	std::shared_ptr<std::atomic<int32_t>> pGuard;
 	bool bHasExpiry = false;
 	bool bIndexed = false;
 	std::list<uint64_t>::iterator stSessionIndex;
@@ -191,6 +194,16 @@ void RemoveSessionIndex(RpcCallShard& stShardParam, RpcCoroSlot& stSlotParam)
 }
 
 // 调用者持分片锁。删除空桶，避免动态超时参数让桶本身无限增长。
+void ArmRpcGuard(RpcCoroSlot& stSlotParam)
+{
+	if (!stSlotParam.pGuard || stSlotParam.bGuardArmed)
+	{
+		return;
+	}
+	stSlotParam.pGuard->fetch_add(1, std::memory_order_acq_rel);
+	stSlotParam.bGuardArmed = true;
+}
+
 void RemoveRpcExpiry(RpcCallShard& stShardParam, RpcCoroSlot& stSlotParam)
 {
 	if (!stSlotParam.bHasExpiry)
@@ -235,6 +248,18 @@ void FinishRpcSlot(RpcCoroSlot& stSlotParam, int32_t iCodeParam, ::OI::Base::Byt
 	{
 		stSlotParam.pManager->DropPendingCall(stSlotParam.iCallId);
 	}
+	struct GuardRelease
+	{
+		std::shared_ptr<std::atomic<int32_t>> pGuard;
+		bool bArmed = false;
+		~GuardRelease()
+		{
+			if (bArmed && pGuard)
+			{
+				pGuard->fetch_sub(1, std::memory_order_acq_rel);
+			}
+		}
+	} stRelease{stSlotParam.pGuard, stSlotParam.bGuardArmed};
 	if (pBodyParam)
 	{
 		if (stSlotParam.fnDecode)
@@ -272,6 +297,7 @@ bool TakeRpcSlot(uint64_t iCallIdParam, RpcCoroSlot& stOutputParam, ::OI::Net::S
 	}
 	RemoveRpcExpiry(stShard, stIterator->second);
 	RemoveSessionIndex(stShard, stIterator->second);
+	ArmRpcGuard(stIterator->second);
 	stOutputParam = std::move(stIterator->second);
 	stShard.mSlots.erase(stIterator);
 	return true;
@@ -304,6 +330,7 @@ void SweepRpcCalls()
 				stIterator->second.stExpiry = {};
 				stIterator->second.stExpiryBucket = {};
 				RemoveSessionIndex(stShard, stIterator->second);
+				ArmRpcGuard(stIterator->second);
 				vFired.push_back(std::move(stIterator->second));
 				stShard.mSlots.erase(stIterator);
 				vQ.pop_front();
@@ -411,7 +438,7 @@ bool ClaimRpcSend(uint64_t iCallIdParam, sid_t iSessionIdParam)
 	return true;
 }
 
-uint64_t BindRpcCall(::OI::Net::SessionManager* pManagerParam, sid_t iSessionIdParam, proto_type_t iResponseIdParam, std::coroutine_handle<> stHandleParam, int32_t* pResultParam, int64_t iTimeoutMillisecondsParam, std::function<bool(::OI::Base::BytesStream&)> fnDecodeParam, std::function<void()> fnResumeParam)
+uint64_t BindRpcCall(::OI::Net::SessionManager* pManagerParam, sid_t iSessionIdParam, proto_type_t iResponseIdParam, std::coroutine_handle<> stHandleParam, int32_t* pResultParam, int64_t iTimeoutMillisecondsParam, std::function<bool(::OI::Base::BytesStream&)> fnDecodeParam, std::function<void()> fnResumeParam, std::shared_ptr<std::atomic<int32_t>> pGuardParam)
 {
 	std::call_once(g_sweep_once, []()
 	{
@@ -429,6 +456,7 @@ uint64_t BindRpcCall(::OI::Net::SessionManager* pManagerParam, sid_t iSessionIdP
 	stSlot.iResponseId = iResponseIdParam;
 	stSlot.iCallId = iCallIdLocal;
 	stSlot.bAwaitingConnect = false;
+	stSlot.pGuard = std::move(pGuardParam);
 	RpcCallShard& stShard = ShardOf(iCallIdLocal);
 	::OI::Thread::MutexGuard stLock(stShard.stMutex);
 	auto stInserted = stShard.mSlots.emplace(iCallIdLocal, std::move(stSlot)).first;
@@ -479,6 +507,40 @@ bool WakeRpcCall(uint64_t iCallIdParam, int32_t iCodeParam, ::OI::Base::BytesStr
 	return true;
 }
 
+void AbandonRpcCall(uint64_t iCallIdParam)
+{
+	RpcCoroSlot stSlot;
+	{
+		RpcCallShard& stShard = ShardOf(iCallIdParam);
+		::OI::Thread::MutexGuard stLock(stShard.stMutex);
+		auto stIterator = stShard.mSlots.find(iCallIdParam);
+		if (stIterator == stShard.mSlots.end())
+		{
+			return;
+		}
+		RemoveRpcExpiry(stShard, stIterator->second);
+		RemoveSessionIndex(stShard, stIterator->second);
+		stSlot = std::move(stIterator->second);
+		stShard.mSlots.erase(stIterator);
+	}
+	if (stSlot.bAwaitingConnect && stSlot.pManager)
+	{
+		stSlot.pManager->DropPendingCall(stSlot.iCallId);
+	}
+}
+
+void WaitRpcGuard(const std::shared_ptr<std::atomic<int32_t>>& pGuardParam)
+{
+	if (!pGuardParam)
+	{
+		return;
+	}
+	while (pGuardParam->load(std::memory_order_acquire) != 0)
+	{
+		std::this_thread::yield();
+	}
+}
+
 void FailRpcCalls(::OI::Net::SessionManager* pManagerParam, sid_t iSessionIdParam)
 {
 	std::vector<RpcCoroSlot> vFailed;
@@ -496,6 +558,7 @@ void FailRpcCalls(::OI::Net::SessionManager* pManagerParam, sid_t iSessionIdPara
 			auto stSlot = stShard.mSlots.find(iId);
 			RemoveRpcExpiry(stShard, stSlot->second);
 			stSlot->second.bIndexed = false;
+			ArmRpcGuard(stSlot->second);
 			vFailed.push_back(std::move(stSlot->second));
 			stShard.mSlots.erase(stSlot);
 		}
@@ -695,13 +758,12 @@ ProtoClientManager* ClientFor(const std::string& sIpParam, const std::string& sP
 }
 }
 
-ServiceRoute RouteService(::OI::Net::SessionManager* pManagerParam, const std::string& sNameParam, ServicePick iPickParam, const std::string& sZoneParam)
+bool PrepareRoute(::OI::Net::SessionManager* pManagerParam, const std::string& sNameParam, ServicePick iPickParam, const std::string& sZoneParam, ServiceRoute& stRouteParam)
 {
-	ServiceRoute stRoute;
 	if (!ValidServiceToken(sNameParam) || (iPickParam == ServicePick::Zone && !ValidServiceToken(sZoneParam)))
 	{
-		stRoute.iStatus = ServiceRouteStatus::BadName;
-		return stRoute;
+		stRouteParam.iStatus = ServiceRouteStatus::BadName;
+		return true;
 	}
 	if (iPickParam == ServicePick::Any && pManagerParam)
 	{
@@ -715,15 +777,69 @@ ServiceRoute RouteService(::OI::Net::SessionManager* pManagerParam, const std::s
 			ProtoClientManager* pClient = dynamic_cast<ProtoClientManager*>(pManagerParam);
 			if (pClient && pClient->IsConnect())
 			{
-				stRoute.iStatus = ServiceRouteStatus::Ok;
-				stRoute.vClients.push_back(pClient);
-				return stRoute;
+				stRouteParam.iStatus = ServiceRouteStatus::Ok;
+				stRouteParam.vClients.push_back(pClient);
+				return true;
 			}
 		}
 	}
-	int32_t iCode = OI_ERR_FAIL;
-	std::vector<::OI::Base::ServiceInstance> vList;
-	if (!::OI::Base::RegistryClient::GetInstance().PullSync(sNameParam, iCode, vList) || iCode != OI_OK)
+	return false;
+}
+
+void PullRoute(const std::string& sNameParam, std::function<void(int32_t, const std::vector<::OI::Base::ServiceInstance>&)> fnDoneParam)
+{
+	::OI::Base::RegistryClient::GetInstance().PullAsync(sNameParam, std::move(fnDoneParam));
+}
+
+bool PrepareTarget(const std::string& sTargetParam, bool bBatchParam, ServiceRoute& stRouteParam, std::string& sNameParam, ServicePick& iPickParam, std::string& sZoneParam)
+{
+	ParsedTarget stTarget;
+	if (!ParseTarget(sTargetParam, stTarget) || stTarget.bAll != bBatchParam)
+	{
+		stRouteParam.iStatus = ServiceRouteStatus::BadName;
+		return true;
+	}
+	sNameParam = stTarget.sName;
+	sZoneParam = stTarget.sZone;
+	iPickParam = ServicePick::Any;
+	if (bBatchParam)
+	{
+		iPickParam = ServicePick::All;
+	}
+	else if (!stTarget.sZone.empty())
+	{
+		iPickParam = ServicePick::Zone;
+	}
+	return false;
+}
+
+bool PrepareZones(::OI::Net::SessionManager* pManagerParam, const std::string& sNameParam, const std::vector<int32_t>& vZoneIdsParam, ServiceRoute& stRouteParam, std::vector<std::string>& vZonesParam)
+{
+	(void)pManagerParam;
+	vZonesParam.clear();
+	if (!ValidServiceToken(sNameParam) || vZoneIdsParam.empty())
+	{
+		stRouteParam.iStatus = ServiceRouteStatus::BadName;
+		return true;
+	}
+	vZonesParam.reserve(vZoneIdsParam.size());
+	for (int32_t iZoneId : vZoneIdsParam)
+	{
+		if (iZoneId < 0)
+		{
+			stRouteParam.iStatus = ServiceRouteStatus::BadName;
+			vZonesParam.clear();
+			return true;
+		}
+		vZonesParam.push_back(std::to_string(iZoneId));
+	}
+	return false;
+}
+
+ServiceRoute FinishRoute(::OI::Net::SessionManager* pManagerParam, const std::string& sNameParam, ServicePick iPickParam, const std::string& sZoneParam, int32_t iCodeParam, const std::vector<::OI::Base::ServiceInstance>& vListParam)
+{
+	ServiceRoute stRoute;
+	if (iCodeParam != OI_OK)
 	{
 		stRoute.iStatus = ServiceRouteStatus::Offline;
 		return stRoute;
@@ -731,7 +847,7 @@ ServiceRoute RouteService(::OI::Net::SessionManager* pManagerParam, const std::s
 	bool bGlobal = false;
 	bool bZoned = false;
 	std::vector<::OI::Base::ServiceInstance> vMatched;
-	for (const auto& stInst : vList)
+	for (const auto& stInst : vListParam)
 	{
 		if (stInst.sName != sNameParam)
 		{
@@ -806,55 +922,16 @@ ServiceRoute RouteService(::OI::Net::SessionManager* pManagerParam, const std::s
 	return stRoute;
 }
 
-ServiceRoute RouteService(const std::string& sTargetParam, bool bBatchParam)
-{
-	ParsedTarget stTarget;
-	if (!ParseTarget(sTargetParam, stTarget) || stTarget.bAll != bBatchParam)
-	{
-		ServiceRoute stRoute;
-		stRoute.iStatus = ServiceRouteStatus::BadName;
-		return stRoute;
-	}
-	ServicePick iPick = ServicePick::Any;
-	if (bBatchParam)
-	{
-		iPick = ServicePick::All;
-	}
-	else if (!stTarget.sZone.empty())
-	{
-		iPick = ServicePick::Zone;
-	}
-	return RouteService(nullptr, stTarget.sName, iPick, stTarget.sZone);
-}
-
-ServiceRoute RouteZones(::OI::Net::SessionManager* pManagerParam, const std::string& sNameParam, const std::vector<int32_t>& vZoneIdsParam)
+ServiceRoute FinishZones(::OI::Net::SessionManager* pManagerParam, const std::string& sNameParam, const std::vector<std::string>& vZonesParam, int32_t iCodeParam, const std::vector<::OI::Base::ServiceInstance>& vListParam)
 {
 	ServiceRoute stRoute;
-	if (!ValidServiceToken(sNameParam) || vZoneIdsParam.empty())
-	{
-		stRoute.iStatus = ServiceRouteStatus::BadName;
-		return stRoute;
-	}
-	std::vector<std::string> vZones;
-	vZones.reserve(vZoneIdsParam.size());
-	for (int32_t iZoneId : vZoneIdsParam)
-	{
-		if (iZoneId < 0)
-		{
-			stRoute.iStatus = ServiceRouteStatus::BadName;
-			return stRoute;
-		}
-		vZones.push_back(std::to_string(iZoneId));
-	}
-	int32_t iCode = OI_ERR_FAIL;
-	std::vector<::OI::Base::ServiceInstance> vList;
-	if (!::OI::Base::RegistryClient::GetInstance().PullSync(sNameParam, iCode, vList) || iCode != OI_OK)
+	if (iCodeParam != OI_OK)
 	{
 		stRoute.iStatus = ServiceRouteStatus::Offline;
 		return stRoute;
 	}
 	bool bGlobal = false;
-	for (const auto& stInst : vList)
+	for (const auto& stInst : vListParam)
 	{
 		if (stInst.sName != sNameParam)
 		{
@@ -870,10 +947,10 @@ ServiceRoute RouteZones(::OI::Net::SessionManager* pManagerParam, const std::str
 		stRoute.iStatus = ServiceRouteStatus::WrongKind;
 		return stRoute;
 	}
-	for (const auto& sZone : vZones)
+	for (const auto& sZone : vZonesParam)
 	{
 		const ::OI::Base::ServiceInstance* pBest = nullptr;
-		for (const auto& stInst : vList)
+		for (const auto& stInst : vListParam)
 		{
 			if (stInst.sName != sNameParam || stInst.sZone != sZone)
 			{

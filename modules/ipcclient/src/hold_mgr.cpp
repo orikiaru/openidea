@@ -1353,7 +1353,10 @@ static coro::TaskResult<int> CheckNamedServiceRpc()
 	// 服务名只在入口解析；局部字符串和请求销毁后，延迟启动仍能正确发送。
 	static ZoneService stOfflineWatcher("ipcserver");
 	OI::Base::ServiceTable::GetInstance().Watch(&stOfflineWatcher, "ipcserver");
-	auto stFallback = OI::Rpc::RouteService(&stOfflineWatcher, "ipcserver", OI::Rpc::ServicePick::Any, "");
+	OI::Rpc::RouteAwaiter stFallbackWait;
+	stFallbackWait.pManager = &stOfflineWatcher;
+	stFallbackWait.sName = "ipcserver";
+	auto stFallback = co_await stFallbackWait;
 	if (stFallback.iStatus != OI::Rpc::ServiceRouteStatus::Ok || stFallback.vClients.size() != 1 || stFallback.vClients[0] == &stOfflineWatcher)
 	{
 		++iBad;
@@ -1417,15 +1420,12 @@ static coro::TaskResult<int> CheckNamedServiceRpc()
 		});
 	}
 	co_await stContenders.Join();
-	try
+	auto stAgain = co_await *pSingle;
+	if (stAgain.GetRet() != 0 || stAgain.GetRes().iMark != 77)
 	{
-		(void)co_await *pSingle;
 		++iBad;
 	}
-	catch (const std::logic_error&)
-	{
-	}
-	if (pSuccess->load() != 1 || pRejected->load() != 7)
+	if (pSuccess->load() != 8 || pRejected->load() != 0)
 	{
 		++iBad;
 	}

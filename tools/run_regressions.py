@@ -27,6 +27,8 @@ import time
 
 REPO = Path(__file__).resolve().parents[1]
 CAP = 2 * 1024**3
+# Windows 动态端口段（本机 1024-15000）可能被 Hyper-V/WinNAT 保留，测试 Redis 不用 6379。
+REDIS_PORT = 16380
 
 
 def replace(text, key, value):
@@ -159,6 +161,9 @@ def run(case, args):
         for name in ("logd", "ipcclient", "ipcserver", "redisserver") + (("registry",) if case == "registry" or mode == "hold" else ()):
             shutil.copy2(args.bin_dir / (name + SUFFIX), work / (name + SUFFIX))
             text = (REPO / "deploy/config" / (name + ".toml")).read_text(encoding="utf-8-sig")
+            if name in ("redisserver", "registry"):
+                assert 'port = "6379"' in text, name
+                text = text.replace('port = "6379"', 'port = "%d"' % REDIS_PORT)
             if name == "logd":
                 text = replace(text, "root_path", '"' + logs.as_posix() + '"')
                 if case == "log-backpressure":
@@ -283,13 +288,13 @@ def run(case, args):
                     time.sleep(0.05)
             if mode in ("redis", "hold") or case == "registry":
                 redis_conf = root / "redis.conf"
-                redis_conf.write_text('bind 127.0.0.1\nport 6379\nsave ""\nappendonly no\n'
+                redis_conf.write_text('bind 127.0.0.1\nport %d\nsave ""\nappendonly no\n' % REDIS_PORT +
                                       'maxmemory 1536mb\nmaxmemory-policy allkeys-lru\n'
                                       'dir ' + str(root) + '\n')
                 db, dbpath = start("redis", [str(args.redis_binary), str(redis_conf)])
                 ready(db, dbpath, "Ready to accept connections")
                 if fairness:
-                    monitor = socket.create_connection(("127.0.0.1", 6379), timeout=2)
+                    monitor = socket.create_connection(("127.0.0.1", REDIS_PORT), timeout=2)
                     monitor.sendall(b"*1\r\n$7\r\nMONITOR\r\n")
                     assert monitor.recv(100) == b"+OK\r\n"
                 if case == "registry" or mode == "hold":
@@ -422,7 +427,7 @@ def run(case, args):
                 assert "hold reentrant connect first=1 retry=0 connections=1 bad=0" in text
                 assert "hold registry pairing bad=0" in text
                 assert re.search(r"hold service rpc global=1 any=1 zone=1 batch=2 many=2 slot=1 elapsed_ms=\d+ wrong=1 miss=1 bad=0", text)
-                assert "hold named rpc ownership success=1 rejected=7 bad=0" in text
+                assert "hold named rpc ownership success=8 rejected=0 bad=0" in text
                 assert re.search(r"hold http release before=\d+ after=\d+ bad=0", text)
                 assert "hold json validation bad=0" in text
                 assert "hold task exceptions bad=0" in text
@@ -549,7 +554,7 @@ if __name__ == "__main__":
     if options.artifacts:
         options.artifacts = options.artifacts.resolve()
         options.artifacts.mkdir(parents=True, exist_ok=True)
-    for port in (19995, 17981, 16379, 6379, 17990, 17992, 17993):
+    for port in (19995, 17981, 16379, REDIS_PORT, 17990, 17992, 17993):
         with socket.socket() as probe:
             probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             probe.bind(("127.0.0.1", port))

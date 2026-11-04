@@ -3,6 +3,7 @@
 #include "oi_header.h"
 #include "oi_parser.h"
 #include "oi_rpc_call.h"
+#include "oi_registry.h"
 #include "oi_session_manager.h"
 #include "oi_rpc_session_manager.h"
 #include "oi_lock.h"
@@ -305,6 +306,8 @@ struct BasicTask
 			if (bStart)
 			{
 				stChildLocal.resume();
+				// 子任务这次 resume 已经返回。执行引用在这里放，不等最外层协程挂起，避免同步完成的帧堆在线程局部队列里。
+				DrainDetached();
 			}
 			// 当场完成仍走内联返回；发布挂起后不再访问 this。
 			return iGate.exchange(2, std::memory_order_acq_rel) != 1;
@@ -585,8 +588,11 @@ void HandleRpc(F fnFunctionParam)
 }
 
 // 返回调用号。回包、超时或 WakeRpcCall 三者只有一个会触发 decode/resume。
-uint64_t BindRpcCall(::OI::Net::SessionManager* pManagerParam, sid_t iSessionIdParam, proto_type_t iResponseIdParam, std::coroutine_handle<> stHandleParam, int32_t* pResultParam, int64_t iTimeoutMillisecondsParam, std::function<bool(::OI::Base::BytesStream&)> fnDecodeParam, std::function<void()> fnResumeParam);
+uint64_t BindRpcCall(::OI::Net::SessionManager* pManagerParam, sid_t iSessionIdParam, proto_type_t iResponseIdParam, std::coroutine_handle<> stHandleParam, int32_t* pResultParam, int64_t iTimeoutMillisecondsParam, std::function<bool(::OI::Base::BytesStream&)> fnDecodeParam, std::function<void()> fnResumeParam, std::shared_ptr<std::atomic<int32_t>> pGuardParam = {});
 void FailRpcCalls(::OI::Net::SessionManager* pManagerParam, sid_t iSessionIdParam);
+// 取走等待项且不调用完成回调。已经在回调里的，等 WaitRpcGuard 归零。
+void AbandonRpcCall(uint64_t iCallIdParam);
+void WaitRpcGuard(const std::shared_ptr<std::atomic<int32_t>>& pGuardParam);
 bool WakeRpcCall(uint64_t iCallIdParam, int32_t iCodeParam, ::OI::Base::BytesStream* pBodyParam);
 
 // 发出请求后挂起。回包或超时回调里 Schedule 回来。回包可能比挂起先到。
@@ -609,6 +615,8 @@ struct [[nodiscard]] RpcCallAwaiter
 	::OI::Base::BytesStream stReply;
 	bool bReplied;
 	std::exception_ptr stSubmissionError;
+	uint64_t iCallId = 0;
+	std::shared_ptr<std::atomic<int32_t>> pGuard;
 
 	RpcCallAwaiter()
 	    : pManager(NULL), iSessionId(0), pRequest(NULL), pResponse(NULL), iResult(OI_ERR_FAIL), iTimeoutMilliseconds(180000), stHandle(), iGate(0), bReplied(false)
@@ -618,9 +626,21 @@ struct [[nodiscard]] RpcCallAwaiter
 	RpcCallAwaiter(RpcCallAwaiter&& stOtherParam)
 	    : pManager(ClaimMove(stOtherParam)), pClient(stOtherParam.pClient), iSessionId(stOtherParam.iSessionId), pRequest(stOtherParam.pRequest), pResponse(stOtherParam.pResponse), iResult(stOtherParam.iResult),
 	      iTimeoutMilliseconds(stOtherParam.iTimeoutMilliseconds), stHandle(stOtherParam.stHandle), iGate(stOtherParam.iGate.load(std::memory_order_relaxed)),
-	      bReplied(false), stSubmissionError(std::move(stOtherParam.stSubmissionError))
+	      bReplied(false), stSubmissionError(std::move(stOtherParam.stSubmissionError)), iCallId(stOtherParam.iCallId), pGuard(std::move(stOtherParam.pGuard))
 	{
 		stOtherParam.stHandle = nullptr;
+		stOtherParam.iCallId = 0;
+		stOtherParam.bDispatched = false;
+	}
+	~RpcCallAwaiter()
+	{
+		if (!bDispatched || iCallId == 0)
+		{
+			return;
+		}
+		// 槽还在就摘掉，回调不会再进来。回调已经在跑就等它结束，避免写进释放后的等待器。
+		AbandonRpcCall(iCallId);
+		WaitRpcGuard(pGuard);
 	}
 	static ::OI::Net::SessionManager* ClaimMove(RpcCallAwaiter& stOtherParam)
 	{
@@ -661,6 +681,8 @@ struct [[nodiscard]] RpcCallAwaiter
 		bReplied = false;
 		stSubmissionError = nullptr;
 		iGate.store(0, std::memory_order_relaxed);
+		iCallId = 0;
+		pGuard = std::make_shared<std::atomic<int32_t>>(0);
 		uint64_t iCallIdLocal = BindRpcCall(pManager, iSessionId, RpcProtoId<Res>::iValue, stHandle, &iResult, iTimeoutMilliseconds, [this](::OI::Base::BytesStream& stInputParam)
 		{
 			stReply = std::move(stInputParam);
@@ -673,7 +695,8 @@ struct [[nodiscard]] RpcCallAwaiter
 			{
 				coro::Schedule(stHandle);
 			}
-		});
+		}, pGuard);
+		iCallId = iCallIdLocal;
 		try
 		{
 			::OI::Base::BytesStream stBody;
@@ -883,9 +906,6 @@ struct ServiceRoute
 	std::vector<ProtoClientManager*> vClients;
 };
 
-// bBatchParam 为真时只接受 name.*，否则只接受 name 或 name.分区。
-ServiceRoute RouteService(const std::string& sTargetParam, bool bBatchParam);
-
 enum class ServicePick
 {
 	Any,
@@ -894,23 +914,43 @@ enum class ServicePick
 };
 
 // pManagerParam 是发起调用的管理器。不带分区且它自己就在看这个名字时，直接用它，不再另连。
-ServiceRoute RouteService(::OI::Net::SessionManager* pManagerParam, const std::string& sNameParam, ServicePick iPickParam, const std::string& sZoneParam);
-// 按给出的分区号各找一台。vClients 与分区号等长，空指针表示这个分区当前没登记。
-ServiceRoute RouteZones(::OI::Net::SessionManager* pManagerParam, const std::string& sNameParam, const std::vector<int32_t>& vZoneIdsParam);
+// 返回 true 表示不用再问注册表，结果已经写进 stRouteParam。
+bool PrepareRoute(::OI::Net::SessionManager* pManagerParam, const std::string& sNameParam, ServicePick iPickParam, const std::string& sZoneParam, ServiceRoute& stRouteParam);
+bool PrepareZones(::OI::Net::SessionManager* pManagerParam, const std::string& sNameParam, const std::vector<int32_t>& vZoneIdsParam, ServiceRoute& stRouteParam, std::vector<std::string>& vZonesParam);
+// bBatchParam 为真时只接受 name.*，否则只接受 name 或 name.分区。
+// 返回 true 表示目标字符串非法，结果在 stRouteParam。否则写出要拉取的名字、挑选方式和分区。
+bool PrepareTarget(const std::string& sTargetParam, bool bBatchParam, ServiceRoute& stRouteParam, std::string& sNameParam, ServicePick& iPickParam, std::string& sZoneParam);
+// 拉取不占线程。fnDone 只调用一次，里面不能再等注册表。
+void PullRoute(const std::string& sNameParam, std::function<void(int32_t, const std::vector<::OI::Base::ServiceInstance>&)> fnDoneParam);
+ServiceRoute FinishRoute(::OI::Net::SessionManager* pManagerParam, const std::string& sNameParam, ServicePick iPickParam, const std::string& sZoneParam, int32_t iCodeParam, const std::vector<::OI::Base::ServiceInstance>& vListParam);
+// vClients 与分区号等长，空指针表示这个分区当前没登记。
+ServiceRoute FinishZones(::OI::Net::SessionManager* pManagerParam, const std::string& sNameParam, const std::vector<std::string>& vZonesParam, int32_t iCodeParam, const std::vector<::OI::Base::ServiceInstance>& vListParam);
 
-template <typename Res, typename Req>
-struct [[nodiscard]] NamedRpcCall
+// 挂起等注册表，不在调用线程里同步等。快路径（名字非法、自己已经连着）不挂起。
+struct RouteAwaiter
 {
+	enum class Kind
+	{
+		Named,
+		Zones,
+		Target,
+	};
+	Kind iKind = Kind::Named;
 	::OI::Net::SessionManager* pManager = nullptr;
 	std::string sName;
 	std::string sZone;
-	bool bZone = false;
+	ServicePick iPick = ServicePick::Any;
+	std::vector<int32_t> vZones;
 	std::string sTarget;
-	Req stRequest;
-	::OI::Timer::MS stTimeout{0};
-	std::optional<RpcValueAwaiter<Req, Res>> stCall;
-	int32_t iFailure = OI_ERR_CONNECT;
-	std::shared_ptr<std::atomic<bool>> pAwaitStarted = std::make_shared<std::atomic<bool>>(false);
+	bool bBatch = false;
+	bool bResolved = false;
+	int32_t iCode = OI_ERR_CONNECT;
+	std::vector<::OI::Base::ServiceInstance> vList;
+	std::vector<std::string> vZoneNames;
+	ServiceRoute stRoute;
+	std::coroutine_handle<> stHandle{};
+	std::atomic<int32_t> iGate{0};
+
 	bool await_ready() const noexcept
 	{
 		return false;
@@ -918,51 +958,52 @@ struct [[nodiscard]] NamedRpcCall
 	template <typename Promise>
 	bool await_suspend(std::coroutine_handle<Promise> stHandleParam)
 	{
-		if (!pAwaitStarted || pAwaitStarted->exchange(true, std::memory_order_acq_rel))
+		stHandle = stHandleParam;
+		if (iKind == Kind::Target)
 		{
-			throw std::logic_error("NamedRpcCall can only be awaited once; share a Task to share its result");
-		}
-		ServiceRoute stRoute;
-		if (pManager)
-		{
-			if (sName.empty())
+			if (PrepareTarget(sTarget, bBatch, stRoute, sName, iPick, sZone))
 			{
-				iFailure = OI_ERR_FAIL;
+				bResolved = true;
 				return false;
 			}
-			stRoute = RouteService(pManager, sName, bZone ? ServicePick::Zone : ServicePick::Any, sZone);
 		}
-		else
+		if (iKind == Kind::Zones)
 		{
-			stRoute = RouteService(sTarget, false);
-		}
-		if (stRoute.iStatus != ServiceRouteStatus::Ok || stRoute.vClients.size() != 1)
-		{
-			if (stRoute.iStatus == ServiceRouteStatus::BadName || stRoute.iStatus == ServiceRouteStatus::WrongKind)
+			if (PrepareZones(pManager, sName, vZones, stRoute, vZoneNames))
 			{
-				iFailure = OI_ERR_FAIL;
+				bResolved = true;
+				return false;
 			}
+		}
+		else if (PrepareRoute(pManager, sName, iPick, sZone, stRoute))
+		{
+			bResolved = true;
 			return false;
 		}
-		stCall.emplace(RpcCall(*stRoute.vClients[0], std::move(stRequest), stTimeout));
-		return stCall->await_suspend(stHandleParam);
-	}
-	RpcResult<Res> await_resume()
-	{
-		if (!stCall)
+		PullRoute(sName, [this](int32_t iCodeParam, const std::vector<::OI::Base::ServiceInstance>& vListParam)
 		{
-			return RpcResult<Res>(iFailure, Res{});
+			iCode = iCodeParam;
+			vList = vListParam;
+			if (iGate.exchange(1, std::memory_order_acq_rel) == 2)
+			{
+				coro::Schedule(stHandle);
+			}
+		});
+		return iGate.exchange(2, std::memory_order_acq_rel) != 1;
+	}
+	ServiceRoute await_resume()
+	{
+		if (bResolved)
+		{
+			return std::move(stRoute);
 		}
-		return stCall->await_resume();
+		if (iKind == Kind::Zones)
+		{
+			return FinishZones(pManager, sName, vZoneNames, iCode, vList);
+		}
+		return FinishRoute(pManager, sName, iPick, sZone, iCode, vList);
 	}
 };
-
-template <typename Res, typename Req>
-NamedRpcCall<Res, Req> RpcCall(const std::string& sServiceParam, Req stRequestParam, ::OI::Timer::MS stTimeoutParam = ::OI::Timer::Seconds(180))
-{
-	static_assert(std::is_same_v<Res, typename RpcProtoId<Req>::Response>, "RPC response type does not match the request");
-	return NamedRpcCall<Res, Req>{nullptr, std::string(), std::string(), false, std::string(sServiceParam), std::move(stRequestParam), stTimeoutParam, std::nullopt, OI_ERR_CONNECT};
-}
 
 }
 }
@@ -973,10 +1014,39 @@ namespace Rpc
 {
 
 template <typename Res, typename Req>
+coro::TaskResult<RpcResult<Res>> FailNamed(int32_t iCodeParam)
+{
+	co_return RpcResult<Res>(iCodeParam, Res{});
+}
+
+template <typename Res, typename Req>
+coro::TaskResult<RpcResult<Res>> CallNamed(::OI::Net::SessionManager* pManagerParam, std::string sNameParam, ServicePick iPickParam, std::string sZoneParam, Req stRequestParam, ::OI::Timer::MS stTimeoutParam)
+{
+	RouteAwaiter stWait;
+	stWait.iKind = RouteAwaiter::Kind::Named;
+	stWait.pManager = pManagerParam;
+	stWait.sName = std::move(sNameParam);
+	stWait.iPick = iPickParam;
+	stWait.sZone = std::move(sZoneParam);
+	ServiceRoute stRoute = co_await stWait;
+	if (stRoute.iStatus != ServiceRouteStatus::Ok || stRoute.vClients.size() != 1 || !stRoute.vClients[0])
+	{
+		int32_t iCode = OI_ERR_CONNECT;
+		if (stRoute.iStatus == ServiceRouteStatus::BadName || stRoute.iStatus == ServiceRouteStatus::WrongKind)
+		{
+			iCode = OI_ERR_FAIL;
+		}
+		co_return RpcResult<Res>(iCode, Res{});
+	}
+	auto stCall = RpcCall(*stRoute.vClients[0], std::move(stRequestParam), stTimeoutParam);
+	co_return co_await stCall;
+}
+
+template <typename Res, typename Req>
 auto ProtoClientManager::CallAny(Req stRequestParam, ::OI::Timer::MS stTimeoutParam)
 {
 	static_assert(std::is_same_v<Res, typename RpcProtoId<Req>::Response>, "RPC response type does not match the request");
-	return NamedRpcCall<Res, Req>{this, sServiceName, std::string(), false, std::string(), std::move(stRequestParam), stTimeoutParam, std::nullopt, OI_ERR_CONNECT};
+	return CallNamed<Res>(this, sServiceName, ServicePick::Any, std::string(), std::move(stRequestParam), stTimeoutParam);
 }
 
 template <typename Res, typename Req>
@@ -985,9 +1055,9 @@ auto ProtoClientManager::Call(int32_t iZoneIdParam, Req stRequestParam, ::OI::Ti
 	static_assert(std::is_same_v<Res, typename RpcProtoId<Req>::Response>, "RPC response type does not match the request");
 	if (iZoneIdParam < 0)
 	{
-		return NamedRpcCall<Res, Req>{this, std::string(), std::string(), true, std::string(), std::move(stRequestParam), stTimeoutParam, std::nullopt, OI_ERR_FAIL};
+		return FailNamed<Res, Req>(OI_ERR_FAIL);
 	}
-	return NamedRpcCall<Res, Req>{this, sServiceName, std::to_string(iZoneIdParam), true, std::string(), std::move(stRequestParam), stTimeoutParam, std::nullopt, OI_ERR_CONNECT};
+	return CallNamed<Res>(this, sServiceName, ServicePick::Zone, std::to_string(iZoneIdParam), std::move(stRequestParam), stTimeoutParam);
 }
 
 template <typename Res, typename Req>
@@ -1004,15 +1074,41 @@ coro::TaskResult<std::vector<RpcResult<Res>>> SendRouted(ServiceRoute stRoutePar
 		co_return std::vector<RpcResult<Res>>{RpcResult<Res>(iCode, Res{})};
 	}
 	std::deque<std::optional<RpcValueAwaiter<Req, Res>>> vCalls;
-	for (auto* pClient : stRouteParam.vClients)
+	std::exception_ptr stBuildError;
+	try
 	{
-		if (!pClient)
+		for (auto* pClient : stRouteParam.vClients)
 		{
-			vCalls.emplace_back();
-			continue;
+			if (!pClient)
+			{
+				vCalls.emplace_back();
+				continue;
+			}
+			vCalls.emplace_back(std::in_place, RpcCall(*pClient, stRequestParam, stTimeoutParam));
+			vCalls.back()->Submit();
 		}
-		vCalls.emplace_back(std::in_place, RpcCall(*pClient, stRequestParam, stTimeoutParam));
-		vCalls.back()->Submit();
+	}
+	catch (...)
+	{
+		stBuildError = std::current_exception();
+	}
+	if (stBuildError)
+	{
+		for (auto& stCall : vCalls)
+		{
+			if (!stCall || !stCall->bDispatched)
+			{
+				continue;
+			}
+			try
+			{
+				(void)co_await *stCall;
+			}
+			catch (...)
+			{
+			}
+		}
+		std::rethrow_exception(stBuildError);
 	}
 	std::vector<RpcResult<Res>> vResults;
 	vResults.reserve(vCalls.size());
@@ -1035,24 +1131,63 @@ coro::TaskResult<std::vector<RpcResult<Res>>> SendRouted(ServiceRoute stRoutePar
 	co_return vResults;
 }
 
-// 普通入口立即解析路由；协程持有目标列表和请求，不再保存服务名。
+// 名字拷进任务。名单是任务跑起来时的注册表回包，等待不占线程。
 // 路由管理器由常驻连接池持有，回包仍按调用号匹配等待器。
+template <typename Res, typename Req>
+coro::TaskResult<std::vector<RpcResult<Res>>> CallRouted(RouteAwaiter::Kind iKindParam, ::OI::Net::SessionManager* pManagerParam, std::string sNameParam, ServicePick iPickParam, std::string sZoneParam, std::vector<int32_t> vZonesParam, std::string sTargetParam, bool bBatchParam, Req stRequestParam, ::OI::Timer::MS stTimeoutParam)
+{
+	RouteAwaiter stWait;
+	stWait.iKind = iKindParam;
+	stWait.pManager = pManagerParam;
+	stWait.sName = std::move(sNameParam);
+	stWait.iPick = iPickParam;
+	stWait.sZone = std::move(sZoneParam);
+	stWait.vZones = std::move(vZonesParam);
+	stWait.sTarget = std::move(sTargetParam);
+	stWait.bBatch = bBatchParam;
+	ServiceRoute stRoute = co_await stWait;
+	auto stBatch = SendRouted<Res>(std::move(stRoute), std::move(stRequestParam), stTimeoutParam);
+	co_return co_await stBatch;
+}
+
 template <typename Res, typename Req>
 coro::TaskResult<std::vector<RpcResult<Res>>> RpcCallBatch(const std::string& sServiceParam, Req stRequestParam, ::OI::Timer::MS stTimeoutParam = ::OI::Timer::Seconds(180))
 {
-	return SendRouted<Res>(RouteService(sServiceParam, true), std::move(stRequestParam), stTimeoutParam);
+	return CallRouted<Res>(RouteAwaiter::Kind::Target, nullptr, std::string(), ServicePick::Any, std::string(), {}, sServiceParam, true, std::move(stRequestParam), stTimeoutParam);
+}
+
+template <typename Res, typename Req>
+coro::TaskResult<RpcResult<Res>> RpcCall(std::string sServiceParam, Req stRequestParam, ::OI::Timer::MS stTimeoutParam = ::OI::Timer::Seconds(180))
+{
+	static_assert(std::is_same_v<Res, typename RpcProtoId<Req>::Response>, "RPC response type does not match the request");
+	RouteAwaiter stWait;
+	stWait.iKind = RouteAwaiter::Kind::Target;
+	stWait.sTarget = std::move(sServiceParam);
+	stWait.bBatch = false;
+	ServiceRoute stRoute = co_await stWait;
+	if (stRoute.iStatus != ServiceRouteStatus::Ok || stRoute.vClients.size() != 1 || !stRoute.vClients[0])
+	{
+		int32_t iCode = OI_ERR_CONNECT;
+		if (stRoute.iStatus == ServiceRouteStatus::BadName || stRoute.iStatus == ServiceRouteStatus::WrongKind)
+		{
+			iCode = OI_ERR_FAIL;
+		}
+		co_return RpcResult<Res>(iCode, Res{});
+	}
+	auto stCall = RpcCall(*stRoute.vClients[0], std::move(stRequestParam), stTimeoutParam);
+	co_return co_await stCall;
 }
 
 template <typename Res, typename Req>
 auto ProtoClientManager::CallAll(const Req& stRequestParam, ::OI::Timer::MS stTimeoutParam)
 {
-	return SendRouted<Res>(RouteService(this, sServiceName, ServicePick::All, std::string()), stRequestParam, stTimeoutParam);
+	return CallRouted<Res>(RouteAwaiter::Kind::Named, this, sServiceName, ServicePick::All, std::string(), {}, std::string(), false, stRequestParam, stTimeoutParam);
 }
 
 template <typename Res, typename Req>
 auto ProtoClientManager::CallMany(const std::vector<int32_t>& vZoneIdsParam, const Req& stRequestParam, ::OI::Timer::MS stTimeoutParam)
 {
-	return SendRouted<Res>(RouteZones(this, sServiceName, vZoneIdsParam), stRequestParam, stTimeoutParam);
+	return CallRouted<Res>(RouteAwaiter::Kind::Zones, this, sServiceName, ServicePick::Any, std::string(), vZoneIdsParam, std::string(), false, stRequestParam, stTimeoutParam);
 }
 
 }

@@ -15,11 +15,19 @@
 #include "oi_timer_manager.h"
 #include <chrono>
 #include <cstdio>
+#include <memory>
+#include <utility>
 
 namespace OI
 {
 namespace Base
 {
+
+struct RegPullState
+{
+	std::atomic<int32_t> iOnce{0};
+	std::function<void(int32_t, const std::vector<ServiceInstance>&)> fnDone;
+};
 
 namespace
 {
@@ -64,6 +72,41 @@ class PullTimer : public ::OI::Timer::BaseTimer
 		return true;
 	}
 };
+
+void FinishPull(const std::shared_ptr<RegPullState>& pStateParam, int32_t iCodeParam, const std::vector<ServiceInstance>& vListParam)
+{
+	if (!pStateParam)
+	{
+		return;
+	}
+	if (pStateParam->iOnce.exchange(1, std::memory_order_acq_rel) != 0)
+	{
+		return;
+	}
+	auto fnDone = std::move(pStateParam->fnDone);
+	if (fnDone)
+	{
+		fnDone(iCodeParam, vListParam);
+	}
+}
+
+class PullTimeoutTimer : public ::OI::Timer::BaseTimer
+{
+  public:
+	std::shared_ptr<RegPullState> pState;
+	bool OnTimer()
+	{
+		std::vector<ServiceInstance> vEmpty;
+		FinishPull(pState, OI_ERR_CONNECT, vEmpty);
+		delete this;
+		return false;
+	}
+};
+
+void ArmPullTimeout(void* pArgumentParam)
+{
+	::OI::Timer::BaseTimerManager::GetInstance().AddTimer(static_cast<PullTimeoutTimer*>(pArgumentParam), kWaitMs);
+}
 }
 
 ::OI::Base::Bytes EncodeRegFrame(uint32_t iIdParam, const ::OI::Rpc::Serialize& stMessageParam)
@@ -373,6 +416,68 @@ bool RegistryClient::Send(uint32_t iIdParam, const ::OI::Rpc::Serialize& stMessa
 	return SendBytes(iSessionIdLocal, EncodeRegFrame(iIdParam, stMessageParam));
 }
 
+bool RegistryClient::EnqueueSentPull(const PendingPull& stPendingParam)
+{
+	vPendingPulls.push_back(stPendingParam);
+	try
+	{
+		::OI::RpcData::RegPull stRequestLocal(stPendingParam.vNames);
+		if (!Send(PROTO_REG_PULL, stRequestLocal))
+		{
+			vPendingPulls.pop_back();
+			return false;
+		}
+	}
+	catch (...)
+	{
+		vPendingPulls.pop_back();
+		throw;
+	}
+	return true;
+}
+
+void RegistryClient::PullAsync(const std::string& sNameParam, std::function<void(int32_t, const std::vector<ServiceInstance>&)> fnDoneParam)
+{
+	auto pState = std::make_shared<RegPullState>();
+	pState->fnDone = std::move(fnDoneParam);
+	std::vector<ServiceInstance> vEmpty;
+	if (sNameParam.empty() || !Configured())
+	{
+		FinishPull(pState, OI_ERR_FAIL, vEmpty);
+		return;
+	}
+	if (!Connect())
+	{
+		FinishPull(pState, OI_ERR_CONNECT, vEmpty);
+		return;
+	}
+	PendingPull stPending;
+	stPending.bSynchronous = false;
+	stPending.vNames.push_back(sNameParam);
+	stPending.pState = pState;
+	bool bAccepted = false;
+	{
+		::OI::Thread::MutexGuard stLock(stPendingMutex);
+		if (bConnected.load())
+		{
+			bAccepted = EnqueueSentPull(stPending);
+		}
+		else if (bConnecting.load())
+		{
+			vDeferredPulls.push_back(stPending);
+			bAccepted = true;
+		}
+	}
+	if (!bAccepted)
+	{
+		FinishPull(pState, OI_ERR_CONNECT, vEmpty);
+		return;
+	}
+	PullTimeoutTimer* pTimer = new PullTimeoutTimer();
+	pTimer->pState = pState;
+	::OI::Net::Poll::GetInstance().CallOnLoop(ArmPullTimeout, pTimer);
+}
+
 void RegistryClient::SendRegister()
 {
 	::OI::RpcData::RegRegister stRequestLocal(sServiceName, iServiceId, sServiceIp, sServicePort, sServiceZone);
@@ -381,16 +486,44 @@ void RegistryClient::SendRegister()
 
 void RegistryClient::OnAddSession(::OI::Net::Session* pSessionParam)
 {
-	::OI::Thread::MutexGuard stPendingLock(stPendingMutex);
-	vPendingPulls.clear();
-	iSessionId = pSessionParam->GetSessionID();
-	bFailed = false;
-	bConnected = true;
-	bConnecting = false;
-	Notify();
-	if (bPublished.load() && !bLost.load())
+	std::vector<std::shared_ptr<RegPullState>> vFailed;
+	std::deque<PendingPull> vSend;
 	{
-		SendRegister();
+		::OI::Thread::MutexGuard stPendingLock(stPendingMutex);
+		for (const auto& stPending : vPendingPulls)
+		{
+			if (stPending.pState)
+			{
+				vFailed.push_back(stPending.pState);
+			}
+		}
+		vPendingPulls.clear();
+		vSend.swap(vDeferredPulls);
+		iSessionId = pSessionParam->GetSessionID();
+		bFailed = false;
+		bConnected = true;
+		bConnecting = false;
+		Notify();
+		if (bPublished.load() && !bLost.load())
+		{
+			SendRegister();
+		}
+		for (const auto& stPending : vSend)
+		{
+			if (stPending.pState && stPending.pState->iOnce.load(std::memory_order_acquire) != 0)
+			{
+				continue;
+			}
+			if (!EnqueueSentPull(stPending))
+			{
+				vFailed.push_back(stPending.pState);
+			}
+		}
+	}
+	std::vector<ServiceInstance> vEmpty;
+	for (const auto& pState : vFailed)
+	{
+		FinishPull(pState, OI_ERR_CONNECT, vEmpty);
 	}
 	LOG_INFO("RegistryClient::OnAddSession sid=%d", pSessionParam->GetSessionID());
 }
@@ -406,9 +539,30 @@ void RegistryClient::OnDelSession(const ::OI::Net::Session* pSessionParam)
 	bConnected = false;
 	bRegistered = false;
 	bFailed = true;
+	std::vector<std::shared_ptr<RegPullState>> vFailed;
 	{
 		::OI::Thread::MutexGuard stLock(stPendingMutex);
+		for (const auto& stPending : vPendingPulls)
+		{
+			if (stPending.pState)
+			{
+				vFailed.push_back(stPending.pState);
+			}
+		}
+		for (const auto& stPending : vDeferredPulls)
+		{
+			if (stPending.pState)
+			{
+				vFailed.push_back(stPending.pState);
+			}
+		}
 		vPendingPulls.clear();
+		vDeferredPulls.clear();
+	}
+	std::vector<ServiceInstance> vEmpty;
+	for (const auto& pState : vFailed)
+	{
+		FinishPull(pState, OI_ERR_CONNECT, vEmpty);
 	}
 	Notify();
 	LOG_INFO("RegistryClient::OnDelSession sid=%d", pSessionParam->GetSessionID());
@@ -416,8 +570,25 @@ void RegistryClient::OnDelSession(const ::OI::Net::Session* pSessionParam)
 
 void RegistryClient::OnConnectFailed()
 {
-	bConnecting = false;
-	bFailed = true;
+	std::vector<std::shared_ptr<RegPullState>> vFailed;
+	{
+		::OI::Thread::MutexGuard stPendingLock(stPendingMutex);
+		bConnecting = false;
+		bFailed = true;
+		for (const auto& stPending : vDeferredPulls)
+		{
+			if (stPending.pState)
+			{
+				vFailed.push_back(stPending.pState);
+			}
+		}
+		vDeferredPulls.clear();
+	}
+	std::vector<ServiceInstance> vEmpty;
+	for (const auto& pState : vFailed)
+	{
+		FinishPull(pState, OI_ERR_CONNECT, vEmpty);
+	}
 	Notify();
 	LOG_TRACE("RegistryClient::OnConnectFailed");
 }
@@ -500,6 +671,11 @@ void RegistryClient::OnFrame(sid_t iSessionIdParam, uint32_t iIdParam, ::OI::Bas
 			stInst.sPort = stResponseLocal.vList[iIndexLocal].sPort;
 			stInst.sZone = stResponseLocal.vList[iIndexLocal].sZone;
 			vList.push_back(stInst);
+		}
+		if (stPending.pState)
+		{
+			FinishPull(stPending.pState, stResponseLocal.iCode, vList);
+			return;
 		}
 		if (stPending.bSynchronous)
 		{

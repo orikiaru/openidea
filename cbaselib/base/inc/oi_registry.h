@@ -8,6 +8,7 @@
 #include <deque>
 #include <functional>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -68,6 +69,8 @@ class ServiceTable
 	std::map<std::string, State> m_mServices;
 };
 
+struct RegPullState;
+
 // 连 registry 的客户端。登记、心跳、拉取都在这里，应用层只在配置里写 service。
 class RegistryClient : public ::OI::Net::SessionManager
 {
@@ -78,8 +81,10 @@ class RegistryClient : public ::OI::Net::SessionManager
 	virtual ~RegistryClient();
 	// 没配 [Registry] 或查不到时返回 false，调用方继续用配置里的 ip/port。
 	bool Lookup(const std::string& sNameParam, std::string& sIpParam, std::string& sPortParam);
-	// 同步拉这个名字下的全部分区。调用方在协程里用；单线程会转 poll，多线程等回包。
+	// 同步拉这个名字下的全部分区。会占住调用线程。协程里用 PullAsync。
 	bool PullSync(const std::string& sNameParam, int32_t& iCodeParam, std::vector<ServiceInstance>& vListParam);
+	// 发出拉取后立刻返回。回包、连不上或超时时调用 fnDone，只调用一次，可能在 poll 线程或定时器线程上。fnDone 里不能再等注册表。
+	void PullAsync(const std::string& sNameParam, std::function<void(int32_t, const std::vector<ServiceInstance>&)> fnDoneParam);
 	// StartServer 成功后登记本进程。返回 false 表示不能起：id 不对，或同名同 id 已经在线。
 	bool Publish(const std::string& sSectionParam, const std::string& sIpParam, const std::string& sPortParam);
 	void Watch(::OI::Net::SessionManager* pManagerParam, const std::string& sNameParam);
@@ -131,10 +136,14 @@ class RegistryClient : public ::OI::Net::SessionManager
 	{
 		bool bSynchronous;
 		std::vector<std::string> vNames;
+		std::shared_ptr<RegPullState> pState;
 	};
+	// 调用方持有 stPendingMutex，且已经连上。发送失败时不留在队列里。
+	bool EnqueueSentPull(const PendingPull& stPendingParam);
 	::OI::Thread::Mutex stPendingMutex;
 	::OI::Thread::Mutex stSyncMutex;
 	std::deque<PendingPull> vPendingPulls;
+	std::deque<PendingPull> vDeferredPulls;
 	std::atomic<bool> bRegistrationWaiting;
 	std::atomic<bool> bGot;
 	int32_t iCode;

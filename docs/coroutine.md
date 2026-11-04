@@ -32,7 +32,7 @@ TaskResult 每次等待返回一份结果副本，不移走共享结果。大对
 
 单线程主循环每一轮只跑进入时已经在队列里的普通 `Task`，再 `StScheduler::Poll` 只 `resume` 进入时已经在协程队列里的句柄。这一轮里 `yield(0)` 和 `StartTask` 进的是原队列，这次碰不到。然后如果还有待跑的任务或协程，`PollWait(0)` 只试一次网络；什么都没有才 `PollWait(1000)` 堵住等。
 
-多线程由 `ThreadPool::PostCoroutine` 把句柄放进工人队列。工人只 `resume`，不在工人里销毁协程帧。协程在 `final_suspend` 里登记执行引用回收，`resume` 返回后 `DrainDetached` 再释放该引用；仍有任务对象或等待者时保留帧与结果。
+多线程由 `ThreadPool::PostCoroutine` 把句柄放进工人队列。工人只 `resume`，不在工人里销毁协程帧。协程在 `final_suspend` 里登记执行引用回收，这次 `resume` 返回后 `DrainDetached` 再释放该引用。当场跑完的子任务也在这次返回后回收，不等最外层协程挂起。仍有任务对象或等待者时保留帧与结果。
 
 完成与等待登记使用框架 Mutex，单线程下锁为空操作。等待节点内嵌在父协程帧，不另分配堆节点；唤醒前缓存节点的下一项和父句柄，发布后不再访问可能已经销毁的节点。执行引用保证通知期间子帧仍然有效。
 
@@ -60,7 +60,7 @@ HandleRpc<AllEchoReq>([](const AllEchoReq& req, AllEchoRes& res) -> OI::Rpc::Rpc
 
 新接口的时长参数是 `OI::Timer::MS`，用 `OI::Timer::Milliseconds(500)`、`Seconds(10)`、`Minutes`、`Hours`、`Days` 构造，默认 `Seconds(180)`。超时统一使用带单位的时长类型，不再接受裸整数秒。由 200 毫秒周期按毫秒分桶扫描，因此 `MS` 不代表毫秒级唤醒精度。非正超时表示不设截止时间，断连仍会结束等待。`yield` 接受毫秒整数，也接受 `MS`。
 
-按服务名调用不传 `sessionid`，见 [服务注册](registry.md)。`CallAny` 不带分区，`Call` 打一个分区，`CallAll` 打当前名单上的每一份，`CallMany` 打给出的分区号列表。`CallAll` 和 `CallMany` 先全部发出，再逐个等。
+按服务名调用不传 `sessionid`，见 [服务注册](registry.md)。`CallAny` 不带分区，`Call` 打一个分区，`CallAll` 打当前名单上的每一份，`CallMany` 打给出的分区号列表。选实例时挂起等注册表回包，不占线程。`CallAll` 和 `CallMany` 先全部发出，再逐个等。这几个接口返回 `TaskResult`，第一次 `co_await` 才发请求；同一个对象可以给多个协程等，请求只发一次，大家拿同一份结果。
 
 ```cpp
 coro::StartTask([n](coro::Token) {

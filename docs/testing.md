@@ -19,7 +19,7 @@ Windows：Python 3.10+、Visual Studio 2022 的“使用 C++ 的桌面开发”�
 
 Linux：WSL 已配置的 Linux 用户、Python 3.8+、cmake、gcc-13/g++-13、make、已编译的 Redis 服务端。源码编译 Redis 可使用已有的 `tools` 外部依赖目录，默认路径 `/tmp/redis-7.4.12/src/redis-server`；路径不存在必须提供 `--redis-binary`，脚本不会下载不明 Redis 二进制。
 
-测试占用本机端口 19995、17981、16379、6379、17990、17992、17993。运行前脚本探测占用；不杀其他人的服务。两端共享本机端口，**不要并行跑平台或线程模式**。
+测试占用本机端口 19995、17981、16379、16380、17990、17992、17993。测试 Redis 用 16380，不用 6379：Windows 动态端口段可能被 Hyper-V/WinNAT 保留，本机已有的 6379 Redis 也不会和测试冲突。复制出的 `redisserver.toml`、`registry.toml` 由脚本改到 16380，仓库里的配置仍是 6379。运行前脚本探测占用；不杀其他人的服务。两端共享本机端口，**不要并行跑平台或线程模式**。
 
 Windows 使用 `--redis-wsl` 时只有测试 Redis 在 WSL，所有待测模块仍为 Windows `.exe`。需要 WSL 的 localhost 转发可用。Redis 为脚本独立启动的临时实例，内存上限 1536MiB、关闭持久化，绝不借用现有数据库。
 
