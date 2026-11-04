@@ -29,6 +29,7 @@ class Session
 
 	size_t iQueuedBytes = 0;
 	size_t iMaxSendQueueBytes = 64 * 1024 * 1024;
+	size_t iMaxReceiveBufferBytes = 64 * 1024 * 1024 + 8;
 	::OI::Base::Bytes stOutputBuffer;
 	::OI::Base::Bytes stInputBuffer;
 	::OI::Thread::Mutex stLocker;
@@ -97,6 +98,15 @@ class Session
 
 	bool Send(const ::OI::Base::Bytes& stBytesParam);
 	void SetSendQueueLimit(size_t iBytesParam);
+	// 接收缓冲仅 poll 线程访问；会话发布前设置限制。
+	void SetReceiveQueueLimit(size_t iBytesParam)
+	{
+		iMaxReceiveBufferBytes = iBytesParam;
+	}
+	size_t ReceiveAllowance() const
+	{
+		return stInputBuffer.Size() < iMaxReceiveBufferBytes ? iMaxReceiveBufferBytes - stInputBuffer.Size() : 0;
+	}
 	size_t PendingSendBytes();
 	void OnBytesSent(size_t iBytesParam);
 	virtual void ActiveClose() = 0; //外部Mgr主动关闭调用,有锁,不会回调Mgr->CloseSession

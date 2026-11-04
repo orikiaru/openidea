@@ -44,6 +44,25 @@ static bool StatusIs(const ::OI::Redis::RedisResult& stResultParam, const char* 
 	return !stResultParam.bTimeout && stResultParam.pReply && stResultParam.pReply->type == REDIS_REPLY_STATUS && stResultParam.pReply->str && std::strcmp(stResultParam.pReply->str, pTextParam) == 0;
 }
 
+static coro::Task RedisQueueTimeoutRegression()
+{
+	// 故意占用普通队列线程，超时必须仍由 poll 推进。
+	if (!OI::Thread::ThreadPool::GetInstance().AddTask([]()
+	{
+		const auto stStart = std::chrono::steady_clock::now();
+		auto stResult = OI::Redis::CallRedisSync({"BLPOP", "oi-queue-timeout-regression", "2"});
+		const auto iElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - stStart).count();
+		const bool bGood = stResult.iStatus == OI::Redis::RedisStatus::Timeout && iElapsed < 1000 && OI::Redis::RedisClient::GetInstance().PendingCount() == 1;
+		LOG_TRACE("redis queue timeout elapsed=%lld bad=%d", static_cast<long long>(iElapsed), bGood ? 0 : 1);
+		fflush(stdout);
+		TestBoard::GetInstance().Done(bGood ? 0 : 1);
+	}, OI::Thread::PRIO_QUEUE))
+	{
+		TestBoard::GetInstance().Done(1);
+	}
+	co_return;
+}
+
 static coro::Task RedisShutdownRegression()
 {
 	if (!OI::Thread::ThreadPool::GetInstance().AddTask([]()
@@ -262,6 +281,13 @@ coro::Task RedisMgr::Pump()
 	}
 
 	bool bShutdown = false, bPressure = false, bOversized = false, bFairness = false;
+	bool bQueueTimeout = false;
+	TryGetConfig("Regression.redis_queue_timeout", bQueueTimeout);
+	if (bQueueTimeout)
+	{
+		co_await RedisQueueTimeoutRegression();
+		co_return;
+	}
 	TryGetConfig("Regression.redis_fairness", bFairness);
 	if (bFairness)
 	{

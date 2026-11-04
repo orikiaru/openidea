@@ -10,7 +10,8 @@ class Session;
 class Channel
 {
   public:
-	int32_t iEventMask;
+	// 工作线程发布期望掩码，poll 线程读取；复合修改仍由通道锁串行化。
+	std::atomic<int32_t> iEventMask;
 	void* pPollToken;
 
   protected:

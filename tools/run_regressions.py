@@ -43,6 +43,49 @@ def reset_connections():
             s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
 
 
+def rpc_ingress_faults():
+    # 只注入畸形/分片网络数据；正常负载仍由 ipcclient 的 EchoMgr 发出。
+    def closed(stream):
+        try:
+            assert stream.recv(1) == b"", "invalid frame accepted"
+        except ConnectionResetError:
+            pass
+
+    def receive(stream, count):
+        result = b""
+        while len(result) < count:
+            part = stream.recv(count - len(result))
+            assert part, "valid fragmented frame disconnected"
+            result += part
+        return result
+
+    with socket.create_connection(("127.0.0.1", 17981), timeout=1) as stream:
+        stream.sendall(struct.pack("<II", 3002, 65537))
+        closed(stream)  # 只发头，不应等正文或残包超时。
+    for partial in (b"\x01", struct.pack("<IIQ", 3002, 65536, 1 << 63)):
+        with socket.create_connection(("127.0.0.1", 17981), timeout=1) as stream:
+            started = time.monotonic()
+            stream.sendall(partial)
+            time.sleep(0.15)
+            stream.sendall(b"\x00")  # 滴流不刷新 250ms 的绝对期限。
+            closed(stream)
+            assert time.monotonic() - started < 0.39, "partial deadline extended"
+    with socket.create_connection(("127.0.0.1", 17981), timeout=2) as stream:
+        for call_id in range(1, 4):
+            body = struct.pack("<QIIiIIi", (1 << 63) | call_id, 0, 4, 0, 1, 4, 42)
+            body += struct.pack("<II", 99, 65536 - len(body) - 8) + b"x" * (65536 - len(body) - 8)
+            frame = struct.pack("<II", 3002, len(body)) + body
+            stream.sendall(frame[:5])
+            time.sleep(0.03)
+            stream.sendall(frame[5:])
+            proto, size = struct.unpack("<II", receive(stream, 8))
+            response = receive(stream, size)
+            assert proto == 3002 and struct.unpack_from("<Q", response)[0] == call_id
+            assert struct.unpack_from("<i", response, 8)[0] == 0, response
+            time.sleep(0.3)  # 完整包必须取消旧计时器，下一包重新计时。
+    print("rpc ingress oversized/partial/drip/boundary/rearm PASS", flush=True)
+
+
 class RawHttpRegression(socketserver.BaseRequestHandler):
     # 原始 TCP 回包夹具：库级 HTTP 服务通常不会生成这些畸形报文。
     def handle(self):
@@ -87,7 +130,7 @@ class RawHttpRegression(socketserver.BaseRequestHandler):
 
 
 def run(case, args):
-    mode = "hold" if case.startswith(("clock-", "rpc-admission-")) else ("echo" if case in ("reset", "registry") else case)
+    mode = "hold" if case.startswith(("clock-", "rpc-admission-")) else ("echo" if case in ("reset", "registry", "rpc-ingress") else case)
     mode = "log" if case in ("disk-full", "log-backpressure") else mode
     mode = "redis" if case.startswith("redis-") else mode
     fairness = case == "redis-fairness"
@@ -114,7 +157,12 @@ def run(case, args):
                 if case == "log-backpressure":
                     text = replace(text, "max_pending_bytes", str(8 * 1024**2 + 8))
             if name == "ipcserver" and case.startswith("rpc-admission-"):
-                text = text[:text.index("[Rpc]")]
+                # 只匹配真正的段头，配置注释也可能提到 [Rpc]。
+                text = re.sub(r"(?ms)^\[Rpc\]\s*\n.*?(?=^\[|\Z)", "", text)
+            if name == "ipcserver" and case == "rpc-ingress":
+                text = replace(text, "max_frame_bytes", "65536")
+                text = replace(text, "max_receive_buffer_bytes", "65544")
+                text = replace(text, "incomplete_frame_timeout_ms", "250")
             if name == "redisserver" and case == "redis":
                 text = replace(text, "connections", "1")
             if name == "redisserver" and pressure:
@@ -125,6 +173,9 @@ def run(case, args):
                 text = replace(text, "max_pending_commands", str(maximum_count))
                 if fairness: text = replace(text, "offset_ms", "1000")
             if name == "ipcclient":
+                if case == "redis-queue-timeout":
+                    text = replace(text, "timeout_ms", "100")
+                    text += "\n[Regression]\nredis_queue_timeout = true\n"
                 if case == "registry":
                     # 错误的直连后备端口，只有通过注册发现才能完成回声。
                     text = text.replace('port = "17981"', 'port = "17982"')
@@ -236,6 +287,8 @@ def run(case, args):
             ready(server, serverpath, "ipc server listen")
             if case == "reset":
                 reset_connections()
+            if case == "rpc-ingress":
+                rpc_ingress_faults()
             env = os.environ.copy()
             if case.startswith("clock-"):
                 if not args.clock_fault_so:
@@ -291,6 +344,8 @@ def run(case, args):
                 assert text.count("ipc client connect sid=") == 1, "echo test started more than once"
             elif case == "redis-shutdown":
                 assert shutdown_sent and "redis shutdown result=2 late=2 bad=0" in text
+            elif case == "redis-queue-timeout":
+                assert re.search(r"redis queue timeout elapsed=\d+ bad=0", text)
             elif pressure:
                 assert pause_at is not None and not db_paused
                 if fairness:
@@ -326,6 +381,7 @@ def run(case, args):
                 assert "hold rpc admission done bad=0" in text
                 assert text.count("ok=2 busy=4 bad=0") == 3
             elif mode == "hold":
+                assert "hold rpc session index calls=4096 bad=0" in text
                 assert "hold timer exceptions executed=5 destroyed=5 bad=0" in text
                 assert "hold nested results completed=32768 caught=16384 bad=0" in text
                 assert "hold deferred rpc value=0 output=0 pinned=-1 bad=0" in text
@@ -441,7 +497,7 @@ def run_web(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case", default="all", choices=("all", "echo", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "clock-forward", "clock-back", "registry", "web"))
+    parser.add_argument("--case", default="all", choices=("all", "echo", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "clock-forward", "clock-back", "registry", "web"))
     parser.add_argument("--bin-dir", type=Path, default=REPO / "deploy/bin")
     parser.add_argument("--redis-binary", type=Path, default=Path("/tmp/redis-7.4.12/src/redis-server"))
     parser.add_argument("--clock-fault-so", type=Path)
@@ -450,7 +506,7 @@ if __name__ == "__main__":
         with socket.socket() as probe:
             probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             probe.bind(("127.0.0.1", port))
-    cases = ("echo", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "registry", "web") if options.case == "all" else (options.case,)
+    cases = ("echo", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "registry", "web") if options.case == "all" else (options.case,)
     for item in cases:
         if item == "web":
             run_web(options)

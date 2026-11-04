@@ -27,6 +27,21 @@ bool SessionManager::Init()
 		return false;
 	}
 	iMaxSendQueueBytes = (size_t)iSendLimit;
+	int64_t iReceiveLimit = 64 * 1024 * 1024 + 8;
+	int64_t iFrameLimit = 64 * 1024 * 1024;
+	int64_t iFrameTimeout = 10000;
+	TryGetConfig(GetIDString() + ".max_receive_buffer_bytes", iReceiveLimit);
+	TryGetConfig(GetIDString() + ".max_frame_bytes", iFrameLimit);
+	TryGetConfig(GetIDString() + ".incomplete_frame_timeout_ms", iFrameTimeout);
+	if (iFrameLimit < 8 || iFrameLimit > INT32_MAX || iReceiveLimit < iFrameLimit + 8 ||
+	    static_cast<uint64_t>(iReceiveLimit) > SIZE_MAX || iFrameTimeout <= 0)
+	{
+		fprintf(stderr, "invalid receive limits for %s\n", GetIDString().c_str());
+		return false;
+	}
+	iMaxReceiveBufferBytes = static_cast<size_t>(iReceiveLimit);
+	iMaxFrameBytes = static_cast<size_t>(iFrameLimit);
+	iIncompleteFrameTimeoutMilliseconds = static_cast<uint64_t>(iFrameTimeout);
 	std::string sIpLocal, sPortLocal, sType;
 	TryGetConfigAndReturnFalse(GetIDString() + ".ip", sIpLocal);
 	TryGetConfigAndReturnFalse(GetIDString() + ".port", sPortLocal);
@@ -361,6 +376,7 @@ bool SessionManager::SendBytes(sid_t iSessionIdParam, const ::OI::Base::Bytes& s
 void SessionManager::AddSession(Session* pSessionParam)
 {
 	pSessionParam->SetSendQueueLimit(iMaxSendQueueBytes);
+	pSessionParam->SetReceiveQueueLimit(iMaxReceiveBufferBytes);
 	int iSessionIdLocal = 0;
 	{
 		{

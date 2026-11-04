@@ -124,6 +124,7 @@ struct RpcExpire
 	uint64_t iCallId;
 };
 using RpcExpireBuckets = std::map<int64_t, std::list<RpcExpire>>;
+using RpcSessionKey = std::pair<::OI::Net::SessionManager*, sid_t>;
 
 struct RpcCoroSlot
 {
@@ -137,6 +138,8 @@ struct RpcCoroSlot
 	uint64_t iCallId;
 	bool bAwaitingConnect;
 	bool bHasExpiry = false;
+	bool bIndexed = false;
+	std::list<uint64_t>::iterator stSessionIndex;
 	RpcExpireBuckets::iterator stExpiryBucket;
 	std::list<RpcExpire>::iterator stExpiry;
 };
@@ -147,7 +150,42 @@ struct RpcCallShard
 	::OI::Thread::Mutex stMutex;
 	std::unordered_map<uint64_t, RpcCoroSlot> mSlots;
 	RpcExpireBuckets mExpire;
+	std::map<RpcSessionKey, std::list<uint64_t>> mSessions;
 };
+
+// 与等待项共用分片锁：登记、换绑、超时、回包及断连原子维护会话索引。
+std::list<uint64_t>::iterator AddSessionIndex(RpcCallShard& stShardParam, const RpcCoroSlot& stSlotParam, sid_t iSessionIdParam)
+{
+	auto it = stShardParam.mSessions.try_emplace(RpcSessionKey{stSlotParam.pManager, iSessionIdParam}).first;
+	try
+	{
+		it->second.push_back(stSlotParam.iCallId);
+	}
+	catch (...)
+	{
+		if (it->second.empty())
+		{
+			stShardParam.mSessions.erase(it);
+		}
+		throw;
+	}
+	return std::prev(it->second.end());
+}
+
+void RemoveSessionIndex(RpcCallShard& stShardParam, RpcCoroSlot& stSlotParam)
+{
+	if (!stSlotParam.bIndexed)
+	{
+		return;
+	}
+	auto it = stShardParam.mSessions.find({stSlotParam.pManager, stSlotParam.iSessionId});
+	it->second.erase(stSlotParam.stSessionIndex);
+	if (it->second.empty())
+	{
+		stShardParam.mSessions.erase(it);
+	}
+	stSlotParam.bIndexed = false;
+}
 
 // 调用者持分片锁。删除空桶，避免动态超时参数让桶本身无限增长。
 void RemoveRpcExpiry(RpcCallShard& stShardParam, RpcCoroSlot& stSlotParam)
@@ -230,6 +268,7 @@ bool TakeRpcSlot(uint64_t iCallIdParam, RpcCoroSlot& stOutputParam, ::OI::Net::S
 		return false;
 	}
 	RemoveRpcExpiry(stShard, stIterator->second);
+	RemoveSessionIndex(stShard, stIterator->second);
 	stOutputParam = std::move(stIterator->second);
 	stShard.mSlots.erase(stIterator);
 	return true;
@@ -261,6 +300,7 @@ void SweepRpcCalls()
 				stIterator->second.bHasExpiry = false; // 本轮在桶内直接摘除，避免使外层迭代器失效。
 				stIterator->second.stExpiry = {};
 				stIterator->second.stExpiryBucket = {};
+				RemoveSessionIndex(stShard, stIterator->second);
 				vFired.push_back(std::move(stIterator->second));
 				stShard.mSlots.erase(stIterator);
 				vQ.pop_front();
@@ -307,6 +347,11 @@ RpcWaitStats GetRpcWaitStats()
 		::OI::Thread::MutexGuard stLock(stShard.stMutex);
 		stStats.iCalls += stShard.mSlots.size();
 		stStats.iBuckets += stShard.mExpire.size();
+		stStats.iSessionBuckets += stShard.mSessions.size();
+		for (const auto& [stKey, vIds] : stShard.mSessions)
+		{
+			stStats.iSessionEntries += vIds.size();
+		}
 		for (const auto& stBucket : stShard.mExpire)
 		{
 			stStats.iExpirations += stBucket.second.size();
@@ -351,8 +396,15 @@ bool ClaimRpcSend(uint64_t iCallIdParam, sid_t iSessionIdParam)
 	{
 		return false;
 	}
+	if (stIterator->second.iSessionId != iSessionIdParam)
+	{
+		const auto stIndex = AddSessionIndex(stShard, stIterator->second, iSessionIdParam);
+		RemoveSessionIndex(stShard, stIterator->second);
+		stIterator->second.stSessionIndex = stIndex;
+		stIterator->second.bIndexed = true;
+		stIterator->second.iSessionId = iSessionIdParam;
+	}
 	stIterator->second.bAwaitingConnect = false;
-	stIterator->second.iSessionId = iSessionIdParam;
 	return true;
 }
 
@@ -379,6 +431,8 @@ uint64_t BindRpcCall(::OI::Net::SessionManager* pManagerParam, sid_t iSessionIdP
 	auto stInserted = stShard.mSlots.emplace(iCallIdLocal, std::move(stSlot)).first;
 	try
 	{
+		stInserted->second.stSessionIndex = AddSessionIndex(stShard, stInserted->second, iSessionIdParam);
+		stInserted->second.bIndexed = true;
 		if (iTimeoutMillisecondsParam > 0)
 		{
 			auto stBucket = stShard.mExpire.try_emplace(iTimeoutMillisecondsParam).first;
@@ -404,6 +458,7 @@ uint64_t BindRpcCall(::OI::Net::SessionManager* pManagerParam, sid_t iSessionIdP
 	catch (...)
 	{
 		// 登记失败必须在放锁前撤销：调用者还没有拿到调用号，不能自行清理。
+		RemoveSessionIndex(stShard, stInserted->second);
 		stShard.mSlots.erase(stInserted);
 		throw;
 	}
@@ -427,19 +482,21 @@ void FailRpcCalls(::OI::Net::SessionManager* pManagerParam, sid_t iSessionIdPara
 	for (auto& stShard : g_call_shards)
 	{
 		::OI::Thread::MutexGuard stLock(stShard.stMutex);
-		for (auto stIterator = stShard.mSlots.begin(); stIterator != stShard.mSlots.end();)
+		auto it = stShard.mSessions.find({pManagerParam, iSessionIdParam});
+		if (it == stShard.mSessions.end())
 		{
-			if (stIterator->second.pManager == pManagerParam && stIterator->second.iSessionId == iSessionIdParam)
-			{
-				RemoveRpcExpiry(stShard, stIterator->second);
-				vFailed.push_back(std::move(stIterator->second));
-				stIterator = stShard.mSlots.erase(stIterator);
-			}
-			else
-			{
-				++stIterator;
-			}
+			continue;
 		}
+		vFailed.reserve(vFailed.size() + it->second.size());
+		for (const auto& iId : it->second)
+		{
+			auto stSlot = stShard.mSlots.find(iId);
+			RemoveRpcExpiry(stShard, stSlot->second);
+			stSlot->second.bIndexed = false;
+			vFailed.push_back(std::move(stSlot->second));
+			stShard.mSlots.erase(stSlot);
+		}
+		stShard.mSessions.erase(it);
 	}
 	// 唤醒放在锁外，应用可以立即发起新的调用。
 	for (auto& stSlot : vFailed)

@@ -47,6 +47,9 @@ class SessionManager
 	uint64_t iConnectGeneration = 0;
 	bool bConnectPending = false;
 	size_t iMaxSendQueueBytes = 64 * 1024 * 1024;
+	size_t iMaxReceiveBufferBytes = 64 * 1024 * 1024 + 8;
+	size_t iMaxFrameBytes = 64 * 1024 * 1024;
+	uint64_t iIncompleteFrameTimeoutMilliseconds = 10000;
 	sid_t iCurrentSessionId;
 	::OI::Thread::Mutex stLocker;
 	std::string sIpAddress;
@@ -88,6 +91,14 @@ class SessionManager
 		sIpAddress = sSipParam;
 		sPort = sPortParam;
 		iSessionType = iSessionTypeParam;
+	}
+	size_t MaxFrameBytes() const
+	{
+		return iMaxFrameBytes;
+	}
+	uint64_t IncompleteFrameTimeoutMilliseconds() const
+	{
+		return iIncompleteFrameTimeoutMilliseconds;
 	}
 	const std::string& GetStrIP()
 	{

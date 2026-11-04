@@ -11,6 +11,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <utility>
+#include <uv.h>
 namespace OI
 {
 namespace Redis
@@ -26,7 +27,8 @@ struct ReplyFree
 	}
 };
 
-std::once_flag g_sweep_once;
+uv_timer_t g_stSweepTimer;
+bool g_bSweepInitialized = false; // 仅 poll 线程访问。
 const int kSweepMs = 200;
 
 int64_t NowMs()
@@ -36,15 +38,26 @@ int64_t NowMs()
 	    .count();
 }
 
-class RedisSweepTimer : public ::OI::Timer::BaseTimer
+bool ArmRedisSweep()
 {
-  public:
-	bool OnTimer()
+	if (!g_bSweepInitialized)
 	{
-		::OI::Net::Poll::GetInstance().CallOnLoop(RedisClient::SweepTimeout, NULL);
+		if (uv_timer_init(::OI::Net::Poll::GetInstance().Loop(), &g_stSweepTimer) != 0)
+		{
+			return false;
+		}
+		g_bSweepInitialized = true;
+	}
+	if (uv_is_active(reinterpret_cast<uv_handle_t*>(&g_stSweepTimer)))
+	{
 		return true;
 	}
-};
+	// 超时直接由 poll 推进，不能依赖可能正在 CallSync 的队列线程。
+	return uv_timer_start(&g_stSweepTimer, [](uv_timer_t*)
+	{
+		RedisClient::SweepTimeout(nullptr);
+	}, kSweepMs, kSweepMs) == 0;
+}
 }
 
 struct RedisCall::State
@@ -104,6 +117,10 @@ bool RedisClient::Init()
 	{
 		auto& stClient = GetInstance();
 		stClient.FailAll();
+		if (g_bSweepInitialized)
+		{
+			uv_timer_stop(&g_stSweepTimer);
+		}
 		stClient.m_iReaderSessionId = INVALID_SID;
 		stClient.CloseAllSessions();
 	});
@@ -348,10 +365,11 @@ void RedisClient::Enqueue(RedisCall::State* pStParam)
 	::OI::Base::Bytes stFrame;
 	stFrame.Append(pCmd, (size_t)iNumber);
 	redisFreeCommand(pCmd);
-	std::call_once(g_sweep_once, []()
+	if (!ArmRedisSweep())
 	{
-		::OI::Timer::BaseTimerManager::GetInstance().AddTimer(new RedisSweepTimer(), kSweepMs);
-	});
+		Settle(pStParam, {}, RedisStatus::SendFailed);
+		return;
+	}
 	pStParam->iDeadlineMilliseconds = NowMs() + m_iTimeoutMilliseconds;
 	bool bQueued = false;
 	{

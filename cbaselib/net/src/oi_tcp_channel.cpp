@@ -1,6 +1,7 @@
 #include "oi_tcp_channel.h"
 #include "oi_session.h"
 #include "oi_net_os.h"
+#include <algorithm>
 namespace OI
 {
 namespace Net
@@ -13,6 +14,17 @@ void TCP_Channel::DataIn()
 	size_t iRound = 0;
 	for (;;)
 	{
+		const size_t iAllowance = pSession->ReceiveAllowance();
+		if (stInputBuffer.Size() >= iAllowance)
+		{
+			// 满额时先交给解析器。只有解析后仍无空间才拒绝，不能误杀完整合法包。
+			pSession->SwapInBuff(stInputBuffer);
+			if (!pSession->IsClosed() && pSession->ReceiveAllowance() == 0)
+			{
+				pSession->PassiveClose(ENOBUFS);
+			}
+			return;
+		}
 		if (iRound >= iItemIndexRoundMax)
 		{
 			goto read_finish;
@@ -21,7 +33,9 @@ void TCP_Channel::DataIn()
 		{
 			stInputBuffer.Reserve(stInputBuffer.Size() + 64 * 1024);
 		}
-		int iReadNumber = NetOs_Recv(stSocket.GetSocket(), stInputBuffer.End(), stInputBuffer.Capacity() - stInputBuffer.Size());
+		const size_t iReadLimit = std::min({stInputBuffer.Capacity() - stInputBuffer.Size(),
+		    iAllowance - stInputBuffer.Size(), iItemIndexRoundMax - iRound});
+		int iReadNumber = NetOs_Recv(stSocket.GetSocket(), stInputBuffer.End(), iReadLimit);
 		if (iReadNumber > 0)
 		{
 			stInputBuffer.Commit((size_t)iReadNumber);

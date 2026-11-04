@@ -1511,11 +1511,50 @@ coro::Task HoldMgr::Pump()
 
 	// 登记后序列化异常，以及发送异常与完成回调竞争；恢复后不能留下悬空等待项。
 	const auto stBaseline = OI::Rpc::GetRpcWaitStats();
-	auto fnBalanced = [&]()
+	auto fnBalanced = [stBaseline]()
 	{
 		const auto stNow = OI::Rpc::GetRpcWaitStats();
-		return stNow.iCalls == stBaseline.iCalls && stNow.iExpirations == stBaseline.iExpirations && stNow.iBuckets == stBaseline.iBuckets;
+		return stNow.iCalls == stBaseline.iCalls && stNow.iExpirations == stBaseline.iExpirations && stNow.iBuckets == stBaseline.iBuckets && stNow.iSessionEntries == stBaseline.iSessionEntries && stNow.iSessionBuckets == stBaseline.iSessionBuckets;
 	};
+	// 会话索引换绑后，旧连接断开只能完成仍属于它的调用。
+	std::vector<int32_t> vIndexedResults(4096, -99);
+	std::vector<uint64_t> vIndexedCalls;
+	for (size_t iIndexLocal = 0; iIndexLocal < vIndexedResults.size(); ++iIndexLocal)
+	{
+		const auto iCallLocal = OI::Rpc::BindRpcCall(&stPending, iIndexLocal < 32 ? 123 : 456, 0, {}, &vIndexedResults[iIndexLocal], 180000, {}, []()
+		{
+		});
+		vIndexedCalls.push_back(iCallLocal);
+	}
+	for (size_t iIndexLocal = 0; iIndexLocal < 16; ++iIndexLocal)
+	{
+		if (!OI::Rpc::ClaimRpcSend(vIndexedCalls[iIndexLocal], 789))
+		{
+			++iBadLocal;
+		}
+	}
+	OI::Rpc::FailRpcCalls(&stPending, 123);
+	for (size_t iIndexLocal = 0; iIndexLocal < vIndexedResults.size(); ++iIndexLocal)
+	{
+		if (vIndexedResults[iIndexLocal] != (iIndexLocal >= 16 && iIndexLocal < 32 ? OI_ERR_CONNECT : -99))
+		{
+			++iBadLocal;
+		}
+	}
+	OI::Rpc::FailRpcCalls(&stPending, 789);
+	for (size_t iIndexLocal = 0; iIndexLocal < vIndexedResults.size(); ++iIndexLocal)
+	{
+		if (vIndexedResults[iIndexLocal] != (iIndexLocal < 32 ? OI_ERR_CONNECT : -99))
+		{
+			++iBadLocal;
+		}
+		OI::Rpc::WakeRpcCall(vIndexedCalls[iIndexLocal], OI_ERR_CONNECT, nullptr);
+	}
+	if (!fnBalanced())
+	{
+		++iBadLocal;
+	}
+	printf("hold rpc session index calls=4096 bad=%d\n", iBadLocal);
 	struct ThrowingRequest : OI::RpcData::HoldReq
 	{
 		OI::Base::BytesStream& serialize(OI::Base::BytesStream&) const override

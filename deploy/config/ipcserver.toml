@@ -12,6 +12,12 @@ heartbeat_ms = 1000
 pull_ms = 1000
 
 [IpcServer]
+# 每会话未解析字节上限；必须至少为 max_frame_bytes + 8（协议头）。
+max_receive_buffer_bytes = 67108872
+# RPC 正文上限，收到包头立即检查，不等正文到齐；与 [Rpc] 执行中额度独立。
+max_frame_bytes = 67108864
+# 从残包首次出现开始计时，滴流不延期；完整包取消计时，空闲连接不受影响。
+incomplete_frame_timeout_ms = 10000
 ip = "127.0.0.1"
 port = "17981"
 type = "tcp"

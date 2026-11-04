@@ -48,6 +48,12 @@ void Session::OnBytesSent(size_t iBytesParam)
 
 void Session::SwapInBuff(::OI::Base::Bytes& stInputBufferParam)
 {
+	if (stInputBufferParam.Size() > ReceiveAllowance())
+	{
+		stInputBufferParam.Clear();
+		PassiveClose(ENOBUFS);
+		return;
+	}
 	//ibuff处理在io线程,无需加锁.
 	if (stInputBuffer.Size() == 0)
 	{

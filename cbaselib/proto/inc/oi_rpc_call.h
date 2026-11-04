@@ -14,6 +14,8 @@ struct RpcWaitStats
 	size_t iCalls = 0;
 	size_t iExpirations = 0;
 	size_t iBuckets = 0;
+	size_t iSessionEntries = 0;
+	size_t iSessionBuckets = 0;
 };
 RpcWaitStats GetRpcWaitStats();
 // 读取进程级 RPC 在途限制；非法配置令模块初始化失败。
