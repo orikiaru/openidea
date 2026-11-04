@@ -169,7 +169,7 @@ struct TaskReturn<void>
 
 // 一条任务只运行一次，可多次/并发等待；结果和异常保留到最后一个引用释放。
 template <typename T = void>
-struct [[nodiscard]] BasicTask
+struct BasicTask
 {
 	struct promise_type : TaskState, TaskReturn<T>
 	{
@@ -195,13 +195,46 @@ struct [[nodiscard]] BasicTask
 	    : stHandle(std::exchange(stOtherParam.stHandle, {}))
 	{
 	}
-	BasicTask(const BasicTask&) = delete;
+	// 外层只是共享句柄，复制不复制协程帧，也不会再次执行任务。
+	BasicTask(const BasicTask& stOtherParam) noexcept
+	    : stHandle(stOtherParam.stHandle)
+	{
+		if (stHandle)
+		{
+			stHandle.promise().iReferences.fetch_add(1, std::memory_order_relaxed);
+		}
+	}
+	BasicTask& operator=(const BasicTask& stOtherParam) noexcept
+	{
+		BasicTask stCopy(stOtherParam);
+		std::swap(stHandle, stCopy.stHandle);
+		return *this;
+	}
+	BasicTask& operator=(BasicTask&& stOtherParam) noexcept
+	{
+		if (this != &stOtherParam)
+		{
+			BasicTask stMoved(std::move(stOtherParam));
+			std::swap(stHandle, stMoved.stHandle);
+		}
+		return *this;
+	}
 	~BasicTask()
 	{
 		promise_type::Release(stHandle);
 	}
+	Token GetToken() const
+	{
+		if (!stHandle)
+		{
+			return 0;
+		}
+		auto& stPromise = stHandle.promise();
+		OI::Thread::MutexGuard stLock(stPromise.stMutex);
+		return stPromise.iTaskId;
+	}
 
-	Token Start(std::shared_ptr<void> pCallableParam = {}, Token iTokenParam = 0)
+	Token Start(std::shared_ptr<void> pCallableParam = {}, Token iTokenParam = 0) const
 	{
 		if (!stHandle)
 		{
@@ -312,12 +345,13 @@ template <typename T>
 using TaskResult = BasicTask<T>;
 
 template <typename F>
-Token StartTask(F&& fnFunctionParam)
+auto StartTask(F&& fnFunctionParam)
 {
 	Token iTokenLocal = AllocTaskUid();
 	auto stCallable = std::make_shared<std::decay_t<F>>(std::forward<F>(fnFunctionParam));
 	auto stTask = (*stCallable)(iTokenLocal);
-	return stTask.Start(std::move(stCallable), iTokenLocal);
+	stTask.Start(std::move(stCallable), iTokenLocal);
+	return stTask;
 }
 
 // 协作停止：不会销毁仍被 IO/定时器引用的帧。模块销毁前必须 await Join。

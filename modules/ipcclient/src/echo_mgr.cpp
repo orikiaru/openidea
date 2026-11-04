@@ -443,6 +443,7 @@ void EchoMgr::OnResult(int iNumberParam, const ::OI::RpcData::AllEchoReq& stRequ
 	}
 	if (iReturnCodeParam != 0 || stResponseParam.iCode != 1)
 	{
+		++m_mFields["ret_" + std::to_string(iReturnCodeParam)];
 		m_iRpcFail.fetch_add(1);
 	}
 	else if (bSameParam)

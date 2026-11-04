@@ -50,19 +50,28 @@ int main(int iCountParam, char** vArgumentsParam)
         }
         auto pRuns = std::make_shared<std::atomic<int>>(0);
         auto pBad = std::make_shared<std::atomic<int>>(0);
-        auto pShared = std::make_shared<coro::TaskResult<std::string>>(SharedChild(pRuns));
-        coro::TaskScope stWaiters;
+        auto stShared = coro::StartTask([pRuns](coro::Token)
+        {
+            return SharedChild(pRuns);
+        });
+        std::vector<coro::Task> vWaiters;
         for (int iIndex = 0; iIndex < 64; ++iIndex)
         {
-            stWaiters.Start([pShared, pBad](coro::Token, coro::StopToken) -> coro::Task
+            vWaiters.push_back(coro::StartTask([stShared, pBad](coro::Token) -> coro::Task
             {
                 for (int iRound = 0; iRound < 2; ++iRound)
                 {
-                    if ((co_await *pShared) != std::string(256, 's')) { ++*pBad; }
+                    if ((co_await stShared) != std::string(256, 's'))
+                    {
+                        ++*pBad;
+                    }
                 }
-            });
+            }));
         }
-        co_await stWaiters.Join();
+        for (const auto& stWaiter : vWaiters)
+        {
+            co_await stWaiter;
+        }
         iBad += pBad->load() + (pRuns->load() != 1);
         std::printf("shared task runs=%d bad=%d\n", pRuns->load(), iBad);
         OI::Thread::ThreadPool::GetInstance().RequestStop(iBad ? 9 : 0);

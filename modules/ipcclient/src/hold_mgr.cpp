@@ -646,68 +646,83 @@ static coro::Task SharedVoidChild(std::shared_ptr<std::atomic<int>> pRunsParam)
 	++*pRunsParam;
 	co_await coro::yield(0);
 }
-struct TwoWaitersState
+// 仅用于回归统计；任务的共享所有权由 Task 自己管理。
+struct SharedWaitersState
 {
 	std::atomic<int> iRuns{0};
 	std::atomic<int> iAwakened{0};
-	std::atomic<int> iMask{0};
 	std::atomic<int> iBad{0};
+	std::vector<std::atomic<int>> vHits;
+	explicit SharedWaitersState(int iCountParam)
+	    : vHits(iCountParam)
+	{
+	}
 };
-static coro::TaskResult<int> TwoWaitersChild(std::shared_ptr<TwoWaitersState> pStateParam)
+static coro::TaskResult<int> SharedWaitersChild(std::shared_ptr<SharedWaitersState> pStateParam)
 {
 	++pStateParam->iRuns;
-	// 模拟正常异步工作，到时自行完成，不等任何等待者登记。
 	co_await coro::yield(OI::Timer::Milliseconds(20));
 	co_return 42;
 }
-static coro::TaskResult<int> CheckStartedTaskTwoWaiters()
+static coro::TaskResult<int> CheckStartedTaskWaiters()
 {
 	int iBad = 0;
-	for (int iMode = 0; iMode < 3; ++iMode)
+	for (const auto& iCount : {2, 8, 64, 256})
 	{
-		auto pState = std::make_shared<TwoWaitersState>();
-		auto pTask = std::make_shared<coro::TaskResult<int>>(TwoWaitersChild(pState));
-		pTask->Start(); // 先独立启动共享任务，两个等待者只负责等待，不负责启动。
-		if (iMode == 2)
+		for (int iMode = 0; iMode < 3; ++iMode)
 		{
-			// 已完成场景：等任务自然结束，再创建两个等待者。
-			if ((co_await *pTask) != 42)
+			auto pState = std::make_shared<SharedWaitersState>(iCount);
+			std::vector<coro::Task> vWaiters;
+			{
+				auto stTask = coro::StartTask([pState](coro::Token)
+				{
+					return SharedWaitersChild(pState);
+				});
+				if (stTask.GetToken() == 0)
+				{
+					++pState->iBad;
+				}
+				if (iMode == 2 && (co_await stTask) != 42)
+				{
+					++pState->iBad;
+				}
+				for (int iIndex = 0; iIndex < iCount; ++iIndex)
+				{
+					// 混合场景：后一半等待者在任务自然完成后才启动。
+					if (iMode == 1 && iIndex == iCount / 2 && (co_await stTask) != 42)
+					{
+						++pState->iBad;
+					}
+					vWaiters.push_back(coro::StartTask([stTask, pState, iIndex](coro::Token) -> coro::Task
+					{
+						const int iResult = co_await stTask;
+						if (iResult != 42 || pState->vHits[iIndex].fetch_add(1) != 0)
+						{
+							++pState->iBad;
+						}
+						++pState->iAwakened;
+					}));
+				}
+			} // 创建者的 Task 析构，各等待者捕获的副本继续保活。
+			for (const auto& stWaiter : vWaiters)
+			{
+				co_await stWaiter;
+			}
+			if (pState->iRuns.load() != 1 || pState->iAwakened.load() != iCount)
 			{
 				++pState->iBad;
 			}
-		}
-		coro::TaskScope stWaiters;
-		for (int iIndex = 0; iIndex < 2; ++iIndex)
-		{
-			if (iMode == 1 && iIndex == 1)
+			for (const auto& iHits : pState->vHits)
 			{
-				// 混合场景：第一个直接等待，第二个在任务完成后才启动。
-				if ((co_await *pTask) != 42)
+				if (iHits.load() != 1)
 				{
 					++pState->iBad;
 				}
 			}
-			stWaiters.Start([pTask, pState, iIndex](coro::Token, coro::StopToken) -> coro::Task
-			{
-				const int iResult = co_await *pTask;
-				if (iResult != 42)
-				{
-					++pState->iBad;
-				}
-				pState->iMask.fetch_or(1 << iIndex);
-				++pState->iAwakened;
-			});
+			printf("hold started task mode=%d waiters=%d runs=%d awakened=%d bad=%d\n",
+			    iMode, iCount, pState->iRuns.load(), pState->iAwakened.load(), pState->iBad.load());
+			iBad += pState->iBad.load();
 		}
-		// 等待者各自按值持有 shared_ptr；创建者提前释放也不会使任务失效。
-		pTask.reset();
-		co_await stWaiters.Join();
-		if (pState->iRuns.load() != 1 || pState->iAwakened.load() != 2 || pState->iMask.load() != 3)
-		{
-			++pState->iBad;
-		}
-		printf("hold started task mode=%d runs=%d awakened=%d mask=%d bad=%d\n",
-		    iMode, pState->iRuns.load(), pState->iAwakened.load(), pState->iMask.load(), pState->iBad.load());
-		iBad += pState->iBad.load();
 	}
 	co_return iBad;
 }
@@ -717,18 +732,18 @@ static coro::TaskResult<int> CheckSharedTasks()
 	for (int iMode = 0; iMode < 2; ++iMode)
 	{
 		auto pRuns = std::make_shared<std::atomic<int>>(0);
-		auto pTask = std::make_shared<coro::TaskResult<std::string>>(SharedResultChild(pRuns, iMode != 0));
+		auto stTask = SharedResultChild(pRuns, iMode != 0);
 		coro::TaskScope stWaiters;
 		for (int iIndex = 0; iIndex < 64; ++iIndex)
 		{
-			stWaiters.Start([pTask, pBad, iMode](coro::Token, coro::StopToken) -> coro::Task
+			stWaiters.Start([stTask, pBad, iMode](coro::Token, coro::StopToken) -> coro::Task
 			{
 				// 第二遍是完成后再次等待，不能重新执行，也不能拿到被移空的字符串。
 				for (int iRound = 0; iRound < 2; ++iRound)
 				{
 					try
 					{
-						auto sResult = co_await *pTask;
+						auto sResult = co_await stTask;
 						if (iMode != 0 || sResult != std::string(256, 's'))
 						{
 							++*pBad;
@@ -751,16 +766,16 @@ static coro::TaskResult<int> CheckSharedTasks()
 		}
 	}
 	auto pRuns = std::make_shared<std::atomic<int>>(0);
-	auto pTask = std::make_shared<coro::Task>(SharedVoidChild(pRuns));
+	auto stTask = SharedVoidChild(pRuns);
 	coro::TaskScope stStarters;
 	for (int iIndex = 0; iIndex < 64; ++iIndex)
 	{
-		stStarters.Start([pTask](coro::Token, coro::StopToken) -> coro::Task
+		stStarters.Start([stTask](coro::Token, coro::StopToken) -> coro::Task
 		{
-			pTask->Start();
-			pTask->Start();
-			co_await *pTask;
-			co_await *pTask;
+			stTask.Start();
+			stTask.Start();
+			co_await stTask;
+			co_await stTask;
 		});
 	}
 	co_await stStarters.Join();
@@ -796,6 +811,20 @@ static coro::TaskResult<int> CheckSharedTasks()
 	{
 	}
 	co_await stMoved;
+	auto stCopy = stMoved;
+	stSource = stCopy;
+	auto* pSelf = &stCopy;
+	stCopy = *pSelf;
+	stCopy = std::move(*pSelf);
+	co_await stSource;
+	auto pUnusedRuns = std::make_shared<std::atomic<int>>(0);
+	auto stReplaced = SharedVoidChild(pUnusedRuns);
+	stReplaced = std::move(stCopy);
+	co_await stReplaced;
+	if (pLifetimeRuns->load() != 2 || pUnusedRuns->load() != 0)
+	{
+		++*pBad;
+	}
 	printf("hold shared tasks waiters=64 bad=%d\n", pBad->load());
 	co_return pBad->load();
 }
@@ -1219,7 +1248,7 @@ coro::Task HoldMgr::Pump()
 		co_return;
 	}
 	iBadLocal += co_await CheckNestedResults();
-	iBadLocal += co_await CheckStartedTaskTwoWaiters();
+	iBadLocal += co_await CheckStartedTaskWaiters();
 	iBadLocal += co_await CheckSharedTasks();
 	iBadLocal += co_await CheckDeferredRpcSession();
 	iBadLocal += co_await CheckAwaitOwnership();
