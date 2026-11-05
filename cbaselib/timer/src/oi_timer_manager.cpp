@@ -1,6 +1,5 @@
 #include <unistd.h>
 #include <stdio.h>
-#include <atomic>
 #include "oi_timer_manager.h"
 #include "oi_thread.h"
 #include "oi_poll.h"
@@ -8,8 +7,6 @@ namespace OI
 {
 namespace Timer
 {
-
-static std::atomic<bool> g_tick_queued(false);
 
 static void OnLoopTick()
 {
@@ -96,26 +93,14 @@ bool BaseTimerManager::Init()
 
 void BaseTimerManager::OnSignal()
 {
-	bool bExpected = false;
-	if (!g_tick_queued.compare_exchange_strong(bExpected, true))
+	// 处在 libuv 的 C 回调里，异常不能穿出去。单个回调的异常 Update 已经接住，这里兜分配失败；错过的 tick 下次按单调时钟补上。
+	try
 	{
-		return;
+		Update();
 	}
-	bool bQueued = ::OI::Thread::ThreadPool::GetInstance().AddTask([]()
+	catch (...)
 	{
-		struct TickQueuedReset
-		{
-			~TickQueuedReset()
-			{
-				g_tick_queued.store(false);
-			}
-		} stTickQueuedReset;
-		BaseTimerManager::GetInstance().Update();
-	}, ::OI::Thread::PRIO_ENUM::PRIO_QUEUE);
-	if (!bQueued)
-	{
-		// 队列满了这一跳不投。下次到点再投，错过的 tick 由 Update 按单调时钟补上。
-		g_tick_queued.store(false);
+		::OI::Thread::ReportTaskError(std::current_exception());
 	}
 }
 

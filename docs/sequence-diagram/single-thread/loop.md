@@ -33,4 +33,4 @@ sequenceDiagram
     end
 ```
 
-时间轮到点是在 `uv_run` 里把 `Update` 放进 `queue` 任务。轮子要等下一轮开头才转。
+时间轮到点是在 `uv_run` 里直接执行 `Update`，回调只 `Schedule`，被唤醒的协程在下一轮 `Poll` 里 `resume`。

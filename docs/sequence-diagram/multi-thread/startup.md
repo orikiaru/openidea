@@ -2,7 +2,7 @@
 
 多线程里 poll 先单独转起来。`StartWork` 再拉工人，主线程自己不 poll，堵到 `RequestStop`。
 
-条数读 `ThreadPool.normal`、`ThreadPool.urgent`、`ThreadPool.queue`，三项都必须配。缺一项 `ThreadPool::Init` 就返回 false，进程起不来。`queue` 读到后强制改成 1 条，时间轮的 `Update` 走这条。
+条数读 `ThreadPool.normal`、`ThreadPool.urgent`、`ThreadPool.queue`，三项都必须配。缺一项 `ThreadPool::Init` 就返回 false，进程起不来。`queue` 读到后强制改成 1 条，给显式投到 `PRIO_QUEUE` 的有序任务用；时间轮的 `Update` 在 poll 线程上跑，不走这条。
 
 ```mermaid
 sequenceDiagram

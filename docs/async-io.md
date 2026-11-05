@@ -8,7 +8,7 @@
 
 文件不走这条路径。`logd` 的落盘在自己的写线程里用 `fwrite` 堵住写完，避免拖住 poll。别的文件读写也不能交给 poll 线程，一堵整条循环就停。
 
-`CallOnLoop`、`PostOnLoop`、`PollWait`、`ArmTick` 都挂在这条循环上。单线程里 poll 在主线程，多线程里 poll 是单独一条线程。时间轮由这条循环按 `offset_ms` 叫醒，到点再把 `Update` 放进任务队列，不在回调里转轮子。
+`CallOnLoop`、`PostOnLoop`、`PollWait`、`ArmTick` 都挂在这条循环上。单线程里 poll 在主线程，多线程里 poll 是单独一条线程。时间轮由这条循环按 `offset_ms` 叫醒，到点在回调里直接执行 `Update`；定时器回调只做短动作，协程只 `Schedule`。
 
 ## 目标
 
@@ -23,7 +23,7 @@ RPC、Redis、HTTP、日志仍从会话收发。`logd` 的字节和轮转规则�
 - 仍是一条 poll 线程。io_uring 和 IOCP 都不交给工人线程抢。
 - `PollWait(0)` 只取已经完成的，不堵。没有完成也没有待跑任务时才堵住。
 - 完成回调里不 `resume` 协程，只 `Schedule`。poll 回调里仍然不能 `CallRedisSync` 这类同步等待，也不能在里面同步读文件。
-- 时间轮仍是叫醒后把 `Update` 放进队列。io_uring 用超时完成来叫醒，Windows 用可等待定时器或 `GetQueuedCompletionStatusEx` 的超时，不在完成回调里转轮子。
+- 时间轮仍是叫醒后在 poll 线程直接 `Update`。io_uring 用超时完成来叫醒，Windows 用可等待定时器或 `GetQueuedCompletionStatusEx` 的超时。
 - 单线程、多线程都要跑现有回声、Hold、Redis、Web，再加上日志落盘。文件写失败和磁盘满仍要能从现有错误路径看出来。行为变了才算这一项做完。
 
 ## 不做在第一刀里

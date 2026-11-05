@@ -22,9 +22,8 @@ sequenceDiagram
     else 毫秒大于 0
         Yld->>Timer: 主线程就是 poll 线程，直接 AddTimer
         Yld-->>Biz: 挂起
-        Note over Main: 某次 PollWait 的 tick 把 Update 放进任务队列
-        Main->>Timer: 下一轮先 Update
+        Note over Main: 某次 PollWait 的 tick 在 uv_run 里直接 Update
         Timer->>Queue: OnTimer 里 Schedule
-        Main->>Biz: 紧接着 Poll 里 resume
+        Main->>Biz: PollWait 返回后，下一轮 Poll 里 resume
     end
 ```

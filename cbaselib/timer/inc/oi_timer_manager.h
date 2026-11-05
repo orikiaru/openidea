@@ -24,7 +24,7 @@ namespace Timer
 
 typedef std::deque<TimerLevel> TimerLevelVector;
 
-// 到点后在时间轮工作线程放锁执行。lambda 是 ()，要用的数据自己捕获。
+// 到点后在 poll 线程放锁执行，不能阻塞或同步等待。lambda 是 ()，要用的数据自己捕获。
 template <typename F>
 class FnTimer : public BaseTimer
 {
@@ -37,7 +37,7 @@ class FnTimer : public BaseTimer
 	}
 	bool OnTimer()
 	{
-		// Update 已在有序工作线程上，且已释放时间轮锁；直接执行，不能受普通任务限额影响。
+		// Update 已释放时间轮锁，直接执行。
 		std::unique_ptr<FnTimer> pSelf(this);
 		m_fnFunction();
 		return END_TIMER;
@@ -51,9 +51,9 @@ class BaseTimerManager
 
   public:
 	bool Init();
-	// libuv 定时器到点。只把 Update 丢进任务队列，不在 poll 回调里跑时间轮
+	// libuv 定时器到点，在 poll 线程直接调用 Update
 	void OnSignal();
-	// 定时器实际触发。单线程在主循环取到任务后执行，多线程在有序队列线程执行
+	// 定时器实际触发。只在 poll 线程执行，回调里不能同步等待网络或 Redis，耗时工作交给协程
 	void Update();
 
 	timer_tick_t GetCurTick()
