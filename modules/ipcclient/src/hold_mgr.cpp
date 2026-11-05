@@ -946,8 +946,19 @@ static coro::TaskResult<bool> AwaitSingleUse(std::shared_ptr<T> pCallParam)
 template <typename T>
 static coro::TaskResult<int> CheckSingleUse(std::shared_ptr<T> pCallParam)
 {
-	auto stFirst = AwaitSingleUse(pCallParam);
-	auto stSecond = AwaitSingleUse(pCallParam);
+	auto pReadyCount = std::make_shared<std::atomic<int>>(0);
+	auto fnContend = [pCallParam, pReadyCount](coro::Token) -> coro::TaskResult<bool>
+	{
+		pReadyCount->fetch_add(1, std::memory_order_acq_rel);
+		// 两个独立任务都就绪后再争抢；单线程等待时让出调度。
+		while (pReadyCount->load(std::memory_order_acquire) < 2)
+		{
+			co_await coro::yield(0);
+		}
+		co_return co_await AwaitSingleUse(pCallParam);
+	};
+	auto stFirst = coro::StartTask(fnContend);
+	auto stSecond = coro::StartTask(fnContend);
 	int iAccepted = (co_await stFirst ? 1 : 0) + (co_await stSecond ? 1 : 0);
 	if (co_await AwaitSingleUse(pCallParam))
 	{

@@ -31,6 +31,25 @@ Windows 侧测试 Redis 用 Windows 原生 `redis-server.exe`（[redis-windows](
 
 ## 3. 推荐的一键矩阵
 
+### Windows 原生 Redis 下载
+
+没有本地 Redis 时，从上面链接的项目 Release 下载便携包，解压到仓库外，不注册系统服务。本轮使用 `8.10.3` 的 `Redis-8.10.3-Windows-x64-msys2.zip`，下载及解压示例：
+
+```powershell
+$redisTools = Join-Path $env:USERPROFILE 'tools/redis-8.10.3'
+New-Item -ItemType Directory -Force -Path $redisTools | Out-Null
+$redisArchive = Join-Path $redisTools 'Redis-8.10.3-Windows-x64-msys2.zip'
+Invoke-WebRequest 'https://github.com/redis-windows/redis-windows/releases/download/8.10.3/Redis-8.10.3-Windows-x64-msys2.zip' -OutFile $redisArchive
+Get-FileHash -LiteralPath $redisArchive -Algorithm SHA256
+Expand-Archive -LiteralPath $redisArchive -DestinationPath $redisTools
+$redisBinary = Join-Path $redisTools 'Redis-8.10.3-Windows-x64-msys2/redis-server.exe'
+python tools/diag/redis_link_probe.py --native $redisBinary
+```
+
+本轮下载文件的 SHA256 为 `af16df340525b431e9ec8dabfd625d5e7a233f82805b5418819904ea909c447f`，用于复现文件身份，不代表发布方签名验证。探针仅操作自己启动的实例：核对启动日志、随机密码认证，并按进程句柄关闭；端口已占用就失败，不发送针对该端口的 `SHUTDOWN`。WSL 探针可用 `--wsl --wsl-user jxy --wsl-binary /tmp/redis-7.4.12/src/redis-server`。
+
+### 执行矩阵
+
 Windows 宿主 PowerShell，同一次调用顺序运行 Windows、Linux：
 
 ```powershell
@@ -113,7 +132,9 @@ git diff --check
 
 ## 7. 四路并行的 subagent 提示词范本
 
-进程清理统一用 `tools/kill_test_procs.py`：Windows 按可执行文件路径、命令行和本路 Redis 端口（16380+偏移）匹配，不按进程名；WSL 只杀测试进程和本路端口的 `redis-server`，保留 6379，不执行 `wsl --shutdown`。`--dry-run` 只列不杀。
+进程清理统一用 `tools/kill_test_procs.py`：按本仓库或本路副本的完整路径，以及临时目录中的 `.oi-test-owner.json` 归属标记匹配。标记记录仓库、端口偏移、PID 及创建标识（Windows FILETIME、Linux `/proc` starttime）。Windows 的路径归属还须核对 CIM 快照创建时间，并通过同一进程句柄验证身份、执行终止。端口、目录前缀和通用脚本名都不能单独证明进程归属。WSL 保留 6379，不执行 `wsl --shutdown`；已知属于测试的进程无法检查、清理错误或有残留，必须返回非零。`--dry-run` 只列不杀。
+
+换机器时，清理和矩阵必须使用相同的 `--windows-root`、`--linux-root`、`--wsl-user`；清理旧的无标记实例时，先人工核实归属，不能退回按端口杀进程。脚本安全回归为 `python tools/test_test_safety.py`，矩阵会自动运行。
 
 先由主对话做一次全局清理 `python tools/kill_test_procs.py`，然后问用户选模型，四个 subagent 同时在后台派发，每个一路，按下表替换范本里的占位符。
 
@@ -157,3 +178,11 @@ python tools/parallel_matrix.py --lane <LANE> --jobs 4 --windows-redis-binary <W
 - 最终四组逐例结果汇总在宿主 `~/openidea-test-results/final-20261104/verified.json`，共 72 项。日志与大文件不入库。
 - 本轮修复 Windows 分支变量重命名遗漏、系统 min/max 宏干扰、RPC 解码和响应移动的顺序，以及 Windows 到 WSL 的路径传递；相关失败日志保留在原结果目录。
 - 早期 Linux MT 压测曾返回 291 次 OI_ERR_BUSY，独立复测及后续完整矩阵均通过。开放式百万请求压力在积压时可以触发容量保护，不能把重试通过等同于任何负载都不会限流。回声客户端此后改为固定数量的工作协程，在途数不超过 `inflight`。
+
+## 9. 2026-11-05 复核验证记录
+
+- Windows 原生 MSVC 19.41.34123 / SDK 10.0.26100 和 WSL GCC 13.1，MT/ST 各 18 项全部通过，共 72 项；包括独立调度的单次请求争抢等待检查。四路及主工作目录均已恢复 MT、关闭测试注入并成功构建。
+- Windows Redis 使用本节前述 8.10.3 便携包，独立探针确认大块 ECHO、BLPOP 后 PING 正常，运行时内存上限 1536MiB、关闭持久化，退出后无残留。
+- 四路完成后追加的 Python 清理边界修复，另在 Windows / WSL 各跑 28 项定向测试，全部通过，包含真实 Redis 端口占用、CIM 快照 PID 复用、Linux 无权检查、PID 文件写入失败收尾。清理属于纯 Python 进程管理逻辑，不依赖 C++ ST/MT；没有将这 28 项冒充追加修复后的四路全量回归。
+- 最新 Linux 进程身份登记逻辑另用现成 MT 产物跑 Hold，`hold done bad=0`；真实 Windows 子进程创建时间比对及同句柄终止通过。最终两端清理返回 0，无残留报告。
+- 本机证据根目录为 `~/openidea-test-results/review-2085438`：四路位于 `par-<平台>-<模式>`，追加脚本测试及主目录恢复状态位于 `final-tools`，Linux 补测位于 `final-tools-linux-hold`。大体积日志数据由用例清理，仅保留文本证据。

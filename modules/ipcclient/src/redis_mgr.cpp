@@ -4,6 +4,8 @@
 #include "oi_poll.h"
 #include "oi_config.h"
 #include "oi_net_session.h"
+#include <atomic>
+#include <memory>
 #include <stdexcept>
 #include "test_board.h"
 #include <cstring>
@@ -514,8 +516,19 @@ static coro::TaskResult<int> CheckSingleUse()
 		++iBad;
 	}
 	auto pSharedCall = std::make_shared<OI::Redis::RedisCall>(OI::Redis::RedisIncr("oi-concurrent-use"));
-	auto stFirst = AwaitSingleUse(pSharedCall);
-	auto stSecond = AwaitSingleUse(pSharedCall);
+	auto pReadyCount = std::make_shared<std::atomic<int>>(0);
+	auto fnContend = [pSharedCall, pReadyCount](coro::Token) -> coro::TaskResult<bool>
+	{
+		pReadyCount->fetch_add(1, std::memory_order_acq_rel);
+		// 两个独立任务都就绪后再争抢；单线程等待时让出调度。
+		while (pReadyCount->load(std::memory_order_acquire) < 2)
+		{
+			co_await coro::yield(0);
+		}
+		co_return co_await AwaitSingleUse(pSharedCall);
+	};
+	auto stFirst = coro::StartTask(fnContend);
+	auto stSecond = coro::StartTask(fnContend);
 	const int iAccepted = (co_await stFirst ? 1 : 0) + (co_await stSecond ? 1 : 0);
 	if (iAccepted != 1 || !BulkIs(co_await OI::Redis::RedisGet("oi-concurrent-use"), "1", 1))
 	{

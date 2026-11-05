@@ -53,7 +53,7 @@ def main():
             parser.error("--platform both is launched on the Windows host")
         native = [sys.executable, str(Path(__file__).resolve()), "--artifacts", str(output / "windows"),
                   "--case", args.case, "--mode", args.mode, "--jobs", str(args.jobs), "--wsl-user", args.wsl_user,
-                  "--redis-binary", args.windows_redis_binary or args.redis_binary]
+                  "--redis-binary", args.windows_redis_binary or args.redis_binary, "--port-offset", str(args.port_offset)]
         if args.redis_wsl and not args.windows_redis_binary:
             native.append("--redis-wsl")
         if args.cmake:
@@ -66,7 +66,7 @@ def main():
         translate = lambda path: subprocess.check_output(prefix + ["wslpath", "-a", Path(path).as_posix()], text=True).strip()
         linux = prefix + ["python3", translate(Path(__file__).resolve()), "--build-dir", args.linux_build_dir,
                           "--artifacts", translate(output / "linux"), "--case", args.case, "--mode", args.mode,
-                          "--jobs", str(args.jobs), "--redis-binary", args.redis_binary]
+                          "--jobs", str(args.jobs), "--redis-binary", args.redis_binary, "--port-offset", str(args.port_offset)]
         if args.asan:
             linux.append("--asan")
         if args.clock_faults:
@@ -111,6 +111,8 @@ def main():
         if run("field-names", [sys.executable, ROOT / "tools/test_field_names.py"]):
             failed = True
         if run("process-fixtures", [sys.executable, ROOT / "tools/test_regression_platform.py"]):
+            failed = True
+        if run("test-safety", [sys.executable, ROOT / "tools/test_test_safety.py"]):
             failed = True
         for mode in (("mt", "st") if args.mode == "all" else (args.mode,)):
             configured = True

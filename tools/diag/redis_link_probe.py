@@ -1,9 +1,16 @@
 """纯 Python 直连 Redis，验证链路本身能否承载大块双向流量和阻塞命令，排除被测代码。
 
 --native 起 Windows 原生 redis-server.exe；--wsl 在 WSL 里起 redis-server，从宿主经 localhost 转发或
-NAT 地址（--host）连接。WSL 转发卡死时这里的 echo 收不全，Redis 侧 client list 显示输出缓冲为空。
+NAT 地址（--host）连接。只操作自己启动且通过随机密码认证的实例；端口被占用即失败。
 """
 import argparse
+from pathlib import Path
+import secrets
+import sys
+import tempfile
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from regression_platform import launch, WslRedis
+from test_process_owner import write_owner, record_process
 import socket
 import subprocess
 import threading
@@ -21,14 +28,54 @@ def resp(*args):
     return out
 
 
-def wsl(user, command):
-    result = subprocess.run(["wsl", "-u", user, "--exec", "bash", "-c", command], capture_output=True,
-                            encoding="utf-8", errors="replace")
-    return (result.stdout or "").strip()
-
-
-def echo_round(host, port, label):
+def connect(host, port, password):
     sock = socket.create_connection((host, port), timeout=10)
+    try:
+        sock.sendall(resp("AUTH", password))
+        answer = b""
+        while not answer.endswith(b"\r\n") and len(answer) < 1024:
+            chunk = sock.recv(1024)
+            if not chunk:
+                break
+            answer += chunk
+        if answer != b"+OK\r\n":
+            raise RuntimeError("probe instance authentication failed")
+        return sock
+    except BaseException:
+        sock.close()
+        raise
+
+
+def wait_ready(server, output, timeout=10):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        text = output.read_text(encoding="utf-8", errors="replace")
+        if server.poll() is not None:
+            raise RuntimeError("owned Redis startup failed: " + text)
+        if "Ready to accept connections" in text:
+            return
+        time.sleep(.05)
+    raise RuntimeError("owned Redis startup timed out")
+
+
+def stop_owned(server):
+    if server.poll() is not None:
+        return
+    try:
+        server.terminate()
+    except FileNotFoundError:
+        # WSL wrapper may already have reaped Redis and removed its PID file.
+        server.wait(timeout=5)
+        return
+    try:
+        server.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        server.kill()
+        server.wait(timeout=5)
+
+
+def echo_round(host, port, label, password):
+    sock = connect(host, port, password)
     expected = ROUNDS * (PAYLOAD_BYTES + len("$%d\r\n\r\n" % PAYLOAD_BYTES))
     received = [0]
 
@@ -57,8 +104,8 @@ def echo_round(host, port, label):
     return complete
 
 
-def blpop_then_ping(host, port, block_seconds):
-    sock = socket.create_connection((host, port), timeout=1)
+def blpop_then_ping(host, port, block_seconds, password):
+    sock = connect(host, port, password)
     sock.settimeout(0.05)
     started = time.monotonic()
     sock.sendall(resp("BLPOP", "probe-late", block_seconds))
@@ -82,36 +129,39 @@ def main():
     target.add_argument("--native", metavar="REDIS_SERVER_EXE")
     target.add_argument("--wsl", action="store_true")
     parser.add_argument("--wsl-user", default="root")
+    parser.add_argument("--wsl-binary", default="redis-server")
     parser.add_argument("--host", default="127.0.0.1", help="WSL NAT address to bypass localhost forwarding")
     parser.add_argument("--port", type=int, default=16392)
     args = parser.parse_args()
 
-    server = None
-    if args.native:
-        server = subprocess.Popen([args.native, "--port", str(args.port), "--bind", "127.0.0.1", "--save", "",
-                                   "--appendonly", "no"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        host, label = "127.0.0.1", "native"
-    else:
-        bind = "127.0.0.1" if args.host == "127.0.0.1" else "0.0.0.0 --protected-mode no"
-        wsl(args.wsl_user, "redis-server --port %d --bind %s --save '' --appendonly no --daemonize yes"
-            % (args.port, bind))
-        host, label = args.host, "wsl"
-    time.sleep(1)
-    ok = True
-    try:
-        for _ in range(3):
-            if not echo_round(host, args.port, label):
-                ok = False
-                if args.wsl:
-                    print("  redis view:", wsl(args.wsl_user, "redis-cli -p %d client list" % args.port), flush=True)
-        ok = blpop_then_ping(host, args.port, 3) and ok
-    finally:
-        if server is not None:
-            server.kill()
-            server.wait()
-        else:
-            wsl(args.wsl_user, "redis-cli -p %d shutdown nosave" % args.port)
-    return 0 if ok else 1
+    # A unique password also prevents a wrong --host from silently probing another database.
+    password = secrets.token_hex(24)
+    host = "127.0.0.1" if args.native else args.host
+    bind = "127.0.0.1" if host == "127.0.0.1" else "0.0.0.0"
+    with tempfile.TemporaryDirectory(prefix="oi-regression-probe-") as directory:
+        root = Path(directory)
+        write_owner(root, Path(__file__).resolve().parents[2], None)
+        config = root / "redis.conf"
+        config.write_text('bind %s\nport %d\nsave ""\nappendonly no\ndir .\n'
+                          'maxmemory 1536mb\nrequirepass %s\n' % (bind, args.port, password), encoding="utf-8")
+        output = root / "redis.out"
+        with output.open("w", encoding="utf-8") as handle:
+            if args.native:
+                # MSYS2 Redis expects a relative config path; cwd is owned and temporary.
+                server = launch([args.native, "redis.conf"], cwd=root, stdout=handle, stderr=subprocess.STDOUT)
+            else:
+                server = WslRedis(args.wsl_binary, config, args.wsl_user, cwd=root,
+                                  stdout=handle, stderr=subprocess.STDOUT)
+            try:
+                record_process(root, server)
+                wait_ready(server, output)
+                ok = True
+                for _ in range(3):
+                    ok = echo_round(host, args.port, "native" if args.native else "wsl", password) and ok
+                ok = blpop_then_ping(host, args.port, 3, password) and ok
+                return 0 if ok else 1
+            finally:
+                stop_owned(server)
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@
 只启动仓库现有进程，临时配置和日志自动清理；不会终止不属于本次测试的进程。
 先编出待测版本，单、多线程分别运行一次。Redis 默认使用已有的源码编译产物。
 """
+from test_process_owner import write_owner, record_process
 import argparse
 import datetime
 import os
@@ -186,6 +187,7 @@ def run(case, args):
     # 前缀带偏移，并行时每路只按自己的临时目录清理进程。
     with tempfile.TemporaryDirectory(prefix="oi-regression-p%d-" % PORT_OFFSET) as tmp:
         root = Path(tmp)
+        write_owner(root, REPO, PORT_OFFSET)
         work, cfg, logs = root / "bin", root / "config", root / "logs"
         for p in (work, cfg, logs):
             p.mkdir()
@@ -265,6 +267,7 @@ def run(case, args):
                 proc = launch(command or [str(work / (name + SUFFIX))], cwd=work,
                               stdout=handle, stderr=subprocess.STDOUT, env=env)
             procs.append(proc)
+            record_process(root, proc)
             return proc, output
 
         def ready(proc, path, marker):
@@ -544,6 +547,7 @@ def run_web(args):
     # 仍使用模块自带的 WebClient 用例，验证字段改名后的 HTTP/JSON/二进制收发。
     with tempfile.TemporaryDirectory(prefix="oi-regression-web-p%d-" % PORT_OFFSET) as tmp:
         root = Path(tmp)
+        write_owner(root, REPO, PORT_OFFSET)
         work, cfg = root / "bin", root / "config"
         work.mkdir()
         cfg.mkdir()
@@ -558,6 +562,7 @@ def run_web(args):
         with (root / "server.out").open("w") as output:
             server = launch([str(work / ("webserver" + SUFFIX))], cwd=work, stdout=output, stderr=subprocess.STDOUT)
             try:
+                record_process(root, server)
                 deadline = time.monotonic() + 10
                 while True:
                     try:
