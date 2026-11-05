@@ -687,15 +687,21 @@ static coro::TaskResult<NestedCounts> NestedResultsWorker(int iWorkerParam)
 
 static coro::TaskResult<int> CheckNestedResults()
 {
+	co_await coro::WhenAll(std::vector<coro::Task>{});
+	const std::vector<int> vEmpty = co_await coro::WhenAll(std::vector<coro::TaskResult<int>>{});
 	std::vector<coro::TaskResult<NestedCounts>> vWorkers;
 	for (int iWorker = 0; iWorker < 64; ++iWorker)
 	{
 		vWorkers.push_back(NestedResultsWorker(iWorker));
 	}
+	const std::vector<NestedCounts> vCounts = co_await coro::WhenAll(std::move(vWorkers));
 	NestedCounts stTotal;
-	for (const auto& stWorker : vWorkers)
+	if (!vEmpty.empty() || vCounts.size() != 64)
 	{
-		const NestedCounts stCounts = co_await stWorker;
+		++stTotal.iBad;
+	}
+	for (const auto& stCounts : vCounts)
+	{
 		stTotal.iCompleted += stCounts.iCompleted;
 		stTotal.iCaught += stCounts.iCaught;
 		stTotal.iBad += stCounts.iBad;

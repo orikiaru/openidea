@@ -411,10 +411,7 @@ coro::Task EchoMgr::Run()
 	{
 		vWorkers.push_back(Pump());
 	}
-	for (const auto& stWorker : vWorkers)
-	{
-		co_await stWorker;
-	}
+	co_await coro::WhenAll(std::move(vWorkers));
 	Report();
 }
 

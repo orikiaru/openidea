@@ -146,7 +146,7 @@ git diff --check
 
 换机器时，清理和矩阵必须使用相同的 `--windows-root`、`--linux-root`、`--wsl-user`；清理旧的无标记实例时，先人工核实归属，不能退回按端口杀进程。脚本安全回归为 `python tools/test_test_safety.py`，矩阵会自动运行。
 
-先由主对话做一次全局清理 `python tools/kill_test_procs.py`，按用户已确认的偏好使用 Terra 执行编译和回归，不使用 Astra、不重复询问；Terra 不可用或用户要求更换时再确认。四个 subagent 同时在后台派发，每个一路，按下表替换范本里的占位符。
+先由主对话做一次全局清理 `python tools/kill_test_procs.py`，Cursor 里 subagent 固定用 `grok-4.7-high`（Grok 4.7）。Codex 里固定用 Terra，不用 Astra。不用每轮再问；只有用户要求更换时再确认。四个 subagent 同时在后台派发，每个一路，按下表替换范本里的占位符。
 
 | `<LANE>` | `<OFFSET>` | `<OTHERS>` | `<MODE_NOTE>` |
 | --- | --- | --- | --- |

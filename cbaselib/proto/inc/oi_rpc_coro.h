@@ -103,11 +103,13 @@ inline SleepMs yield(int32_t iMillisecondsParam)
 
 SleepMs yield(::OI::Timer::MS stDelayParam);
 
-// 等待节点放在调用方协程帧中，单个或多个等待者都不另分配堆节点。
+// 等待节点放在调用方协程帧或 WhenAll 的稳定状态里，不按等待者另做包装协程。
+// fnReady 为空时，完成即唤醒。WhenAll 只在最后一个任务完成时返回 true。
 struct TaskWaiter
 {
 	std::coroutine_handle<> stParent;
 	TaskWaiter* pNext = nullptr;
+	bool (*fnReady)(TaskWaiter* pWaiterParam) = nullptr;
 };
 // 协程里新建的任务当场跑；协程外（网络回调、main）新建的或框架要求入队的，放进运行队列。
 struct TaskInitialSuspend
@@ -145,7 +147,11 @@ struct TaskFinalSuspend
 		{
 			// 调度后等待者可能立即恢复并销毁节点，只能再用局部副本。
 			auto* pNext = pWaiter->pNext;
-			Schedule(pWaiter->stParent);
+			const bool bWake = pWaiter->fnReady == nullptr || pWaiter->fnReady(pWaiter);
+			if (bWake)
+			{
+				Schedule(pWaiter->stParent);
+			}
 			pWaiter = pNext;
 		}
 		// 执行引用必须等 resume 返回后才释放，不能在 final_suspend 中销毁帧。
@@ -392,6 +398,123 @@ struct BasicTask
 using Task = BasicTask<void>;
 template <typename T>
 using TaskResult = BasicTask<T>;
+
+// 节点放在堆上。awaiter 被协程帧挪走时，已经链进任务的地址不能跟着变。
+template <typename T>
+struct WhenAllState
+{
+	struct Slot : TaskWaiter
+	{
+		WhenAllState* pState = nullptr;
+	};
+	std::vector<BasicTask<T>>* pTasks = nullptr;
+	std::vector<Slot> vSlots;
+	std::atomic<size_t> iLeft{0};
+	std::atomic<Gate> iGate{Gate::Idle};
+
+	static bool OnReady(TaskWaiter* pWaiterParam)
+	{
+		WhenAllState* pState = static_cast<Slot*>(pWaiterParam)->pState;
+		if (pState->iLeft.fetch_sub(1, std::memory_order_acq_rel) != 1)
+		{
+			return false;
+		}
+		const Gate iPrevious = pState->iGate.exchange(Gate::Ready, std::memory_order_acq_rel);
+		return iPrevious == Gate::Waiting;
+	}
+};
+
+template <typename T>
+struct WhenAllAwaiter
+{
+	std::shared_ptr<WhenAllState<T>> pState;
+
+	explicit WhenAllAwaiter(std::vector<BasicTask<T>>& vTasksParam)
+	    : pState(std::make_shared<WhenAllState<T>>())
+	{
+		pState->pTasks = &vTasksParam;
+	}
+	bool await_ready()
+	{
+		DrainDetached();
+		return pState->pTasks->empty();
+	}
+	bool await_suspend(std::coroutine_handle<> stParentParam)
+	{
+		std::vector<BasicTask<T>>& vTasks = *pState->pTasks;
+		const size_t iCount = vTasks.size();
+		for (size_t iIndex = 0; iIndex < iCount; ++iIndex)
+		{
+			if (!vTasks[iIndex].stHandle)
+			{
+				throw std::logic_error("cannot await a moved-from Task");
+			}
+		}
+		pState->vSlots.resize(iCount);
+		pState->iLeft.store(iCount, std::memory_order_relaxed);
+		for (size_t iIndex = 0; iIndex < iCount; ++iIndex)
+		{
+			typename WhenAllState<T>::Slot& stSlot = pState->vSlots[iIndex];
+			stSlot.pState = pState.get();
+			stSlot.stParent = stParentParam;
+			stSlot.fnReady = &WhenAllState<T>::OnReady;
+			auto& stPromise = vTasks[iIndex].stHandle.promise();
+			bool bReady = false;
+			{
+				OI::Thread::MutexGuard stLock(stPromise.stMutex);
+				if (stPromise.bReady)
+				{
+					bReady = true;
+				}
+				else
+				{
+					stSlot.pNext = stPromise.pWaiters;
+					stPromise.pWaiters = &stSlot;
+				}
+			}
+			if (bReady && pState->iLeft.fetch_sub(1, std::memory_order_acq_rel) == 1)
+			{
+				pState->iGate.exchange(Gate::Ready, std::memory_order_acq_rel);
+			}
+		}
+		const Gate iPrevious = pState->iGate.exchange(Gate::Waiting, std::memory_order_acq_rel);
+		return iPrevious != Gate::Ready;
+	}
+	void await_resume() const noexcept
+	{
+	}
+};
+
+// 等到全部结束再返回。有返回值时按原顺序给出副本。
+// 某一条失败时，其余任务仍会跑完，再按序号抛出第一条异常。空列表直接完成。
+inline Task WhenAll(std::vector<Task> vTasksParam)
+{
+	if (!vTasksParam.empty())
+	{
+		co_await WhenAllAwaiter<void>(vTasksParam);
+	}
+	for (auto& stTask : vTasksParam)
+	{
+		co_await stTask;
+	}
+}
+
+template <typename T>
+    requires(!std::is_void_v<T> && !std::is_same_v<T, bool>)
+[[nodiscard]] TaskResult<std::vector<T>> WhenAll(std::vector<TaskResult<T>> vTasksParam)
+{
+	if (!vTasksParam.empty())
+	{
+		co_await WhenAllAwaiter<T>(vTasksParam);
+	}
+	std::vector<T> vResults;
+	vResults.reserve(vTasksParam.size());
+	for (auto& stTask : vTasksParam)
+	{
+		vResults.push_back(co_await stTask);
+	}
+	co_return vResults;
+}
 
 // 在 stLaunchParam 下调用 fnFunctionParam，它新建的第一条任务取走这份启动信息。
 template <typename F>
