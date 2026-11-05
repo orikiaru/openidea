@@ -23,7 +23,7 @@
 
 Windows：Python 3.10+、Visual Studio 2022 的“使用 C++ 的桌面开发”（MSVC v143 x64、MSBuild、Windows SDK）、CMake。仅有 cl.exe 不够，还要有 MSVC include/lib 与 SDK include/lib。脚本会寻找 PATH 中的 CMake，也能找到 VS 附带的 CMake。
 
-Linux：WSL 已配置的 Linux 用户、Python 3.8+、cmake、gcc-13/g++-13、make、已编译的 Redis 服务端。源码编译 Redis 可使用已有的 `tools` 外部依赖目录，默认路径 `/tmp/redis-7.4.12/src/redis-server`；路径不存在必须提供 `--redis-binary`，脚本不会下载不明 Redis 二进制。
+Linux：WSL 已配置的 Linux 用户、Python 3.8+、cmake、gcc-13/g++-13、make、已编译的 Redis 服务端。源码编译 Redis 应使用持久外部依赖目录（例如 `~/opt/redis-7.4.12`），通过 `/usr/local/bin/redis-server` 安装入口复用；默认路径为该入口。禁止把工具装到 `/tmp` 或测试临时目录，停止测试进程时不删除工具安装或源码。路径不存在必须提供 `--redis-binary`，脚本不会下载不明 Redis 二进制。
 
 测试占用本机端口 19995、17981、16379、16380、17990、17992、17993。测试 Redis 用 16380，不用 6379：Windows 动态端口段可能被 Hyper-V/WinNAT 保留，本机已有的 6379 Redis 也不会和测试冲突。复制出的 `redisserver.toml`、`registry.toml` 由脚本改到 16380，仓库里的配置仍是 6379。运行前脚本探测占用；不杀其他人的服务。同一份工作目录内不要并行；要并行就用 `tools/parallel_matrix.py`，它把工作目录同步成四份（Windows 在 `F:/oi-par`，Linux 在 WSL 的 `/root/oi-par`），Windows MT/ST、Linux MT/ST 各用一份，`--port-offset` 依次为 0、1000、2000、3000，所有测试端口整体平移，互不抢占：
 
@@ -52,7 +52,7 @@ $redisBinary = Join-Path $redisTools 'Redis-8.10.3-Windows-x64-msys2/redis-serve
 python tools/diag/redis_link_probe.py --native $redisBinary
 ```
 
-本轮下载文件的 SHA256 为 `af16df340525b431e9ec8dabfd625d5e7a233f82805b5418819904ea909c447f`，用于复现文件身份，不代表发布方签名验证。探针仅操作自己启动的实例：核对启动日志、随机密码认证，并按进程句柄关闭；端口已占用就失败，不发送针对该端口的 `SHUTDOWN`。WSL 探针可用 `--wsl --wsl-user jxy --wsl-binary /tmp/redis-7.4.12/src/redis-server`。
+本轮下载文件的 SHA256 为 `af16df340525b431e9ec8dabfd625d5e7a233f82805b5418819904ea909c447f`，用于复现文件身份，不代表发布方签名验证。探针仅操作自己启动的实例：核对启动日志、随机密码认证，并按进程句柄关闭；端口已占用就失败，不发送针对该端口的 `SHUTDOWN`。WSL 探针可用 `--wsl --wsl-user jxy --wsl-binary /usr/local/bin/redis-server`。
 
 ### 执行矩阵
 
@@ -77,7 +77,7 @@ python3 tools/test_matrix.py --build-dir "$HOME/openidea-build-gcc13" --asan --c
 自定义路径示例：
 
 ```powershell
-python tools/test_matrix.py --platform both --wsl-user jxy --linux-build-dir /home/jxy/openidea-build-gcc13 --redis-binary /tmp/redis-7.4.12/src/redis-server --windows-redis-binary C:/tools/redis/redis-server.exe --artifacts C:/Users/Admin/openidea-test-results/manual-run
+python tools/test_matrix.py --platform both --wsl-user jxy --linux-build-dir /home/jxy/openidea-build-gcc13 --redis-binary /usr/local/bin/redis-server --windows-redis-binary C:/tools/redis/redis-server.exe --artifacts C:/Users/Admin/openidea-test-results/manual-run
 ```
 
 矩阵脚本会：记录源码身份 → 配置 MT → 编译所有模块 → 跑全部用例 → 配置 ST → 编译 → 跑同样用例 → 可选扩展测试 → 在 finally 中恢复 MT 且关闭测试注入并重新编译。任何一步失败，最终退出码非零。平台间串行运行。
@@ -152,8 +152,8 @@ git diff --check
 | --- | --- | --- | --- |
 | windows-mt | 0 | windows-st / linux-mt / linux-st | 在 F:\oi-par\windows-mt 编译 MT |
 | windows-st | 1000 | windows-mt / linux-mt / linux-st | 在 F:\oi-par\windows-st 编译 ST，最后恢复 MT |
-| linux-mt | 2000 | windows-mt / windows-st / linux-st | 在 WSL /root/oi-par/linux-mt 编译 MT，Redis 用 /usr/bin/redis-server |
-| linux-st | 3000 | windows-mt / windows-st / linux-mt | 在 WSL /root/oi-par/linux-st 编译 ST，最后恢复 MT，Redis 用 /usr/bin/redis-server |
+| linux-mt | 2000 | windows-mt / windows-st / linux-st | 在 WSL /root/oi-par/linux-mt 编译 MT，Redis 用 /usr/local/bin/redis-server |
+| linux-st | 3000 | windows-mt / windows-st / linux-mt | 在 WSL /root/oi-par/linux-st 编译 ST，最后恢复 MT，Redis 用 /usr/local/bin/redis-server |
 
 范本：
 
@@ -258,3 +258,24 @@ Redis 断言按每条命令分别等待、检查返回值和输出，失败日�
 - 主目录 Windows/Linux 全目标构建及格式检查通过；七个新 Redis 头分别独立包含的 Windows 编译通过。主目录和四个副本均恢复 MT、关闭测试钩子并重建；最终全局进程清理与残留核查均退出 0，用户 6379 Redis 未处理。临时大日志由用例清理。
 - 最后逐字节核对主目录与四个隔离副本的 202 个自有源码、头、CMake 与脚本文件，全部一致。文档、三方源码和构建产物不在该核对范围内；本节在测试后追加。
 - 本机证据根目录为 `C:/Users/Admin/openidea-test-results/redis-complete-20261105`：最终全量在 `final/par-<平台>-<模式>`，最终 Redis 补跑在 `final/expiry-par-<平台>-<模式>`，主目录最后构建在 `final/main-expiry-rebuild`，汇总为 `final/verified.json`，源码比较为 `final/source-byte-comparison.json`。段错误、六项旧集合断言失败和 GCC13 独立最小复现均保留在非 final 目录，不能视为通过证据。
+
+
+## 17. 原始异常日志回归
+
+`redis`、`rpc-ingress`、`hold` 三项增加 `diagnostic original errors persisted <case> PASS` 标记。测试通过正常退出排空日志服后检查真实 error 文件，不能只检查客户端打印：
+
+- Redis 检查 Lua 原始错误和 WRONGTYPE 的终端记录，并检查 Lua 错误及请求/会话/命令信息已落盘；原有标准返回码和输出不变断言继续执行。
+- RPC 入站测试发送合法帧包裹损坏的字段头，验证失败回执调用号仍为 424242，并确认解包阶段、会话、协议号、调用号和 ParserException 已落盘。
+- Hold 触发 handler 异常和响应序列化异常，确认两种原始异常消息与调用上下文已落盘；失败不覆盖输出，后续请求正常恢复。另覆盖诊断文本的换行、NUL、反斜杠转义、百分号原样保留和 4096 字节截断边界。
+
+上述检查复用现有模块与开关，纳入 `--case all`，Windows/Linux 单、多线程均需执行。它们验证正常日志管道可落盘，不代表日志服断连、磁盘损坏或进程被强杀时仍保证日志持久化。
+
+### 2026-11-05 验证结果
+
+Terra 执行 Windows 原生 MSVC、WSL GCC13 单/多线程矩阵，最终每路 18 项通过，共 72 项；四路三个原始错误落盘标记均通过，副本均恢复 MT 并关闭测试注入。本轮改动涉及的 9 个源码/脚本文件在四份测试副本与主目录逐字节一致。
+
+证据根目录为 `C:/Users/Admin/openidea-test-results/error-diagnostics-20261105`。Windows MT 最终使用 `final-retry/par-windows-mt`，另外三路使用 `final/par-<平台>-<模式>`，逐例汇总为 `final/verified.json`。Windows MT 前一轮业务检查通过，但 Web 临时副本删除报 WinError 5，整轮按失败保留；同源码全量复测通过，不将旧失败报告改为成功。
+
+Linux 首轮使用了错误的 `/usr/bin/redis-server` 路径，失败记录保留；原有 Redis 实际仍在 `/tmp/redis-7.4.12`，没有被删除。本轮直接复制已有安装到 `/home/jxy/opt/redis-7.4.12`，建立 `/usr/local/bin/redis-server` 和 `redis-cli` 入口，无需重新下载；原副本保留，两份服务端二进制 SHA256 一致。后续复测使用持久入口，清理仅停止本次进程及移除临时日志/数据，保留第三方安装。
+
+主目录 Windows/Linux MT 生产构建均成功，测试钩子关闭；最终全局清理和 dry-run 核查均退出 0，无残留报告。两端 Redis 持久安装保留，测试临时大日志由用例清理。主目录构建日志在 `final/main-windows`、`final/main-linux`，最终清理证据在 `final/cleanup.json`。

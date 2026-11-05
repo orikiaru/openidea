@@ -33,7 +33,7 @@ def main():
     parser.add_argument("--linux-build-dir", default="/home/jxy/openidea-build-gcc13")
     parser.add_argument("--cmake")
     parser.add_argument("--jobs", type=int, default=8)
-    parser.add_argument("--redis-binary", default="/tmp/redis-7.4.12/src/redis-server")
+    parser.add_argument("--redis-binary", default="/usr/local/bin/redis-server")
     parser.add_argument("--windows-redis-binary", help="--platform both: native Windows redis-server.exe for the Windows side")
     parser.add_argument("--redis-wsl", action="store_true")
     parser.add_argument("--wsl-user", default="jxy")

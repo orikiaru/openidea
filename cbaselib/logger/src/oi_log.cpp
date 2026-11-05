@@ -10,6 +10,35 @@ namespace OI
 {
 namespace Log
 {
+DiagnosticText::DiagnosticText(std::string_view sTextParam) noexcept
+{
+	constexpr char vHex[] = "0123456789abcdef";
+	size_t iUsed = 0;
+	for (const auto& iCharacter : sTextParam)
+	{
+		const auto iByte = static_cast<unsigned char>(iCharacter);
+		const bool bEscape = iByte < 32 || iByte == 127 || iByte == '\\';
+		const size_t iNeeded = bEscape ? 4 : 1;
+		if (iUsed + iNeeded >= sizeof(m_vText))
+		{
+			m_bTruncated = true;
+			break;
+		}
+		if (bEscape)
+		{
+			m_vText[iUsed++] = '\\';
+			m_vText[iUsed++] = 'x';
+			m_vText[iUsed++] = vHex[iByte >> 4];
+			m_vText[iUsed++] = vHex[iByte & 15];
+		}
+		else
+		{
+			m_vText[iUsed++] = iCharacter;
+		}
+	}
+	m_vText[iUsed] = 0;
+}
+
 static std::string sLogTitle;
 static bool _logclient_init = false;
 static LocalSink _local_sink = NULL;

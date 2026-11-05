@@ -49,7 +49,7 @@ def main():
     parser.add_argument("--linux-root", default="/root/oi-par")
     parser.add_argument("--wsl-user", default="root")
     parser.add_argument("--windows-redis-binary", required=True)
-    parser.add_argument("--redis-binary", default="/usr/bin/redis-server")
+    parser.add_argument("--redis-binary", default="/usr/local/bin/redis-server")
     parser.add_argument("--case", default="all")
     parser.add_argument("--jobs", type=int, default=8)
     parser.add_argument("--artifacts", type=Path, required=True)

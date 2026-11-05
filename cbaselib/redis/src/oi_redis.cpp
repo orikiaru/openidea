@@ -7,6 +7,7 @@
 #include "oi_log.h"
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <deque>
 #include <mutex>
 #include <stdexcept>
@@ -48,6 +49,27 @@ int32_t RedisResult::GetRet() const noexcept
 
 namespace
 {
+void ReportRedisError(uint64_t iRequestIdParam, sid_t iSessionIdParam, const char* pStageParam,
+    std::string_view sCommandParam, std::string_view sReasonParam, bool bLateParam = false) noexcept
+{
+	const ::OI::Log::DiagnosticText stCommand(sCommandParam.substr(0, 64));
+	const ::OI::Log::DiagnosticText stReason(sReasonParam);
+	try
+	{
+		LOG_ERROR("redis failure stage=%s request=%llu sid=%llu command=%s reason=%s truncated=%d late=%d",
+		    pStageParam, (unsigned long long)iRequestIdParam, (unsigned long long)iSessionIdParam,
+		    stCommand.GetText(), stReason.GetText(), stReason.IsTruncated() ? 1 : 0, bLateParam ? 1 : 0);
+		// 错误立即刷新本地输出，避免日志服不可用时仍滞留在 stdout 缓冲。
+		fflush(stdout);
+	}
+	catch (...)
+	{
+		fprintf(stderr, "redis failure stage=%s request=%llu sid=%llu command=%s reason=%s truncated=%d late=%d logger_failed=1\n",
+		    pStageParam, (unsigned long long)iRequestIdParam, (unsigned long long)iSessionIdParam,
+		    stCommand.GetText(), stReason.GetText(), stReason.IsTruncated() ? 1 : 0, bLateParam ? 1 : 0);
+	}
+}
+
 struct ReplyFree
 {
 	void operator()(redisReply* pReplyParam) const
@@ -91,6 +113,7 @@ bool ArmRedisSweep()
 
 struct RedisCall::State
 {
+	uint64_t iRequestId = coro::AllocTaskUid();
 	std::vector<std::string> vArguments;
 	std::shared_ptr<redisReply> pReply;
 	RedisStatus iStatus;
@@ -501,6 +524,7 @@ void RedisClient::Feed(sid_t iSessionIdParam, const char* pDataParam, size_t iSi
 	}
 	if (redisReaderFeed(m_pReader, pDataParam, iSizeParam) != REDIS_OK)
 	{
+		ReportRedisError(0, iSessionIdParam, "reader_feed", "", m_pReader->errstr);
 		FailAll(RedisStatus::ProtocolError);
 		if (m_iReaderSessionId != INVALID_SID)
 		{
@@ -513,6 +537,7 @@ void RedisClient::Feed(sid_t iSessionIdParam, const char* pDataParam, size_t iSi
 		void* pRaw = NULL;
 		if (redisReaderGetReply(m_pReader, &pRaw) != REDIS_OK)
 		{
+			ReportRedisError(0, iSessionIdParam, "reader_reply", "", m_pReader->errstr);
 			FailAll(RedisStatus::ProtocolError);
 			if (m_iReaderSessionId != INVALID_SID)
 			{
@@ -538,6 +563,14 @@ void RedisClient::Feed(sid_t iSessionIdParam, const char* pDataParam, size_t iSi
 			{
 				--m_iSwept;
 			}
+		}
+		// 即使调用已经超时，也保留迟到的 Redis 原始错误，不能因不再唤醒而吞掉诊断。
+		if (pHeld->type == REDIS_REPLY_ERROR)
+		{
+			ReportRedisError(pSt->iRequestId, iSessionIdParam, "server_reply",
+			    pSt->vArguments.empty() ? std::string_view() : std::string_view(pSt->vArguments.front()),
+			    pHeld->str ? std::string_view(pHeld->str, pHeld->len) : std::string_view("missing error text"),
+			    pSt->iWon.load(std::memory_order_acquire) != 0);
 		}
 		if (pSt->iWon.load(std::memory_order_acquire) == 0)
 		{

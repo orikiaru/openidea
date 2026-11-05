@@ -24,7 +24,7 @@ python3 /mnt/e/openidea/tools/run_regressions.py --case clock-forward --clock-fa
 python3 /mnt/e/openidea/tools/run_regressions.py --case clock-back --clock-fault-so /tmp/oi-clock-fault.so
 ```
 
-Redis 默认程序位置为 `/tmp/redis-7.4.12/src/redis-server`，可通过 `--redis-binary` 指定。`--bin-dir` 可指定另一套已编译的模块。脚本失败会输出本次进程的末尾日志；所有测试进程都在 finally 中清理。
+Redis 默认程序位置为 `/usr/local/bin/redis-server`，可通过 `--redis-binary` 指定。`--bin-dir` 可指定另一套已编译的模块。脚本失败会输出本次进程的末尾日志；所有测试进程都在 finally 中清理。
 
 磁盘故障用 `/dev/full` 替换临时日志文件。判据是日志服非零退出并在 stderr 明确报告写入或刷新失败。该策略是失败即停止，不代表未落盘数据已经持久化，也不做自动重放。
 

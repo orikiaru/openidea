@@ -499,6 +499,10 @@ namespace OI
 {
 namespace Rpc
 {
+// 记录失败阶段和调用关联信息；日志失败不能打断原来的错误回执/收尾。
+void ReportRpcError(coro::Token iTokenParam, uint64_t iCallIdParam, sid_t iSessionIdParam,
+    proto_type_t iProtocolIdParam, const char* pStageParam, std::exception_ptr stErrorParam) noexcept;
+
 // 标准服务端协程：co_return 0 成功，正数为业务错误。
 using RpcTask = coro::TaskResult<int32_t>;
 
@@ -530,15 +534,18 @@ coro::Task RunHandledRpc(F fnFunctionParam, proto_type_t iResponseIdParam, coro:
 	}
 	catch (::OI::Base::ParserException&)
 	{
+		ReportRpcError(iTokenParam, 0, iSessionIdParam, iResponseIdParam, "decode_call_id", std::current_exception());
 		co_return;
 	}
 	iCallIdLocal &= ~(uint64_t)RPC_REQ_MASK;
 	Req stRequestLocal{};
 	Res stResponseLocal{};
 	int32_t iRetcode = 0;
+	const char* pStage = "decode_request";
 	try
 	{
 		stRequestLocal.deserialize(stBodyParam);
+		pStage = "handler";
 		RpcContext stContext{iTokenParam, *pManagerParam, iSessionIdParam};
 		auto stInvoke = [pFunction = &fnFunctionParam, pRequest = &stRequestLocal, pResponse = &stResponseLocal, pContext = &stContext]()
 		{
@@ -567,10 +574,12 @@ coro::Task RunHandledRpc(F fnFunctionParam, proto_type_t iResponseIdParam, coro:
 	catch (::OI::Base::ParserException&)
 	{
 		iRetcode = OI_ERR_FAIL;
+		ReportRpcError(iTokenParam, iCallIdLocal, iSessionIdParam, iResponseIdParam, pStage, std::current_exception());
 	}
 	catch (...)
 	{
 		iRetcode = OI_ERR_FAIL;
+		ReportRpcError(iTokenParam, iCallIdLocal, iSessionIdParam, iResponseIdParam, pStage, std::current_exception());
 		coro::ReportTaskError(iTokenParam, std::current_exception());
 	}
 	::OI::Base::BytesStream stFrame;
@@ -586,6 +595,7 @@ coro::Task RunHandledRpc(F fnFunctionParam, proto_type_t iResponseIdParam, coro:
 	}
 	catch (...)
 	{
+		ReportRpcError(iTokenParam, iCallIdLocal, iSessionIdParam, iResponseIdParam, "encode_response", std::current_exception());
 		coro::ReportTaskError(iTokenParam, std::current_exception());
 		// 丢弃已经写入的半包，重新构造只有调用号和错误码的回执。
 		try
@@ -596,6 +606,7 @@ coro::Task RunHandledRpc(F fnFunctionParam, proto_type_t iResponseIdParam, coro:
 		}
 		catch (...)
 		{
+			ReportRpcError(iTokenParam, iCallIdLocal, iSessionIdParam, iResponseIdParam, "encode_failure_reply", std::current_exception());
 			coro::ReportTaskError(iTokenParam, std::current_exception());
 			pManagerParam->CloseSession(iSessionIdParam);
 			co_return;
@@ -610,6 +621,7 @@ coro::Task RunHandledRpc(F fnFunctionParam, proto_type_t iResponseIdParam, coro:
 	}
 	catch (...)
 	{
+		ReportRpcError(iTokenParam, iCallIdLocal, iSessionIdParam, iResponseIdParam, "send_response", std::current_exception());
 		coro::ReportTaskError(iTokenParam, std::current_exception());
 		pManagerParam->CloseSession(iSessionIdParam);
 	}

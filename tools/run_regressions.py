@@ -208,6 +208,14 @@ def rpc_ingress_faults():
             assert proto == 3002 and struct.unpack_from("<Q", response)[0] == call_id
             assert struct.unpack_from("<i", response, 8)[0] == 0, response
             time.sleep(0.3)  # 完整包必须取消旧计时器，下一包重新计时。
+    # 合法外层帧、损坏的字段头：进入真实 RPC 解包失败路径，回执仍须正确配对。
+    with socket.create_connection(("127.0.0.1", IPC_PORT), timeout=2) as stream:
+        body = struct.pack("<Q", (1 << 63) | 424242) + b"\x00"
+        stream.sendall(struct.pack("<II", 3002, len(body)) + body)
+        proto, size = struct.unpack("<II", receive(stream, 8))
+        response = receive(stream, size)
+        assert proto == 3002 and struct.unpack_from("<Q", response)[0] == 424242
+        assert size == 12 and struct.unpack_from("<i", response, 8)[0] != 0
     print("rpc ingress oversized/partial/drip/boundary/rearm PASS", flush=True)
 
 
@@ -562,6 +570,8 @@ def run(case, args):
                     assert "redis expanded five types bad=0" in text
                     assert "redis typed sync id=0 bad=0" in text
                     assert "redis typed sync id=1 bad=0" in text
+                    assert re.search(r"redis failure stage=server_reply request=[1-9]\d* sid=\d+ command=EVAL reason=.*test error.*truncated=0 late=0", text), "missing original Lua error"
+                    assert re.search(r"redis failure .*command=GET reason=WRONGTYPE .*truncated=0 late=0", text), "missing original Redis WRONGTYPE"
                     assert "redis script isolation bad=0" in text
                     assert "redis single use bad=0" in text
                     assert re.search(r"redis stress .*bad=0", text)
@@ -638,6 +648,23 @@ def run(case, args):
                     peak, limit, pauses, pending = map(int, backlog.groups())
                     assert peak <= limit == 8 * 1024**2 + 8 and pauses > 0 and pending == 0, backlog.group(0)
                     print(backlog.group(0), flush=True)
+            if case in ("hold", "rpc-ingress", "redis"):
+                # 正常退出刷新 stdout，再排空 logd，核对真实落盘而非只有终端输出。
+                stop(server)
+                server.wait(timeout=10)
+                assert server.returncode == 0
+                stop(logd)
+                logd.wait(timeout=10)
+                assert logd.returncode == 0
+                diagnostics = "\n".join(path.read_text(encoding="utf-8", errors="replace") for path in logs.rglob("error") if path.is_file())
+                if case == "redis":
+                    assert re.search(r"redis failure stage=server_reply request=[1-9]\d* sid=\d+ command=EVAL reason=.*test error", diagnostics), "Lua error missing from logd disk"
+                elif case == "rpc-ingress":
+                    assert re.search(r"rpc failure stage=decode_request token=[1-9]\d* call=424242 sid=\d+ proto=3002 ret=-?\d+ reason=ParserException", diagnostics), "RPC parse context missing from logd disk"
+                else:
+                    for stage, reason in (("handler", "injected server handler failure"), ("encode_response", "injected server response encoding failure")):
+                        assert re.search(r"rpc failure stage=" + stage + r" token=[1-9]\d* call=[1-9]\d* sid=\d+ proto=3002 ret=-?\d+ reason=" + reason, diagnostics), "RPC exception context missing from logd disk: " + stage
+                print("diagnostic original errors persisted", case, "PASS", flush=True)
             print(case, "PASS seconds=", round(time.monotonic() - started, 2), flush=True)
         except BaseException:
             try:
@@ -692,7 +719,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", default="all", choices=("all", "echo", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "clock-forward", "clock-back", "registry", "web"))
     parser.add_argument("--bin-dir", type=Path, default=REPO / "deploy/bin")
-    parser.add_argument("--redis-binary", type=Path, default=Path("/tmp/redis-7.4.12/src/redis-server"))
+    parser.add_argument("--redis-binary", type=Path, default=Path("/usr/local/bin/redis-server"))
     parser.add_argument("--clock-fault-so", type=Path)
     parser.add_argument("--redis-wsl", action="store_true", help="Windows: run only the owned Redis fixture in WSL")
     parser.add_argument("--wsl-user", default="jxy")

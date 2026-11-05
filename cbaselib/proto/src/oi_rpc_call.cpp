@@ -1,3 +1,5 @@
+#include "oi_log.h"
+#include <cstdio>
 #include "oi_rpc_call.h"
 #include "oi_timer_manager.h"
 #include "oi_poll.h"
@@ -699,5 +701,49 @@ bool DeliverRpc(proto_type_t iIdParam, ::OI::Base::BytesStream& stBodyParam, ::O
 	return true;
 }
 
+}
+}
+
+namespace OI::Rpc
+{
+void ReportRpcError(coro::Token iTokenParam, uint64_t iCallIdParam, sid_t iSessionIdParam,
+    proto_type_t iProtocolIdParam, const char* pStageParam, std::exception_ptr stErrorParam) noexcept
+{
+	const auto fnWrite = [iTokenParam, iCallIdParam, iSessionIdParam, iProtocolIdParam, pStageParam](const char* pReasonParam) noexcept
+	{
+		const ::OI::Log::DiagnosticText stReason(pReasonParam ? pReasonParam : "unknown exception");
+		try
+		{
+			LOG_ERROR("rpc failure stage=%s token=%llu call=%llu sid=%llu proto=%llu ret=%d reason=%s truncated=%d",
+			    pStageParam, (unsigned long long)iTokenParam, (unsigned long long)iCallIdParam,
+			    (unsigned long long)iSessionIdParam, (unsigned long long)iProtocolIdParam, OI_ERR_FAIL,
+			    stReason.GetText(), stReason.IsTruncated() ? 1 : 0);
+			// 错误立即刷新本地输出，避免日志服不可用时仍滞留在 stdout 缓冲。
+			fflush(stdout);
+		}
+		catch (...)
+		{
+			fprintf(stderr, "rpc failure stage=%s token=%llu call=%llu sid=%llu proto=%llu ret=%d reason=%s truncated=%d logger_failed=1\n",
+			    pStageParam, (unsigned long long)iTokenParam, (unsigned long long)iCallIdParam,
+			    (unsigned long long)iSessionIdParam, (unsigned long long)iProtocolIdParam, OI_ERR_FAIL,
+			    stReason.GetText(), stReason.IsTruncated() ? 1 : 0);
+		}
+	};
+	try
+	{
+		if (stErrorParam)
+		{
+			std::rethrow_exception(stErrorParam);
+		}
+		fnWrite("unknown exception");
+	}
+	catch (const std::exception& stError)
+	{
+		fnWrite(stError.what());
+	}
+	catch (...)
+	{
+		fnWrite("non-std exception");
+	}
 }
 }

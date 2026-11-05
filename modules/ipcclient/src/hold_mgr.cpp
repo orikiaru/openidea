@@ -1,6 +1,7 @@
 #include "hold_mgr.h"
 #include "oi_http.h"
 #include "oi_log_client.h"
+#include "oi_log.h"
 #include "oi_registry.h"
 #if defined(__GLIBC__)
 #include <malloc.h>
@@ -2575,6 +2576,21 @@ static coro::TaskResult<int> CheckServerEncoding()
 	stResponse.iMark = 91;
 	int32_t iResult = co_await OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequest, stResponse, OI::Timer::Seconds(2));
 	if (iResult != OI_ERR_FAIL || stResponse.iMark != 91)
+	{
+		++iBadLocal;
+	}
+	stRequest.iMark = -2147483599;
+	iResult = co_await OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequest, stResponse, OI::Timer::Seconds(2));
+	if (iResult != OI_ERR_FAIL || stResponse.iMark != 91)
+	{
+		++iBadLocal;
+	}
+	const std::string sOriginal("error\n\r\0\\%s", 11);
+	const OI::Log::DiagnosticText stEscaped(sOriginal);
+	const OI::Log::DiagnosticText stLong(std::string(5000, 'X'));
+	const OI::Log::DiagnosticText stExact(std::string(4096, 'X'));
+	if (std::string(stEscaped.GetText()) != "error\\x0a\\x0d\\x00\\x5c%s" || stEscaped.IsTruncated() ||
+	    !stLong.IsTruncated() || std::strlen(stLong.GetText()) != 4096 || stExact.IsTruncated())
 	{
 		++iBadLocal;
 	}

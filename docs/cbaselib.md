@@ -135,3 +135,12 @@ redisserver 的 `[Redis] max_pending_bytes`（默认 64MiB）和 `max_pending_co
 过滤同时覆盖 hiredis 自己识别的异步状态命令，包括 PMONITOR 和命令名内嵌 CRLF 的监控/订阅/退订变体；不能只依赖 Redis 返回未知命令错误，因为 hiredis 在收到回复前就已改变连接状态。这些命令按已有规则关闭发起的下游连接，共享上游及其他下游保持可用。
 
 HTTP Call 与 RPC/Redis 请求一样只能 await 一次，重复等待、并发等待或等待已移走对象会抛出 std::logic_error；要重复请求须重新调用 Get/Post。建连等待对象则支持多个协程共享结果，区别在于不会重复提交业务请求。
+
+
+## RPC / Redis 异常诊断
+
+RPC 服务端解包、handler、响应序列化及发送异常通过现有日志接口记录 `rpc failure`：包含 `stage`、`token`、`call`、`sid`、`proto`、`ret` 和原始异常 `reason`。调用号尚未解出时为 0；非标准异常记为 `non-std exception`。保留原来的错误回执和任务异常钩子，日志异常不能阻止回包或连接清理。
+
+Redis 收到错误回执时记录 `redis failure stage=server_reply`，包含进程内唯一 `request`、`sid`、命令名 `command` 和 Redis 原始错误 `reason`。迟到的错误仍记录并标记 `late=1`，不重复唤醒任务；hiredis 解析失败则记录 `reader_feed` / `reader_reply` 及原始 `errstr`，随后执行原有失败清理。
+
+错误正文最多输出 4096 字节（转义后的长度），截断标记为 `truncated=1`；换行、NUL、其他控制字符及反斜杠按 `\xHH` 转义，保留可辨识的原始内容。命令名最多取 64 字节，不附加 key、value、Lua 脚本或请求正文。原始错误文本本身可能含业务内容，业务异常消息不要包含凭据或敏感值；这里不声称能自动识别任意错误文本中的秘密。日志正常走 stdout 和 logd，写日志抛异常时退回 stderr，不能把这条兜底误认为日志服已经落盘。
