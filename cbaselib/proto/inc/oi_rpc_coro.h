@@ -805,7 +805,7 @@ struct [[nodiscard]] RpcCallAwaiter
 };
 
 template <typename Req, typename Res>
-RpcCallAwaiter<Req, Res> RpcCall(::OI::Net::SessionManager& stManagerParam, sid_t iSessionIdParam, Req& stRequestParam, Res& stResponseParam, ::OI::Timer::MS stTimeoutParam = ::OI::Timer::Seconds(180))
+RpcCallAwaiter<Req, Res> MakeRpcCallAwaiter(::OI::Net::SessionManager& stManagerParam, sid_t iSessionIdParam, Req& stRequestParam, Res& stResponseParam, ::OI::Timer::MS stTimeoutParam = ::OI::Timer::Seconds(180))
 {
 	RpcCallAwaiter<Req, Res> stAwaiter;
 	stAwaiter.pManager = &stManagerParam;
@@ -864,14 +864,33 @@ class [[nodiscard]] RpcResult
 	}
 };
 
-// 输出引用仅在成功解包后更新，错误时保留调用方原值。
+// 底层单次等待器供框架和故障注入使用；应用使用下面拥有请求的 Task 接口。
 template <typename Req>
-auto RpcCall(ProtoClientManager& stManagerParam, Req& stRequestParam, typename RpcProtoId<Req>::Response& stResponseParam,
+auto MakeRpcCallAwaiter(ProtoClientManager& stManagerParam, Req& stRequestParam, typename RpcProtoId<Req>::Response& stResponseParam,
     ::OI::Timer::MS stTimeoutParam = ::OI::Timer::Seconds(180))
 {
-	auto stCall = RpcCall(stManagerParam, INVALID_SID, stRequestParam, stResponseParam, stTimeoutParam);
+	auto stCall = MakeRpcCallAwaiter(stManagerParam, INVALID_SID, stRequestParam, stResponseParam, stTimeoutParam);
 	stCall.pClient = &stManagerParam;
 	return stCall;
+}
+
+// 请求按值进入协程帧，输出引用必须活到任务结束。成功解包后才移动更新输出。
+// Task 可以复制/重复等待；只有这条执行协程写一次输出，所有等待者取得同一个状态码。
+template <typename Req>
+[[nodiscard]] coro::TaskResult<int32_t> RpcCall(::OI::Net::SessionManager& stManagerParam, sid_t iSessionIdParam,
+    Req stRequestParam, typename RpcProtoId<Req>::Response& stResponseParam,
+    ::OI::Timer::MS stTimeoutParam = ::OI::Timer::Seconds(180))
+{
+	auto stCall = MakeRpcCallAwaiter(stManagerParam, iSessionIdParam, stRequestParam, stResponseParam, stTimeoutParam);
+	co_return co_await stCall;
+}
+
+template <typename Req>
+[[nodiscard]] coro::TaskResult<int32_t> RpcCall(ProtoClientManager& stManagerParam, Req stRequestParam,
+    typename RpcProtoId<Req>::Response& stResponseParam, ::OI::Timer::MS stTimeoutParam = ::OI::Timer::Seconds(180))
+{
+	auto stCall = MakeRpcCallAwaiter(stManagerParam, stRequestParam, stResponseParam, stTimeoutParam);
+	co_return co_await stCall;
 }
 
 // 拥有请求和响应，应用不必跨挂起维护输出引用。
@@ -1104,6 +1123,73 @@ auto ProtoClientManager::Call(int32_t iZoneIdParam, Req stRequestParam, ::OI::Ti
 		return FailNamed<Res, Req>(OI_ERR_FAIL);
 	}
 	return CallNamed<Res>(this, sServiceName, ServicePick::Zone, std::to_string(iZoneIdParam), std::move(stRequestParam), stTimeoutParam);
+}
+
+// 命名调用与直连共用同一个解包等待器，响应不经过 RpcResult 中转或复制。
+template <typename Req>
+coro::TaskResult<int32_t> CallNamedOutput(::OI::Net::SessionManager* pManagerParam, std::string sNameParam,
+    ServicePick iPickParam, std::string sZoneParam, Req stRequestParam,
+    typename RpcProtoId<Req>::Response& stResponseParam, ::OI::Timer::MS stTimeoutParam)
+{
+	RouteAwaiter stWait;
+	stWait.pManager = pManagerParam;
+	stWait.sName = std::move(sNameParam);
+	stWait.iPick = iPickParam;
+	stWait.sZone = std::move(sZoneParam);
+	ServiceRoute stRoute = co_await stWait;
+	if (stRoute.iStatus != ServiceRouteStatus::Ok || stRoute.vClients.size() != 1 || !stRoute.vClients[0])
+	{
+		co_return stRoute.iStatus == ServiceRouteStatus::BadName || stRoute.iStatus == ServiceRouteStatus::WrongKind ? OI_ERR_FAIL : OI_ERR_CONNECT;
+	}
+	auto stCall = MakeRpcCallAwaiter(*stRoute.vClients[0], stRequestParam, stResponseParam, stTimeoutParam);
+	co_return co_await stCall;
+}
+
+inline coro::TaskResult<int32_t> FailRpcOutput(int32_t iCodeParam)
+{
+	co_return iCodeParam;
+}
+
+template <typename Req>
+[[nodiscard]] auto ProtoClientManager::Call(Req stRequestParam, typename RpcProtoId<Req>::Response& stResponseParam,
+    ::OI::Timer::MS stTimeoutParam)
+{
+	// 不指定分区时沿用当前客户端的连接、首次建连排队和固定配置。
+	return RpcCall(*this, std::move(stRequestParam), stResponseParam, stTimeoutParam);
+}
+
+template <typename Req>
+[[nodiscard]] auto ProtoClientManager::CallAny(Req stRequestParam, typename RpcProtoId<Req>::Response& stResponseParam,
+    ::OI::Timer::MS stTimeoutParam)
+{
+	return CallNamedOutput(this, sServiceName, ServicePick::Any, std::string(), std::move(stRequestParam), stResponseParam, stTimeoutParam);
+}
+
+template <typename Req>
+[[nodiscard]] auto ProtoClientManager::Call(int32_t iZoneIdParam, Req stRequestParam,
+    typename RpcProtoId<Req>::Response& stResponseParam, ::OI::Timer::MS stTimeoutParam)
+{
+	if (iZoneIdParam < 0)
+	{
+		return FailRpcOutput(OI_ERR_FAIL);
+	}
+	return CallNamedOutput(this, sServiceName, ServicePick::Zone, std::to_string(iZoneIdParam), std::move(stRequestParam), stResponseParam, stTimeoutParam);
+}
+
+template <typename Req>
+[[nodiscard]] coro::TaskResult<int32_t> RpcCall(const std::string& sServiceParam, Req stRequestParam,
+    typename RpcProtoId<Req>::Response& stResponseParam, ::OI::Timer::MS stTimeoutParam = ::OI::Timer::Seconds(180))
+{
+	// 本函数不是协程，解析/拷贝在返回前完成；任务帧按值保存选路参数。
+	ServiceRoute stRoute;
+	std::string sName;
+	std::string sZone;
+	ServicePick iPick = ServicePick::Any;
+	if (PrepareTarget(sServiceParam, false, stRoute, sName, iPick, sZone))
+	{
+		return FailRpcOutput(OI_ERR_FAIL);
+	}
+	return CallNamedOutput(nullptr, std::move(sName), iPick, std::move(sZone), std::move(stRequestParam), stResponseParam, stTimeoutParam);
 }
 
 template <typename Res, typename Req>

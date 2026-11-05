@@ -928,6 +928,149 @@ class DeferredRpcProbe : public OI::Rpc::ProtoClientManager
 	}
 };
 
+// 只统计提交，仍走真实连接、序列化、服务端 Hold 和回包。
+class OutputRpcProbe : public DeferredRpcProbe
+{
+	std::atomic<int> m_iSubmissions{0};
+
+  public:
+	void SubmitCall(uint64_t iIdParam, const OI::Base::Bytes& stDataParam) override
+	{
+		m_iSubmissions.fetch_add(1, std::memory_order_relaxed);
+		ProtoClientManager::SubmitCall(iIdParam, stDataParam);
+	}
+	int Submissions() const
+	{
+		return m_iSubmissions.load(std::memory_order_relaxed);
+	}
+};
+
+static coro::TaskResult<int> AwaitOutputRpc(coro::TaskResult<int32_t> stTaskParam)
+{
+	try
+	{
+		co_return (co_await stTaskParam) == 0 ? 0 : 1;
+	}
+	catch (const std::exception&)
+	{
+		co_return 1;
+	}
+}
+
+static coro::TaskResult<int> CheckOutputRpcTask(sid_t iSessionIdParam)
+{
+	int iBad = 0;
+	static OutputRpcProbe stClient;
+	OI::RpcData::HoldRes stOutput;
+	stOutput.iMark = -1;
+	const int iBefore = stClient.Submissions();
+	// 普通函数体返回 Task 后局部请求消失；管理器和输出活到所有等待者完成。
+	auto stCall = [pOutput = &stOutput]()
+	{
+		OI::RpcData::HoldReq stLocal;
+		stLocal.iDelayMilliseconds = 100;
+		stLocal.iMark = 731;
+		auto stTask = OI::Rpc::RpcCall(stClient, stLocal, *pOutput, OI::Timer::Seconds(3));
+		stLocal.iMark = -731;
+		return stTask;
+	}();
+	static_assert(std::is_same_v<decltype(stCall), coro::TaskResult<int32_t>>);
+	std::vector<coro::TaskResult<int>> vWaiters;
+	for (int iIndex = 0; iIndex < 16; ++iIndex)
+	{
+		vWaiters.push_back(coro::StartTask([stCall](coro::Token)
+		{
+			return AwaitOutputRpc(stCall);
+		}));
+	}
+	if (!(co_await stClient.StartClient()))
+	{
+		++iBad;
+	}
+	for (const auto& stWaiter : vWaiters)
+	{
+		iBad += co_await stWaiter;
+	}
+	if (stOutput.iMark != 731)
+	{
+		++iBad;
+	}
+	// 任务已完成。修改输出，再从多个任务重复 await，不能重新发送或再次写输出。
+	stOutput.iMark = 732;
+	vWaiters.clear();
+	for (int iIndex = 0; iIndex < 16; ++iIndex)
+	{
+		vWaiters.push_back(coro::StartTask([stCall](coro::Token)
+		{
+			return AwaitOutputRpc(stCall);
+		}));
+	}
+	for (const auto& stWaiter : vWaiters)
+	{
+		iBad += co_await stWaiter;
+	}
+	const int iSubmitted = stClient.Submissions() - iBefore;
+	if (iSubmitted != 1 || stOutput.iMark != 732)
+	{
+		++iBad;
+	}
+	printf("hold output rpc shared waiters=16 submissions=%d bad=%d\n", iSubmitted, iBad);
+
+	OI::RpcData::HoldReq stRequest;
+	stRequest.iMark = 733;
+	auto& stManager = IpcClient::GetInstance();
+	auto stDirect = stManager.Call(stRequest, stOutput, OI::Timer::Seconds(3));
+	static_assert(std::is_same_v<decltype(stDirect), coro::TaskResult<int32_t>>);
+	if (co_await stDirect != 0 || stOutput.iMark != 733)
+	{
+		++iBad;
+	}
+	stRequest.iMark = 734;
+	auto stPinned = OI::Rpc::RpcCall(stManager, iSessionIdParam, stRequest, stOutput, OI::Timer::Seconds(3));
+	static_assert(std::is_same_v<decltype(stPinned), coro::TaskResult<int32_t>>);
+	if (co_await stPinned != 0 || stOutput.iMark != 734)
+	{
+		++iBad;
+	}
+	static DeferredRpcProbe stUnconnected;
+	const auto stBefore = OI::Rpc::GetRpcWaitStats();
+	if (co_await OI::Rpc::RpcCall(stUnconnected, sid_t(12345), stRequest, stOutput, OI::Timer::Seconds(3)) != OI_ERR_CONNECT ||
+	    stOutput.iMark != 734 || OI::Rpc::GetRpcWaitStats().iCalls != stBefore.iCalls)
+	{
+		++iBad;
+	}
+	stRequest.iDelayMilliseconds = -1;
+	auto stError = stManager.Call(stRequest, stOutput, OI::Timer::Seconds(3));
+	if (co_await stError != 1001 || co_await stError != 1001 || stOutput.iMark != 734)
+	{
+		++iBad;
+	}
+
+	stRequest.iDelayMilliseconds = 1000;
+	stRequest.iMark = 735;
+	auto stTimeout = stManager.Call(stRequest, stOutput, OI::Timer::Milliseconds(100));
+	if (co_await stTimeout != OI_ERR_TIMEOUT || stOutput.iMark != 734)
+	{
+		++iBad;
+	}
+	// 复用同一输出给下一次成功请求，迟到回包不得覆盖新结果。
+	stRequest.iDelayMilliseconds = 0;
+	stRequest.iMark = 736;
+	if (co_await stManager.Call(stRequest, stOutput, OI::Timer::Seconds(3)) != 0 || stOutput.iMark != 736)
+	{
+		++iBad;
+	}
+	co_await coro::yield(OI::Timer::Milliseconds(1200));
+	if (stOutput.iMark != 736 || co_await stTimeout != OI_ERR_TIMEOUT || stOutput.iMark != 736)
+	{
+		++iBad;
+	}
+	stClient.CloseAllSessions();
+	printf("hold output rpc direct pinned error late bad=%d\n", iBad);
+	fflush(stdout);
+	co_return iBad;
+}
+
 template <typename T>
 static coro::TaskResult<bool> AwaitSingleUse(std::shared_ptr<T> pCallParam)
 {
@@ -1019,7 +1162,7 @@ static coro::TaskResult<int> CheckAwaitOwnership()
 	}
 	iBad += co_await CheckSingleUse(pRpc);
 	OI::RpcData::HoldRes stOutput;
-	auto stOutputWait = OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequest, stOutput, OI::Timer::Seconds(3));
+	auto stOutputWait = OI::Rpc::MakeRpcCallAwaiter(IpcClient::GetInstance(), stRequest, stOutput, OI::Timer::Seconds(3));
 	iBad += co_await CheckSingleUse(std::make_shared<decltype(stOutputWait)>(std::move(stOutputWait)));
 	if (stOutput.iMark != 123)
 	{
@@ -1190,7 +1333,7 @@ static coro::TaskResult<int> CheckRpcAdmission()
 		} stLarge;
 		OI::RpcData::HoldReq& stBase = stLarge;
 		OI::RpcData::HoldRes stOutput;
-		if ((co_await OI::Rpc::RpcCall(vClients[0], stBase, stOutput, OI::Timer::Seconds(3))) != OI_ERR_BUSY)
+		if ((co_await OI::Rpc::MakeRpcCallAwaiter(vClients[0], stBase, stOutput, OI::Timer::Seconds(3))) != OI_ERR_BUSY)
 		{
 			++iBad;
 		}
@@ -1234,6 +1377,8 @@ static coro::TaskResult<int> CheckDeferredRpcSession()
 	if (!(co_await stClient.StartClient()))
 	{
 		++iBad;
+		// 输出接口创建即运行，失败路径也要等任务结束再释放输出。
+		iOutputCode = co_await stOutputWait;
 	}
 	else
 	{
@@ -1486,6 +1631,80 @@ static coro::TaskResult<NamedOutcome> AwaitNamedHold(T stCallParam)
 	{
 	}
 	co_return NamedOutcome::Rejected;
+}
+
+static coro::TaskResult<int> CheckNamedOutputRpcTask()
+{
+	int iBad = 0;
+	static ZoneService stGames("gameserver");
+	auto& stManager = IpcClient::GetInstance();
+	OI::RpcData::HoldReq stRequest;
+	stRequest.iMark = 811;
+	OI::RpcData::HoldRes stOutput;
+	stOutput.iMark = -1;
+	auto stAny = stManager.CallAny(stRequest, stOutput, OI::Timer::Seconds(3));
+	static_assert(std::is_same_v<decltype(stAny), coro::TaskResult<int32_t>>);
+	if (co_await stAny != 0 || stOutput.iMark != 811)
+	{
+		++iBad;
+	}
+	stRequest.iMark = 812;
+	auto stZone = stGames.Call(1001, stRequest, stOutput, OI::Timer::Seconds(3));
+	static_assert(std::is_same_v<decltype(stZone), coro::TaskResult<int32_t>>);
+	if (co_await stZone != 0 || stOutput.iMark != 812)
+	{
+		++iBad;
+	}
+	// 服务名和请求仅在普通 lambda 的调用栈上存在，返回后任务必须自己保活。
+	auto stNamed = [pOutput = &stOutput]()
+	{
+		OI::RpcData::HoldReq stLocal;
+		stLocal.iDelayMilliseconds = 100;
+		stLocal.iMark = 813;
+		std::string sName = "gameserver.1002";
+		auto stTask = OI::Rpc::RpcCall(sName, stLocal, *pOutput, OI::Timer::Seconds(3));
+		sName = "missing.9999";
+		stLocal.iMark = -813;
+		return stTask;
+	}();
+	static_assert(std::is_same_v<decltype(stNamed), coro::TaskResult<int32_t>>);
+	std::vector<coro::TaskResult<int>> vWaiters;
+	for (int iIndex = 0; iIndex < 8; ++iIndex)
+	{
+		vWaiters.push_back(coro::StartTask([stNamed](coro::Token)
+		{
+			return AwaitOutputRpc(stNamed);
+		}));
+	}
+	for (const auto& stWaiter : vWaiters)
+	{
+		iBad += co_await stWaiter;
+	}
+	if (stOutput.iMark != 813)
+	{
+		++iBad;
+	}
+	stOutput.iMark = 814;
+	if (co_await stAny != 0 || co_await stZone != 0 || co_await stNamed != 0 || stOutput.iMark != 814)
+	{
+		++iBad;
+	}
+	stRequest.iDelayMilliseconds = -1;
+	if (co_await stGames.CallAny(stRequest, stOutput, OI::Timer::Seconds(3)) != 1001 || stOutput.iMark != 814)
+	{
+		++iBad;
+	}
+	if (co_await stGames.Call(9999, stRequest, stOutput, OI::Timer::Seconds(3)) != OI_ERR_CONNECT || stOutput.iMark != 814)
+	{
+		++iBad;
+	}
+	if (co_await OI::Rpc::RpcCall(std::string("gameserver.*"), stRequest, stOutput, OI::Timer::Seconds(3)) != OI_ERR_FAIL || stOutput.iMark != 814)
+	{
+		++iBad;
+	}
+	printf("hold output rpc named any zone shared=8 bad=%d\n", iBad);
+	fflush(stdout);
+	co_return iBad;
 }
 
 static coro::TaskResult<int> CheckNamedServiceRpc()
@@ -2201,7 +2420,7 @@ static coro::TaskResult<int> CheckRpcExceptions(PendingClient& stPendingParam)
 	int iCaughtErrors = 0;
 	try
 	{
-		co_await OI::Rpc::RpcCall(stPendingParam, INVALID_SID, stThrowingBase, stUnused, OI::Timer::Milliseconds(50));
+		co_await OI::Rpc::MakeRpcCallAwaiter(stPendingParam, INVALID_SID, stThrowingBase, stUnused, OI::Timer::Milliseconds(50));
 	}
 	catch (const std::runtime_error&)
 	{
@@ -2220,7 +2439,7 @@ static coro::TaskResult<int> CheckRpcExceptions(PendingClient& stPendingParam)
 		{
 			try
 			{
-				co_await OI::Rpc::RpcCall(stPendingParam, stOrdinary, stUnused, OI::Timer::Milliseconds(50));
+				co_await OI::Rpc::MakeRpcCallAwaiter(stPendingParam, stOrdinary, stUnused, OI::Timer::Milliseconds(50));
 			}
 			catch (const std::runtime_error&)
 			{
@@ -2387,7 +2606,7 @@ static coro::TaskResult<int> CheckStandardizedReply()
 	for (int iMalformed = 0; iMalformed < 2; ++iMalformed)
 	{
 		stResponseLocal.iMark = 876;
-		auto stBroken = ::OI::Rpc::RpcCall(stManagerLocal, stRequestLocal, stResponseLocal);
+		auto stBroken = ::OI::Rpc::MakeRpcCallAwaiter(stManagerLocal, stRequestLocal, stResponseLocal);
 		stBroken.bReplied = true;
 		if (iMalformed)
 		{
@@ -2626,6 +2845,7 @@ coro::Task HoldMgr::Pump()
 	iBad += co_await CheckHotStart();
 	iBad += co_await CheckSharedTasks();
 	iBad += co_await CheckDeferredRpcSession();
+	iBad += co_await CheckOutputRpcTask(m_iSessionId);
 	iBad += co_await CheckAwaitOwnership();
 	iBad += CheckBinaryBool();
 	iBad += co_await CheckClientConnect();
@@ -2636,6 +2856,7 @@ coro::Task HoldMgr::Pump()
 	{
 		iBad += co_await CheckRegistryPairing();
 		iBad += co_await CheckNamedServiceRpc();
+		iBad += co_await CheckNamedOutputRpcTask();
 		iBad += co_await CheckRouteTargetStability();
 	}
 	iBad += CheckJsonDecoding();

@@ -11,6 +11,8 @@
 - 必须全部返回 0；不能用删除断言、扩大超时、提高容量或重试掩盖失败。偶发失败保留日志，记录复测结果及根因是否确认。
 - 本次源码正在变化时不要声称覆盖了最新版本；核对结果目录的 environment.json、Git HEAD、diff 摘要后再报告。
 
+输出引用 RPC 的日常压力由 EchoMgr 使用 `Call(req, res)` 覆盖。HoldMgr 同时验证输出任务的请求保活、16 个等待者只提交一次、重复等待不重写响应、固定会话、业务错误保留原响应、超时后迟到回包不覆盖新响应，以及命名/分区调用。正常 Hold 必须输出 `hold output rpc shared waiters=16 submissions=1 bad=0`、`hold output rpc direct pinned error late bad=0`、`hold output rpc named any zone shared=8 bad=0`；它们已纳入脚本断言。底层单次等待器的重复等待和异常注入用例仍保留，与输出 Task 可重复等待的语义分开验证。
+
 ## 2. 环境预检
 
 仓库路径可以包含空格。以下示例在仓库根目录执行，示例中的用户、构建目录和 Redis 路径按实际环境传参。
@@ -198,3 +200,11 @@ python tools/parallel_matrix.py --lane <LANE> --jobs 4 --windows-redis-binary <W
 - 本机证据根目录为 `~/openidea-test-results/fix-review-20261104`，最终四路在 `par-<平台>-<模式>-fixed`，脚本证据在 `tool-tests`，主目录构建与静态检查在 `main-restore`。首轮新增用例的模板参数编译错误已修正；原失败目录保留，不计为通过。
 - 格式检查 136 个文件通过，命名基础测试 5 项通过。libclang 命名扫描仍返回 1：现有 `hold_mgr.cpp` 的 `fnContend` lambda 被识别为 `auto` 而要求 `st` 前缀，按可调用对象应使用 `fn`，属于既有误报；没有将该扫描记为通过。
 - 主目录及四路副本均恢复 MT、关闭测试注入并构建成功；最终全局清理返回 0，无残留报告。临时日志数据已由测试清理，仅保留诊断输出。
+
+## 11. 2026-11-05 RPC 输出参数接口验证
+
+- Windows 原生 MSVC 19.41.34123 / SDK 10.0.26100 与 WSL GCC13，MT/ST 各 18 项通过，共 72 项。四路回声均通过新的输出参数接口完成 100 万次请求，`mismatch=0`、`rpc_fail=0`。
+- 四路 Hold 均确认输出任务 16 个等待者只提交一次、命名路由 8 个共享等待者，以及完成后重复等待、请求生命周期、业务错误、超时迟到回包不覆盖响应等检查通过；三个新增标记及 `hold done bad=0` 均满足。
+- 每路 Python 工具检查 58 项通过、1 项跳过：未设置 `OI_SAFETY_REDIS_BINARY`，本轮没有执行可选的真实 Redis 端口冲突探针。应用层 Redis 收发用例已全部通过，不能将该工具探针记为通过。
+- 主工作目录 Windows / Linux 构建成功，格式检查 136 个文件通过；主目录及四路副本均恢复 MT、关闭测试注入。最终全局清理返回 0，无残留报告。
+- 本机证据根目录为 `~/openidea-test-results/rpc-output-20261105`，四路在 `par-<平台>-<模式>`，主目录验证在 `preflight` 和 `main-windows`，汇总为 `verified.json`。临时日志数据已清理，仅保留诊断证据。

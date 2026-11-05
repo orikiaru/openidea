@@ -288,17 +288,10 @@ static coro::Task RunOne(int iNumberParam)
 {
 	::OI::RpcData::AllEchoReq stRequestLocal;
 	FillAllTypes(stRequestLocal.stData, iNumberParam);
-	auto stResult = co_await IpcClient::GetInstance().CallAny<::OI::RpcData::AllEchoRes>(stRequestLocal);
-	if (stResult.GetRet() == 0)
-	{
-		const ::OI::RpcData::AllEchoRes& stResponseLocal = stResult.GetRes();
-		EchoMgr::GetInstance().OnResult(iNumberParam, stRequestLocal, stResponseLocal, stResult.GetRet(), DiffAllTypes(stRequestLocal.stData, stResponseLocal.stData));
-	}
-	else
-	{
-		::OI::RpcData::AllEchoRes stResponseLocal;
-		EchoMgr::GetInstance().OnResult(iNumberParam, stRequestLocal, stResponseLocal, stResult.GetRet(), false);
-	}
+	::OI::RpcData::AllEchoRes stResponseLocal;
+	const int32_t iReturnCode = co_await IpcClient::GetInstance().Call(stRequestLocal, stResponseLocal);
+	const bool bSame = iReturnCode == 0 && DiffAllTypes(stRequestLocal.stData, stResponseLocal.stData);
+	EchoMgr::GetInstance().OnResult(iNumberParam, stRequestLocal, stResponseLocal, iReturnCode, bSame);
 }
 
 EchoMgr::EchoMgr()

@@ -542,6 +542,9 @@ def run(case, args):
                         assert f"hold started task mode={shared_mode} waiters={waiter_count} runs=1 awakened={waiter_count} bad=0" in text
                 assert "hold deferred rpc value=0 output=0 pinned=-1 bad=0" in text
                 assert "hold await ownership shared=32 bad=0" in text
+                assert "hold output rpc shared waiters=16 submissions=1 bad=0" in text
+                assert "hold output rpc direct pinned error late bad=0" in text
+                assert "hold output rpc named any zone shared=8 bad=0" in text
                 assert "hold binary bool bad=0" in text
                 assert "hold connection isolation bad=0" in text
                 assert "hold coroutine connect bad=0" in text

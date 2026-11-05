@@ -13,6 +13,9 @@ namespace OI
 namespace Rpc
 {
 
+template <typename T>
+struct RpcProtoId;
+
 void FailRpcCalls(::OI::Net::SessionManager* pManagerParam, sid_t iSessionIdParam);
 
 enum CLIENT_CONNECT_MODE
@@ -174,7 +177,15 @@ class ProtoClientManager : public ProtoSessionManager
 			Reconnect(0);
 		}
 	}
-	// 不带分区号：在当前登记里随机一台。本管理器已经连着这个名字时继续用这条连接。
+	// 输出引用版自动配对响应类型，返回 TaskResult<int32_t>；输出须活到任务结束。
+	// Call(req,res) 使用当前连接；CallAny 按名字选路；Call(zone,req,res) 指定分区。
+	template <typename Req>
+	auto Call(Req stRequestParam, typename RpcProtoId<Req>::Response& stResponseParam, ::OI::Timer::MS stTimeoutParam = ::OI::Timer::Seconds(180));
+	template <typename Req>
+	auto CallAny(Req stRequestParam, typename RpcProtoId<Req>::Response& stResponseParam, ::OI::Timer::MS stTimeoutParam = ::OI::Timer::Seconds(180));
+	template <typename Req>
+	auto Call(int32_t iZoneIdParam, Req stRequestParam, typename RpcProtoId<Req>::Response& stResponseParam, ::OI::Timer::MS stTimeoutParam = ::OI::Timer::Seconds(180));
+	// 不带分区号：在当前登记里选一台。本管理器已经连着这个名字时继续用这条连接。
 	template <typename Res, typename Req>
 	auto CallAny(Req stRequestParam, ::OI::Timer::MS stTimeoutParam = ::OI::Timer::Seconds(180));
 	// 指定分区号，只打这一台。全局服不接受分区号。
