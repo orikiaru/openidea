@@ -103,6 +103,7 @@ thread_local TaskLaunch g_stLaunch;
 
 void ResumeTask(std::coroutine_handle<> stHandleParam)
 {
+	// 深度大于 0 时，新建且未要求入队的任务当场跑。深度在 resume 返回后才减，嵌套调用也算在协程里。
 	++g_iResumeDepth;
 	stHandleParam.resume();
 	--g_iResumeDepth;

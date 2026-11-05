@@ -1,5 +1,6 @@
 #include "echo_mgr.h"
 #include "oi_config.h"
+#include "oi_log.h"
 #include "ipcclient.h"
 #include "rpc_ids.h"
 #include "test_board.h"
@@ -7,6 +8,7 @@
 #include "oi_thread.h"
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <memory>
 #include <vector>
 
@@ -330,7 +332,7 @@ void EchoMgr::ArmTimeout()
 {
 	::OI::Timer::BaseTimerManager::GetInstance().AddTimer([]()
 	{
-		printf("ipc timeout done=%d ok=%d\n", EchoMgr::GetInstance().Done(), EchoMgr::GetInstance().Ok());
+		LOG_TRACE("ipc timeout done=%d ok=%d", EchoMgr::GetInstance().Done(), EchoMgr::GetInstance().Ok());
 		fflush(stdout);
 		::OI::Thread::ThreadPool::GetInstance().RequestStop(1);
 	}, m_iTimeoutMilliseconds);
@@ -356,14 +358,14 @@ coro::Task EchoMgr::StackProbe()
 		vCalls.push_back(StackOne(iNumber, pDone));
 	}
 	co_await coro::yield(400);
-	printf("stack holding done=%d\n", pDone->load());
+	LOG_TRACE("stack holding done=%d", pDone->load());
 	fflush(stdout);
 	int iOkLocal = 0;
 	for (const auto& stCall : vCalls)
 	{
 		iOkLocal += co_await stCall ? 1 : 0;
 	}
-	printf("stack flush ok=%d done=%d\n", iOkLocal, pDone->load());
+	LOG_TRACE("stack flush ok=%d done=%d", iOkLocal, pDone->load());
 	fflush(stdout);
 	int iSpins = 0;
 	while (IpcClient::GetInstance().IsConnect() && iSpins++ < 200)
@@ -375,7 +377,7 @@ coro::Task EchoMgr::StackProbe()
 	FillAllTypes(stRequestLocal.stData, 9);
 	auto stResult = co_await IpcClient::GetInstance().CallAny<::OI::RpcData::AllEchoRes>(stRequestLocal, ::OI::Timer::Seconds(3));
 	int iReturnCodeLocal = stResult.GetRet();
-	printf("stack offline ret=%d\n", iReturnCodeLocal);
+	LOG_TRACE("stack offline ret=%d", iReturnCodeLocal);
 	fflush(stdout);
 	TestBoard::GetInstance().Done((iOkLocal == 3 && iReturnCodeLocal == OI_ERR_CONNECT) ? 0 : 1);
 	co_return;
@@ -390,7 +392,7 @@ void EchoMgr::Start(sid_t iSessionIdParam)
 	m_iSessionId = iSessionIdParam;
 	m_stStart = std::chrono::steady_clock::now();
 	ArmTimeout();
-	printf("ipc client connect sid=%d mode=%s total=%d\n", m_iSessionId, kMode, m_iTotal);
+	LOG_TRACE("ipc client connect sid=%d mode=%s total=%d", m_iSessionId, kMode, m_iTotal);
 	fflush(stdout);
 	TestBoard::GetInstance().Arm();
 	coro::StartTask([](coro::Token)
@@ -467,16 +469,16 @@ void EchoMgr::Report()
 	}
 	int iOkLocal = m_iOk.load();
 	int iRpcFail = m_iRpcFail.load();
-	printf("ipc mode=%s total=%d ok=%d mismatch=%d rpc_fail=%d ms=%lld rate=%d/s\n",
+	LOG_TRACE("ipc mode=%s total=%d ok=%d mismatch=%d rpc_fail=%d ms=%lld rate=%d/s",
 	    kMode, m_iTotal, iOkLocal, m_iMismatch, iRpcFail, iMillisecondsLocal, (int)(m_iTotal * 1000LL / iMillisecondsLocal));
-	printf("sample gap_sent=%d gap_recv=%d code=%d gap_differ=%d\n",
+	LOG_TRACE("sample gap_sent=%d gap_recv=%d code=%d gap_differ=%d",
 	    m_iSampleSent, m_iSampleReceived, m_iSampleCode, m_iGapDiffer);
-	printf("fields");
+	std::string sFields = "fields";
 	for (const auto& [sName, iCount] : m_mFields)
 	{
-		printf(" %s=%d", sName.c_str(), iCount);
+		sFields += " " + sName + "=" + std::to_string(iCount);
 	}
-	printf("\n");
+	LOG_TRACE("%s", sFields.c_str());
 	fflush(stdout);
 	TestBoard::GetInstance().Done((m_iMismatch == 0 && iRpcFail == 0 && iOkLocal == m_iTotal) ? 0 : 1);
 }

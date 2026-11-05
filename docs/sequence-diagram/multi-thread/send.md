@@ -1,6 +1,6 @@
 # 发出一次调用
 
-这是一条 `RpcCall`。`CallAny` 和 `Call` 选好实例后走这里。`CallAll` 和 `CallMany` 对每一台先 `Submit`，把帧写进发送缓冲，再逐个 `co_await` 已经在途的等待器。
+这是一条 `RpcCall`。按服务名选实例见 [按服务名调用](route.md)。选路之后这里只用 `RpcDeadline` 剩下的毫秒。`CallAll` 和 `CallMany` 对每一台先 `Submit`，把帧写进发送缓冲，再逐个 `co_await` 已经在途的等待器。
 
 业务协程在 `normal` 工人上跑。挂起前就把帧写进发送缓冲。工人不是 poll 线程，打开写事件只是 `PostOp`。`send` 在 poll 线程的可写回调里。
 

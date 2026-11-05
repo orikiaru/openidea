@@ -10,7 +10,7 @@
 - `ms <= 0` 只把句柄放回队列，这一轮不再碰它。主循环会先去 poll，再跑新挂上的
 - 应用层要空等一段时间，只用 `co_await coro::yield(毫秒)`。不要 `sleep`、`sleep_for`、`Sleep`、`usleep`。单线程就这一条线程，睡下去 poll 停转，套接字里的数据发不出去
 
-任务创建即运行。在协程里调用协程函数，子协程当场在调用方的栈上跑到第一次挂起，再把 Task 返回给调用方；子协程当场跑完，之后的 `co_await` 直接取结果，调用方不挂起。在协程外调用（网络回调、定时器回调、main），子协程只放进运行队列，不在回调线程上跑。子协程停住（等回包或定时）后，`co_await` 把调用方登记到等待列表，子协程结束后逐个 `Schedule` 等待者。
+任务创建即运行。时序见 [单线程](sequence-diagram/single-thread/task.md) 和 [多线程](sequence-diagram/multi-thread/task.md)。在协程里调用协程函数，子协程当场在调用方的栈上跑到第一次挂起，再把 Task 返回给调用方；子协程当场跑完，之后的 `co_await` 直接取结果，调用方不挂起。在协程外调用（网络回调、定时器回调、main），子协程只放进运行队列，不在回调线程上跑。子协程停住（等回包或定时）后，`co_await` 把调用方登记到等待列表，子协程结束后逐个 `Schedule` 等待者。
 
 所以不要在第一次挂起之前层层调用子任务，栈会随层数涨。`StartTask` 和 `TaskScope::Start` 总是入队，不加栈。
 
@@ -62,7 +62,7 @@ HandleRpc<AllEchoReq>([](const AllEchoReq& req, AllEchoRes& res) -> OI::Rpc::Rpc
 
 新接口的时长参数是 `OI::Timer::MS`，用 `OI::Timer::Milliseconds(500)`、`Seconds(10)`、`Minutes`、`Hours`、`Days` 构造，默认 `Seconds(180)`。超时统一使用带单位的时长类型，不再接受裸整数秒。由 200 毫秒周期按毫秒分桶扫描，因此 `MS` 不代表毫秒级唤醒精度。非正超时表示不设截止时间，断连仍会结束等待。`yield` 接受毫秒整数，也接受 `MS`。
 
-按服务名调用不传 `sessionid`，见 [服务注册](registry.md)。`CallAny` 不带分区，`Call` 打一个分区，`CallAll` 打当前名单上的每一份，`CallMany` 打给出的分区号列表。选实例时挂起等注册表回包，不占线程。`CallAll` 和 `CallMany` 先全部发出，再逐个等。这几个接口返回 `TaskResult`，调用时就开始选实例并发请求；同一个对象可以给多个协程等，请求只发一次，大家拿同一份结果。
+按服务名调用不传 `sessionid`，见 [服务注册](registry.md)，时序见 [单线程](sequence-diagram/single-thread/route.md) 和 [多线程](sequence-diagram/multi-thread/route.md)。`CallAny` 不带分区，`Call` 打一个分区，`CallAll` 打当前名单上的每一份，`CallMany` 打给出的分区号列表。调用时记下 `RpcDeadline`，查询、建连和回包共用这一份预算，发出去时只剩剩余毫秒。选实例时挂起等注册表回包，不占线程。`CallAll` 和 `CallMany` 先全部发出，再逐个等。这几个接口返回 `TaskResult`，调用时就开始选实例并发请求；同一个对象可以给多个协程等，请求只发一次，大家拿同一份结果。
 
 ```cpp
 coro::StartTask([n](coro::Token) {

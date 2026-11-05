@@ -1,5 +1,6 @@
 #include "log_mgr.h"
 #include "oi_config.h"
+#include "oi_log.h"
 #include "oi_log_client.h"
 #include "test_board.h"
 #include <cstdio>
@@ -53,7 +54,7 @@ coro::Task LogMgr::Run()
 		iMillisecondsLocal = 1;
 	}
 	long long iSentLocal = m_iSent.load();
-	printf("log tasks=%d sent=%lld ms=%lld enqueue_rate=%lldMB/s\n",
+	LOG_TRACE("log tasks=%d sent=%lld ms=%lld enqueue_rate=%lldMB/s",
 	    m_iTaskCount, iSentLocal, iMillisecondsLocal, iSentLocal / iMillisecondsLocal * 1000 / (1024 * 1024));
 	fflush(stdout);
 	if (m_iDrainSeconds > 0)

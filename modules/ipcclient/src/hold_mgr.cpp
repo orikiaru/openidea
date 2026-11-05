@@ -273,7 +273,7 @@ static int CheckJsonDecoding()
 	{
 		++iBad;
 	}
-	printf("hold json validation bad=%d\n", iBad);
+	LOG_TRACE("hold json validation bad=%d", iBad);
 	return iBad;
 }
 
@@ -316,7 +316,7 @@ static int CheckBinaryBool()
 			}
 		}
 	}
-	printf("hold binary bool bad=%d\n", iBad);
+	LOG_TRACE("hold binary bool bad=%d", iBad);
 	return iBad;
 }
 
@@ -510,11 +510,11 @@ static coro::TaskResult<int> CheckClientConnect()
 	const bool bRetry = co_await stReentrant.Retry();
 	const int iReentrantBad = (!bFirst || bRetry || stReentrant.Connections() != 1) ? 1 : 0;
 	iBad += iReentrantBad;
-	printf("hold reentrant connect first=%d retry=%d connections=%d bad=%d\n", bFirst, bRetry, stReentrant.Connections(), iReentrantBad);
+	LOG_TRACE("hold reentrant connect first=%d retry=%d connections=%d bad=%d", bFirst, bRetry, stReentrant.Connections(), iReentrantBad);
 	stAwait.CloseAllSessions();
 	stGood.CloseAllSessions();
 	iBad += pResult->iBad;
-	printf("hold coroutine connect bad=%d\n", iBad);
+	LOG_TRACE("hold coroutine connect bad=%d", iBad);
 	co_return iBad;
 }
 
@@ -612,7 +612,7 @@ static coro::TaskResult<int> CheckTimerExceptions()
 	{
 		++iBad;
 	}
-	printf("hold timer exceptions executed=%d destroyed=%d bad=%d\n", pState->iExecuted.load(), pState->iDestroyed.load(), iBad);
+	LOG_TRACE("hold timer exceptions executed=%d destroyed=%d bad=%d", pState->iExecuted.load(), pState->iDestroyed.load(), iBad);
 	fflush(stdout);
 	co_return iBad;
 }
@@ -704,7 +704,7 @@ static coro::TaskResult<int> CheckNestedResults()
 	{
 		++stTotal.iBad;
 	}
-	printf("hold nested results completed=%d caught=%d bad=%d\n", stTotal.iCompleted, stTotal.iCaught, stTotal.iBad);
+	LOG_TRACE("hold nested results completed=%d caught=%d bad=%d", stTotal.iCompleted, stTotal.iCaught, stTotal.iBad);
 	fflush(stdout);
 	co_return stTotal.iBad;
 }
@@ -777,7 +777,7 @@ static coro::TaskResult<int> CheckHotStart()
 	{
 		++iBad;
 	}
-	printf("hold hot start inline=%d queued=%d bad=%d\n", iStepAtCreate != 0 ? 1 : 0, pProbe->pInCallback->load() ? 0 : 1, iBad);
+	LOG_TRACE("hold hot start inline=%d queued=%d bad=%d", iStepAtCreate != 0 ? 1 : 0, pProbe->pInCallback->load() ? 0 : 1, iBad);
 	fflush(stdout);
 	co_return iBad;
 }
@@ -855,7 +855,7 @@ static coro::TaskResult<int> CheckStartedTaskWaiters()
 					++pState->iBad;
 				}
 			}
-			printf("hold started task mode=%d waiters=%d runs=%d awakened=%d bad=%d\n",
+			LOG_TRACE("hold started task mode=%d waiters=%d runs=%d awakened=%d bad=%d",
 			    iMode, iCount, pState->iRuns.load(), pState->iAwakened.load(), pState->iBad.load());
 			iBad += pState->iBad.load();
 		}
@@ -972,7 +972,7 @@ static coro::TaskResult<int> CheckSharedTasks()
 	{
 		++iBad;
 	}
-	printf("hold shared tasks waiters=64 bad=%d\n", iBad);
+	LOG_TRACE("hold shared tasks waiters=64 bad=%d", iBad);
 	co_return iBad;
 }
 
@@ -1045,7 +1045,7 @@ static coro::TaskResult<int> CheckDirectBackpressure()
 	{
 		++iBad;
 	}
-	printf("hold direct backpressure queued=%d direct=%d pinned=%d closed=%d bad=%d\n", iQueuedRet, iDirectRet, iPinnedRet, iClosedRet, iBad);
+	LOG_TRACE("hold direct backpressure queued=%d direct=%d pinned=%d closed=%d bad=%d", iQueuedRet, iDirectRet, iPinnedRet, iClosedRet, iBad);
 	co_return iBad;
 }
 
@@ -1135,7 +1135,7 @@ static coro::TaskResult<int> CheckOutputRpcTask(sid_t iSessionIdParam)
 	{
 		++iBad;
 	}
-	printf("hold output rpc shared waiters=16 submissions=%d bad=%d\n", iSubmitted, iBad);
+	LOG_TRACE("hold output rpc shared waiters=16 submissions=%d bad=%d", iSubmitted, iBad);
 
 	OI::RpcData::HoldReq stRequest;
 	stRequest.iMark = 733;
@@ -1187,7 +1187,7 @@ static coro::TaskResult<int> CheckOutputRpcTask(sid_t iSessionIdParam)
 		++iBad;
 	}
 	stClient.CloseAllSessions();
-	printf("hold output rpc direct pinned error late bad=%d\n", iBad);
+	LOG_TRACE("hold output rpc direct pinned error late bad=%d", iBad);
 	fflush(stdout);
 	co_return iBad;
 }
@@ -1365,7 +1365,7 @@ static coro::TaskResult<int> CheckAwaitOwnership()
 	{
 		++iBad;
 	}
-	printf("hold await ownership shared=32 bad=%d\n", iBad);
+	LOG_TRACE("hold await ownership shared=32 bad=%d", iBad);
 	fflush(stdout);
 	co_return iBad;
 }
@@ -1435,7 +1435,7 @@ static coro::TaskResult<int> CheckRpcAdmission()
 				++iBad;
 			}
 		}
-		printf("hold rpc admission round=%d ok=%d busy=%d bad=%d\n", iRound, iOk, iBusy, iBad);
+		LOG_TRACE("hold rpc admission round=%d ok=%d busy=%d bad=%d", iRound, iOk, iBusy, iBad);
 		co_await coro::yield(50);
 	}
 	// 超大请求拒绝不占额度，错误回执也必须归还；随后正常请求仍可执行。
@@ -1476,7 +1476,7 @@ static coro::TaskResult<int> CheckRpcAdmission()
 	{
 		stClient.CloseAllSessions();
 	}
-	printf("hold rpc admission done bad=%d\n", iBad);
+	LOG_TRACE("hold rpc admission done bad=%d", iBad);
 	fflush(stdout);
 	co_return iBad;
 }
@@ -1518,7 +1518,7 @@ static coro::TaskResult<int> CheckDeferredRpcSession()
 		}
 	}
 	stClient.CloseAllSessions();
-	printf("hold deferred rpc value=%d output=%d pinned=%d bad=%d\n", iValueCode, iOutputCode, iPinnedCode, iBad);
+	LOG_TRACE("hold deferred rpc value=%d output=%d pinned=%d bad=%d", iValueCode, iOutputCode, iPinnedCode, iBad);
 	fflush(stdout);
 	co_return iBad;
 }
@@ -1601,7 +1601,7 @@ static coro::TaskResult<int> CheckConnectionIsolation()
 		++iBad;
 	}
 	iBad += pProbe->iBad;
-	printf("hold connection isolation bad=%d\n", iBad);
+	LOG_TRACE("hold connection isolation bad=%d", iBad);
 	co_return iBad;
 }
 
@@ -1736,7 +1736,7 @@ static coro::TaskResult<int> CheckRouteTargetStability()
 		}
 	}
 	stMoving.CloseAllSessions();
-	printf("hold route target stability bad=%d\n", iBad);
+	LOG_TRACE("hold route target stability bad=%d", iBad);
 	co_return iBad;
 }
 
@@ -1841,7 +1841,7 @@ static coro::TaskResult<int> CheckRoutePoolLifetime()
 	{
 		++iBad;
 	}
-	printf("hold route backpressure status bad=%d\n", iBad);
+	LOG_TRACE("hold route backpressure status bad=%d", iBad);
 	const auto stBefore = OI::Rpc::GetRoutePoolStats();
 	OI::RpcData::HoldReq stRequest;
 	stRequest.iDelayMilliseconds = 800;
@@ -1876,7 +1876,7 @@ static coro::TaskResult<int> CheckRoutePoolLifetime()
 	{
 		++iBad;
 	}
-	printf("hold route policy isolation idle reconnect bad=%d\n", iBad);
+	LOG_TRACE("hold route policy isolation idle reconnect bad=%d", iBad);
 	fflush(stdout);
 	co_return iBad;
 }
@@ -1912,7 +1912,7 @@ static coro::TaskResult<int> CheckRouteInboundAndReconnect()
 			++iBad;
 		}
 	}
-	printf("hold pooled reconnect bad=%d\n", iBad);
+	LOG_TRACE("hold pooled reconnect bad=%d", iBad);
 	std::weak_ptr<void> pWeakOwner = OI::Rpc::GetRouteConnectionOwner(*pClient);
 	stRequest.iMark = -2147483598;
 	if (co_await OI::Rpc::RpcCall(*pClient, stRequest, stOutput, OI::Timer::Seconds(3)) != 0)
@@ -1939,7 +1939,7 @@ static coro::TaskResult<int> CheckRouteInboundAndReconnect()
 	{
 		++iBad;
 	}
-	printf("hold inbound route lifetime bad=%d\n", iBad);
+	LOG_TRACE("hold inbound route lifetime bad=%d", iBad);
 	fflush(stdout);
 	co_return iBad;
 }
@@ -2008,7 +2008,7 @@ static coro::TaskResult<int> CheckRoutePoolCapacity()
 	{
 		++iBad;
 	}
-	printf("hold route pool capacity busy=%d bad=%d\n", iBusy == OI_ERR_BUSY ? 1 : 0, iBad);
+	LOG_TRACE("hold route pool capacity busy=%d bad=%d", iBusy == OI_ERR_BUSY ? 1 : 0, iBad);
 	fflush(stdout);
 	co_return iBad;
 }
@@ -2162,8 +2162,8 @@ static coro::TaskResult<int> CheckRegistryBoundsAndBudget()
 		iManyBad += stResult.GetRet() != OI_ERR_FAIL;
 	}
 	iBad += iManyBad;
-	printf("hold batch failure slots bad=%d\n", iManyBad);
-	printf("hold registry bounded recovery busy=%d timeout=%d bad=%d\n", iBusy, iTimeout, iBad);
+	LOG_TRACE("hold batch failure slots bad=%d", iManyBad);
+	LOG_TRACE("hold registry bounded recovery busy=%d timeout=%d bad=%d", iBusy, iTimeout, iBad);
 	fflush(stdout);
 	if (!(co_await RegistryFaultHandshake(sFaultPath, "budget")))
 	{
@@ -2201,7 +2201,7 @@ static coro::TaskResult<int> CheckRegistryBoundsAndBudget()
 	{
 		++iBad;
 	}
-	printf("hold named rpc end to end budget elapsed_ms=%lld bad=%d\n", iBudgetElapsedMilliseconds, iBad);
+	LOG_TRACE("hold named rpc end to end budget elapsed_ms=%lld bad=%d", iBudgetElapsedMilliseconds, iBad);
 	fflush(stdout);
 	co_return iBad;
 }
@@ -2298,7 +2298,7 @@ static coro::TaskResult<int> CheckCompletedRpcRequests(sid_t iSessionIdParam)
 	{
 		++iBad;
 	}
-	printf("hold completed rpc requests retained=%zu destroyed=%d bad=%d\n", vTasks.size(), pDestroyed->load(), iBad);
+	LOG_TRACE("hold completed rpc requests retained=%zu destroyed=%d bad=%d", vTasks.size(), pDestroyed->load(), iBad);
 	fflush(stdout);
 	co_return iBad;
 }
@@ -2372,7 +2372,7 @@ static coro::TaskResult<int> CheckNamedOutputRpcTask()
 	{
 		++iBad;
 	}
-	printf("hold output rpc named any zone shared=8 bad=%d\n", iBad);
+	LOG_TRACE("hold output rpc named any zone shared=8 bad=%d", iBad);
 	fflush(stdout);
 	co_return iBad;
 }
@@ -2467,7 +2467,7 @@ static coro::TaskResult<int> CheckNamedServiceRpc()
 	{
 		++iBad;
 	}
-	printf("hold service rpc global=%d any=%d zone=%d batch=%d many=%d slot=%d elapsed_ms=%lld wrong=%d miss=%d bad=%d\n", iGlobal, iAny, iZone, iBatch, iMany, iSlot, iElapsed, iWrong, iMiss, iBad);
+	LOG_TRACE("hold service rpc global=%d any=%d zone=%d batch=%d many=%d slot=%d elapsed_ms=%lld wrong=%d miss=%d bad=%d", iGlobal, iAny, iZone, iBatch, iMany, iSlot, iElapsed, iWrong, iMiss, iBad);
 	// 服务名只在入口解析；局部字符串和请求销毁后，延迟启动仍能正确发送。
 	static ZoneService stOfflineWatcher("ipcserver");
 	OI::Base::ServiceTable::GetInstance().Watch(&stOfflineWatcher, "ipcserver");
@@ -2536,7 +2536,7 @@ static coro::TaskResult<int> CheckNamedServiceRpc()
 	{
 		++iBad;
 	}
-	printf("hold named rpc ownership success=%d rejected=%d bad=%d\n", iSuccess, iRejected, iBad);
+	LOG_TRACE("hold named rpc ownership success=%d rejected=%d bad=%d", iSuccess, iRejected, iBad);
 	fflush(stdout);
 	co_return iBad;
 }
@@ -2570,7 +2570,7 @@ static coro::TaskResult<int> CheckRegistryPairing()
 	{
 		iBad += co_await stLookup;
 	}
-	printf("hold registry pairing bad=%d\n", iBad);
+	LOG_TRACE("hold registry pairing bad=%d", iBad);
 	co_return iBad;
 }
 
@@ -2621,7 +2621,7 @@ static coro::TaskResult<int> CheckTaskExceptions()
 	{
 		++iBadLocal;
 	}
-	printf("hold task exceptions bad=%d\n", iBadLocal);
+	LOG_TRACE("hold task exceptions bad=%d", iBadLocal);
 	co_return iBadLocal;
 }
 
@@ -2659,14 +2659,14 @@ static coro::TaskResult<int> CheckServerEncoding()
 	{
 		++iBadLocal;
 	}
-	printf("hold client malformed response sid=%llu bad=%d\n", (unsigned long long)IpcClient::GetInstance().ConnectedSid(), iBadLocal);
+	LOG_TRACE("hold client malformed response sid=%llu bad=%d", (unsigned long long)IpcClient::GetInstance().ConnectedSid(), iBadLocal);
 	stRequest.iMark = 92;
 	auto stRecovered = co_await IpcClient::GetInstance().CallAny<OI::RpcData::HoldRes>(stRequest, OI::Timer::Seconds(2));
 	if (stRecovered.GetRet() != 0 || stRecovered.GetRes().iMark != 92)
 	{
 		++iBadLocal;
 	}
-	printf("hold server encoding bad=%d\n", iBadLocal);
+	LOG_TRACE("hold server encoding bad=%d", iBadLocal);
 	co_return iBadLocal;
 }
 
@@ -2689,10 +2689,10 @@ static coro::TaskResult<int> CheckHttpFraming(int32_t iHttpPortParam)
 		if (stResult.bFail != stCase.bFail || (!stCase.bFail && (stResult.iStatus != stCase.iStatus || stResult.sBody != stCase.pBody)))
 		{
 			++iBadLocal;
-			printf("http regression path=%s status=%d fail=%d error=%s\n", stCase.pPath, stResult.iStatus, stResult.bFail, stResult.sError.c_str());
+			LOG_TRACE("http regression path=%s status=%d fail=%d error=%s", stCase.pPath, stResult.iStatus, stResult.bFail, stResult.sError.c_str());
 		}
 	}
-	printf("hold http framing bad=%d\n", iBadLocal);
+	LOG_TRACE("hold http framing bad=%d", iBadLocal);
 	co_return iBadLocal;
 }
 
@@ -2729,7 +2729,7 @@ static coro::TaskResult<int> CheckHttpRelease(int32_t iHttpPortParam)
 	{
 		++iBadLocal;
 	}
-	printf("hold http release before=%zu after=%zu bad=%d\n", iBefore, iAfter, iBadLocal);
+	LOG_TRACE("hold http release before=%zu after=%zu bad=%d", iBefore, iAfter, iBadLocal);
 	co_return iBadLocal;
 }
 
@@ -2772,7 +2772,7 @@ static int CheckSendBudget()
 	{
 		++iBadLocal;
 	}
-	printf("hold send budget bad=%d\n", iBadLocal);
+	LOG_TRACE("hold send budget bad=%d", iBadLocal);
 	return iBadLocal;
 }
 
@@ -2813,7 +2813,7 @@ static coro::TaskResult<int> CheckSchedulerFairness()
 	}
 	stBusyScope.RequestStop();
 	co_await stBusyScope.Join();
-	printf("hold scheduler fairness bad=%d\n", iBadLocal);
+	LOG_TRACE("hold scheduler fairness bad=%d", iBadLocal);
 	co_return iBadLocal;
 }
 
@@ -2873,7 +2873,7 @@ static coro::TaskResult<int> CheckTaskScope()
 	catch (const std::logic_error&)
 	{
 	}
-	printf("hold scope finished=%d caught=%d bad=%d\n", iFinishedLocal.load(), bCaught, iBadLocal);
+	LOG_TRACE("hold scope finished=%d caught=%d bad=%d", iFinishedLocal.load(), bCaught, iBadLocal);
 	co_return iBadLocal;
 }
 
@@ -2895,7 +2895,7 @@ static coro::TaskResult<int> CheckCapturedTasks()
 	{
 		iBad += co_await stTask;
 	}
-	printf("hold captured tasks done=%zu bad=%d\n", vTasks.size(), iBad);
+	LOG_TRACE("hold captured tasks done=%zu bad=%d", vTasks.size(), iBad);
 	co_return iBad;
 }
 
@@ -2969,7 +2969,7 @@ static int CheckPreconnectSendBudget()
 	}
 	stRawPending.CloseSession(pSessionLocal->GetSessionID());
 	pSessionLocal->Release();
-	printf("hold preconnect send budget bad=%d\n", iBadLocal);
+	LOG_TRACE("hold preconnect send budget bad=%d", iBadLocal);
 	return iBadLocal;
 }
 
@@ -3000,7 +3000,7 @@ static coro::TaskResult<int> CheckRpcContext(PendingClient& stPendingParam)
 	{
 		++iBadLocal;
 	}
-	printf("hold rpc context bad=%d\n", iBadLocal);
+	LOG_TRACE("hold rpc context bad=%d", iBadLocal);
 	co_return iBadLocal;
 }
 
@@ -3047,7 +3047,7 @@ static int CheckPendingLimits(PendingClient& stPendingParam)
 	{
 		++iBadLocal;
 	}
-	printf("hold pending limits bad=%d\n", iBadLocal);
+	LOG_TRACE("hold pending limits bad=%d", iBadLocal);
 	return iBadLocal;
 }
 
@@ -3093,7 +3093,7 @@ static int CheckRpcSessionIndex(PendingClient& stPendingParam)
 	{
 		++iBadLocal;
 	}
-	printf("hold rpc session index calls=4096 bad=%d\n", iBadLocal);
+	LOG_TRACE("hold rpc session index calls=4096 bad=%d", iBadLocal);
 	return iBadLocal;
 }
 
@@ -3123,7 +3123,7 @@ static int CheckRpcDisconnectDrain(PendingClient& stPendingParam)
 			++iBad;
 		}
 	}
-	printf("hold disconnect drain calls=4096 bad=%d\n", iBad);
+	LOG_TRACE("hold disconnect drain calls=4096 bad=%d", iBad);
 	return iBad;
 }
 
@@ -3181,7 +3181,7 @@ static coro::TaskResult<int> CheckRpcExceptions(PendingClient& stPendingParam)
 	{
 		++iBadLocal;
 	}
-	printf("hold rpc exceptions caught=%d bad=%d\n", iCaughtErrors, iBadLocal);
+	LOG_TRACE("hold rpc exceptions caught=%d bad=%d", iCaughtErrors, iBadLocal);
 	co_return iBadLocal;
 }
 
@@ -3229,7 +3229,7 @@ static int CheckRpcExpiry(PendingClient& stPendingParam)
 	{
 		++iBadLocal;
 	}
-	printf("hold rpc expiry rejected=100000 retained=%zu bad=%d\n", stLimited.iExpirations - stBaseline.iExpirations, iBadLocal);
+	LOG_TRACE("hold rpc expiry rejected=100000 retained=%zu bad=%d", stLimited.iExpirations - stBaseline.iExpirations, iBadLocal);
 	return iBadLocal;
 }
 
@@ -3293,7 +3293,7 @@ static coro::TaskResult<int> CheckDeadlineBuckets()
 	{
 		++iBad;
 	}
-	printf("hold absolute deadline buckets calls=4096 buckets=%zu fired=%d bad=%d\n", stDuring.iBuckets - stBefore.iBuckets, pProbe->iCompleted.load(), iBad);
+	LOG_TRACE("hold absolute deadline buckets calls=4096 buckets=%zu fired=%d bad=%d", stDuring.iBuckets - stBefore.iBuckets, pProbe->iCompleted.load(), iBad);
 	fflush(stdout);
 	co_return iBad;
 }
@@ -3342,7 +3342,7 @@ static int CheckRpcSource(sid_t iSessionIdParam)
 	{
 		++iBadLocal;
 	}
-	printf("hold rpc source and disconnect bad=%d\n", iBadLocal);
+	LOG_TRACE("hold rpc source and disconnect bad=%d", iBadLocal);
 	return iBadLocal;
 }
 
@@ -3434,7 +3434,7 @@ static coro::TaskResult<int> CheckStandardizedReply()
 	{
 		++iBadLocal;
 	}
-	printf("hold rpc standardized reply bad=%d\n", iBadLocal);
+	LOG_TRACE("hold rpc standardized reply bad=%d", iBadLocal);
 	co_return iBadLocal;
 }
 
@@ -3459,7 +3459,7 @@ static coro::TaskResult<int> CheckRpcLateReply()
 	{
 		stResponseLocal = stEarly.GetRes();
 	}
-	printf("hold rpc early ret=%d mark=%d\n", iReturnCodeLocal, stResponseLocal.iMark);
+	LOG_TRACE("hold rpc early ret=%d mark=%d", iReturnCodeLocal, stResponseLocal.iMark);
 	fflush(stdout);
 	if (iReturnCodeLocal != 0 || stResponseLocal.iMark != 1)
 	{
@@ -3473,7 +3473,7 @@ static coro::TaskResult<int> CheckRpcLateReply()
 	stResponseLocal.iMark = 0;
 	auto stTimeout = co_await IpcClient::GetInstance().CallAny<::OI::RpcData::HoldRes>(stRequestLocal, ::OI::Timer::Milliseconds(500));
 	iReturnCodeLocal = stTimeout.GetRet();
-	printf("hold rpc timeout ret=%d\n", iReturnCodeLocal);
+	LOG_TRACE("hold rpc timeout ret=%d", iReturnCodeLocal);
 	fflush(stdout);
 	if (iReturnCodeLocal != OI_ERR_TIMEOUT)
 	{
@@ -3481,7 +3481,7 @@ static coro::TaskResult<int> CheckRpcLateReply()
 	}
 	// 回包还在路上。让这一下把迟到的包和已经武装的超时定时器都消化掉。
 	co_await coro::yield(1500);
-	printf("hold rpc late-reply cpu_ms=%lld wall_ms=%lld\n",
+	LOG_TRACE("hold rpc late-reply cpu_ms=%lld wall_ms=%lld",
 	    CpuMs(iCpuBegin), WallMs(iWallBegin));
 	fflush(stdout);
 
@@ -3491,7 +3491,7 @@ static coro::TaskResult<int> CheckRpcLateReply()
 	auto stFollow = co_await IpcClient::GetInstance().CallAny<::OI::RpcData::HoldRes>(stRequestLocal, ::OI::Timer::Seconds(10));
 	iReturnCodeLocal = stFollow.GetRet();
 	stResponseLocal.iMark = iReturnCodeLocal == 0 ? stFollow.GetRes().iMark : 0;
-	printf("hold rpc follow ret=%d mark=%d\n", iReturnCodeLocal, stResponseLocal.iMark);
+	LOG_TRACE("hold rpc follow ret=%d mark=%d", iReturnCodeLocal, stResponseLocal.iMark);
 	fflush(stdout);
 	if (iReturnCodeLocal != 0 || stResponseLocal.iMark != 3)
 	{
@@ -3519,7 +3519,7 @@ static coro::TaskResult<int> CheckRpcRace()
 		iTimeoutNumber += iOutcome == RaceOutcome::Timeout ? 1 : 0;
 		iRaceBad += iOutcome == RaceOutcome::Bad ? 1 : 0;
 	}
-	printf("hold rpc race n=%zu done=%zu reply=%d timeout=%d bad=%d cpu_ms=%lld wall_ms=%lld\n",
+	LOG_TRACE("hold rpc race n=%zu done=%zu reply=%d timeout=%d bad=%d cpu_ms=%lld wall_ms=%lld",
 	    vCalls.size(), vCalls.size(), iReplyNumber, iTimeoutNumber, iRaceBad, CpuMs(iCpuBegin), WallMs(iWallBegin));
 	fflush(stdout);
 	co_return iRaceBad;
@@ -3529,7 +3529,7 @@ static coro::TaskResult<int> CheckRedisPing(const char* pLabelParam)
 {
 	const int64_t iWallBegin = ::OI::Timer::SteadyMilliseconds();
 	const auto stPing = co_await ::OI::Redis::CallRedis({"PING"});
-	printf("hold redis %sping ok=%d status=%d reply_type=%d wall_ms=%lld\n", pLabelParam, Pong(stPing) ? 1 : 0,
+	LOG_TRACE("hold redis %sping ok=%d status=%d reply_type=%d wall_ms=%lld", pLabelParam, Pong(stPing) ? 1 : 0,
 	    static_cast<int>(stPing.iStatus), stPing.pReply ? stPing.pReply->type : -1, WallMs(iWallBegin));
 	fflush(stdout);
 	co_return Pong(stPing) ? 0 : 1;
@@ -3548,7 +3548,7 @@ static coro::TaskResult<int> CheckRedisLateReply(int32_t iRedisTimeoutMillisecon
 	{
 		if (iSpins++ >= iLimit)
 		{
-			printf("hold redis connect fail\n");
+			LOG_TRACE("hold redis connect fail");
 			fflush(stdout);
 			co_return 1;
 		}
@@ -3565,7 +3565,7 @@ static coro::TaskResult<int> CheckRedisLateReply(int32_t iRedisTimeoutMillisecon
 	int64_t iWallBegin = ::OI::Timer::SteadyMilliseconds();
 	std::vector<std::string> vLate{"BLPOP", "hold-late", std::to_string(iSeconds + 1)};
 	const auto stLate = co_await ::OI::Redis::CallRedis(std::move(vLate));
-	printf("hold redis late timeout=%d cpu_ms=%lld wall_ms=%lld\n",
+	LOG_TRACE("hold redis late timeout=%d cpu_ms=%lld wall_ms=%lld",
 	    stLate.bTimeout ? 1 : 0, CpuMs(iCpuBegin), WallMs(iWallBegin));
 	fflush(stdout);
 	if (!stLate.bTimeout)
@@ -3579,7 +3579,7 @@ static coro::TaskResult<int> CheckRedisLateReply(int32_t iRedisTimeoutMillisecon
 	std::vector<std::string> vRace{"BLPOP", "hold-race", std::to_string(iSeconds)};
 	const auto stRace = co_await ::OI::Redis::CallRedis(std::move(vRace));
 	const int iNil = stRace.pReply && stRace.pReply->type == REDIS_REPLY_NIL ? 1 : 0;
-	printf("hold redis race timeout=%d nil=%d cpu_ms=%lld wall_ms=%lld\n",
+	LOG_TRACE("hold redis race timeout=%d nil=%d cpu_ms=%lld wall_ms=%lld",
 	    stRace.bTimeout ? 1 : 0, iNil, CpuMs(iCpuBegin), WallMs(iWallBegin));
 	fflush(stdout);
 	if (!stRace.bTimeout && !iNil)
@@ -3607,7 +3607,7 @@ static coro::TaskResult<int> CheckRpcDisconnect(sid_t iSessionIdParam)
 	auto stClosed = co_await IpcClient::GetInstance().CallAny<::OI::RpcData::HoldRes>(stRequestLocal, ::OI::Timer::Seconds(10));
 	const long long iWallMilliseconds = WallMs(iWallBegin);
 	co_await stClose;
-	printf("hold rpc disconnected code=%d wall_ms=%lld\n", stClosed.GetRet(), iWallMilliseconds);
+	LOG_TRACE("hold rpc disconnected code=%d wall_ms=%lld", stClosed.GetRet(), iWallMilliseconds);
 	co_return (stClosed.GetRet() != OI_ERR_CONNECT || iWallMilliseconds > 2000) ? 1 : 0;
 }
 
@@ -3624,7 +3624,7 @@ coro::Task HoldMgr::Pump()
 	int iBad = co_await CheckTimerExceptions();
 	if (iBad != 0)
 	{
-		printf("hold done bad=%d\n", iBad);
+		LOG_TRACE("hold done bad=%d", iBad);
 		fflush(stdout);
 		TestBoard::GetInstance().Done(1);
 		co_return;
@@ -3688,7 +3688,7 @@ coro::Task HoldMgr::Pump()
 	iBad += co_await CheckRpcRace();
 	iBad += co_await CheckRedisLateReply(m_iRedisTimeoutMilliseconds);
 	iBad += co_await CheckRpcDisconnect(m_iSessionId);
-	printf("hold done bad=%d\n", iBad);
+	LOG_TRACE("hold done bad=%d", iBad);
 	fflush(stdout);
 	TestBoard::GetInstance().Done(iBad == 0 ? 0 : 1);
 }

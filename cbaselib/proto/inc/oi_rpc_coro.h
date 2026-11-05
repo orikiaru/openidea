@@ -148,6 +148,13 @@ struct TaskFinalSuspend
 	{
 	}
 };
+// 任务状态。一条任务只从「在跑」进「完成」，不能再跑第二次。
+//
+// 在跑：bReady 为假。协程里直接调用时 bInlineStart 为真，initial_suspend 不挂起，在当前 resume 栈上跑到第一次 co_await。
+//       协程外新建，或 StartTask / TaskScope::Start，bInlineStart 为假，initial_suspend 把句柄放进运行队列。
+// 完成：final_suspend 在锁里把 bReady 写成真，摘走 pWaiters 再逐个 Schedule。之后的 co_await 看见 bReady，不再挂起。
+// 独立：bDetached 为真表示没有人等也要自己报告异常。Start() 只打这个标记，不重新执行。
+// 异常：bObserved 表示某个等待者已经重抛过；bErrorReported 保证 ReportError 只进一次。没人看的异常在最后一个引用释放时再报。
 struct TaskState
 {
 	std::shared_ptr<void> pCallable;
@@ -155,10 +162,10 @@ struct TaskState
 	Token iTaskId = 0;
 	OI::Thread::Mutex stMutex;
 	TaskWaiter* pWaiters = nullptr;
-	std::atomic<size_t> iReferences{2}; // Task 对象、等待者、运行中的帧各自持有引用。创建时即在运行。
-	bool bReady = false;
-	bool bInlineStart = false;
-	std::atomic<bool> bDetached{false};
+	std::atomic<size_t> iReferences{2}; // 创建时两份：Task 对象一份，正在跑的帧一份。每个等待器再加一份。
+	bool bReady = false;                // 假=还在跑或还没开始；真=已经 co_return 或异常结束。
+	bool bInlineStart = false;          // 真=initial_suspend 不挂起。
+	std::atomic<bool> bDetached{false}; // 真=独立任务，异常不等待者来取。
 	std::atomic<bool> bObserved{false};
 	std::atomic<bool> bErrorReported{false};
 	TaskState()
@@ -667,9 +674,15 @@ struct [[nodiscard]] RpcCallAwaiter
 	int32_t iResult;
 	int64_t iTimeoutMilliseconds;
 	std::coroutine_handle<> stHandle;
+	// 完成门，和注册表那道门同一套数：
+	// 0 已发出，完成回调和挂起都还没认领。
+	// 1 回包、超时或失败已经写完结果。
+	// 2 调用方已经挂起，等着被 Schedule。
+	// 完成回调 exchange(1)，只有看见 2 才调度；Arm exchange(2)，看见 1 就不挂起。
+	// 用 exchange 而不是先读后写，回包比挂起先到时不会把协程永久挂住。
 	std::atomic<int32_t> iGate;
-	std::atomic<bool> bAwaitStarted{false};
-	bool bDispatched = false;
+	std::atomic<bool> bAwaitStarted{false}; // 一次性闩。第二次 await 或移动已提交对象直接抛，不进完成门。
+	bool bDispatched = false;               // Dispatch 已经 BindRpcCall。析构时槽还在就摘掉。
 	// 回包原样留到 await_resume 再解，解包跑在工人上，不占 IO 线程。
 	::OI::Base::BytesStream stReply;
 	bool bReplied;
@@ -752,6 +765,8 @@ struct [[nodiscard]] RpcCallAwaiter
 			return true;
 		}, [this]()
 		{
+			// 0→1：结果先写好，调用方还在 Arm 之前，留给 Arm 发现后不挂起。
+			// 2→1：调用方已经挂起，必须由这里 Schedule。
 			int iPrevious = iGate.exchange(1, std::memory_order_acq_rel);
 			if (iPrevious == 2)
 			{
@@ -795,6 +810,7 @@ struct [[nodiscard]] RpcCallAwaiter
 			iAwaitToken = stHandleParam.promise().iTaskId;
 		}
 		stHandle = stHandleParam;
+		// 0→2：还在等，挂起。1→2：结果已经写完，不挂起，调用方马上 await_resume。
 		int iPrevious = iGate.exchange(2, std::memory_order_acq_rel);
 		return iPrevious != 1;
 	}
@@ -1161,6 +1177,8 @@ struct RouteAwaiter
 	std::vector<std::string> vZoneNames;
 	ServiceRoute stRoute;
 	std::coroutine_handle<> stHandle{};
+	// 和 RpcCallAwaiter::iGate 同一套数，完成方换成注册表回包：
+	// 0 还在等拉取；1 回包已经写入 iCode/vList；2 调用方已经挂起。
 	std::atomic<int32_t> iGate{0};
 
 	bool await_ready() const noexcept
@@ -1210,11 +1228,13 @@ struct RouteAwaiter
 			{
 				iCode = OI_ERR_FAIL;
 			}
+			// 2→1 才调度。回包先到时门已是 1，下面的 exchange(2) 会选择不挂起。
 			if (iGate.exchange(1, std::memory_order_acq_rel) == 2)
 			{
 				coro::Schedule(stHandle);
 			}
 		}, iRemaining > 0 ? (std::min)(iRemaining, int64_t(1000)) : 1000);
+		// 看见 1 表示回包已经写完，不挂起。
 		return iGate.exchange(2, std::memory_order_acq_rel) != 1;
 	}
 	ServiceRoute await_resume()

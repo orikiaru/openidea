@@ -1,6 +1,7 @@
 #include "web_client.h"
 #include "oi_config.h"
 #include "oi_http.h"
+#include "oi_log.h"
 #include "oi_rpc_coro.h"
 #include "oi_rpcdata_jsonall.h"
 #include "oi_thread.h"
@@ -189,11 +190,11 @@ static coro::Task Run()
 		iBadLocal += 1;
 	}
 
-	printf("web query=%d text=%s json_n=%d json_s=%s json_ok=%d rpc=%d bin=%d bad=%d\n",
+	LOG_TRACE("web query=%d text=%s json_n=%d json_s=%s json_ok=%d rpc=%d bin=%d bad=%d",
 	    sGotTextGottext == sText ? 1 : 0, sGotTextGottext.c_str(), iGotNumber, sGotTextGots.c_str(), bGotOk ? 1 : 0, iRpcOk, iBinOk, iBadLocal);
 	if (iBadLocal != 0)
 	{
-		printf("web err query=%s json=%s rpc=%s bin=%s\n",
+		LOG_TRACE("web err query=%s json=%s rpc=%s bin=%s",
 		    stGot.sError.c_str(), stJs.sError.c_str(), stRpc.sError.c_str(), stRaw.sError.c_str());
 	}
 	fflush(stdout);
