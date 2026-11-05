@@ -4,20 +4,20 @@ namespace OI
 namespace Rpc
 {
 
-::OI::Base::BytesStream EncodePbFrame(proto_type_t iIdParam, ::OI::Base::BytesStream& stBodyParam)
+::OI::Base::BytesStream EncodePbFrame(proto_type_t iId, ::OI::Base::BytesStream& stBody)
 {
-	if (stBodyParam.Size() > (size_t)0x7FFFFFFF)
+	if (stBody.Size() > (size_t)0x7FFFFFFF)
 	{
 		throw ::OI::Base::ParserException();
 	}
 	::OI::Base::BytesStream stOutputStream;
-	uint32_t iSize = (uint32_t)stBodyParam.Size();
+	uint32_t iSize = (uint32_t)stBody.Size();
 	const void* pData = NULL;
 	if (iSize > 0)
 	{
-		pData = stBodyParam.Begin();
+		pData = stBody.Begin();
 	}
-	stOutputStream.WritePbRaw((uint32_t)iIdParam, pData, iSize);
+	stOutputStream.WritePbRaw((uint32_t)iId, pData, iSize);
 	return stOutputStream;
 }
 }

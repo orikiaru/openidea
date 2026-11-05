@@ -3,7 +3,7 @@
 #include "oi_base.h"
 #include "ipcclient.h"
 
-int main(int iArgumentCountParam, char* vArgumentsParam[])
+int main(int iArgumentCount, char* vArguments[])
 {
 	int iCodeLocal = ::OI::Base::StartFramework("../config/ipcclient.toml");
 	if (iCodeLocal != 0)

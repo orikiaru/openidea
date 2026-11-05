@@ -37,32 +37,32 @@ time_t GetTime();
 tm GetLocalTime();
 timeval GetCurTickTime();
 
-time_t Shift(time_t iTimestampParam, int64_t iOffsetSecondsParam);
-TimeMark Capture(int64_t iOffsetSecondsParam = 0);
+time_t Shift(time_t iTimestamp, int64_t iOffsetSeconds);
+TimeMark Capture(int64_t iOffsetSeconds = 0);
 
-int64_t DayPeriod(time_t iTimestampParam, int64_t iOffsetSecondsParam = 0);
-int64_t WeekPeriod(time_t iTimestampParam, int64_t iOffsetSecondsParam = 0);
-int64_t WeekdayPeriod(time_t iTimestampParam, int iWeekdayParam, int64_t iOffsetSecondsParam = 0);
-int64_t MonthPeriod(time_t iTimestampParam, int64_t iOffsetSecondsParam = 0);
-int64_t YearPeriod(time_t iTimestampParam, int64_t iOffsetSecondsParam = 0);
+int64_t DayPeriod(time_t iTimestamp, int64_t iOffsetSeconds = 0);
+int64_t WeekPeriod(time_t iTimestamp, int64_t iOffsetSeconds = 0);
+int64_t WeekdayPeriod(time_t iTimestamp, int iWeekday, int64_t iOffsetSeconds = 0);
+int64_t MonthPeriod(time_t iTimestamp, int64_t iOffsetSeconds = 0);
+int64_t YearPeriod(time_t iTimestamp, int64_t iOffsetSeconds = 0);
 
-bool SameDay(time_t iFirstParam, time_t iSecondParam, int64_t iOffsetSecondsParam = 0);
-bool SameWeek(time_t iFirstParam, time_t iSecondParam, int64_t iOffsetSecondsParam = 0);
-bool SameWeekday(time_t iFirstParam, time_t iSecondParam, int iWeekdayParam, int64_t iOffsetSecondsParam = 0);
-bool SameMonth(time_t iFirstParam, time_t iSecondParam, int64_t iOffsetSecondsParam = 0);
-bool SameYear(time_t iFirstParam, time_t iSecondParam, int64_t iOffsetSecondsParam = 0);
+bool SameDay(time_t iFirst, time_t iSecond, int64_t iOffsetSeconds = 0);
+bool SameWeek(time_t iFirst, time_t iSecond, int64_t iOffsetSeconds = 0);
+bool SameWeekday(time_t iFirst, time_t iSecond, int iWeekday, int64_t iOffsetSeconds = 0);
+bool SameMonth(time_t iFirst, time_t iSecond, int64_t iOffsetSeconds = 0);
+bool SameYear(time_t iFirst, time_t iSecond, int64_t iOffsetSeconds = 0);
 
 // now 落到了比 old 更晚的一格才算跨过。时间往回走不算。
-bool CrossDay(time_t iOldTimestampParam, time_t iNowTimestampParam, int64_t iOffsetSecondsParam = 0);
-bool CrossWeek(time_t iOldTimestampParam, time_t iNowTimestampParam, int64_t iOffsetSecondsParam = 0);
-bool CrossWeekday(time_t iOldTimestampParam, time_t iNowTimestampParam, int iWeekdayParam, int64_t iOffsetSecondsParam = 0);
-bool CrossMonth(time_t iOldTimestampParam, time_t iNowTimestampParam, int64_t iOffsetSecondsParam = 0);
-bool CrossYear(time_t iOldTimestampParam, time_t iNowTimestampParam, int64_t iOffsetSecondsParam = 0);
+bool CrossDay(time_t iOldTimestamp, time_t iNowTimestamp, int64_t iOffsetSeconds = 0);
+bool CrossWeek(time_t iOldTimestamp, time_t iNowTimestamp, int64_t iOffsetSeconds = 0);
+bool CrossWeekday(time_t iOldTimestamp, time_t iNowTimestamp, int iWeekday, int64_t iOffsetSeconds = 0);
+bool CrossMonth(time_t iOldTimestamp, time_t iNowTimestamp, int64_t iOffsetSeconds = 0);
+bool CrossYear(time_t iOldTimestamp, time_t iNowTimestamp, int64_t iOffsetSeconds = 0);
 
-bool CrossDay(const TimeMark& stSavedParam, time_t iNowTimestampParam);
-bool CrossWeek(const TimeMark& stSavedParam, time_t iNowTimestampParam);
-bool CrossWeekday(const TimeMark& stSavedParam, time_t iNowTimestampParam, int iWeekdayParam);
-bool CrossMonth(const TimeMark& stSavedParam, time_t iNowTimestampParam);
-bool CrossYear(const TimeMark& stSavedParam, time_t iNowTimestampParam);
+bool CrossDay(const TimeMark& stSaved, time_t iNowTimestamp);
+bool CrossWeek(const TimeMark& stSaved, time_t iNowTimestamp);
+bool CrossWeekday(const TimeMark& stSaved, time_t iNowTimestamp, int iWeekday);
+bool CrossMonth(const TimeMark& stSaved, time_t iNowTimestamp);
+bool CrossYear(const TimeMark& stSaved, time_t iNowTimestamp);
 }
 }

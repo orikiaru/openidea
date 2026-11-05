@@ -19,8 +19,8 @@ class Task
 {
   public:
 	PRIO_ENUM iPriority;
-	Task(PRIO_ENUM iPriorityParam = PRIO_NORMAL)
-	    : iPriority(iPriorityParam)
+	Task(PRIO_ENUM iPriority = PRIO_NORMAL)
+	    : iPriority(iPriority)
 	{
 	}
 	virtual ~Task()
@@ -36,8 +36,8 @@ class FnTask : public Task
 	F m_fnFunction;
 
   public:
-	FnTask(F fnFunctionParam, PRIO_ENUM iPriorityParam = PRIO_NORMAL)
-	    : Task(iPriorityParam), m_fnFunction(std::move(fnFunctionParam))
+	FnTask(F fnFunction, PRIO_ENUM iPriority = PRIO_NORMAL)
+	    : Task(iPriority), m_fnFunction(std::move(fnFunction))
 	{
 	}
 	void Exec()

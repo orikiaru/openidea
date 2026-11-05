@@ -38,28 +38,28 @@ void RedisMgr::Start()
 	}
 	m_stStart = std::chrono::steady_clock::now();
 	TestBoard::GetInstance().Arm();
-	coro::StartTask([](coro::Token)
+	OI::Coro::StartTask([](OI::Coro::Token)
 	{
 		return RedisMgr::GetInstance().Pump();
 	});
 }
 
-static bool StatusIs(const ::OI::Redis::RedisResult& stResultParam, const char* pTextParam)
+static bool StatusIs(const ::OI::Redis::RedisResult& stResult, const char* pText)
 {
-	return !stResultParam.bTimeout && stResultParam.pReply && stResultParam.pReply->type == REDIS_REPLY_STATUS && stResultParam.pReply->str && std::strcmp(stResultParam.pReply->str, pTextParam) == 0;
+	return !stResult.bTimeout && stResult.pReply && stResult.pReply->type == REDIS_REPLY_STATUS && stResult.pReply->str && std::strcmp(stResult.pReply->str, pText) == 0;
 }
 
-static bool IntIs(const ::OI::Redis::RedisResult& stResultParam, long long iNumberParam)
+static bool IntIs(const ::OI::Redis::RedisResult& stResult, long long iNumber)
 {
-	return !stResultParam.bTimeout && stResultParam.pReply && stResultParam.pReply->type == REDIS_REPLY_INTEGER && stResultParam.pReply->integer == iNumberParam;
+	return !stResult.bTimeout && stResult.pReply && stResult.pReply->type == REDIS_REPLY_INTEGER && stResult.pReply->integer == iNumber;
 }
 
-static bool BulkIs(const ::OI::Redis::RedisResult& stResultParam, const char* pTextParam, size_t iNumberParam)
+static bool BulkIs(const ::OI::Redis::RedisResult& stResult, const char* pText, size_t iNumber)
 {
-	return !stResultParam.bTimeout && stResultParam.pReply && stResultParam.pReply->type == REDIS_REPLY_STRING && stResultParam.pReply->len == iNumberParam && stResultParam.pReply->str && std::memcmp(stResultParam.pReply->str, pTextParam, iNumberParam) == 0;
+	return !stResult.bTimeout && stResult.pReply && stResult.pReply->type == REDIS_REPLY_STRING && stResult.pReply->len == iNumber && stResult.pReply->str && std::memcmp(stResult.pReply->str, pText, iNumber) == 0;
 }
 
-static coro::Task RedisQueueTimeoutRegression()
+static OI::Coro::Task RedisQueueTimeoutRegression()
 {
 	// 故意占用普通队列线程，超时必须仍由 poll 推进。
 	if (!OI::Thread::ThreadPool::GetInstance().AddTask([]()
@@ -78,7 +78,7 @@ static coro::Task RedisQueueTimeoutRegression()
 	co_return;
 }
 
-static coro::Task RedisShutdownRegression()
+static OI::Coro::Task RedisShutdownRegression()
 {
 	if (!OI::Thread::ThreadPool::GetInstance().AddTask([]()
 	{
@@ -95,7 +95,7 @@ static coro::Task RedisShutdownRegression()
 	const int64_t iDeadline = ::OI::Timer::SteadyMilliseconds() + ::OI::Timer::MS(::OI::Timer::Seconds(3)).iMilliseconds;
 	while (OI::Redis::RedisClient::GetInstance().PendingCount() == 0 && ::OI::Timer::SteadyMilliseconds() < iDeadline)
 	{
-		co_await coro::yield(1);
+		co_await OI::Coro::yield(1);
 	}
 	if (OI::Redis::RedisClient::GetInstance().PendingCount() == 0)
 	{
@@ -107,9 +107,9 @@ static coro::Task RedisShutdownRegression()
 	// 驱动脚本收到标记后发 SIGTERM；测试线程必须被停止回调唤醒。
 }
 
-static coro::TaskResult<int> PressureEcho(int iIndexParam)
+static OI::Coro::TaskResult<int> PressureEcho(int iIndex)
 {
-	const std::string sPayload = std::to_string(iIndexParam) + std::string(256 * 1024, 'x');
+	const std::string sPayload = std::to_string(iIndex) + std::string(256 * 1024, 'x');
 	std::vector<std::string> vArguments{"ECHO", sPayload};
 	auto stResult = co_await OI::Redis::CallRedis(std::move(vArguments));
 	if (!stResult || !stResult.pReply->str || stResult.pReply->len != sPayload.size() || std::memcmp(stResult.pReply->str, sPayload.data(), sPayload.size()) != 0)
@@ -119,9 +119,9 @@ static coro::TaskResult<int> PressureEcho(int iIndexParam)
 	co_return 0;
 }
 
-static coro::Task RedisPressureRegression(bool bOversizedParam)
+static OI::Coro::Task RedisPressureRegression(bool bOversized)
 {
-	std::vector<coro::TaskResult<int>> vEchoes;
+	std::vector<OI::Coro::TaskResult<int>> vEchoes;
 	for (int iIndex = 0; iIndex < 64; ++iIndex)
 	{
 		vEchoes.push_back(PressureEcho(iIndex));
@@ -131,7 +131,7 @@ static coro::Task RedisPressureRegression(bool bOversizedParam)
 	{
 		iBad += co_await stEcho;
 	}
-	if (bOversizedParam)
+	if (bOversized)
 	{
 		auto& stClient = OI::Redis::RedisClient::GetInstance();
 		const sid_t iOldSid = stClient.ConnectedSid();
@@ -144,7 +144,7 @@ static coro::Task RedisPressureRegression(bool bOversizedParam)
 		const int64_t iDeadline = ::OI::Timer::SteadyMilliseconds() + ::OI::Timer::MS(::OI::Timer::Seconds(3)).iMilliseconds;
 		while ((!stClient.IsConnect() || stClient.ConnectedSid() == iOldSid) && ::OI::Timer::SteadyMilliseconds() < iDeadline)
 		{
-			co_await coro::yield(1);
+			co_await OI::Coro::yield(1);
 		}
 	}
 	if (!StatusIs(co_await OI::Redis::CallRedis({"PING"}), "PONG"))
@@ -172,8 +172,8 @@ class RedisFairPeer : public OI::Net::SessionManager
 		RedisFairPeer* m_pOwner;
 
 	  public:
-		explicit ReplySession(RedisFairPeer* pOwnerParam)
-		    : NetSession(pOwnerParam), m_pOwner(pOwnerParam)
+		explicit ReplySession(RedisFairPeer* pOwner)
+		    : NetSession(pOwner), m_pOwner(pOwner)
 		{
 		}
 		void OnDataOut() override
@@ -206,9 +206,9 @@ class RedisFairPeer : public OI::Net::SessionManager
 	{
 		return new ReplySession(this);
 	}
-	void OnAddSession(OI::Net::Session* pSessionParam) override
+	void OnAddSession(OI::Net::Session* pSession) override
 	{
-		m_iSid = pSessionParam->GetSessionID();
+		m_iSid = pSession->GetSessionID();
 	}
 	void OnDelSession(const OI::Net::Session*) override
 	{
@@ -216,16 +216,16 @@ class RedisFairPeer : public OI::Net::SessionManager
 	}
 
   public:
-	RedisFairPeer(std::string sLabelParam, RedisFairPeer* pOtherParam, std::string sExpectedParam = "")
-	    : m_sLabel(std::move(sLabelParam)), m_sExpected(sExpectedParam.empty() ? std::string("$1\r\n") + m_sLabel + "\r\n" : std::move(sExpectedParam)), m_pOther(pOtherParam)
+	RedisFairPeer(std::string sLabel, RedisFairPeer* pOther, std::string sExpected = "")
+	    : m_sLabel(std::move(sLabel)), m_sExpected(sExpected.empty() ? std::string("$1\r\n") + m_sLabel + "\r\n" : std::move(sExpected)), m_pOther(pOther)
 	{
 		DefaultInit("127.0.0.1", RedisServerPort());
 	}
-	bool SendCommands(int iCountParam)
+	bool SendCommands(int iCount)
 	{
 		OI::Base::Bytes stWire;
 		const std::string sCommand = std::string("*2\r\n$4\r\nECHO\r\n$1\r\n") + m_sLabel + "\r\n";
-		for (int iIndex = 0; iIndex < iCountParam; ++iIndex)
+		for (int iIndex = 0; iIndex < iCount; ++iIndex)
 		{
 			stWire.Append(sCommand.data(), sCommand.size());
 		}
@@ -252,7 +252,7 @@ class RedisFairPeer : public OI::Net::SessionManager
 	}
 };
 
-static coro::Task RedisFairnessRegression()
+static OI::Coro::Task RedisFairnessRegression()
 {
 	static RedisFairPeer stFirst("A", nullptr), stSecond("B", &stFirst);
 	int iBad = 0;
@@ -260,7 +260,7 @@ static coro::Task RedisFairnessRegression()
 	{
 		++iBad;
 	}
-	co_await coro::yield(100);
+	co_await OI::Coro::yield(100);
 	if (!(co_await stSecond.StartClient()) || !stSecond.SendCommands(1))
 	{
 		++iBad;
@@ -270,12 +270,12 @@ static coro::Task RedisFairnessRegression()
 	const int64_t iDeadline = ::OI::Timer::SteadyMilliseconds() + ::OI::Timer::MS(::OI::Timer::Seconds(8)).iMilliseconds;
 	while (stFirst.Replies() == 0 && ::OI::Timer::SteadyMilliseconds() < iDeadline)
 	{
-		co_await coro::yield(1);
+		co_await OI::Coro::yield(1);
 	}
 	const auto stStart = std::chrono::steady_clock::now();
 	while ((stFirst.Replies() != 64 || stSecond.Replies() != 1) && ::OI::Timer::SteadyMilliseconds() < iDeadline)
 	{
-		co_await coro::yield(1);
+		co_await OI::Coro::yield(1);
 	}
 	const auto iElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - stStart).count();
 	if (stFirst.Replies() != 64 || stSecond.Replies() != 1 || iElapsed > 1500)
@@ -290,7 +290,7 @@ static coro::Task RedisFairnessRegression()
 	TestBoard::GetInstance().Done(iBad ? 1 : 0);
 }
 
-coro::Task RedisMgr::Pump()
+OI::Coro::Task RedisMgr::Pump()
 {
 	int iSpins = 0;
 	int iLimit = m_iTimeoutMilliseconds > 0 ? m_iTimeoutMilliseconds / 50 : 100;
@@ -306,7 +306,7 @@ coro::Task RedisMgr::Pump()
 			TestBoard::GetInstance().Done(1);
 			co_return;
 		}
-		co_await coro::yield(50);
+		co_await OI::Coro::yield(50);
 	}
 
 	bool bShutdown = false, bPressure = false, bOversized = false, bFairness = false;
@@ -351,7 +351,7 @@ coro::Task RedisMgr::Pump()
 		TestBoard::GetInstance().Done(0);
 		co_return;
 	}
-	std::vector<coro::Task> vStress;
+	std::vector<OI::Coro::Task> vStress;
 	for (int iIndexLocal = 0; iIndexLocal < m_iTaskCount; ++iIndexLocal)
 	{
 		vStress.push_back(Stress(iIndexLocal));
@@ -380,20 +380,20 @@ coro::Task RedisMgr::Pump()
 	Report();
 }
 
-static coro::TaskResult<::OI::Redis::RedisResult> AwaitRedis(std::vector<std::string> vArgumentsParam)
+static OI::Coro::TaskResult<::OI::Redis::RedisResult> AwaitRedis(std::vector<std::string> vArguments)
 {
-	co_return co_await ::OI::Redis::CallRedis(std::move(vArgumentsParam));
+	co_return co_await ::OI::Redis::CallRedis(std::move(vArguments));
 }
 
 // max_pending 为 1 时，第二条命令必须立即返回 Busy，前一条完成后恢复。
-static coro::TaskResult<int> CheckPendingLimit()
+static OI::Coro::TaskResult<int> CheckPendingLimit()
 {
 	int iBad = 0;
 	auto stBlockedTask = AwaitRedis({"BLPOP", "oi-limit-empty", "1"});
 	const int64_t iDeadline = ::OI::Timer::SteadyMilliseconds() + ::OI::Timer::MS(::OI::Timer::Seconds(3)).iMilliseconds;
 	while (::OI::Redis::RedisClient::GetInstance().PendingCount() == 0 && ::OI::Timer::SteadyMilliseconds() < iDeadline)
 	{
-		co_await coro::yield(::OI::Timer::Milliseconds(10));
+		co_await OI::Coro::yield(::OI::Timer::Milliseconds(10));
 	}
 	auto stBusy = co_await ::OI::Redis::CallRedis({"PING"});
 	if (stBusy.iStatus != ::OI::Redis::RedisStatus::Busy || stBusy.GetRet() != OI_ERR_BUSY || stBusy.bTimeout)
@@ -413,7 +413,7 @@ static coro::TaskResult<int> CheckPendingLimit()
 	co_return iBad;
 }
 
-static coro::TaskResult<int> CheckReplyStatus()
+static OI::Coro::TaskResult<int> CheckReplyStatus()
 {
 	int iBad = 0;
 	auto stInvalid = co_await ::OI::Redis::CallRedis({});
@@ -435,16 +435,16 @@ static coro::TaskResult<int> CheckReplyStatus()
 }
 
 // poll 线程里调用同步接口必须抛错，不能把自己堵死；协程里的同步调用照常返回。
-static coro::TaskResult<int> CheckSyncOnLoop()
+static OI::Coro::TaskResult<int> CheckSyncOnLoop()
 {
 	int iBad = 0;
 	std::atomic<int32_t> iSyncGuard(0);
-	::OI::Net::Poll::GetInstance().CallOnLoop([](void* pArgumentParam)
+	::OI::Net::Poll::GetInstance().CallOnLoop([](void* pArgument)
 	{
 		auto pTimer = new uv_timer_t{};
-		pTimer->data = pArgumentParam;
+		pTimer->data = pArgument;
 		uv_timer_init(OI::Net::Poll::GetInstance().Loop(), pTimer);
-		uv_timer_start(pTimer, [](uv_timer_t* pTimerParam)
+		uv_timer_start(pTimer, [](uv_timer_t* pTimer)
 		{
 			int32_t iChecked = -1;
 			try
@@ -455,16 +455,16 @@ static coro::TaskResult<int> CheckSyncOnLoop()
 			{
 				iChecked = 1;
 			}
-			static_cast<std::atomic<int32_t>*>(pTimerParam->data)->store(iChecked, std::memory_order_release);
-			uv_close(reinterpret_cast<uv_handle_t*>(pTimerParam), [](uv_handle_t* pHandleParam)
+			static_cast<std::atomic<int32_t>*>(pTimer->data)->store(iChecked, std::memory_order_release);
+			uv_close(reinterpret_cast<uv_handle_t*>(pTimer), [](uv_handle_t* pHandle)
 			{
-				delete reinterpret_cast<uv_timer_t*>(pHandleParam);
+				delete reinterpret_cast<uv_timer_t*>(pHandle);
 			});
 		}, 1, 0);
 	}, &iSyncGuard);
 	while (iSyncGuard.load(std::memory_order_acquire) == 0)
 	{
-		co_await coro::yield(10);
+		co_await OI::Coro::yield(10);
 	}
 	if (iSyncGuard.load() != 1)
 	{
@@ -477,11 +477,11 @@ static coro::TaskResult<int> CheckSyncOnLoop()
 	co_return iBad;
 }
 
-static coro::TaskResult<bool> AwaitSingleUse(std::shared_ptr<OI::Redis::RedisCall> pCallParam)
+static OI::Coro::TaskResult<bool> AwaitSingleUse(std::shared_ptr<OI::Redis::RedisCall> pCall)
 {
 	try
 	{
-		if (IntIs(co_await *pCallParam, 1))
+		if (IntIs(co_await *pCall, 1))
 		{
 			co_return true;
 		}
@@ -493,7 +493,7 @@ static coro::TaskResult<bool> AwaitSingleUse(std::shared_ptr<OI::Redis::RedisCal
 }
 
 // 同一个等待对象只能提交一次；重复或并发 await 必须在发送前拒绝，不能重复写 Redis。
-static coro::TaskResult<int> CheckSingleUse()
+static OI::Coro::TaskResult<int> CheckSingleUse()
 {
 	int iBad = 0;
 	std::vector<std::string> vSingleUseKeys{"DEL", "oi-single-use", "oi-concurrent-use"};
@@ -520,18 +520,18 @@ static coro::TaskResult<int> CheckSingleUse()
 	}
 	auto pSharedCall = std::make_shared<OI::Redis::RedisCall>(OI::Redis::CallRedis({"INCR", "oi-concurrent-use"}));
 	auto pReadyCount = std::make_shared<std::atomic<int>>(0);
-	auto fnContend = [pSharedCall, pReadyCount](coro::Token) -> coro::TaskResult<bool>
+	auto fnContend = [pSharedCall, pReadyCount](OI::Coro::Token) -> OI::Coro::TaskResult<bool>
 	{
 		pReadyCount->fetch_add(1, std::memory_order_acq_rel);
 		// 两个独立任务都就绪后再争抢；单线程等待时让出调度。
 		while (pReadyCount->load(std::memory_order_acquire) < 2)
 		{
-			co_await coro::yield(0);
+			co_await OI::Coro::yield(0);
 		}
 		co_return co_await AwaitSingleUse(pSharedCall);
 	};
-	auto stFirst = coro::StartTask(fnContend);
-	auto stSecond = coro::StartTask(fnContend);
+	auto stFirst = OI::Coro::StartTask(fnContend);
+	auto stSecond = OI::Coro::StartTask(fnContend);
 	const int iAccepted = (co_await stFirst ? 1 : 0) + (co_await stSecond ? 1 : 0);
 	if (iAccepted != 1 || !BulkIs(co_await OI::Redis::CallRedis({"GET", "oi-concurrent-use"}), "1", 1))
 	{
@@ -546,7 +546,7 @@ static coro::TaskResult<int> CheckSingleUse()
 	co_return iBad;
 }
 
-static coro::TaskResult<int> CheckCommands()
+static OI::Coro::TaskResult<int> CheckCommands()
 {
 	using namespace OI::Redis;
 	int iBad = 0;
@@ -797,7 +797,7 @@ static coro::TaskResult<int> CheckCommands()
 	co_return iBad;
 }
 
-static coro::TaskResult<int> CheckCollectionCommands()
+static OI::Coro::TaskResult<int> CheckCollectionCommands()
 {
 	using namespace OI::Redis;
 	int iBad = 0;
@@ -1026,7 +1026,7 @@ static coro::TaskResult<int> CheckCollectionCommands()
 	co_return iBad;
 }
 
-static coro::TaskResult<int> CheckExpandedCommands()
+static OI::Coro::TaskResult<int> CheckExpandedCommands()
 {
 	using namespace OI::Redis;
 	int iBad = 0;
@@ -1696,7 +1696,7 @@ static coro::TaskResult<int> CheckExpandedCommands()
 	co_return iBad;
 }
 
-static coro::TaskResult<int> CheckTypedNativeCommands()
+static OI::Coro::TaskResult<int> CheckTypedNativeCommands()
 {
 	using namespace OI::Redis;
 	int iBad = 0;
@@ -1807,7 +1807,7 @@ static coro::TaskResult<int> CheckTypedNativeCommands()
 	co_return iBad;
 }
 
-static coro::TaskResult<int> CheckExpiry()
+static OI::Coro::TaskResult<int> CheckExpiry()
 {
 	int64_t iChanged = 0;
 	int64_t iRemaining = 0;
@@ -1824,7 +1824,7 @@ static coro::TaskResult<int> CheckExpiry()
 }
 
 // runner 将普通 Redis 用例配置成单条上游，两条下游必须互不污染。
-static coro::TaskResult<int> CheckScriptIsolation()
+static OI::Coro::TaskResult<int> CheckScriptIsolation()
 {
 	static RedisFairPeer stScriptPeer("B", nullptr, ":42\r\n");
 	int iBad = 0;
@@ -1852,7 +1852,7 @@ static coro::TaskResult<int> CheckScriptIsolation()
 		const int64_t iDeadline = ::OI::Timer::SteadyMilliseconds() + ::OI::Timer::MS(::OI::Timer::Seconds(3)).iMilliseconds;
 		while (stScriptPeer.Replies() < iExpected && ::OI::Timer::SteadyMilliseconds() < iDeadline)
 		{
-			co_await coro::yield(1);
+			co_await OI::Coro::yield(1);
 		}
 		if (stScriptPeer.Replies() != iExpected || stScriptPeer.Bad() != 0)
 		{
@@ -1887,7 +1887,7 @@ static coro::TaskResult<int> CheckScriptIsolation()
 }
 
 // 状态命令必须被代理拒绝；重连后普通命令仍能使用，不能留下事务或切库状态。
-static coro::TaskResult<int> CheckDeniedCommands()
+static OI::Coro::TaskResult<int> CheckDeniedCommands()
 {
 	int iBad = 0;
 	const char* vDenied[] = {"SELECT", "MULTI", "CLIENT", "SUBSCRIBE"};
@@ -1902,7 +1902,7 @@ static coro::TaskResult<int> CheckDeniedCommands()
 		int iAttempts = 0;
 		while (!::OI::Redis::RedisClient::GetInstance().IsConnect() && iAttempts++ < 100)
 		{
-			co_await coro::yield(50);
+			co_await OI::Coro::yield(50);
 		}
 		if (!StatusIs(co_await ::OI::Redis::CallRedis({"PING"}), "PONG"))
 		{
@@ -1913,7 +1913,7 @@ static coro::TaskResult<int> CheckDeniedCommands()
 }
 
 // 由既有测试驱动仅重启本轮拥有的 Redis；模块继续连接 redisserver。
-static coro::TaskResult<int> CheckUpstreamDisconnect()
+static OI::Coro::TaskResult<int> CheckUpstreamDisconnect()
 {
 	std::vector<std::string> vOutput{"unchanged"};
 	auto stPending = OI::Redis::CallRedis({"BLPOP", "oi:disconnect:empty", "0"}, vOutput);
@@ -1933,7 +1933,7 @@ static coro::TaskResult<int> CheckUpstreamDisconnect()
 			bAcknowledged = true;
 			break;
 		}
-		co_await coro::yield(OI::Timer::Milliseconds(20));
+		co_await OI::Coro::yield(OI::Timer::Milliseconds(20));
 	}
 	bool bRecovered = false;
 	while (bAcknowledged && OI::Timer::SteadyMilliseconds() < iDeadline)
@@ -1945,7 +1945,7 @@ static coro::TaskResult<int> CheckUpstreamDisconnect()
 			bRecovered = true;
 			break;
 		}
-		co_await coro::yield(OI::Timer::Milliseconds(100));
+		co_await OI::Coro::yield(OI::Timer::Milliseconds(100));
 	}
 	if (!bRecovered)
 	{
@@ -1956,7 +1956,7 @@ static coro::TaskResult<int> CheckUpstreamDisconnect()
 }
 
 // 临时配置限定客户端发送预算为 1MiB；真实发送拒绝后，后续回执仍应准确配对。
-static coro::TaskResult<int> CheckSendBudget()
+static OI::Coro::TaskResult<int> CheckSendBudget()
 {
 	int iBad = 0;
 	int iRejected = 0;
@@ -2005,7 +2005,7 @@ static coro::TaskResult<int> CheckSendBudget()
 	co_return iBad;
 }
 
-coro::Task RedisMgr::Check()
+OI::Coro::Task RedisMgr::Check()
 {
 	int32_t iPendingLimit = 65536;
 	TryGetConfig("RedisClient.max_pending", iPendingLimit);
@@ -2054,17 +2054,17 @@ void RedisMgr::Report()
 	TestBoard::GetInstance().Done(iBadLocal == 0 ? 0 : 1);
 }
 
-void RedisMgr::SyncStress(int iIdParam)
+void RedisMgr::SyncStress(int iIdLocal)
 {
 	int iTypedBad = 0;
-	std::string sKey = "sync:" + std::to_string(iIdParam);
+	std::string sKey = "sync:" + std::to_string(iIdLocal);
 	OI::RpcData::RegInstance stWritten;
-	stWritten.iId = iIdParam;
+	stWritten.iId = iIdLocal;
 	stWritten.sName = "sync-rpcdata";
 	OI::RpcData::RegInstance stRead;
 	const std::string sObjectKey = sKey + ":object";
 	if (OI::Redis::RedisSetSync(sObjectKey, stWritten) != OI_OK ||
-	    OI::Redis::RedisGetSync(sObjectKey, stRead) != OI_OK || stRead.iId != iIdParam || stRead.sName != stWritten.sName)
+	    OI::Redis::RedisGetSync(sObjectKey, stRead) != OI_OK || stRead.iId != iIdLocal || stRead.sName != stWritten.sName)
 	{
 		++iTypedBad;
 	}
@@ -2074,7 +2074,7 @@ void RedisMgr::SyncStress(int iIdParam)
 	if (OI::Redis::CallRedisSync({"PING"}, sPong) != OI_OK || sPong != "PONG" ||
 	    OI::Redis::CallRedisSync({"EVAL", "return 42", "0"}, iLuaValue) != OI_OK || iLuaValue != 42 ||
 	    OI::Redis::CallRedisSync({"EVAL", "return {1,2}", "0"}, vLuaValues) != OI_OK || vLuaValues != std::vector<int64_t>{1, 2} ||
-	    OI::Redis::CallRedisSync({"EVAL", "return redis.call('GET', KEYS[1])", "1", sObjectKey}, stRead) != OI_OK || stRead.iId != iIdParam)
+	    OI::Redis::CallRedisSync({"EVAL", "return redis.call('GET', KEYS[1])", "1", sObjectKey}, stRead) != OI_OK || stRead.iId != iIdLocal)
 	{
 		++iTypedBad;
 	}
@@ -2094,29 +2094,29 @@ void RedisMgr::SyncStress(int iIdParam)
 	std::vector<OI::Redis::RedisScored<OI::RpcData::RegInstance>> vScores;
 	bool bMember = false;
 	double dScore = 0;
-	if (OI::Redis::RedisHSetSync(sHashKey, "f", stWritten) != OI_OK || OI::Redis::RedisHGetAllSync(sHashKey, mRecords) != OI_OK || mRecords.size() != 1 || mRecords.at("f").iId != iIdParam)
+	if (OI::Redis::RedisHSetSync(sHashKey, "f", stWritten) != OI_OK || OI::Redis::RedisHGetAllSync(sHashKey, mRecords) != OI_OK || mRecords.size() != 1 || mRecords.at("f").iId != iIdLocal)
 	{
 		++iTypedBad;
 	}
-	if (OI::Redis::RedisRPushSync(sListKey, stWritten) != OI_OK || OI::Redis::RedisLRangeSync(sListKey, 0, -1, vRecords) != OI_OK || vRecords.size() != 1 || vRecords[0].iId != iIdParam)
+	if (OI::Redis::RedisRPushSync(sListKey, stWritten) != OI_OK || OI::Redis::RedisLRangeSync(sListKey, 0, -1, vRecords) != OI_OK || vRecords.size() != 1 || vRecords[0].iId != iIdLocal)
 	{
 		++iTypedBad;
 	}
-	if (OI::Redis::RedisSAddSync(sSetKey, stWritten) != OI_OK || OI::Redis::RedisSIsMemberSync(sSetKey, stWritten, bMember) != OI_OK || !bMember || OI::Redis::RedisSMembersSync(sSetKey, vRecords) != OI_OK || vRecords.size() != 1 || vRecords[0].iId != iIdParam)
+	if (OI::Redis::RedisSAddSync(sSetKey, stWritten) != OI_OK || OI::Redis::RedisSIsMemberSync(sSetKey, stWritten, bMember) != OI_OK || !bMember || OI::Redis::RedisSMembersSync(sSetKey, vRecords) != OI_OK || vRecords.size() != 1 || vRecords[0].iId != iIdLocal)
 	{
 		++iTypedBad;
 	}
-	if (OI::Redis::RedisZAddSync(sZsetKey, 1.25, stWritten) != OI_OK || OI::Redis::RedisZScoreSync(sZsetKey, stWritten, dScore) != OI_OK || dScore != 1.25 || OI::Redis::RedisZRevRangeWithScoresSync(sZsetKey, 0, -1, vScores) != OI_OK || vScores.size() != 1 || vScores[0].stMember.iId != iIdParam || vScores[0].dScore != 1.25)
+	if (OI::Redis::RedisZAddSync(sZsetKey, 1.25, stWritten) != OI_OK || OI::Redis::RedisZScoreSync(sZsetKey, stWritten, dScore) != OI_OK || dScore != 1.25 || OI::Redis::RedisZRevRangeWithScoresSync(sZsetKey, 0, -1, vScores) != OI_OK || vScores.size() != 1 || vScores[0].stMember.iId != iIdLocal || vScores[0].dScore != 1.25)
 	{
 		++iTypedBad;
 	}
 	const std::vector<std::string> vFields{"missing", "f"};
 	std::vector<std::optional<OI::RpcData::RegInstance>> vOptionalRecords;
 	OI::RpcData::RegInstance stMissingRecord = stWritten;
-	stMissingRecord.iId = iIdParam + 100;
+	stMissingRecord.iId = iIdLocal + 100;
 	std::vector<OI::RpcData::RegInstance> vScoreMembers{stMissingRecord, stWritten};
 	std::vector<std::optional<double>> vOptionalScores;
-	if (OI::Redis::RedisHMGetSync(sHashKey, vFields, vOptionalRecords) != OI_OK || vOptionalRecords.size() != 2 || vOptionalRecords[0] || !vOptionalRecords[1] || vOptionalRecords[1]->iId != iIdParam)
+	if (OI::Redis::RedisHMGetSync(sHashKey, vFields, vOptionalRecords) != OI_OK || vOptionalRecords.size() != 2 || vOptionalRecords[0] || !vOptionalRecords[1] || vOptionalRecords[1]->iId != iIdLocal)
 	{
 		++iTypedBad;
 	}
@@ -2138,7 +2138,7 @@ void RedisMgr::SyncStress(int iIdParam)
 		}
 		for (const auto& [sField, stValue] : stHashPage.stValues)
 		{
-			if (sField == "f" && stValue.iId == iIdParam)
+			if (sField == "f" && stValue.iId == iIdLocal)
 			{
 				bFound = true;
 			}
@@ -2160,7 +2160,7 @@ void RedisMgr::SyncStress(int iIdParam)
 		}
 		for (const auto& stValue : stSetPage.stValues)
 		{
-			if (stValue.iId == iIdParam)
+			if (stValue.iId == iIdLocal)
 			{
 				bFound = true;
 			}
@@ -2182,7 +2182,7 @@ void RedisMgr::SyncStress(int iIdParam)
 		}
 		for (const auto& stValue : stZPage.stValues)
 		{
-			if (stValue.stMember.iId == iIdParam && stValue.dScore == 1.25)
+			if (stValue.stMember.iId == iIdLocal && stValue.dScore == 1.25)
 			{
 				bFound = true;
 			}
@@ -2222,7 +2222,7 @@ void RedisMgr::SyncStress(int iIdParam)
 		}
 	}
 	m_iBad.fetch_add(iTypedBad);
-	LOG_TRACE("redis typed sync id=%d bad=%d", iIdParam, iTypedBad);
+	LOG_TRACE("redis typed sync id=%d bad=%d", iIdLocal, iTypedBad);
 	auto stEnd = m_stStart + std::chrono::seconds(m_iSeconds);
 	while (std::chrono::steady_clock::now() < stEnd)
 	{
@@ -2240,17 +2240,17 @@ void RedisMgr::SyncStress(int iIdParam)
 	}
 }
 
-coro::Task RedisMgr::Stress(int iIdParam)
+OI::Coro::Task RedisMgr::Stress(int iIdLocal)
 {
 	std::string sValueLocal(64, 'x');
-	std::string sHash = "h:" + std::to_string(iIdParam);
-	std::string sList = "l:" + std::to_string(iIdParam);
+	std::string sHash = "h:" + std::to_string(iIdLocal);
+	std::string sList = "l:" + std::to_string(iIdLocal);
 	auto stEnd = m_stStart + std::chrono::seconds(m_iSeconds);
 	int iSequence = 0;
-	int iKind = iIdParam % 4;
+	int iKind = iIdLocal % 4;
 	while (std::chrono::steady_clock::now() < stEnd)
 	{
-		std::string sKey = "k:" + std::to_string(iIdParam) + ":" + std::to_string(iSequence % 256);
+		std::string sKey = "k:" + std::to_string(iIdLocal) + ":" + std::to_string(iSequence % 256);
 		std::string sMember = std::to_string(iSequence % 32);
 		++iSequence;
 		int64_t iNumber = 0;

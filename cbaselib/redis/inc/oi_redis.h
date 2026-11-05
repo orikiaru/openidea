@@ -59,8 +59,8 @@ class RedisCall
 	State* m_pState;
 
   public:
-	RedisCall(std::vector<std::string> vArgumentsParam, RedisResult* pOutputParam);
-	RedisCall(RedisCall&& stOtherParam) noexcept;
+	RedisCall(std::vector<std::string> vArguments, RedisResult* pOutput);
+	RedisCall(RedisCall&& stOther) noexcept;
 	RedisCall(const RedisCall&) = delete;
 	RedisCall& operator=(const RedisCall&) = delete;
 	~RedisCall();
@@ -69,14 +69,14 @@ class RedisCall
 		return false;
 	}
 	template <typename Promise>
-	bool await_suspend(std::coroutine_handle<Promise> stHandleParam)
+	bool await_suspend(std::coroutine_handle<Promise> stHandle)
 	{
-		return Suspend(stHandleParam);
+		return Suspend(stHandle);
 	}
 	RedisResult await_resume();
 
   private:
-	bool Suspend(std::coroutine_handle<> stHandleParam);
+	bool Suspend(std::coroutine_handle<> stHandle);
 };
 
 // 跟日志一样走自己的连接，字节是 RESP，不进 proto。
@@ -101,44 +101,44 @@ class RedisClient : public ::OI::Rpc::ProtoClientManager
 		return "RedisClient";
 	}
 	virtual bool Init();
-	RedisCall Call(std::vector<std::string> vArgumentsParam, RedisResult* pOutputParam);
+	RedisCall Call(std::vector<std::string> vArguments, RedisResult* pOutput);
 	// 阻塞到回执或超时。多线程不能在 poll 线程上调。
 	// 单线程没有第二个人收包，调用方就在这条线程上把 poll 和协程跑到回执为止。
-	RedisResult CallSync(std::vector<std::string> vArgumentsParam);
+	RedisResult CallSync(std::vector<std::string> vArguments);
 	size_t PendingCount()
 	{
 		::OI::Thread::MutexGuard stLock(m_stWaitMutex);
 		return m_vWait.size();
 	}
-	void Feed(sid_t iSessionIdParam, const char* pDataParam, size_t iSizeParam);
+	void Feed(sid_t iSessionId, const char* pData, size_t iSize);
 	// poll 线程上周期调用，把到期还没回执的调用按超时结掉
 	static void SweepTimeout(void*);
 
   private:
 	virtual ::OI::Net::Session* CloneSession();
-	virtual void OnClientConnect(::OI::Net::Session* pSessionParam);
-	virtual void OnClientDisconnect(const ::OI::Net::Session* pSessionParam);
-	static void Submit(void* pStateParam);
-	void Enqueue(RedisCall::State* pStParam);
-	void FailAll(RedisStatus iStatusParam = RedisStatus::Disconnected);
-	void FailSid(sid_t iSessionIdParam);
-	void Settle(RedisCall::State* pStParam, std::shared_ptr<redisReply> pReplyParam, RedisStatus iStatusParam);
-	static void Release(RedisCall::State* pStParam);
+	virtual void OnClientConnect(::OI::Net::Session* pSession);
+	virtual void OnClientDisconnect(const ::OI::Net::Session* pSession);
+	static void Submit(void* pState);
+	void Enqueue(RedisCall::State* pSt);
+	void FailAll(RedisStatus iStatus = RedisStatus::Disconnected);
+	void FailSid(sid_t iSessionId);
+	void Settle(RedisCall::State* pSt, std::shared_ptr<redisReply> pReply, RedisStatus iStatus);
+	static void Release(RedisCall::State* pSt);
 };
 
-inline RedisCall CallRedis(std::vector<std::string> vArgumentsParam, RedisResult& stOutputParam)
+inline RedisCall CallRedis(std::vector<std::string> vArguments, RedisResult& stOutput)
 {
-	return RedisClient::GetInstance().Call(std::move(vArgumentsParam), &stOutputParam);
+	return RedisClient::GetInstance().Call(std::move(vArguments), &stOutput);
 }
 
-inline RedisCall CallRedis(std::vector<std::string> vArgumentsParam)
+inline RedisCall CallRedis(std::vector<std::string> vArguments)
 {
-	return RedisClient::GetInstance().Call(std::move(vArgumentsParam), nullptr);
+	return RedisClient::GetInstance().Call(std::move(vArguments), nullptr);
 }
 
-inline RedisResult CallRedisSync(std::vector<std::string> vArgumentsParam)
+inline RedisResult CallRedisSync(std::vector<std::string> vArguments)
 {
-	return RedisClient::GetInstance().CallSync(std::move(vArgumentsParam));
+	return RedisClient::GetInstance().CallSync(std::move(vArguments));
 }
 
 }

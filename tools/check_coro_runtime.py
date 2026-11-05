@@ -15,19 +15,19 @@ import tempfile
 
 SOURCE = r'''
 #include "oi_app.h"
-#include "oi_rpc_coro.h"
+#include "oi_coro.h"
 #include "oi_thread.h"
 #include <memory>
 #include <cstdio>
-static coro::TaskResult<int> Child(int iValueParam)
+static OI::Coro::TaskResult<int> Child(int iValueParam)
 {
-    co_await coro::yield(0);
+    co_await OI::Coro::yield(0);
     co_return iValueParam;
 }
-static coro::TaskResult<std::string> SharedChild(std::shared_ptr<std::atomic<int>> pRunsParam)
+static OI::Coro::TaskResult<std::string> SharedChild(std::shared_ptr<std::atomic<int>> pRunsParam)
 {
     ++*pRunsParam;
-    co_await coro::yield(20);
+    co_await OI::Coro::yield(20);
     co_return std::string(256, 's');
 }
 int main(int iCountParam, char** vArgumentsParam)
@@ -38,7 +38,7 @@ int main(int iCountParam, char** vArgumentsParam)
     }
     auto pLifetime = std::make_shared<int>(42);
     std::weak_ptr<int> pWeak = pLifetime;
-    coro::StartTask([pLifetime](coro::Token) -> coro::Task
+    OI::Coro::StartTask([pLifetime](OI::Coro::Token) -> OI::Coro::Task
     {
         int iBad = 0;
         for (int iIndex = 0; iIndex < 1024; ++iIndex)
@@ -50,14 +50,14 @@ int main(int iCountParam, char** vArgumentsParam)
         }
         auto pRuns = std::make_shared<std::atomic<int>>(0);
         auto pBad = std::make_shared<std::atomic<int>>(0);
-        auto stShared = coro::StartTask([pRuns](coro::Token)
+        auto stShared = OI::Coro::StartTask([pRuns](OI::Coro::Token)
         {
             return SharedChild(pRuns);
         });
-        std::vector<coro::Task> vWaiters;
+        std::vector<OI::Coro::Task> vWaiters;
         for (int iIndex = 0; iIndex < 64; ++iIndex)
         {
-            vWaiters.push_back(coro::StartTask([stShared, pBad](coro::Token) -> coro::Task
+            vWaiters.push_back(OI::Coro::StartTask([stShared, pBad](OI::Coro::Token) -> OI::Coro::Task
             {
                 for (int iRound = 0; iRound < 2; ++iRound)
                 {

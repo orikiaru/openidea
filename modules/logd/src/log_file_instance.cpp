@@ -13,8 +13,8 @@
 #error LOG_SERVER MUST BE MULTI THREAD
 #endif
 
-LogFileInstance::LogFileInstance(LogManager* pManagerParam, LOG_LEVEL iLevelParam)
-    : m_pManager(pManagerParam), m_iLevel(iLevelParam), m_bWorking(false), m_bQuit(false)
+LogFileInstance::LogFileInstance(LogManager* pManager, LOG_LEVEL iLevel)
+    : m_pManager(pManager), m_iLevel(iLevel), m_bWorking(false), m_bQuit(false)
 {
 	memset(m_vFiles, 0, sizeof(m_vFiles));
 }
@@ -29,16 +29,16 @@ LogFileInstance::~LogFileInstance()
 	}
 }
 
-bool LogFileInstance::CreateNewFile(const char* pPathParam)
+bool LogFileInstance::CreateNewFile(const char* pPath)
 {
 #ifdef _WIN32
 	FILE* pFile = NULL;
-	if (fopen_s(&pFile, pPathParam, "ab+") != 0 || !pFile)
+	if (fopen_s(&pFile, pPath, "ab+") != 0 || !pFile)
 	{
 		return false;
 	}
 #else
-	FILE* pFile = fopen(pPathParam, "ab+");
+	FILE* pFile = fopen(pPath, "ab+");
 	if (!pFile)
 	{
 		return false;
@@ -50,12 +50,12 @@ bool LogFileInstance::CreateNewFile(const char* pPathParam)
 	return true;
 }
 
-void LogFileInstance::OnCreateNewFile(FILE* pNewFileParam)
+void LogFileInstance::OnCreateNewFile(FILE* pNewFile)
 {
 	{
 		::OI::Thread::MutexGuard stIndexLockState(m_stFileLocker);
 		assert(m_vFiles[1] == NULL);
-		m_vFiles[1] = pNewFileParam;
+		m_vFiles[1] = pNewFile;
 	}
 	{
 		::OI::Thread::MutexGuard stLock(m_stCacheLocker);
@@ -107,7 +107,7 @@ void LogFileInstance::Passive()
 	m_stCacheCondition.Wait(m_stCacheLocker);
 }
 
-void LogFileInstance::AddLog(::OI::Base::Bytes& stLogParam)
+void LogFileInstance::AddLog(::OI::Base::Bytes& stLog)
 {
 	bool bNotify = false;
 
@@ -117,7 +117,7 @@ void LogFileInstance::AddLog(::OI::Base::Bytes& stLogParam)
 		{
 			bNotify = true;
 		}
-		m_vLogs.push_back(std::move(stLogParam));
+		m_vLogs.push_back(std::move(stLog));
 		if (bNotify)
 		{
 			Active();
@@ -125,23 +125,23 @@ void LogFileInstance::AddLog(::OI::Base::Bytes& stLogParam)
 	}
 }
 
-void* LogFileInstance::WriteLogThreadHandle(void* pArgumentParam)
+void* LogFileInstance::WriteLogThreadHandle(void* pArgument)
 {
-	LogFileInstance* pInst = (LogFileInstance*)pArgumentParam;
+	LogFileInstance* pInst = (LogFileInstance*)pArgument;
 	pInst->WriteLog();
 	return NULL;
 }
 
-static void DiskFailure(const char* pOperationParam)
+static void DiskFailure(const char* pOperation)
 {
 	const int iError = errno;
 	// 不经日志网络告警，避免递归记录。停止进程并明确暴露失败，不能清空后假装已落盘。
-	fprintf(stderr, "logd %s failed: %s\n", pOperationParam, strerror(iError));
+	fprintf(stderr, "logd %s failed: %s\n", pOperation, strerror(iError));
 	fflush(stderr);
 	std::abort();
 }
 
-static bool WriteAll(FILE* pFileParam, const char* pDataParam, size_t iSizeParam)
+static bool WriteAll(FILE* pFile, const char* pData, size_t iSize)
 {
 #ifdef OI_ENABLE_TEST_HOOKS
 	// 只在测试构建生效，只阻塞日志写线程，不阻塞 poll 或业务协程。
@@ -159,15 +159,15 @@ static bool WriteAll(FILE* pFileParam, const char* pDataParam, size_t iSizeParam
 		std::this_thread::sleep_for(std::chrono::milliseconds(5));
 	}
 #endif
-	while (iSizeParam > 0)
+	while (iSize > 0)
 	{
-		size_t iWrote = fwrite(pDataParam, 1, iSizeParam, pFileParam);
+		size_t iWrote = fwrite(pData, 1, iSize, pFile);
 		if (iWrote == 0)
 		{
 			DiskFailure("fwrite");
 		}
-		pDataParam += iWrote;
-		iSizeParam -= iWrote;
+		pData += iWrote;
+		iSize -= iWrote;
 	}
 	return true;
 }

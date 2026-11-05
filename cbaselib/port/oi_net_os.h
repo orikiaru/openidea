@@ -27,30 +27,30 @@ typedef int net_socket_t;
 #define INVALID_SOCKET_ID ((net_socket_t) - 1)
 
 void NetOs_Startup();
-net_socket_t NetOs_CreateTcp(bool bNonblockParam);
-int NetOs_SetNonblock(net_socket_t iDescriptorParam);
+net_socket_t NetOs_CreateTcp(bool bNonblock);
+int NetOs_SetNonblock(net_socket_t iDescriptor);
 // 关掉 Nagle。小包一来一回的请求不等凑包
-int NetOs_SetNoDelay(net_socket_t iDescriptorParam);
-int NetOs_Close(net_socket_t iDescriptorParam);
-int NetOs_Recv(net_socket_t iDescriptorParam, void* pBufferParam, size_t iLengthParam);
-int NetOs_Send(net_socket_t iDescriptorParam, const void* pBufferParam, size_t iLengthParam);
-net_socket_t NetOs_Accept(net_socket_t iDescriptorParam);
-net_socket_t NetOs_Dup(net_socket_t iDescriptorParam);
-int NetOs_Bind(net_socket_t iDescriptorParam, const sockaddr* pAddrParam, int iLengthParam);
-int NetOs_Listen(net_socket_t iDescriptorParam, int iBacklogParam);
-int NetOs_Connect(net_socket_t iDescriptorParam, const sockaddr* pAddrParam, int iLengthParam);
-int NetOs_GetSocketError(net_socket_t iDescriptorParam);
+int NetOs_SetNoDelay(net_socket_t iDescriptor);
+int NetOs_Close(net_socket_t iDescriptor);
+int NetOs_Recv(net_socket_t iDescriptor, void* pBuffer, size_t iLength);
+int NetOs_Send(net_socket_t iDescriptor, const void* pBuffer, size_t iLength);
+net_socket_t NetOs_Accept(net_socket_t iDescriptor);
+net_socket_t NetOs_Dup(net_socket_t iDescriptor);
+int NetOs_Bind(net_socket_t iDescriptor, const sockaddr* pAddr, int iLength);
+int NetOs_Listen(net_socket_t iDescriptor, int iBacklog);
+int NetOs_Connect(net_socket_t iDescriptor, const sockaddr* pAddr, int iLength);
+int NetOs_GetSocketError(net_socket_t iDescriptor);
 
-inline const char* NetOs_StrError(int iErrorParam)
+inline const char* NetOs_StrError(int iError)
 {
 	static thread_local char vBuffer[128];
 #ifdef _WIN32
-	if (strerror_s(vBuffer, sizeof(vBuffer), iErrorParam) != 0)
+	if (strerror_s(vBuffer, sizeof(vBuffer), iError) != 0)
 	{
 		vBuffer[0] = '\0';
 	}
 #else
-	const char* pText = strerror(iErrorParam);
+	const char* pText = strerror(iError);
 	if (!pText)
 	{
 		pText = "";

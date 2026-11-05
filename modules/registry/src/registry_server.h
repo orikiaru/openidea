@@ -21,13 +21,13 @@ class RegistryServer : public ::OI::Net::SessionManager
 	virtual ~RegistryServer();
 	bool Init();
 	virtual const std::string GetIDString();
-	void Handle(::OI::Net::Session* pSessionParam, uint32_t iIdParam, ::OI::Base::BytesStream& stBodyParam);
+	void Handle(::OI::Net::Session* pSession, uint32_t iId, ::OI::Base::BytesStream& stBody);
 	void StartReload();
 
   protected:
 	virtual ::OI::Net::Session* CloneSession();
-	virtual void OnAddSession(::OI::Net::Session* pSessionParam);
-	virtual void OnDelSession(const ::OI::Net::Session* pSessionParam);
+	virtual void OnAddSession(::OI::Net::Session* pSession);
+	virtual void OnDelSession(const ::OI::Net::Session* pSession);
 
   private:
 	struct Binding
@@ -46,18 +46,18 @@ class RegistryServer : public ::OI::Net::SessionManager
 		REG_OK = 1,
 		REG_RENEWED = 2
 	};
-	coro::Task Boot();
-	coro::Task Reload();
-	coro::Task Register(sid_t iSessionIdParam, Binding stSecondParam);
-	coro::Task Refresh(sid_t iSessionIdParam, Binding stSecondParam);
-	coro::Task Withdraw(Binding stSecondParam);
+	OI::Coro::Task Boot();
+	OI::Coro::Task Reload();
+	OI::Coro::Task Register(sid_t iSessionId, Binding stSecond);
+	OI::Coro::Task Refresh(sid_t iSessionId, Binding stSecond);
+	OI::Coro::Task Withdraw(Binding stSecond);
 	bool LoadSpace();
-	std::string Key(const std::string& sTailParam) const;
-	std::vector<std::string> EvalArgs(const char* pLuaParam, const Binding& stSecondParam) const;
-	void Reply(sid_t iSessionIdParam, uint32_t iIdParam, const ::OI::Rpc::Serialize& stMessageParam);
-	Binding* FindBinding(sid_t iSessionIdParam, const std::string& sNameParam, int32_t iIdParam);
-	void PutSnapshot(const Binding& stSecondParam);
-	void DropSnapshot(const std::string& sNameParam, int32_t iIdParam);
+	std::string Key(const std::string& sTail) const;
+	std::vector<std::string> EvalArgs(const char* pLua, const Binding& stSecond) const;
+	void Reply(sid_t iSessionId, uint32_t iId, const ::OI::Rpc::Serialize& stMessage);
+	Binding* FindBinding(sid_t iSessionId, const std::string& sName, int32_t iId);
+	void PutSnapshot(const Binding& stSecond);
+	void DropSnapshot(const std::string& sName, int32_t iId);
 
 	std::set<sid_t> m_vAlive;
 	std::map<sid_t, std::vector<Binding>> m_mBindings;

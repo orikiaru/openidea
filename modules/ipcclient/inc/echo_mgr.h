@@ -39,9 +39,9 @@ class EchoMgr
 	{
 		return m_bStack;
 	}
-	coro::Task StackProbe();
+	OI::Coro::Task StackProbe();
 	void ArmTimeout();
-	void Start(sid_t iSessionIdParam);
+	void Start(sid_t iSessionId);
 	sid_t Sid() const
 	{
 		return m_iSessionId;
@@ -54,10 +54,10 @@ class EchoMgr
 	{
 		return m_iOk.load();
 	}
-	void Note(const char* pNameParam);
+	void Note(const char* pName);
 	void NoteGap();
-	void OnResult(int iNumberParam, const ::OI::RpcData::AllEchoReq& stRequestParam, const ::OI::RpcData::AllEchoRes& stResponseParam, int iReturnCodeParam, bool bSameParam);
+	void OnResult(int iNumber, const ::OI::RpcData::AllEchoReq& stRequest, const ::OI::RpcData::AllEchoRes& stResponse, int iReturnCode, bool bSame);
 	void Report();
-	coro::Task Run();
-	coro::Task Pump();
+	OI::Coro::Task Run();
+	OI::Coro::Task Pump();
 };

@@ -10,41 +10,41 @@ namespace Redis
 // 原生命令显式指定全部参数；类型化输出与标准命令共用解码和错误码。
 template <typename T>
     requires(!std::is_same_v<T, RedisResult>)
-[[nodiscard]] inline coro::TaskResult<int32_t> CallRedis(std::vector<std::string> vArgumentsParam, T& stOutputParam)
+[[nodiscard]] inline OI::Coro::TaskResult<int32_t> CallRedis(std::vector<std::string> vArgumentsLocal, T& stOutput)
 {
-	return Detail::Read(Detail::Arguments(std::move(vArgumentsParam)), stOutputParam);
+	return Detail::Read(Detail::Arguments(std::move(vArgumentsLocal)), stOutput);
 }
 
 template <typename T>
-[[nodiscard]] inline int32_t CallRedisSync(std::vector<std::string> vArgumentsParam, T& stOutputParam)
+[[nodiscard]] inline int32_t CallRedisSync(std::vector<std::string> vArgumentsLocal, T& stOutput)
 {
-	return Detail::ReadSync(Detail::Arguments(std::move(vArgumentsParam)), stOutputParam);
+	return Detail::ReadSync(Detail::Arguments(std::move(vArgumentsLocal)), stOutput);
 }
 
 // 字面量命令先以轻量视图接收，返回前全部复制；避免协程表达式创建临时 string 数组。
 template <typename T>
     requires(!std::is_same_v<T, RedisResult>)
-[[nodiscard]] inline coro::TaskResult<int32_t> CallRedis(std::initializer_list<std::string_view> vArgumentsParam, T& stOutputParam)
+[[nodiscard]] inline OI::Coro::TaskResult<int32_t> CallRedis(std::initializer_list<std::string_view> vArgumentsLocal, T& stOutput)
 {
 	std::vector<std::string> vArguments;
-	vArguments.reserve(vArgumentsParam.size());
-	for (const auto& sArgument : vArgumentsParam)
+	vArguments.reserve(vArgumentsLocal.size());
+	for (const auto& sArgument : vArgumentsLocal)
 	{
 		vArguments.emplace_back(sArgument);
 	}
-	return CallRedis(std::move(vArguments), stOutputParam);
+	return CallRedis(std::move(vArguments), stOutput);
 }
 
 template <typename T>
-[[nodiscard]] inline int32_t CallRedisSync(std::initializer_list<std::string_view> vArgumentsParam, T& stOutputParam)
+[[nodiscard]] inline int32_t CallRedisSync(std::initializer_list<std::string_view> vArgumentsLocal, T& stOutput)
 {
 	std::vector<std::string> vArguments;
-	vArguments.reserve(vArgumentsParam.size());
-	for (const auto& sArgument : vArgumentsParam)
+	vArguments.reserve(vArgumentsLocal.size());
+	for (const auto& sArgument : vArgumentsLocal)
 	{
 		vArguments.emplace_back(sArgument);
 	}
-	return CallRedisSync(std::move(vArguments), stOutputParam);
+	return CallRedisSync(std::move(vArguments), stOutput);
 }
 
 }

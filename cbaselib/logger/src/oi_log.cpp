@@ -10,11 +10,11 @@ namespace OI
 {
 namespace Log
 {
-DiagnosticText::DiagnosticText(std::string_view sTextParam) noexcept
+DiagnosticText::DiagnosticText(std::string_view sText) noexcept
 {
 	constexpr char vHex[] = "0123456789abcdef";
 	size_t iUsed = 0;
-	for (const auto& iCharacter : sTextParam)
+	for (const auto& iCharacter : sText)
 	{
 		const auto iByte = static_cast<unsigned char>(iCharacter);
 		const bool bEscape = iByte < 32 || iByte == 127 || iByte == '\\';
@@ -68,21 +68,21 @@ bool Init()
 	return true;
 }
 
-void InitLocal(LocalSink fnSinkParam)
+void InitLocal(LocalSink fnSink)
 {
 	InitTitle();
-	_local_sink = fnSinkParam;
+	_local_sink = fnSink;
 }
 
-bool Log(LOG_LEVEL iLevelParam, const char* pFormatParam, ...)
+bool Log(LOG_LEVEL iLevel, const char* pFormat, ...)
 {
 	// 先格式化到栈上，放得下就只格式化一次；放不下再按实际长度格式化进 tmp。
 	char vStack[2048];
 	va_list vVl;
-	va_start(vVl, pFormatParam);
+	va_start(vVl, pFormat);
 	va_list vAgain;
 	va_copy(vAgain, vVl);
-	int iNeed = vsnprintf(vStack, sizeof(vStack), pFormatParam, vVl);
+	int iNeed = vsnprintf(vStack, sizeof(vStack), pFormat, vVl);
 	va_end(vVl);
 	if (iNeed < 0)
 	{
@@ -98,7 +98,7 @@ bool Log(LOG_LEVEL iLevelParam, const char* pFormatParam, ...)
 	}
 	else
 	{
-		vsnprintf(stTmp.End(), (size_t)iNeed + 1, pFormatParam, vAgain);
+		vsnprintf(stTmp.End(), (size_t)iNeed + 1, pFormat, vAgain);
 		stTmp.Commit((size_t)iNeed);
 	}
 	va_end(vAgain);
@@ -108,11 +108,11 @@ bool Log(LOG_LEVEL iLevelParam, const char* pFormatParam, ...)
 
 	if (_local_sink)
 	{
-		return _local_sink(iLevelParam, stTmp.Data(), stTmp.Size());
+		return _local_sink(iLevel, stTmp.Data(), stTmp.Size());
 	}
 	if (_logclient_init)
 	{
-		return LogClient::GetInstance().SendLog((int)iLevelParam, stTmp.Data(), stTmp.Size());
+		return LogClient::GetInstance().SendLog((int)iLevel, stTmp.Data(), stTmp.Size());
 	}
 
 	return false;

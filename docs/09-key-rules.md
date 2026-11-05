@@ -30,8 +30,8 @@
 
 ## 8. 避免成员遮蔽
 
-- 参数、局部变量不得与成员同名；普通参数使用 `Param` 后缀，需要区分局部变量时使用 `Local` 后缀。RPC 宏参数固定为 `stRequest`、`stResponse`、可选 `stContext`。
-- 避免 `this->x = x`、`member(member)`；改名后检查自赋值和遮蔽，并跑真实业务回归。
+- 参数、局部变量不得与成员同名。名字已经有语义的不再加 `Param`。去掉后只剩类型前缀、不成词的，保留 `Param`，如 `iParam`、`sParam`、`stParam`。和成员或已有局部变量撞名时，参数用 `Local` 后缀。RPC 宏参数固定为 `stRequest`、`stResponse`、可选 `stContext`。
+- 构造函数初始化列表允许 `: iPriority(iPriority)`，冒号左边是成员。函数体不能自赋值，不用 `this->` 掩盖。改名后跑真实业务回归。
 
 ## 9. 业务词汇沿用项目约定
 

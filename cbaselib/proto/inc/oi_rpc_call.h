@@ -19,13 +19,13 @@ struct RpcSender
 	{
 		return *pManager;
 	}
-	void SubmitCall(uint64_t iCallIdParam, const ::OI::Base::Bytes& stDataParam)
+	void SubmitCall(uint64_t iCallId, const ::OI::Base::Bytes& stData)
 	{
-		fnSubmit(pContext, iCallIdParam, stDataParam);
+		fnSubmit(pContext, iCallId, stData);
 	}
-	void DropPendingCall(uint64_t iCallIdParam)
+	void DropPendingCall(uint64_t iCallId)
 	{
-		fnDrop(pContext, iCallIdParam);
+		fnDrop(pContext, iCallId);
 	}
 };
 
@@ -42,10 +42,10 @@ RpcWaitStats GetRpcWaitStats();
 // 读取进程级 RPC 在途限制；非法配置令模块初始化失败。
 bool InitRpcAdmission();
 
-bool MarkRpcAwaitingConnect(uint64_t iCallIdParam);
-bool ClaimRpcSend(uint64_t iCallIdParam, sid_t iSessionIdParam);
+bool MarkRpcAwaitingConnect(uint64_t iCallId);
+bool ClaimRpcSend(uint64_t iCallId, sid_t iSessionId);
 // 回包按调用号交给 RpcCall 登记的等待项，请求交给该协议号的处理协程。都没有就把包丢掉。
-bool DeliverRpc(proto_type_t iIdParam, ::OI::Base::BytesStream& stBodyParam, ::OI::Net::SessionManager* pManagerParam, sid_t iSessionIdParam);
+bool DeliverRpc(proto_type_t iId, ::OI::Base::BytesStream& stBody, ::OI::Net::SessionManager* pManager, sid_t iSessionId);
 
 }
 }

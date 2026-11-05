@@ -25,14 +25,14 @@ namespace
 const size_t kMaxHeader = 65536;
 const size_t kMaxBody = 8 * 1024 * 1024;
 
-std::string EncodeQuery(const std::string& sValueParam)
+std::string EncodeQuery(const std::string& sValue)
 {
 	static const char* pHex = "0123456789ABCDEF";
 	std::string sOutput;
-	sOutput.reserve(sValueParam.size());
-	for (size_t iIndexLocal = 0; iIndexLocal < sValueParam.size(); ++iIndexLocal)
+	sOutput.reserve(sValue.size());
+	for (size_t iIndexLocal = 0; iIndexLocal < sValue.size(); ++iIndexLocal)
 	{
-		unsigned char iCharacter = (unsigned char)sValueParam[iIndexLocal];
+		unsigned char iCharacter = (unsigned char)sValue[iIndexLocal];
 		bool bPlain = (iCharacter >= 'a' && iCharacter <= 'z') || (iCharacter >= 'A' && iCharacter <= 'Z') || (iCharacter >= '0' && iCharacter <= '9') || iCharacter == '-' || iCharacter == '_' || iCharacter == '.' || iCharacter == '!' || iCharacter == '~' || iCharacter == '*' || iCharacter == '\'' || iCharacter == '(' || iCharacter == ')';
 		if (bPlain)
 		{
@@ -48,21 +48,21 @@ std::string EncodeQuery(const std::string& sValueParam)
 	return sOutput;
 }
 
-bool EqName(const std::string& sTextParam, size_t iPositionParam, size_t iEndParam, const char* pNameParam)
+bool EqName(const std::string& sText, size_t iPosition, size_t iEnd, const char* pName)
 {
-	size_t iNumber = std::strlen(pNameParam);
-	if (iPositionParam + iNumber > iEndParam)
+	size_t iNumber = std::strlen(pName);
+	if (iPosition + iNumber > iEnd)
 	{
 		return false;
 	}
 	for (size_t iIndexLocal = 0; iIndexLocal < iNumber; ++iIndexLocal)
 	{
-		char iCharacter = sTextParam[iPositionParam + iIndexLocal];
+		char iCharacter = sText[iPosition + iIndexLocal];
 		if (iCharacter >= 'A' && iCharacter <= 'Z')
 		{
 			iCharacter = (char)(iCharacter - 'A' + 'a');
 		}
-		if (iCharacter != pNameParam[iIndexLocal])
+		if (iCharacter != pName[iIndexLocal])
 		{
 			return false;
 		}
@@ -70,16 +70,16 @@ bool EqName(const std::string& sTextParam, size_t iPositionParam, size_t iEndPar
 	return true;
 }
 
-bool ParseU64(const std::string& sTextParam, size_t iPositionParam, size_t iEndParam, uint64_t& iOutputParam)
+bool ParseU64(const std::string& sText, size_t iPosition, size_t iEnd, uint64_t& iOutput)
 {
-	if (iPositionParam >= iEndParam || sTextParam[iPositionParam] < '0' || sTextParam[iPositionParam] > '9')
+	if (iPosition >= iEnd || sText[iPosition] < '0' || sText[iPosition] > '9')
 	{
 		return false;
 	}
 	uint64_t iValue = 0;
-	for (size_t iIndexLocal = iPositionParam; iIndexLocal < iEndParam; ++iIndexLocal)
+	for (size_t iIndexLocal = iPosition; iIndexLocal < iEnd; ++iIndexLocal)
 	{
-		char iCharacter = sTextParam[iIndexLocal];
+		char iCharacter = sText[iIndexLocal];
 		if (iCharacter < '0' || iCharacter > '9')
 		{
 			return false;
@@ -90,18 +90,18 @@ bool ParseU64(const std::string& sTextParam, size_t iPositionParam, size_t iEndP
 		}
 		iValue = iValue * 10 + (uint64_t)(iCharacter - '0');
 	}
-	iOutputParam = iValue;
+	iOutput = iValue;
 	return true;
 }
 
 // chunk 行里分号后面是扩展，忽略。
-bool ParseHex(const std::string& sTextParam, size_t iPositionParam, size_t iEndParam, uint64_t& iOutputParam)
+bool ParseHex(const std::string& sText, size_t iPosition, size_t iEnd, uint64_t& iOutput)
 {
 	uint64_t iValue = 0;
 	size_t iDigits = 0;
-	for (size_t iIndexLocal = iPositionParam; iIndexLocal < iEndParam; ++iIndexLocal)
+	for (size_t iIndexLocal = iPosition; iIndexLocal < iEnd; ++iIndexLocal)
 	{
-		char iCharacter = sTextParam[iIndexLocal];
+		char iCharacter = sText[iIndexLocal];
 		int iD = -1;
 		if (iCharacter >= '0' && iCharacter <= '9')
 		{
@@ -130,18 +130,18 @@ bool ParseHex(const std::string& sTextParam, size_t iPositionParam, size_t iEndP
 		iValue = (iValue << 4) | (uint64_t)iD;
 		iDigits += 1;
 	}
-	iOutputParam = iValue;
+	iOutput = iValue;
 	return iDigits > 0;
 }
 
-std::string HostHeader(const std::string& sHostParam, int32_t iPortParam)
+std::string HostHeader(const std::string& sHost, int32_t iPort)
 {
 	std::string sLine = "Host: ";
-	sLine += sHostParam;
-	if (iPortParam != 80)
+	sLine += sHost;
+	if (iPort != 80)
 	{
 		sLine += ":";
-		sLine += std::to_string(iPortParam);
+		sLine += std::to_string(iPort);
 	}
 	sLine += "\r\n";
 	return sLine;
@@ -157,7 +157,7 @@ struct Call::Request
 	std::string sBody;                   // 正文。exchange(Ready) 之前写完。
 	std::string sError;                  // 失败原因。成功时为空。
 	std::coroutine_handle<> stHandle;    // 调用方句柄。门已经是 Waiting 才 Schedule。
-	std::atomic<coro::Gate> iGate;       // 完成门。Idle 还没人认领，Ready 结果已写好，Waiting 调用方已挂起。
+	std::atomic<OI::Coro::Gate> iGate;       // 完成门。Idle 还没人认领，Ready 结果已写好，Waiting 调用方已挂起。
 	std::atomic<int32_t> iDone;          // 结果只发布一次。晚到的超时看见非 0 就返回。
 	std::atomic<bool> bAwaitStarted;     // 一次性闩。第二次 await 或移走后再等直接抛。
 	int32_t iStatus;                     // HTTP 状态码。没拿到状态行是 0。
@@ -166,7 +166,7 @@ struct Call::Request
 	~Request();
 
 	Request()
-	    : iGate(coro::Gate::Idle), iDone(0), bAwaitStarted(false), iStatus(0), iTimeoutMilliseconds(5000), bFailed(false)
+	    : iGate(OI::Coro::Gate::Idle), iDone(0), bAwaitStarted(false), iStatus(0), iTimeoutMilliseconds(5000), bFailed(false)
 	{
 	}
 };
@@ -190,17 +190,17 @@ struct Client::Impl : public ::OI::Net::SessionManager
 	bool m_bClosed;
 	bool m_bReuse;
 
-	void Publish(const std::shared_ptr<Call::Request>& pRequestParam, bool bFailParam, const char* pWhyParam);
-	void EnqueueOnLoop(const std::shared_ptr<Call::Request>& pRequestParam);
-	void ArmTimer(const std::shared_ptr<Call::Request>& pRequestParam);
+	void Publish(const std::shared_ptr<Call::Request>& pRequestLocal, bool bFail, const char* pWhy);
+	void EnqueueOnLoop(const std::shared_ptr<Call::Request>& pRequestLocal);
+	void ArmTimer(const std::shared_ptr<Call::Request>& pRequestLocal);
 	void Pump();
 	void BeginConnect();
-	void UseAddress(const std::string& sIpParam);
-	void FailFront(const char* pWhyParam);
-	static void OnDns(uv_getaddrinfo_t* pRequestParam, int iStatusParam, struct addrinfo* pResponseParam);
+	void UseAddress(const std::string& sIp);
+	void FailFront(const char* pWhy);
+	static void OnDns(uv_getaddrinfo_t* pRequestLocal, int iStatusLocal, struct addrinfo* pResponse);
 
   public:
-	Impl(const std::string& sHostParam, int32_t iPortParam, int32_t iTimeoutMillisecondsParam, bool bReuseParam);
+	Impl(const std::string& sHost, int32_t iPort, int32_t iTimeoutMilliseconds, bool bReuse);
 	~Impl() override;
 	const std::string GetIDString() override;
 	int32_t Timeout() const
@@ -219,26 +219,26 @@ struct Client::Impl : public ::OI::Net::SessionManager
 	{
 		return m_iPort;
 	}
-	void Attach(const std::shared_ptr<Impl>& pSelfParam)
+	void Attach(const std::shared_ptr<Impl>& pSelf)
 	{
-		m_pSelf = pSelfParam;
+		m_pSelf = pSelf;
 	}
 	std::shared_ptr<Impl> Hold()
 	{
 		return m_pSelf.lock();
 	}
-	void Enqueue(const std::shared_ptr<Call::Request>& pRequestParam);
-	void OnTimeout(const std::shared_ptr<Call::Request>& pRequestParam);
+	void Enqueue(const std::shared_ptr<Call::Request>& pRequestLocal);
+	void OnTimeout(const std::shared_ptr<Call::Request>& pRequestLocal);
 	void Shutdown();
-	void OnHttpFinished(HttpSession* pSessionParam, bool bFailParam, const char* pWhyParam, bool bCloseParam, int32_t iStatusParam, std::string sBodyParam);
-	void OnIdleBytes(HttpSession* pSessionParam);
+	void OnHttpFinished(HttpSession* pSession, bool bFail, const char* pWhy, bool bClose, int32_t iStatusLocal, std::string sBodyLocal);
+	void OnIdleBytes(HttpSession* pSession);
 
   protected:
 	::OI::Net::Session* CloneSession() override;
-	void OnAddSession(::OI::Net::Session* pSessionParam) override;
-	void OnDelSession(const ::OI::Net::Session* pSessionParam) override;
+	void OnAddSession(::OI::Net::Session* pSession) override;
+	void OnDelSession(const ::OI::Net::Session* pSession) override;
 	void OnConnectFailed() override;
-	void OnSessionClosed(sid_t iSessionIdParam) override;
+	void OnSessionClosed(sid_t iSessionId) override;
 };
 
 class HttpSession : public ::OI::Net::NetSession
@@ -258,15 +258,15 @@ class HttpSession : public ::OI::Net::NetSession
 	bool m_bActive;
 
 	void ReleaseIncoming();
-	void NoteConnection(const std::string& sValueParam);
-	bool ParseHeaders(size_t iHeaderEndParam);
+	void NoteConnection(const std::string& sValue);
+	bool ParseHeaders(size_t iHeaderEnd);
 	bool ConsumeChunks();
 	bool Consume();
-	void Succeed(size_t iConsumedParam);
-	void Fail(const char* pWhyParam);
+	void Succeed(size_t iConsumed);
+	void Fail(const char* pWhy);
 
   public:
-	explicit HttpSession(const std::shared_ptr<Client::Impl>& pImplParam);
+	explicit HttpSession(const std::shared_ptr<Client::Impl>& pImpl);
 	~HttpSession() override;
 	void BeginResponse();
 	void Abandon();
@@ -286,8 +286,8 @@ Call::Request::~Request() = default;
 Client::Impl::~Impl() = default;
 HttpSession::~HttpSession() = default;
 
-HttpSession::HttpSession(const std::shared_ptr<Client::Impl>& pImplParam)
-    : ::OI::Net::NetSession(pImplParam.get()), m_pImpl(pImplParam), m_iHeaderBytes(0), m_iContentLength(0), m_iChunkPosition(0), m_iInterimResponses(0), m_iStatus(0), m_bHeadersReady(false), m_bHasLength(false), m_bChunked(false), m_bCloseAfter(false), m_bActive(false)
+HttpSession::HttpSession(const std::shared_ptr<Client::Impl>& pImpl)
+    : ::OI::Net::NetSession(pImpl.get()), m_pImpl(pImpl), m_iHeaderBytes(0), m_iContentLength(0), m_iChunkPosition(0), m_iInterimResponses(0), m_iStatus(0), m_bHeadersReady(false), m_bHasLength(false), m_bChunked(false), m_bCloseAfter(false), m_bActive(false)
 {
 }
 
@@ -320,40 +320,40 @@ void HttpSession::Abandon()
 	ReleaseIncoming();
 }
 
-void HttpSession::NoteConnection(const std::string& sValueParam)
+void HttpSession::NoteConnection(const std::string& sValue)
 {
 	bool bClose = false;
 	bool bKeep = false;
 	size_t iPosition = 0;
-	while (iPosition < sValueParam.size())
+	while (iPosition < sValue.size())
 	{
-		while (iPosition < sValueParam.size() && (sValueParam[iPosition] == ' ' || sValueParam[iPosition] == '\t' || sValueParam[iPosition] == ','))
+		while (iPosition < sValue.size() && (sValue[iPosition] == ' ' || sValue[iPosition] == '\t' || sValue[iPosition] == ','))
 		{
 			iPosition += 1;
 		}
-		if (iPosition >= sValueParam.size())
+		if (iPosition >= sValue.size())
 		{
 			break;
 		}
 		size_t iEnd = iPosition;
-		while (iEnd < sValueParam.size() && sValueParam[iEnd] != ',')
+		while (iEnd < sValue.size() && sValue[iEnd] != ',')
 		{
 			iEnd += 1;
 		}
 		size_t iTokenEnd = iEnd;
-		while (iTokenEnd > iPosition && (sValueParam[iTokenEnd - 1] == ' ' || sValueParam[iTokenEnd - 1] == '\t'))
+		while (iTokenEnd > iPosition && (sValue[iTokenEnd - 1] == ' ' || sValue[iTokenEnd - 1] == '\t'))
 		{
 			iTokenEnd -= 1;
 		}
-		if (EqName(sValueParam, iPosition, iTokenEnd, "close") && iPosition + std::strlen("close") == iTokenEnd)
+		if (EqName(sValue, iPosition, iTokenEnd, "close") && iPosition + std::strlen("close") == iTokenEnd)
 		{
 			bClose = true;
 		}
-		else if (EqName(sValueParam, iPosition, iTokenEnd, "keep-alive") && iPosition + std::strlen("keep-alive") == iTokenEnd)
+		else if (EqName(sValue, iPosition, iTokenEnd, "keep-alive") && iPosition + std::strlen("keep-alive") == iTokenEnd)
 		{
 			bKeep = true;
 		}
-		if (iEnd >= sValueParam.size())
+		if (iEnd >= sValue.size())
 		{
 			break;
 		}
@@ -369,10 +369,10 @@ void HttpSession::NoteConnection(const std::string& sValueParam)
 	}
 }
 
-bool HttpSession::ParseHeaders(size_t iHeaderEndParam)
+bool HttpSession::ParseHeaders(size_t iHeaderEnd)
 {
 	size_t iLineEnd = m_sIncoming.find("\r\n");
-	if (iLineEnd == std::string::npos || iLineEnd > iHeaderEndParam)
+	if (iLineEnd == std::string::npos || iLineEnd > iHeaderEnd)
 	{
 		return false;
 	}
@@ -395,10 +395,10 @@ bool HttpSession::ParseHeaders(size_t iHeaderEndParam)
 	m_iContentLength = 0;
 	m_bCloseAfter = m_sIncoming.compare(0, 9, "HTTP/1.0 ") == 0;
 	size_t iPosition = iLineEnd + 2;
-	while (iPosition < iHeaderEndParam)
+	while (iPosition < iHeaderEnd)
 	{
 		size_t iEnd = m_sIncoming.find("\r\n", iPosition);
-		if (iEnd == std::string::npos || iEnd > iHeaderEndParam)
+		if (iEnd == std::string::npos || iEnd > iHeaderEnd)
 		{
 			break;
 		}
@@ -570,14 +570,14 @@ bool HttpSession::Consume()
 	return true;
 }
 
-void HttpSession::Succeed(size_t iConsumedParam)
+void HttpSession::Succeed(size_t iConsumed)
 {
 	if (!m_bActive)
 	{
 		return;
 	}
 	// 同一段缓冲里还剩下一响没用到的字节。丢掉后续复用会让下一条请求从半截报文开始解析。
-	if (iConsumedParam < m_sIncoming.size())
+	if (iConsumed < m_sIncoming.size())
 	{
 		m_bCloseAfter = true;
 	}
@@ -589,7 +589,7 @@ void HttpSession::Succeed(size_t iConsumedParam)
 	m_pImpl->OnHttpFinished(this, false, NULL, bCloseLocal, iStatusLocal, std::move(sBodyLocal));
 }
 
-void HttpSession::Fail(const char* pWhyParam)
+void HttpSession::Fail(const char* pWhy)
 {
 	if (!m_bActive)
 	{
@@ -598,7 +598,7 @@ void HttpSession::Fail(const char* pWhyParam)
 	m_bActive = false;
 	int32_t iStatusLocal = m_iStatus;
 	ReleaseIncoming();
-	m_pImpl->OnHttpFinished(this, true, pWhyParam, true, iStatusLocal, std::string());
+	m_pImpl->OnHttpFinished(this, true, pWhy, true, iStatusLocal, std::string());
 }
 
 void HttpSession::FinishEof()
@@ -661,8 +661,8 @@ void HttpSession::OnClose()
 	::OI::Net::NetSession::OnClose();
 }
 
-Client::Impl::Impl(const std::string& sHostParam, int32_t iPortParam, int32_t iTimeoutMillisecondsParam, bool bReuseParam)
-    : m_sHost(sHostParam), m_iPort(iPortParam), m_iTimeoutMilliseconds(iTimeoutMillisecondsParam), m_pSession(NULL), m_iSessionId(INVALID_SID), m_bConnected(false), m_bConnecting(false), m_bDnsPending(false), m_bClosed(false), m_bReuse(bReuseParam)
+Client::Impl::Impl(const std::string& sHost, int32_t iPort, int32_t iTimeoutMilliseconds, bool bReuse)
+    : m_sHost(sHost), m_iPort(iPort), m_iTimeoutMilliseconds(iTimeoutMilliseconds), m_pSession(NULL), m_iSessionId(INVALID_SID), m_bConnected(false), m_bConnecting(false), m_bDnsPending(false), m_bClosed(false), m_bReuse(bReuse)
 {
 	std::memset(&m_stDns, 0, sizeof(m_stDns));
 	iMaxReceiveBufferBytes = kMaxHeader + kMaxBody;
@@ -673,39 +673,39 @@ const std::string Client::Impl::GetIDString()
 	return "HttpClient";
 }
 
-void Client::Impl::Publish(const std::shared_ptr<Call::Request>& pRequestParam, bool bFailParam, const char* pWhyParam)
+void Client::Impl::Publish(const std::shared_ptr<Call::Request>& pRequestLocal, bool bFail, const char* pWhy)
 {
-	if (!pRequestParam)
+	if (!pRequestLocal)
 	{
 		return;
 	}
-	if (pRequestParam->iDone.exchange(1, std::memory_order_acq_rel) != 0)
+	if (pRequestLocal->iDone.exchange(1, std::memory_order_acq_rel) != 0)
 	{
 		return;
 	}
-	pRequestParam->bFailed = bFailParam;
-	if (bFailParam && pRequestParam->sError.empty() && pWhyParam)
+	pRequestLocal->bFailed = bFail;
+	if (bFail && pRequestLocal->sError.empty() && pWhy)
 	{
-		pRequestParam->sError = pWhyParam;
+		pRequestLocal->sError = pWhy;
 	}
-	std::string().swap(pRequestParam->sRequest);
+	std::string().swap(pRequestLocal->sRequest);
 	// Idle→Ready：结果先写好，调用方还没挂起，留给 await_suspend 发现后不挂起。
 	// Waiting→Ready：调用方已经挂起，这里 Schedule。
-	coro::Gate iPrevious = pRequestParam->iGate.exchange(coro::Gate::Ready, std::memory_order_acq_rel);
-	if (iPrevious == coro::Gate::Waiting && pRequestParam->stHandle)
+	OI::Coro::Gate iPrevious = pRequestLocal->iGate.exchange(OI::Coro::Gate::Ready, std::memory_order_acq_rel);
+	if (iPrevious == OI::Coro::Gate::Waiting && pRequestLocal->stHandle)
 	{
-		coro::Schedule(pRequestParam->stHandle);
+		OI::Coro::Schedule(pRequestLocal->stHandle);
 	}
 }
 
-void Client::Impl::UseAddress(const std::string& sIpParam)
+void Client::Impl::UseAddress(const std::string& sIp)
 {
 	std::string sPortLocal = std::to_string(m_iPort);
-	DefaultInit(sIpParam, sPortLocal);
-	sEndpoint = sIpParam + ":" + sPortLocal;
+	DefaultInit(sIp, sPortLocal);
+	sEndpoint = sIp + ":" + sPortLocal;
 }
 
-void Client::Impl::FailFront(const char* pWhyParam)
+void Client::Impl::FailFront(const char* pWhy)
 {
 	if (m_vQueue.empty())
 	{
@@ -713,26 +713,26 @@ void Client::Impl::FailFront(const char* pWhyParam)
 	}
 	std::shared_ptr<Call::Request> pRequestLocal = m_vQueue.front();
 	m_vQueue.pop_front();
-	Publish(pRequestLocal, true, pWhyParam);
+	Publish(pRequestLocal, true, pWhy);
 }
 
-void Client::Impl::OnHttpFinished(HttpSession* pSessionParam, bool bFailParam, const char* pWhyParam, bool bCloseParam, int32_t iStatusParam, std::string sBodyParam)
+void Client::Impl::OnHttpFinished(HttpSession* pSession, bool bFail, const char* pWhy, bool bClose, int32_t iStatusLocal, std::string sBodyLocal)
 {
-	if (m_pFlight && pSessionParam == m_pSession)
+	if (m_pFlight && pSession == m_pSession)
 	{
 		std::shared_ptr<Call::Request> pFlightLocal = std::move(m_pFlight);
-		pFlightLocal->iStatus = iStatusParam;
-		if (!bFailParam)
+		pFlightLocal->iStatus = iStatusLocal;
+		if (!bFail)
 		{
-			pFlightLocal->sBody = std::move(sBodyParam);
+			pFlightLocal->sBody = std::move(sBodyLocal);
 		}
-		Publish(pFlightLocal, bFailParam, pWhyParam);
+		Publish(pFlightLocal, bFail, pWhy);
 	}
-	bool bDropLocal = bFailParam || bCloseParam || !m_bReuse;
-	if (bDropLocal && pSessionParam == m_pSession && pSessionParam && !pSessionParam->IsClosed())
+	bool bDropLocal = bFail || bClose || !m_bReuse;
+	if (bDropLocal && pSession == m_pSession && pSession && !pSession->IsClosed())
 	{
-		pSessionParam->Abandon();
-		CloseSession(pSessionParam->GetSessionID());
+		pSession->Abandon();
+		CloseSession(pSession->GetSessionID());
 		return;
 	}
 	if (!m_bClosed)
@@ -741,11 +741,11 @@ void Client::Impl::OnHttpFinished(HttpSession* pSessionParam, bool bFailParam, c
 	}
 }
 
-void Client::Impl::OnIdleBytes(HttpSession* pSessionParam)
+void Client::Impl::OnIdleBytes(HttpSession* pSession)
 {
-	if (pSessionParam == m_pSession && pSessionParam && !pSessionParam->IsClosed())
+	if (pSession == m_pSession && pSession && !pSession->IsClosed())
 	{
-		CloseSession(pSessionParam->GetSessionID());
+		CloseSession(pSession->GetSessionID());
 	}
 }
 
@@ -810,16 +810,16 @@ void Client::Impl::BeginConnect()
 	}
 }
 
-void Client::Impl::OnDns(uv_getaddrinfo_t* pRequestParam, int iStatusParam, struct addrinfo* pResponseParam)
+void Client::Impl::OnDns(uv_getaddrinfo_t* pRequestLocal, int iStatusLocal, struct addrinfo* pResponse)
 {
-	Impl* pSelf = static_cast<Impl*>(pRequestParam->data);
+	Impl* pSelf = static_cast<Impl*>(pRequestLocal->data);
 	std::shared_ptr<Impl> pHold = std::move(pSelf->m_pDnsHold);
 	pSelf->m_bDnsPending = false;
-	if (pSelf->m_bClosed || iStatusParam != 0 || pResponseParam == NULL || pResponseParam->ai_addr == NULL || pResponseParam->ai_family != AF_INET)
+	if (pSelf->m_bClosed || iStatusLocal != 0 || pResponse == NULL || pResponse->ai_addr == NULL || pResponse->ai_family != AF_INET)
 	{
-		if (pResponseParam)
+		if (pResponse)
 		{
-			uv_freeaddrinfo(pResponseParam);
+			uv_freeaddrinfo(pResponse);
 		}
 		if (!pSelf->m_bClosed)
 		{
@@ -831,8 +831,8 @@ void Client::Impl::OnDns(uv_getaddrinfo_t* pRequestParam, int iStatusParam, stru
 	}
 	char sIp[INET_ADDRSTRLEN];
 	std::memset(sIp, 0, sizeof(sIp));
-	sockaddr_in stAddr = *reinterpret_cast<const sockaddr_in*>(pResponseParam->ai_addr);
-	uv_freeaddrinfo(pResponseParam);
+	sockaddr_in stAddr = *reinterpret_cast<const sockaddr_in*>(pResponse->ai_addr);
+	uv_freeaddrinfo(pResponse);
 	if (inet_ntop(AF_INET, &stAddr.sin_addr, sIp, sizeof(sIp)) == NULL)
 	{
 		pSelf->m_bConnecting = false;
@@ -844,16 +844,16 @@ void Client::Impl::OnDns(uv_getaddrinfo_t* pRequestParam, int iStatusParam, stru
 	pSelf->StartClient();
 }
 
-void Client::Impl::ArmTimer(const std::shared_ptr<Call::Request>& pRequestParam)
+void Client::Impl::ArmTimer(const std::shared_ptr<Call::Request>& pRequestLocal)
 {
-	std::shared_ptr<Call::Request> pHeld = pRequestParam;
+	std::shared_ptr<Call::Request> pHeld = pRequestLocal;
 	int32_t iTimeout = pHeld->iTimeoutMilliseconds > 0 ? pHeld->iTimeoutMilliseconds : 5000;
 	::OI::Timer::BaseTimerManager::GetInstance().AddTimer([pHeld]()
 	{
 		auto pJob = std::make_unique<std::shared_ptr<Call::Request>>(pHeld);
-		::OI::Net::Poll::GetInstance().CallOnLoop([](void* pArgumentParam)
+		::OI::Net::Poll::GetInstance().CallOnLoop([](void* pArgument)
 		{
-			std::unique_ptr<std::shared_ptr<Call::Request>> pOwned(static_cast<std::shared_ptr<Call::Request>*>(pArgumentParam));
+			std::unique_ptr<std::shared_ptr<Call::Request>> pOwned(static_cast<std::shared_ptr<Call::Request>*>(pArgument));
 			if (*pOwned && (*pOwned)->pImpl)
 			{
 				(*pOwned)->pImpl->OnTimeout(*pOwned);
@@ -864,20 +864,20 @@ void Client::Impl::ArmTimer(const std::shared_ptr<Call::Request>& pRequestParam)
 	    iTimeout);
 }
 
-void Client::Impl::OnTimeout(const std::shared_ptr<Call::Request>& pRequestParam)
+void Client::Impl::OnTimeout(const std::shared_ptr<Call::Request>& pRequestLocal)
 {
-	if (!pRequestParam || pRequestParam->iDone.load(std::memory_order_acquire) != 0)
+	if (!pRequestLocal || pRequestLocal->iDone.load(std::memory_order_acquire) != 0)
 	{
 		return;
 	}
-	if (m_pFlight == pRequestParam)
+	if (m_pFlight == pRequestLocal)
 	{
 		if (m_pSession)
 		{
 			m_pSession->Abandon();
 		}
 		m_pFlight.reset();
-		Publish(pRequestParam, true, "timeout");
+		Publish(pRequestLocal, true, "timeout");
 		if (m_pSession && !m_pSession->IsClosed())
 		{
 			CloseSession(m_iSessionId);
@@ -890,48 +890,48 @@ void Client::Impl::OnTimeout(const std::shared_ptr<Call::Request>& pRequestParam
 	}
 	for (auto it = m_vQueue.begin(); it != m_vQueue.end(); ++it)
 	{
-		if (*it == pRequestParam)
+		if (*it == pRequestLocal)
 		{
 			m_vQueue.erase(it);
-			Publish(pRequestParam, true, "timeout");
+			Publish(pRequestLocal, true, "timeout");
 			break;
 		}
 	}
 }
 
-void Client::Impl::EnqueueOnLoop(const std::shared_ptr<Call::Request>& pRequestParam)
+void Client::Impl::EnqueueOnLoop(const std::shared_ptr<Call::Request>& pRequestLocal)
 {
 	if (m_bClosed)
 	{
-		Publish(pRequestParam, true, "closed");
+		Publish(pRequestLocal, true, "closed");
 		return;
 	}
 	if (m_iPort <= 0 || m_iPort > 65535 || m_sHost.empty())
 	{
-		Publish(pRequestParam, true, "host");
+		Publish(pRequestLocal, true, "host");
 		return;
 	}
-	m_vQueue.push_back(pRequestParam);
-	ArmTimer(pRequestParam);
+	m_vQueue.push_back(pRequestLocal);
+	ArmTimer(pRequestLocal);
 	Pump();
 }
 
-void Client::Impl::Enqueue(const std::shared_ptr<Call::Request>& pRequestParam)
+void Client::Impl::Enqueue(const std::shared_ptr<Call::Request>& pRequestLocal)
 {
 	if (!::OI::Net::Poll::GetInstance().InLoopThread())
 	{
 		auto pJob = std::make_unique<LoopRequest>();
 		pJob->pImpl = Hold();
-		pJob->pRequest = pRequestParam;
-		::OI::Net::Poll::GetInstance().PostOnLoop([](void* pArgumentParam)
+		pJob->pRequest = pRequestLocal;
+		::OI::Net::Poll::GetInstance().PostOnLoop([](void* pArgument)
 		{
-			std::unique_ptr<LoopRequest> pOwned(static_cast<LoopRequest*>(pArgumentParam));
+			std::unique_ptr<LoopRequest> pOwned(static_cast<LoopRequest*>(pArgument));
 			pOwned->pImpl->EnqueueOnLoop(pOwned->pRequest);
 		},
 		    pJob.release());
 		return;
 	}
-	EnqueueOnLoop(pRequestParam);
+	EnqueueOnLoop(pRequestLocal);
 }
 
 void Client::Impl::Shutdown()
@@ -939,9 +939,9 @@ void Client::Impl::Shutdown()
 	if (!::OI::Net::Poll::GetInstance().InLoopThread())
 	{
 		auto pJob = std::make_unique<std::shared_ptr<Impl>>(Hold());
-		::OI::Net::Poll::GetInstance().PostOnLoop([](void* pArgumentParam)
+		::OI::Net::Poll::GetInstance().PostOnLoop([](void* pArgument)
 		{
-			std::unique_ptr<std::shared_ptr<Impl>> pOwned(static_cast<std::shared_ptr<Impl>*>(pArgumentParam));
+			std::unique_ptr<std::shared_ptr<Impl>> pOwned(static_cast<std::shared_ptr<Impl>*>(pArgument));
 			(*pOwned)->Shutdown();
 		},
 		    pJob.release());
@@ -974,10 +974,10 @@ void Client::Impl::Shutdown()
 	return new HttpSession(Hold());
 }
 
-void Client::Impl::OnAddSession(::OI::Net::Session* pSessionParam)
+void Client::Impl::OnAddSession(::OI::Net::Session* pSession)
 {
-	m_pSession = static_cast<HttpSession*>(pSessionParam);
-	m_iSessionId = pSessionParam->GetSessionID();
+	m_pSession = static_cast<HttpSession*>(pSession);
+	m_iSessionId = pSession->GetSessionID();
 	m_bConnected = true;
 	m_bConnecting = false;
 	if (m_bClosed)
@@ -988,9 +988,9 @@ void Client::Impl::OnAddSession(::OI::Net::Session* pSessionParam)
 	Pump();
 }
 
-void Client::Impl::OnDelSession(const ::OI::Net::Session* pSessionParam)
+void Client::Impl::OnDelSession(const ::OI::Net::Session* pSession)
 {
-	if (m_pSession == pSessionParam)
+	if (m_pSession == pSession)
 	{
 		m_pSession = NULL;
 		m_bConnected = false;
@@ -1012,9 +1012,9 @@ void Client::Impl::OnConnectFailed()
 	Pump();
 }
 
-void Client::Impl::OnSessionClosed(sid_t iSessionIdParam)
+void Client::Impl::OnSessionClosed(sid_t iSessionId)
 {
-	if (m_pSession && m_pSession->GetSessionID() == iSessionIdParam)
+	if (m_pSession && m_pSession->GetSessionID() == iSessionId)
 	{
 		HttpSession* pSessionLocal = m_pSession;
 		pSessionLocal->FinishEof();
@@ -1031,25 +1031,25 @@ void Client::Impl::OnSessionClosed(sid_t iSessionIdParam)
 	}
 }
 
-Call::Call(std::shared_ptr<Request> pRequestParam)
-    : m_pRequest(std::move(pRequestParam))
+Call::Call(std::shared_ptr<Request> pRequestLocal)
+    : m_pRequest(std::move(pRequestLocal))
 {
 }
 
-Call::Call(Call&& stOtherParam) noexcept
-    : m_pRequest(std::move(stOtherParam.m_pRequest))
+Call::Call(Call&& stOther) noexcept
+    : m_pRequest(std::move(stOther.m_pRequest))
 {
 }
 
 Call::~Call() = default;
 
-bool Call::await_suspend(std::coroutine_handle<> stHandleParam)
+bool Call::await_suspend(std::coroutine_handle<> stHandleLocal)
 {
 	if (!m_pRequest || m_pRequest->bAwaitStarted.exchange(true, std::memory_order_acq_rel))
 	{
 		throw std::logic_error("HTTP Call can only be awaited once and must not be moved from");
 	}
-	m_pRequest->stHandle = stHandleParam;
+	m_pRequest->stHandle = stHandleLocal;
 	std::shared_ptr<Client::Impl> pImplLocal = m_pRequest->pImpl;
 	if (!pImplLocal)
 	{
@@ -1057,7 +1057,7 @@ bool Call::await_suspend(std::coroutine_handle<> stHandleParam)
 	}
 	pImplLocal->Enqueue(m_pRequest);
 	// Idle→Waiting：还在等，挂起。Ready→Waiting：入队时已经写完结果，不挂起。
-	return m_pRequest->iGate.exchange(coro::Gate::Waiting, std::memory_order_acq_rel) != coro::Gate::Ready;
+	return m_pRequest->iGate.exchange(OI::Coro::Gate::Waiting, std::memory_order_acq_rel) != OI::Coro::Gate::Ready;
 }
 
 Response Call::await_resume()
@@ -1074,8 +1074,8 @@ Response Call::await_resume()
 	return stOutput;
 }
 
-Client::Client(const std::string& sHostParam, int32_t iPortParam, int32_t iTimeoutMillisecondsParam, bool bReuseParam)
-    : m_pImpl(std::make_shared<Impl>(sHostParam, iPortParam, iTimeoutMillisecondsParam, bReuseParam))
+Client::Client(const std::string& sHost, int32_t iPort, int32_t iTimeoutMilliseconds, bool bReuse)
+    : m_pImpl(std::make_shared<Impl>(sHost, iPort, iTimeoutMilliseconds, bReuse))
 {
 	m_pImpl->Attach(m_pImpl);
 }
@@ -1089,21 +1089,21 @@ Client::~Client()
 	}
 }
 
-Call Client::Get(const std::string& sPathParam, const std::vector<std::pair<std::string, std::string>>& vQueryParam)
+Call Client::Get(const std::string& sPath, const std::vector<std::pair<std::string, std::string>>& vQuery)
 {
-	std::string sTarget = sPathParam.empty() ? "/" : sPathParam;
-	if (!vQueryParam.empty())
+	std::string sTarget = sPath.empty() ? "/" : sPath;
+	if (!vQuery.empty())
 	{
 		sTarget.push_back('?');
-		for (size_t iIndexLocal = 0; iIndexLocal < vQueryParam.size(); ++iIndexLocal)
+		for (size_t iIndexLocal = 0; iIndexLocal < vQuery.size(); ++iIndexLocal)
 		{
 			if (iIndexLocal != 0)
 			{
 				sTarget.push_back('&');
 			}
-			sTarget += EncodeQuery(vQueryParam[iIndexLocal].first);
+			sTarget += EncodeQuery(vQuery[iIndexLocal].first);
 			sTarget.push_back('=');
-			sTarget += EncodeQuery(vQueryParam[iIndexLocal].second);
+			sTarget += EncodeQuery(vQuery[iIndexLocal].second);
 		}
 	}
 	auto pRequest = std::make_shared<Call::Request>();
@@ -1115,18 +1115,18 @@ Call Client::Get(const std::string& sPathParam, const std::vector<std::pair<std:
 	return Call(pRequest);
 }
 
-Call Client::Post(const std::string& sPathParam, const std::string& sBodyParam, const std::string& sContentTypeParam)
+Call Client::Post(const std::string& sPath, const std::string& sBodyLocal, const std::string& sContentType)
 {
-	std::string sTarget = sPathParam.empty() ? "/" : sPathParam;
+	std::string sTarget = sPath.empty() ? "/" : sPath;
 	auto pRequest = std::make_shared<Call::Request>();
 	pRequest->pImpl = m_pImpl;
 	pRequest->iTimeoutMilliseconds = m_pImpl->Timeout();
 	pRequest->sRequest = "POST " + sTarget + " HTTP/1.1\r\n";
 	pRequest->sRequest += HostHeader(m_pImpl->Host(), m_pImpl->Port());
-	pRequest->sRequest += "Content-Type: " + sContentTypeParam + "\r\n";
-	pRequest->sRequest += "Content-Length: " + std::to_string(sBodyParam.size()) + "\r\n";
+	pRequest->sRequest += "Content-Type: " + sContentType + "\r\n";
+	pRequest->sRequest += "Content-Length: " + std::to_string(sBodyLocal.size()) + "\r\n";
 	pRequest->sRequest += m_pImpl->Reuse() ? "Connection: keep-alive\r\n\r\n" : "Connection: close\r\n\r\n";
-	pRequest->sRequest.append(sBodyParam.data(), sBodyParam.size());
+	pRequest->sRequest.append(sBodyLocal.data(), sBodyLocal.size());
 	return Call(pRequest);
 }
 

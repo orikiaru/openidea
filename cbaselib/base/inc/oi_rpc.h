@@ -11,33 +11,33 @@ class Serialize
 	virtual ~Serialize()
 	{
 	}
-	virtual ::OI::Base::BytesStream& serialize(::OI::Base::BytesStream& stOutputStreamParam) const = 0;
-	virtual ::OI::Base::BytesStream& deserialize(::OI::Base::BytesStream& stOutputStreamParam) = 0;
-	virtual void Encode(::OI::Base::BytesStream& stOutputStreamParam) const
+	virtual ::OI::Base::BytesStream& serialize(::OI::Base::BytesStream& stOutputStream) const = 0;
+	virtual ::OI::Base::BytesStream& deserialize(::OI::Base::BytesStream& stOutputStream) = 0;
+	virtual void Encode(::OI::Base::BytesStream& stOutputStream) const
 	{
-		serialize(stOutputStreamParam);
+		serialize(stOutputStream);
 	}
-	virtual bool Decode(::OI::Base::BytesStream& stOutputStreamParam)
+	virtual bool Decode(::OI::Base::BytesStream& stOutputStream)
 	{
-		deserialize(stOutputStreamParam);
+		deserialize(stOutputStream);
 		return true;
 	}
 
-	virtual ::OI::Base::BytesStream& operator<<(::OI::Base::BytesStream& stOutputStreamParam) const
+	virtual ::OI::Base::BytesStream& operator<<(::OI::Base::BytesStream& stOutputStream) const
 	{
-		return serialize(stOutputStreamParam);
+		return serialize(stOutputStream);
 	}
-	virtual ::OI::Base::BytesStream& operator>>(::OI::Base::BytesStream& stOutputStreamParam)
+	virtual ::OI::Base::BytesStream& operator>>(::OI::Base::BytesStream& stOutputStream)
 	{
-		return deserialize(stOutputStreamParam);
+		return deserialize(stOutputStream);
 	}
 };
 
 class RpcData : public Serialize
 {
   public:
-	virtual ::OI::Base::BytesStream& serialize(::OI::Base::BytesStream& stOutputStreamParam) const = 0;
-	virtual ::OI::Base::BytesStream& deserialize(::OI::Base::BytesStream& stOutputStreamParam) = 0;
+	virtual ::OI::Base::BytesStream& serialize(::OI::Base::BytesStream& stOutputStream) const = 0;
+	virtual ::OI::Base::BytesStream& deserialize(::OI::Base::BytesStream& stOutputStream) = 0;
 };
 }
 }

@@ -22,634 +22,24 @@
 #include <utility>
 #include <vector>
 
-namespace coro
-{
-// 协程 token。StartTask 生成并传进协程。
-typedef uint64_t Token;
-typedef Token TaskUid;
+#include "oi_coro.h"
 
-TaskUid AllocTaskUid();
-
-// 挂起的协程放回运行队列。单线程进本线程队列，多线程进工人队列。RPC 回包和定时器都走这里。
-void Schedule(std::coroutine_handle<> stHandleParam);
-
-// 单消费者完成门。结果和挂起谁先到都能收口，不会把协程永久挂住。
-// 完成方 exchange(Ready)，只有看见 Waiting 才 Schedule。
-// 等待方 exchange(Waiting)，看见 Ready 就不挂起。
-enum class Gate : int32_t
-{
-	Idle,
-	Ready,
-	Waiting,
-};
-
-// 根协程跑完后不能在 final_suspend 里销毁自己。登记下来，等 resume 返回再释放。
-void DetachFinished(std::coroutine_handle<> stHandleParam, void (*fnReleaseParam)(std::coroutine_handle<>));
-void DrainDetached();
-// 调度器唯一的 resume 入口。期间新建的任务当场跑到第一次挂起，协程外新建的任务入队。
-void ResumeTask(std::coroutine_handle<> stHandleParam);
-bool InTaskResume() noexcept;
-
-// 新任务构造 promise 时取走。只在 StartTask、TaskScope 等框架入口里设置。
-struct TaskLaunch
-{
-	Token iToken = 0;
-	bool bDetached = false;
-	bool bPost = false;
-};
-TaskLaunch TakeTaskLaunch() noexcept;
-class TaskLaunchScope
-{
-	TaskLaunch m_stPrevious;
-
-  public:
-	explicit TaskLaunchScope(TaskLaunch stLaunchParam) noexcept;
-	~TaskLaunchScope();
-	TaskLaunchScope(const TaskLaunchScope&) = delete;
-	TaskLaunchScope& operator=(const TaskLaunchScope&) = delete;
-};
-using TaskErrorHandler = void (*)(Token, std::exception_ptr);
-// 在工作线程调用；处理函数必须线程安全，不允许抛异常。nullptr 恢复默认 stderr 报告。
-void SetTaskErrorHandler(TaskErrorHandler fnHandlerParam);
-void ReportTaskError(Token iTokenParam, std::exception_ptr stErrorParam) noexcept;
-
-// 单线程就绪队列。Poll 只跑进入时已经在队列里的句柄，这一轮新挂上的留到 poll 之后。
-class StScheduler
-{
-  public:
-	static void Post(std::coroutine_handle<> stHandleParam);
-	static bool Poll();
-	static bool Queued();
-};
-
-// 下一轮再跑，或者过 ms 毫秒再跑。到点就是 Schedule。
-struct SleepMs
-{
-	int32_t iMilliseconds;
-	bool await_ready() const noexcept
-	{
-		return false;
-	}
-	void await_suspend(std::coroutine_handle<> stHandleParam) const noexcept;
-	void await_resume() const noexcept
-	{
-	}
-};
-
-inline SleepMs yield(int32_t iMillisecondsParam)
-{
-	return SleepMs{iMillisecondsParam};
-}
-
-SleepMs yield(::OI::Timer::MS stDelayParam);
-
-// 等待节点放在调用方协程帧或 WhenAll 的稳定状态里，不按等待者另做包装协程。
-// fnReady 为空时，完成即唤醒。WhenAll 只在最后一个任务完成时返回 true。
-struct TaskWaiter
-{
-	std::coroutine_handle<> stParent;
-	TaskWaiter* pNext = nullptr;
-	bool (*fnReady)(TaskWaiter* pWaiterParam) = nullptr;
-};
-// 协程里新建的任务当场跑；协程外（网络回调、main）新建的或框架要求入队的，放进运行队列。
-struct TaskInitialSuspend
-{
-	bool bInline;
-	bool await_ready() const noexcept
-	{
-		return bInline;
-	}
-	void await_suspend(std::coroutine_handle<> stHandleParam) const noexcept
-	{
-		Schedule(stHandleParam);
-	}
-	void await_resume() const noexcept
-	{
-	}
-};
-struct TaskFinalSuspend
-{
-	bool await_ready() const noexcept
-	{
-		return false;
-	}
-	template <typename Promise>
-	void await_suspend(std::coroutine_handle<Promise> stHandleParam) const noexcept
-	{
-		auto& stPromise = stHandleParam.promise();
-		TaskWaiter* pWaiter;
-		{
-			OI::Thread::MutexGuard stLock(stPromise.stMutex);
-			stPromise.bReady = true;
-			pWaiter = std::exchange(stPromise.pWaiters, nullptr);
-		}
-		while (pWaiter)
-		{
-			// 调度后等待者可能立即恢复并销毁节点，只能再用局部副本。
-			auto* pNext = pWaiter->pNext;
-			const bool bWake = pWaiter->fnReady == nullptr || pWaiter->fnReady(pWaiter);
-			if (bWake)
-			{
-				Schedule(pWaiter->stParent);
-			}
-			pWaiter = pNext;
-		}
-		// 执行引用必须等 resume 返回后才释放，不能在 final_suspend 中销毁帧。
-		DetachFinished(stHandleParam, [](std::coroutine_handle<> stHandleLocal)
-		{
-			Promise::Release(std::coroutine_handle<Promise>::from_address(stHandleLocal.address()));
-		});
-	}
-	void await_resume() const noexcept
-	{
-	}
-};
-// 任务状态。一条任务只从「在跑」进「完成」，不能再跑第二次。
-//
-// 在跑：bReady 为假。协程里直接调用时 bInlineStart 为真，initial_suspend 不挂起，在当前 resume 栈上跑到第一次 co_await。
-//       协程外新建，或 StartTask / TaskScope::Start，bInlineStart 为假，initial_suspend 把句柄放进运行队列。
-// 完成：final_suspend 在锁里把 bReady 写成真，摘走 pWaiters 再逐个 Schedule。之后的 co_await 看见 bReady，不再挂起。
-// 独立：bDetached 为真表示没有人等也要自己报告异常。Start() 只打这个标记，不重新执行。
-// 异常：bObserved 表示某个等待者已经重抛过；bErrorReported 保证 ReportError 只进一次。没人看的异常在最后一个引用释放时再报。
-struct TaskState
-{
-	std::shared_ptr<void> pCallable;
-	std::exception_ptr stError;
-	Token iTaskId = 0;
-	OI::Thread::Mutex stMutex;
-	TaskWaiter* pWaiters = nullptr;
-	std::atomic<size_t> iReferences{2}; // 创建时两份：Task 对象一份，正在跑的帧一份。每个等待器再加一份。
-	bool bReady = false;                // 假=还在跑或还没开始；真=已经 co_return 或异常结束。
-	bool bInlineStart = false;          // 真=initial_suspend 不挂起。
-	std::atomic<bool> bDetached{false}; // 真=独立任务，异常不等待者来取。
-	std::atomic<bool> bObserved{false};
-	std::atomic<bool> bErrorReported{false};
-	TaskState()
-	{
-		const TaskLaunch stLaunch = TakeTaskLaunch();
-		iTaskId = stLaunch.iToken;
-		bDetached.store(stLaunch.bDetached, std::memory_order_relaxed);
-		bInlineStart = !stLaunch.bPost && InTaskResume();
-	}
-	TaskInitialSuspend initial_suspend() noexcept
-	{
-		return {bInlineStart};
-	}
-	TaskFinalSuspend final_suspend() noexcept
-	{
-		return {};
-	}
-	void unhandled_exception() noexcept
-	{
-		stError = std::current_exception();
-		if (bDetached.load(std::memory_order_acquire))
-		{
-			ReportError();
-		}
-	}
-	void ReportError() noexcept
-	{
-		if (!bErrorReported.exchange(true, std::memory_order_acq_rel))
-		{
-			ReportTaskError(iTaskId, stError);
-		}
-	}
-};
-
-// 有返回值和无返回值任务共用同一套调度与完成门，不增加包装协程。
-template <typename T>
-struct TaskReturn : TaskState
-{
-	std::optional<T> stResult;
-	void return_value(T stValueParam)
-	{
-		stResult.emplace(std::move(stValueParam));
-	}
-};
-template <>
-struct TaskReturn<void> : TaskState
-{
-	void return_void() noexcept
-	{
-	}
-};
-
-// 一条任务只运行一次，可多次/并发等待；结果和异常保留到最后一个引用释放。
-template <typename T = void>
-struct BasicTask
-{
-	struct promise_type : TaskReturn<T>
-	{
-		BasicTask get_return_object()
-		{
-			return BasicTask{std::coroutine_handle<promise_type>::from_promise(*this)};
-		}
-		static void Release(std::coroutine_handle<promise_type> stHandleParam)
-		{
-			if (stHandleParam && stHandleParam.promise().iReferences.fetch_sub(1, std::memory_order_acq_rel) == 1)
-			{
-				// 没有人取走的异常在最后一个引用释放时报告，不会悄悄丢掉。
-				auto& stPromise = stHandleParam.promise();
-				if (stPromise.stError && !stPromise.bObserved.load(std::memory_order_acquire))
-				{
-					stPromise.ReportError();
-				}
-				stHandleParam.destroy();
-			}
-		}
-	};
-	using Handle = std::coroutine_handle<promise_type>;
-	Handle stHandle;
-	explicit BasicTask(Handle stHandleParam)
-	    : stHandle(stHandleParam)
-	{
-	}
-	BasicTask(BasicTask&& stOtherParam) noexcept
-	    : stHandle(std::exchange(stOtherParam.stHandle, {}))
-	{
-	}
-	// 外层只是共享句柄，复制不复制协程帧，也不会再次执行任务。
-	BasicTask(const BasicTask& stOtherParam) noexcept
-	    : stHandle(stOtherParam.stHandle)
-	{
-		if (stHandle)
-		{
-			stHandle.promise().iReferences.fetch_add(1, std::memory_order_relaxed);
-		}
-	}
-	BasicTask& operator=(const BasicTask& stOtherParam) noexcept
-	{
-		BasicTask stCopy(stOtherParam);
-		std::swap(stHandle, stCopy.stHandle);
-		return *this;
-	}
-	BasicTask& operator=(BasicTask&& stOtherParam) noexcept
-	{
-		if (this != &stOtherParam)
-		{
-			BasicTask stMoved(std::move(stOtherParam));
-			std::swap(stHandle, stMoved.stHandle);
-		}
-		return *this;
-	}
-	~BasicTask()
-	{
-		promise_type::Release(stHandle);
-	}
-	Token GetToken() const
-	{
-		if (!stHandle)
-		{
-			return 0;
-		}
-		auto& stPromise = stHandle.promise();
-		OI::Thread::MutexGuard stLock(stPromise.stMutex);
-		return stPromise.iTaskId;
-	}
-
-	// 任务创建即运行。Start 只把它标成独立任务：分配 token、保活闭包、异常直接报告。可重复调用。
-	Token Start(std::shared_ptr<void> pCallableParam = {}, Token iTokenParam = 0) const
-	{
-		if (!stHandle)
-		{
-			throw std::logic_error("cannot start a moved-from Task");
-		}
-		auto& stPromise = stHandle.promise();
-		OI::Thread::MutexGuard stLock(stPromise.stMutex);
-		if (stPromise.iTaskId == 0)
-		{
-			stPromise.iTaskId = iTokenParam ? iTokenParam : AllocTaskUid();
-		}
-		if (!stPromise.pCallable)
-		{
-			stPromise.pCallable = std::move(pCallableParam);
-		}
-		if (!stPromise.bDetached.exchange(true, std::memory_order_acq_rel) && stPromise.bReady && stPromise.stError)
-		{
-			stPromise.ReportError();
-		}
-		return stPromise.iTaskId;
-	}
-
-	struct Awaiter : TaskWaiter
-	{
-		Handle stChild;
-		explicit Awaiter(Handle stChildParam)
-		    : stChild(stChildParam)
-		{
-			if (!stChild)
-			{
-				throw std::logic_error("cannot await a moved-from Task");
-			}
-			stChild.promise().iReferences.fetch_add(1, std::memory_order_relaxed);
-		}
-		Awaiter(const Awaiter&) = delete;
-		~Awaiter()
-		{
-			promise_type::Release(stChild);
-		}
-		bool await_ready()
-		{
-			// 当场跑完的子任务的执行引用在这里放，不等最外层协程挂起，避免帧堆在线程局部队列里。
-			DrainDetached();
-			auto& stPromise = stChild.promise();
-			OI::Thread::MutexGuard stLock(stPromise.stMutex);
-			return stPromise.bReady;
-		}
-		bool await_suspend(std::coroutine_handle<> stParentParam)
-		{
-			// 登记和完成共用锁。登记后子任务可能在别的线程立即完成并调度本协程，之后不再访问 this。
-			auto& stPromise = stChild.promise();
-			OI::Thread::MutexGuard stLock(stPromise.stMutex);
-			if (stPromise.bReady)
-			{
-				return false;
-			}
-			stParent = stParentParam;
-			pNext = stPromise.pWaiters;
-			stPromise.pWaiters = this;
-			return true;
-		}
-		T await_resume()
-		{
-			auto& stPromise = stChild.promise();
-			if (stPromise.stError)
-			{
-				stPromise.bObserved.store(true, std::memory_order_release);
-				std::rethrow_exception(stPromise.stError);
-			}
-			if constexpr (!std::is_void_v<T>)
-			{
-				static_assert(std::is_copy_constructible_v<T>, "shared TaskResult needs a copyable result; use shared_ptr<T> for move-only data");
-				if (!stPromise.stResult)
-				{
-					throw std::logic_error("Task has no result");
-				}
-				return *stPromise.stResult; // 不移走共享结果，后续等待者仍得到完整值。
-			}
-		}
-	};
-	Awaiter operator co_await() const
-	{
-		return Awaiter(stHandle);
-	}
-};
-
-using Task = BasicTask<void>;
-template <typename T>
-using TaskResult = BasicTask<T>;
-
-// 节点放在堆上。awaiter 被协程帧挪走时，已经链进任务的地址不能跟着变。
-template <typename T>
-struct WhenAllState
-{
-	struct Slot : TaskWaiter
-	{
-		WhenAllState* pState = nullptr;
-	};
-	std::vector<BasicTask<T>>* pTasks = nullptr;
-	std::vector<Slot> vSlots;
-	std::atomic<size_t> iLeft{0};
-	std::atomic<Gate> iGate{Gate::Idle};
-
-	static bool OnReady(TaskWaiter* pWaiterParam)
-	{
-		WhenAllState* pState = static_cast<Slot*>(pWaiterParam)->pState;
-		if (pState->iLeft.fetch_sub(1, std::memory_order_acq_rel) != 1)
-		{
-			return false;
-		}
-		const Gate iPrevious = pState->iGate.exchange(Gate::Ready, std::memory_order_acq_rel);
-		return iPrevious == Gate::Waiting;
-	}
-};
-
-template <typename T>
-struct WhenAllAwaiter
-{
-	std::shared_ptr<WhenAllState<T>> pState;
-
-	explicit WhenAllAwaiter(std::vector<BasicTask<T>>& vTasksParam)
-	    : pState(std::make_shared<WhenAllState<T>>())
-	{
-		pState->pTasks = &vTasksParam;
-	}
-	bool await_ready()
-	{
-		DrainDetached();
-		return pState->pTasks->empty();
-	}
-	bool await_suspend(std::coroutine_handle<> stParentParam)
-	{
-		std::vector<BasicTask<T>>& vTasks = *pState->pTasks;
-		const size_t iCount = vTasks.size();
-		for (size_t iIndex = 0; iIndex < iCount; ++iIndex)
-		{
-			if (!vTasks[iIndex].stHandle)
-			{
-				throw std::logic_error("cannot await a moved-from Task");
-			}
-		}
-		pState->vSlots.resize(iCount);
-		pState->iLeft.store(iCount, std::memory_order_relaxed);
-		for (size_t iIndex = 0; iIndex < iCount; ++iIndex)
-		{
-			typename WhenAllState<T>::Slot& stSlot = pState->vSlots[iIndex];
-			stSlot.pState = pState.get();
-			stSlot.stParent = stParentParam;
-			stSlot.fnReady = &WhenAllState<T>::OnReady;
-			auto& stPromise = vTasks[iIndex].stHandle.promise();
-			bool bReady = false;
-			{
-				OI::Thread::MutexGuard stLock(stPromise.stMutex);
-				if (stPromise.bReady)
-				{
-					bReady = true;
-				}
-				else
-				{
-					stSlot.pNext = stPromise.pWaiters;
-					stPromise.pWaiters = &stSlot;
-				}
-			}
-			if (bReady && pState->iLeft.fetch_sub(1, std::memory_order_acq_rel) == 1)
-			{
-				pState->iGate.exchange(Gate::Ready, std::memory_order_acq_rel);
-			}
-		}
-		const Gate iPrevious = pState->iGate.exchange(Gate::Waiting, std::memory_order_acq_rel);
-		return iPrevious != Gate::Ready;
-	}
-	void await_resume() const noexcept
-	{
-	}
-};
-
-// 等到全部结束再返回。有返回值时按原顺序给出副本。
-// 某一条失败时，其余任务仍会跑完，再按序号抛出第一条异常。空列表直接完成。
-inline Task WhenAll(std::vector<Task> vTasksParam)
-{
-	if (!vTasksParam.empty())
-	{
-		co_await WhenAllAwaiter<void>(vTasksParam);
-	}
-	for (auto& stTask : vTasksParam)
-	{
-		co_await stTask;
-	}
-}
-
-template <typename T>
-    requires(!std::is_void_v<T> && !std::is_same_v<T, bool>)
-[[nodiscard]] TaskResult<std::vector<T>> WhenAll(std::vector<TaskResult<T>> vTasksParam)
-{
-	if (!vTasksParam.empty())
-	{
-		co_await WhenAllAwaiter<T>(vTasksParam);
-	}
-	std::vector<T> vResults;
-	vResults.reserve(vTasksParam.size());
-	for (auto& stTask : vTasksParam)
-	{
-		vResults.push_back(co_await stTask);
-	}
-	co_return vResults;
-}
-
-// 在 stLaunchParam 下调用 fnFunctionParam，它新建的第一条任务取走这份启动信息。
-template <typename F>
-auto InvokeTask(TaskLaunch stLaunchParam, F&& fnFunctionParam)
-{
-	TaskLaunchScope stScope(stLaunchParam);
-	return std::forward<F>(fnFunctionParam)();
-}
-
-// 闭包由任务保活，带捕获的协程 lambda 必须经这里启动。任务总是入队，不在调用方栈上跑。
-template <typename F>
-auto StartTask(F&& fnFunctionParam)
-{
-	Token iTokenLocal = AllocTaskUid();
-	auto stCallable = std::make_shared<std::decay_t<F>>(std::forward<F>(fnFunctionParam));
-	auto stTask = InvokeTask(TaskLaunch{iTokenLocal, true, true}, [&stCallable, iTokenLocal]()
-	{
-		return (*stCallable)(iTokenLocal);
-	});
-	stTask.Start(std::move(stCallable), iTokenLocal);
-	return stTask;
-}
-
-// 协作停止：不会销毁仍被 IO/定时器引用的帧。模块销毁前必须 await Join。
-class StopToken
-{
-	std::shared_ptr<std::atomic<bool>> m_pStop;
-
-  public:
-	explicit StopToken(std::shared_ptr<std::atomic<bool>> pStopParam)
-	    : m_pStop(std::move(pStopParam))
-	{
-	}
-	bool StopRequested() const
-	{
-		return m_pStop->load(std::memory_order_acquire);
-	}
-};
-
-class TaskScope
-{
-	struct State
-	{
-		::OI::Thread::Mutex stMutex;
-		std::shared_ptr<std::atomic<bool>> pStop = std::make_shared<std::atomic<bool>>(false);
-		size_t iActive = 0;
-		std::vector<std::coroutine_handle<>> vWaiters;
-		bool bClosed = false;
-		std::exception_ptr stError;
-	};
-	std::shared_ptr<State> m_pState = std::make_shared<State>();
-	template <typename F>
-	static Task Run(std::shared_ptr<State> pStateParam, F fnFunctionParam, Token iTokenParam)
-	{
-		try
-		{
-			co_await fnFunctionParam(iTokenParam, StopToken(pStateParam->pStop));
-		}
-		catch (...)
-		{
-			::OI::Thread::MutexGuard stLock(pStateParam->stMutex);
-			if (!pStateParam->stError)
-			{
-				pStateParam->stError = std::current_exception();
-			}
-			pStateParam->pStop->store(true, std::memory_order_release);
-		}
-		std::vector<std::coroutine_handle<>> vWaitersLocal;
-		{
-			::OI::Thread::MutexGuard stLock(pStateParam->stMutex);
-			if (--pStateParam->iActive == 0)
-			{
-				vWaitersLocal.swap(pStateParam->vWaiters);
-			}
-		}
-		for (const auto& stWaiter : vWaitersLocal)
-		{
-			Schedule(stWaiter);
-		}
-	}
-	struct JoinAwaiter
-	{
-		std::shared_ptr<State> pState;
-		bool await_ready() const noexcept
-		{
-			return false;
-		}
-		bool await_suspend(std::coroutine_handle<> stWaiterParam);
-		void await_resume();
-	};
-	static Task Wait(std::shared_ptr<State> pStateParam);
-
-  public:
-	TaskScope() = default;
-	TaskScope(const TaskScope&) = delete;
-	TaskScope& operator=(const TaskScope&) = delete;
-	~TaskScope();
-	void RequestStop();
-	template <typename F>
-	Token Start(F&& fnFunctionParam)
-	{
-		::OI::Thread::MutexGuard stLock(m_pState->stMutex);
-		if (m_pState->bClosed)
-		{
-			throw std::logic_error("TaskScope is closed");
-		}
-		Token iTokenLocal = AllocTaskUid();
-		// 任务入队后要等这把锁才能结束，计数晚一步加不会被提前减到零。
-		auto stTask = InvokeTask(TaskLaunch{iTokenLocal, true, true}, [this, &fnFunctionParam, iTokenLocal]()
-		{
-			return Run(m_pState, std::forward<F>(fnFunctionParam), iTokenLocal);
-		});
-		++m_pState->iActive;
-		return stTask.Start();
-	}
-	Task Join();
-};
-
-}
 
 namespace OI
 {
 namespace Rpc
 {
 // 记录失败阶段和调用关联信息；日志失败不能打断原来的错误回执/收尾。
-void ReportRpcError(coro::Token iTokenParam, uint64_t iCallIdParam, sid_t iSessionIdParam,
-    proto_type_t iProtocolIdParam, const char* pStageParam, std::exception_ptr stErrorParam) noexcept;
+void ReportRpcError(OI::Coro::Token iToken, uint64_t iCallId, sid_t iSessionId,
+    proto_type_t iProtocolId, const char* pStage, std::exception_ptr stError) noexcept;
 
 // 标准服务端协程：co_return 0 成功，正数为业务错误。
-using RpcTask = coro::TaskResult<int32_t>;
+using RpcTask = OI::Coro::TaskResult<int32_t>;
 
 // 仅需要连接信息的处理函数接收上下文；生命周期覆盖本次处理协程。
 struct RpcContext
 {
-	coro::Token iToken;
+	OI::Coro::Token iToken;
 	::OI::Net::SessionManager& stManager;
 	sid_t iSessionId;
 };
@@ -657,7 +47,7 @@ struct RpcContext
 template <typename T>
 struct RpcProtoId;
 
-void BindRpcHandler(proto_type_t iIdParam, std::function<coro::Task(coro::Token, ::OI::Net::SessionManager*, sid_t, ::OI::Base::BytesStream)> fnHandleParam);
+void BindRpcHandler(proto_type_t iId, std::function<OI::Coro::Task(OI::Coro::Token, ::OI::Net::SessionManager*, sid_t, ::OI::Base::BytesStream)> fnHandle);
 
 // 请求和回包共用一个协议号。调用号最高位是 1 表示请求，回包清掉这一位。
 // 请求：调用号 + Req；回执：调用号 + int32_t retcode + 成功时的 Res。
@@ -665,16 +55,16 @@ void BindRpcHandler(proto_type_t iIdParam, std::function<coro::Task(coro::Token,
 
 // 业务任务外面这一层：解包，co_await 业务任务，再把带调用号的回包写出去。
 template <typename Req, typename Res, typename F>
-coro::Task RunHandledRpc(F fnFunctionParam, proto_type_t iResponseIdParam, coro::Token iTokenParam, ::OI::Net::SessionManager* pManagerParam, sid_t iSessionIdParam, ::OI::Base::BytesStream stBodyParam)
+OI::Coro::Task RunHandledRpc(F fnFunction, proto_type_t iResponseId, OI::Coro::Token iToken, ::OI::Net::SessionManager* pManager, sid_t iSessionId, ::OI::Base::BytesStream stBody)
 {
 	uint64_t iCallIdLocal = 0;
 	try
 	{
-		stBodyParam >> iCallIdLocal;
+		stBody >> iCallIdLocal;
 	}
 	catch (::OI::Base::ParserException&)
 	{
-		ReportRpcError(iTokenParam, 0, iSessionIdParam, iResponseIdParam, "decode_call_id", std::current_exception());
+		ReportRpcError(iToken, 0, iSessionId, iResponseId, "decode_call_id", std::current_exception());
 		co_return;
 	}
 	iCallIdLocal &= ~(uint64_t)RPC_REQ_MASK;
@@ -684,10 +74,10 @@ coro::Task RunHandledRpc(F fnFunctionParam, proto_type_t iResponseIdParam, coro:
 	const char* pStage = "decode_request";
 	try
 	{
-		stRequestLocal.deserialize(stBodyParam);
+		stRequestLocal.deserialize(stBody);
 		pStage = "handler";
-		RpcContext stContext{iTokenParam, *pManagerParam, iSessionIdParam};
-		auto stInvoke = [pFunction = &fnFunctionParam, pRequest = &stRequestLocal, pResponse = &stResponseLocal, pContext = &stContext]()
+		RpcContext stContext{iToken, *pManager, iSessionId};
+		auto stInvoke = [pFunction = &fnFunction, pRequest = &stRequestLocal, pResponse = &stResponseLocal, pContext = &stContext]()
 		{
 			if constexpr (std::is_invocable_v<F&, Req&, Res&>)
 			{
@@ -708,19 +98,19 @@ coro::Task RunHandledRpc(F fnFunctionParam, proto_type_t iResponseIdParam, coro:
 		{
 			static_assert(std::is_same_v<Return, RpcTask>,
 			    "RPC handler must return RpcTask or int32_t");
-			iRetcode = co_await coro::InvokeTask(coro::TaskLaunch{iTokenParam, false, false}, stInvoke);
+			iRetcode = co_await OI::Coro::InvokeTask(OI::Coro::TaskLaunch{iToken, false, false}, stInvoke);
 		}
 	}
 	catch (::OI::Base::ParserException&)
 	{
 		iRetcode = OI_ERR_FAIL;
-		ReportRpcError(iTokenParam, iCallIdLocal, iSessionIdParam, iResponseIdParam, pStage, std::current_exception());
+		ReportRpcError(iToken, iCallIdLocal, iSessionId, iResponseId, pStage, std::current_exception());
 	}
 	catch (...)
 	{
 		iRetcode = OI_ERR_FAIL;
-		ReportRpcError(iTokenParam, iCallIdLocal, iSessionIdParam, iResponseIdParam, pStage, std::current_exception());
-		coro::ReportTaskError(iTokenParam, std::current_exception());
+		ReportRpcError(iToken, iCallIdLocal, iSessionId, iResponseId, pStage, std::current_exception());
+		OI::Coro::ReportTaskError(iToken, std::current_exception());
 	}
 	::OI::Base::BytesStream stFrame;
 	try
@@ -731,68 +121,68 @@ coro::Task RunHandledRpc(F fnFunctionParam, proto_type_t iResponseIdParam, coro:
 		{
 			stResponseLocal.serialize(stOutput);
 		}
-		stFrame = EncodePbFrame(iResponseIdParam, stOutput);
+		stFrame = EncodePbFrame(iResponseId, stOutput);
 	}
 	catch (...)
 	{
-		ReportRpcError(iTokenParam, iCallIdLocal, iSessionIdParam, iResponseIdParam, "encode_response", std::current_exception());
-		coro::ReportTaskError(iTokenParam, std::current_exception());
+		ReportRpcError(iToken, iCallIdLocal, iSessionId, iResponseId, "encode_response", std::current_exception());
+		OI::Coro::ReportTaskError(iToken, std::current_exception());
 		// 丢弃已经写入的半包，重新构造只有调用号和错误码的回执。
 		try
 		{
 			::OI::Base::BytesStream stFailure;
 			stFailure << iCallIdLocal << int32_t(OI_ERR_FAIL);
-			stFrame = EncodePbFrame(iResponseIdParam, stFailure);
+			stFrame = EncodePbFrame(iResponseId, stFailure);
 		}
 		catch (...)
 		{
-			ReportRpcError(iTokenParam, iCallIdLocal, iSessionIdParam, iResponseIdParam, "encode_failure_reply", std::current_exception());
-			coro::ReportTaskError(iTokenParam, std::current_exception());
-			pManagerParam->CloseSession(iSessionIdParam);
+			ReportRpcError(iToken, iCallIdLocal, iSessionId, iResponseId, "encode_failure_reply", std::current_exception());
+			OI::Coro::ReportTaskError(iToken, std::current_exception());
+			pManager->CloseSession(iSessionId);
 			co_return;
 		}
 	}
 	try
 	{
-		if (!pManagerParam->SendBytes(iSessionIdParam, stFrame.GetMutableBuff()))
+		if (!pManager->SendBytes(iSessionId, stFrame.GetMutableBuff()))
 		{
-			pManagerParam->CloseSession(iSessionIdParam);
+			pManager->CloseSession(iSessionId);
 		}
 	}
 	catch (...)
 	{
-		ReportRpcError(iTokenParam, iCallIdLocal, iSessionIdParam, iResponseIdParam, "send_response", std::current_exception());
-		coro::ReportTaskError(iTokenParam, std::current_exception());
-		pManagerParam->CloseSession(iSessionIdParam);
+		ReportRpcError(iToken, iCallIdLocal, iSessionId, iResponseId, "send_response", std::current_exception());
+		OI::Coro::ReportTaskError(iToken, std::current_exception());
+		pManager->CloseSession(iSessionId);
 	}
 	co_return;
 }
 
 template <typename Req, typename Res, typename F>
-void HandleRpc(F fnFunctionParam)
+void HandleRpc(F fnFunction)
 {
 	const proto_type_t iResponseIdLocal = RpcProtoId<Res>::iValue;
-	BindRpcHandler(RpcProtoId<Req>::iValue, [fnFunctionParam, iResponseIdLocal](coro::Token iTokenParam, ::OI::Net::SessionManager* pManagerParam, sid_t iSessionIdParam, ::OI::Base::BytesStream stBodyParam) -> coro::Task
+	BindRpcHandler(RpcProtoId<Req>::iValue, [fnFunction, iResponseIdLocal](OI::Coro::Token iToken, ::OI::Net::SessionManager* pManager, sid_t iSessionId, ::OI::Base::BytesStream stBody) -> OI::Coro::Task
 	{
-		return RunHandledRpc<Req, Res>(fnFunctionParam, iResponseIdLocal, iTokenParam, pManagerParam, iSessionIdParam, std::move(stBodyParam));
+		return RunHandledRpc<Req, Res>(fnFunction, iResponseIdLocal, iToken, pManager, iSessionId, std::move(stBody));
 	});
 }
 
 // 请求类型已关联响应，无需在注册处重复指定。
 template <typename Req, typename F>
-void HandleRpc(F fnFunctionParam)
+void HandleRpc(F fnFunction)
 {
-	HandleRpc<Req, typename RpcProtoId<Req>::Response>(std::move(fnFunctionParam));
+	HandleRpc<Req, typename RpcProtoId<Req>::Response>(std::move(fnFunction));
 }
 
 // 返回调用号。回包、超时或 WakeRpcCall 三者只有一个会触发 decode/resume。
 // 回包回调携带实际匹配的 sid，日志不得用可能已重连的当前会话替代来源。
-uint64_t BindRpcCall(::OI::Net::SessionManager* pManagerParam, sid_t iSessionIdParam, proto_type_t iResponseIdParam, std::coroutine_handle<> stHandleParam, int32_t* pResultParam, int64_t iTimeoutMillisecondsParam, std::function<bool(::OI::Base::BytesStream&, sid_t)> fnDecodeParam, std::function<void()> fnResumeParam, std::shared_ptr<std::atomic<int32_t>> pGuardParam = {}, RpcSender* pSenderParam = nullptr);
-void FailRpcCalls(::OI::Net::SessionManager* pManagerParam, sid_t iSessionIdParam);
+uint64_t BindRpcCall(::OI::Net::SessionManager* pManager, sid_t iSessionId, proto_type_t iResponseId, std::coroutine_handle<> stHandle, int32_t* pResult, int64_t iTimeoutMilliseconds, std::function<bool(::OI::Base::BytesStream&, sid_t)> fnDecode, std::function<void()> fnResume, std::shared_ptr<std::atomic<int32_t>> pGuard = {}, RpcSender* pSender = nullptr);
+void FailRpcCalls(::OI::Net::SessionManager* pManager, sid_t iSessionId);
 // 取走等待项且不调用完成回调。已经在回调里的，等 WaitRpcGuard 归零。
-void AbandonRpcCall(uint64_t iCallIdParam);
-void WaitRpcGuard(const std::shared_ptr<std::atomic<int32_t>>& pGuardParam);
-bool WakeRpcCall(uint64_t iCallIdParam, int32_t iCodeParam, ::OI::Base::BytesStream* pBodyParam);
+void AbandonRpcCall(uint64_t iCallId);
+void WaitRpcGuard(const std::shared_ptr<std::atomic<int32_t>>& pGuard);
+bool WakeRpcCall(uint64_t iCallId, int32_t iCode, ::OI::Base::BytesStream* pBody);
 
 // 发出请求后挂起。回包或超时回调里 Schedule 回来。回包可能比挂起先到。
 template <typename Req, typename Res>
@@ -808,31 +198,31 @@ struct [[nodiscard]] RpcCallAwaiter
 	int64_t iTimeoutMilliseconds;
 	std::coroutine_handle<> stHandle; // 调用方句柄。门已经是 Waiting 才 Schedule。
 	// 完成门。Idle 已发出还没人认领，Ready 结果已写好，Waiting 调用方已挂起。
-	std::atomic<coro::Gate> iGate;
+	std::atomic<OI::Coro::Gate> iGate;
 	std::atomic<bool> bAwaitStarted{false}; // 一次性闩。第二次 await 或移动已提交对象直接抛，不进完成门。
 	bool bDispatched = false;               // Dispatch 已经 BindRpcCall。析构时槽还在就摘掉。
 	// 回包原样留到 await_resume 再解，解包跑在工人上，不占 IO 线程。
 	::OI::Base::BytesStream stReply;
 	bool bReplied; // 真表示 stReply 里有回包，await_resume 再解。
 	sid_t iReplySessionId = INVALID_SID;
-	coro::Token iAwaitToken = 0;
+	OI::Coro::Token iAwaitToken = 0;
 	std::exception_ptr stSubmissionError;
 	uint64_t iCallId = 0;
 	std::shared_ptr<std::atomic<int32_t>> pGuard;
 
 	RpcCallAwaiter()
-	    : pManager(NULL), iSessionId(0), pRequest(NULL), pResponse(NULL), iResult(OI_ERR_FAIL), iTimeoutMilliseconds(180000), stHandle(), iGate(coro::Gate::Idle), bReplied(false)
+	    : pManager(NULL), iSessionId(0), pRequest(NULL), pResponse(NULL), iResult(OI_ERR_FAIL), iTimeoutMilliseconds(180000), stHandle(), iGate(OI::Coro::Gate::Idle), bReplied(false)
 	{
 	}
 	RpcCallAwaiter(const RpcCallAwaiter&) = delete;
-	RpcCallAwaiter(RpcCallAwaiter&& stOtherParam)
-	    : pManager(ClaimMove(stOtherParam)), pClient(stOtherParam.pClient), iSessionId(stOtherParam.iSessionId), pRequest(stOtherParam.pRequest), pResponse(stOtherParam.pResponse), iResult(stOtherParam.iResult),
-	      iTimeoutMilliseconds(stOtherParam.iTimeoutMilliseconds), stHandle(stOtherParam.stHandle), iGate(stOtherParam.iGate.load(std::memory_order_relaxed)),
-	      bReplied(false), stSubmissionError(std::move(stOtherParam.stSubmissionError)), iCallId(stOtherParam.iCallId), pGuard(std::move(stOtherParam.pGuard))
+	RpcCallAwaiter(RpcCallAwaiter&& stOther)
+	    : pManager(ClaimMove(stOther)), pClient(stOther.pClient), iSessionId(stOther.iSessionId), pRequest(stOther.pRequest), pResponse(stOther.pResponse), iResult(stOther.iResult),
+	      iTimeoutMilliseconds(stOther.iTimeoutMilliseconds), stHandle(stOther.stHandle), iGate(stOther.iGate.load(std::memory_order_relaxed)),
+	      bReplied(false), stSubmissionError(std::move(stOther.stSubmissionError)), iCallId(stOther.iCallId), pGuard(std::move(stOther.pGuard))
 	{
-		stOtherParam.stHandle = nullptr;
-		stOtherParam.iCallId = 0;
-		stOtherParam.bDispatched = false;
+		stOther.stHandle = nullptr;
+		stOther.iCallId = 0;
+		stOther.bDispatched = false;
 	}
 	~RpcCallAwaiter()
 	{
@@ -844,14 +234,14 @@ struct [[nodiscard]] RpcCallAwaiter
 		AbandonRpcCall(iCallId);
 		WaitRpcGuard(pGuard);
 	}
-	static ::OI::Net::SessionManager* ClaimMove(RpcCallAwaiter& stOtherParam)
+	static ::OI::Net::SessionManager* ClaimMove(RpcCallAwaiter& stOther)
 	{
-		stOtherParam.ClaimAwait();
-		if (stOtherParam.bDispatched)
+		stOther.ClaimAwait();
+		if (stOther.bDispatched)
 		{
 			throw std::logic_error("RpcCall can only be awaited once; cannot reuse or move a submitted call");
 		}
-		return stOtherParam.pManager;
+		return stOther.pManager;
 	}
 	void ClaimAwait()
 	{
@@ -866,10 +256,10 @@ struct [[nodiscard]] RpcCallAwaiter
 		return false;
 	}
 	template <typename Promise>
-	bool await_suspend(std::coroutine_handle<Promise> stHandleParam)
+	bool await_suspend(std::coroutine_handle<Promise> stHandle)
 	{
 		ClaimAwait();
-		return Suspend(stHandleParam);
+		return Suspend(stHandle);
 	}
 	// 只负责发出。完成回调在门还没挂起时不调度，调用方可以先发再等。
 	void Dispatch()
@@ -882,23 +272,23 @@ struct [[nodiscard]] RpcCallAwaiter
 		iResult = OI_ERR_FAIL;
 		bReplied = false;
 		stSubmissionError = nullptr;
-		iGate.store(coro::Gate::Idle, std::memory_order_relaxed);
+		iGate.store(OI::Coro::Gate::Idle, std::memory_order_relaxed);
 		iCallId = 0;
 		pGuard = std::make_shared<std::atomic<int32_t>>(0);
-		uint64_t iCallIdLocal = BindRpcCall(pManager, iSessionId, RpcProtoId<Res>::iValue, stHandle, &iResult, iTimeoutMilliseconds, [this](::OI::Base::BytesStream& stInputParam, sid_t iSourceSessionParam)
+		uint64_t iCallIdLocal = BindRpcCall(pManager, iSessionId, RpcProtoId<Res>::iValue, stHandle, &iResult, iTimeoutMilliseconds, [this](::OI::Base::BytesStream& stInput, sid_t iSourceSession)
 		{
-			iReplySessionId = iSourceSessionParam;
-			stReply = std::move(stInputParam);
+			iReplySessionId = iSourceSession;
+			stReply = std::move(stInput);
 			bReplied = true;
 			return true;
 		}, [this]()
 		{
 			// Idle→Ready：结果先写好，调用方还在 Arm 之前，留给 Arm 发现后不挂起。
 			// Waiting→Ready：调用方已经挂起，必须由这里 Schedule。
-			coro::Gate iPrevious = iGate.exchange(coro::Gate::Ready, std::memory_order_acq_rel);
-			if (iPrevious == coro::Gate::Waiting)
+			OI::Coro::Gate iPrevious = iGate.exchange(OI::Coro::Gate::Ready, std::memory_order_acq_rel);
+			if (iPrevious == OI::Coro::Gate::Waiting)
 			{
-				coro::Schedule(stHandle);
+				OI::Coro::Schedule(stHandle);
 			}
 		}, pGuard, pClient);
 		iCallId = iCallIdLocal;
@@ -930,23 +320,23 @@ struct [[nodiscard]] RpcCallAwaiter
 		}
 	}
 	template <typename Promise>
-	bool Arm(std::coroutine_handle<Promise> stHandleParam)
+	bool Arm(std::coroutine_handle<Promise> stHandleLocal)
 	{
-		if constexpr (std::is_base_of_v<coro::TaskState, Promise>)
+		if constexpr (std::is_base_of_v<OI::Coro::TaskState, Promise>)
 		{
-			OI::Thread::MutexGuard stLock(stHandleParam.promise().stMutex);
-			iAwaitToken = stHandleParam.promise().iTaskId;
+			OI::Thread::MutexGuard stLock(stHandleLocal.promise().stMutex);
+			iAwaitToken = stHandleLocal.promise().iTaskId;
 		}
-		stHandle = stHandleParam;
+		stHandle = stHandleLocal;
 		// Idle→Waiting：还在等，挂起。Ready→Waiting：结果已经写完，不挂起，调用方马上 await_resume。
-		coro::Gate iPrevious = iGate.exchange(coro::Gate::Waiting, std::memory_order_acq_rel);
-		return iPrevious != coro::Gate::Ready;
+		OI::Coro::Gate iPrevious = iGate.exchange(OI::Coro::Gate::Waiting, std::memory_order_acq_rel);
+		return iPrevious != OI::Coro::Gate::Ready;
 	}
 	template <typename Promise>
-	bool Suspend(std::coroutine_handle<Promise> stHandleParam)
+	bool Suspend(std::coroutine_handle<Promise> stHandle)
 	{
 		Dispatch();
-		return Arm(stHandleParam);
+		return Arm(stHandle);
 	}
 	int32_t await_resume()
 	{
@@ -977,14 +367,14 @@ struct [[nodiscard]] RpcCallAwaiter
 };
 
 template <typename Req, typename Res>
-RpcCallAwaiter<Req, Res> MakeRpcCallAwaiter(::OI::Net::SessionManager& stManagerParam, sid_t iSessionIdParam, Req& stRequestParam, Res& stResponseParam, ::OI::Timer::MS stTimeoutParam = ::OI::Timer::Seconds(180))
+RpcCallAwaiter<Req, Res> MakeRpcCallAwaiter(::OI::Net::SessionManager& stManager, sid_t iSessionId, Req& stRequest, Res& stResponse, ::OI::Timer::MS stTimeout = ::OI::Timer::Seconds(180))
 {
 	RpcCallAwaiter<Req, Res> stAwaiter;
-	stAwaiter.pManager = &stManagerParam;
-	stAwaiter.iSessionId = iSessionIdParam;
-	stAwaiter.pRequest = &stRequestParam;
-	stAwaiter.pResponse = &stResponseParam;
-	stAwaiter.iTimeoutMilliseconds = stTimeoutParam.iMilliseconds;
+	stAwaiter.pManager = &stManager;
+	stAwaiter.iSessionId = iSessionId;
+	stAwaiter.pRequest = &stRequest;
+	stAwaiter.pResponse = &stResponse;
+	stAwaiter.iTimeoutMilliseconds = stTimeout.iMilliseconds;
 	return stAwaiter;
 }
 
@@ -1002,8 +392,8 @@ class [[nodiscard]] RpcResult
 	}
 
   public:
-	RpcResult(int32_t iReturnCodeParam, Res stResponseParam)
-	    : m_iReturnCode(iReturnCodeParam), m_stResponse(std::move(stResponseParam))
+	RpcResult(int32_t iReturnCode, Res stResponse)
+	    : m_iReturnCode(iReturnCode), m_stResponse(std::move(stResponse))
 	{
 	}
 	int32_t GetRet() const noexcept
@@ -1038,11 +428,11 @@ class [[nodiscard]] RpcResult
 
 // 底层单次等待器供框架和故障注入使用；应用使用下面拥有请求的 Task 接口。
 template <typename Req>
-auto MakeRpcCallAwaiter(RpcSender& stManagerParam, Req& stRequestParam, typename RpcProtoId<Req>::Response& stResponseParam,
-    ::OI::Timer::MS stTimeoutParam = ::OI::Timer::Seconds(180))
+auto MakeRpcCallAwaiter(RpcSender& stManager, Req& stRequest, typename RpcProtoId<Req>::Response& stResponse,
+    ::OI::Timer::MS stTimeout = ::OI::Timer::Seconds(180))
 {
-	auto stCall = MakeRpcCallAwaiter(stManagerParam.Manager(), INVALID_SID, stRequestParam, stResponseParam, stTimeoutParam);
-	stCall.pClient = &stManagerParam;
+	auto stCall = MakeRpcCallAwaiter(stManager.Manager(), INVALID_SID, stRequest, stResponse, stTimeout);
+	stCall.pClient = &stManager;
 	return stCall;
 }
 
@@ -1058,32 +448,32 @@ struct RpcRequestRelease
 };
 
 template <typename Req>
-coro::TaskResult<int32_t> RunOutputCall(::OI::Net::SessionManager& stManagerParam, sid_t iSessionIdParam,
-    RpcSender* pClientParam, std::optional<Req> stRequestParam,
-    typename RpcProtoId<Req>::Response& stResponseParam, ::OI::Timer::MS stTimeoutParam)
+OI::Coro::TaskResult<int32_t> RunOutputCall(::OI::Net::SessionManager& stManager, sid_t iSessionId,
+    RpcSender* pClient, std::optional<Req> stRequest,
+    typename RpcProtoId<Req>::Response& stResponse, ::OI::Timer::MS stTimeout)
 {
-	RpcRequestRelease<Req> stRelease{stRequestParam};
-	auto stCall = MakeRpcCallAwaiter(stManagerParam, iSessionIdParam, *stRequestParam, stResponseParam, stTimeoutParam);
-	stCall.pClient = pClientParam;
+	RpcRequestRelease<Req> stRelease{stRequest};
+	auto stCall = MakeRpcCallAwaiter(stManager, iSessionId, *stRequest, stResponse, stTimeout);
+	stCall.pClient = pClient;
 	co_return co_await stCall;
 }
 
 // 普通函数在返回前把请求移入任务；响应必须活到任务结束。
 template <typename Req>
-[[nodiscard]] coro::TaskResult<int32_t> RpcCall(::OI::Net::SessionManager& stManagerParam, sid_t iSessionIdParam,
-    Req stRequestParam, typename RpcProtoId<Req>::Response& stResponseParam,
-    ::OI::Timer::MS stTimeoutParam = ::OI::Timer::Seconds(180))
+[[nodiscard]] OI::Coro::TaskResult<int32_t> RpcCall(::OI::Net::SessionManager& stManager, sid_t iSessionId,
+    Req stRequest, typename RpcProtoId<Req>::Response& stResponse,
+    ::OI::Timer::MS stTimeout = ::OI::Timer::Seconds(180))
 {
-	return RunOutputCall<Req>(stManagerParam, iSessionIdParam, nullptr,
-	    std::optional<Req>(std::in_place, std::move(stRequestParam)), stResponseParam, stTimeoutParam);
+	return RunOutputCall<Req>(stManager, iSessionId, nullptr,
+	    std::optional<Req>(std::in_place, std::move(stRequest)), stResponse, stTimeout);
 }
 
 template <typename Req>
-[[nodiscard]] coro::TaskResult<int32_t> RpcCall(RpcSender& stManagerParam, Req stRequestParam,
-    typename RpcProtoId<Req>::Response& stResponseParam, ::OI::Timer::MS stTimeoutParam = ::OI::Timer::Seconds(180))
+[[nodiscard]] OI::Coro::TaskResult<int32_t> RpcCall(RpcSender& stManager, Req stRequest,
+    typename RpcProtoId<Req>::Response& stResponse, ::OI::Timer::MS stTimeout = ::OI::Timer::Seconds(180))
 {
-	return RunOutputCall<Req>(stManagerParam.Manager(), INVALID_SID, &stManagerParam,
-	    std::optional<Req>(std::in_place, std::move(stRequestParam)), stResponseParam, stTimeoutParam);
+	return RunOutputCall<Req>(stManager.Manager(), INVALID_SID, &stManager,
+	    std::optional<Req>(std::in_place, std::move(stRequest)), stResponse, stTimeout);
 }
 
 template <typename Req, typename Res>
@@ -1091,13 +481,13 @@ struct [[nodiscard]] RpcValueAwaiter : RpcCallAwaiter<Req, Res>
 {
 	Req stRequest;
 	Res stResponse{};
-	RpcValueAwaiter(::OI::Net::SessionManager& stManagerParam, sid_t iSessionIdParam, Req stRequestParam, ::OI::Timer::MS stTimeoutParam, RpcSender* pClientParam = nullptr)
-	    : stRequest(std::move(stRequestParam))
+	RpcValueAwaiter(::OI::Net::SessionManager& stManager, sid_t iSessionId, Req stRequest, ::OI::Timer::MS stTimeout, RpcSender* pClient = nullptr)
+	    : stRequest(std::move(stRequest))
 	{
-		this->pManager = &stManagerParam;
-		this->pClient = pClientParam;
-		this->iSessionId = iSessionIdParam;
-		this->iTimeoutMilliseconds = stTimeoutParam.iMilliseconds;
+		this->pManager = &stManager;
+		this->pClient = pClient;
+		this->iSessionId = iSessionId;
+		this->iTimeoutMilliseconds = stTimeout.iMilliseconds;
 	}
 	void Submit()
 	{
@@ -1106,7 +496,7 @@ struct [[nodiscard]] RpcValueAwaiter : RpcCallAwaiter<Req, Res>
 		this->Dispatch();
 	}
 	template <typename Promise>
-	bool await_suspend(std::coroutine_handle<Promise> stHandleParam)
+	bool await_suspend(std::coroutine_handle<Promise> stHandle)
 	{
 		// 先独占等待权，再决定要不要发送。并发等待必须在改完成门之前被拒绝。
 		this->ClaimAwait();
@@ -1116,7 +506,7 @@ struct [[nodiscard]] RpcValueAwaiter : RpcCallAwaiter<Req, Res>
 			this->pResponse = &stResponse;
 			this->Dispatch();
 		}
-		return this->Arm(stHandleParam);
+		return this->Arm(stHandle);
 	}
 	RpcResult<Res> await_resume()
 	{
@@ -1127,47 +517,48 @@ struct [[nodiscard]] RpcValueAwaiter : RpcCallAwaiter<Req, Res>
 };
 
 template <typename Res, typename Req>
-RpcValueAwaiter<Req, Res> RpcCall(::OI::Net::SessionManager& stManagerParam, sid_t iSessionIdParam, Req stRequestParam, ::OI::Timer::MS stTimeoutParam = ::OI::Timer::Seconds(180))
+RpcValueAwaiter<Req, Res> RpcCall(::OI::Net::SessionManager& stManager, sid_t iSessionId, Req stRequest, ::OI::Timer::MS stTimeout = ::OI::Timer::Seconds(180))
 {
-	return RpcValueAwaiter<Req, Res>(stManagerParam, iSessionIdParam, std::move(stRequestParam), stTimeoutParam);
+	return RpcValueAwaiter<Req, Res>(stManager, iSessionId, std::move(stRequest), stTimeout);
 }
-// 自动配对响应类型；保留显式 Res 和输出引用接口供旧代码使用。
+// 自动配对响应类型。这个等待对象是完成门，只能等一次。
+// 要让两个协程等同一次调用，用返回 TaskResult<int32_t> 的输出引用接口：任务按上面的等待链表共享，响应对象只写一次。
 template <typename Req>
-auto RpcCall(::OI::Net::SessionManager& stManagerParam, sid_t iSessionIdParam, Req stRequestParam,
-    ::OI::Timer::MS stTimeoutParam = ::OI::Timer::Seconds(180))
+auto RpcCall(::OI::Net::SessionManager& stManager, sid_t iSessionId, Req stRequest,
+    ::OI::Timer::MS stTimeout = ::OI::Timer::Seconds(180))
     -> RpcValueAwaiter<Req, typename RpcProtoId<Req>::Response>
 {
-	return {stManagerParam, iSessionIdParam, std::move(stRequestParam), stTimeoutParam};
+	return {stManager, iSessionId, std::move(stRequest), stTimeout};
 }
 
 template <typename Req>
-auto RpcCall(RpcSender& stManagerParam, Req stRequestParam,
-    ::OI::Timer::MS stTimeoutParam = ::OI::Timer::Seconds(180))
+auto RpcCall(RpcSender& stManager, Req stRequest,
+    ::OI::Timer::MS stTimeout = ::OI::Timer::Seconds(180))
     -> RpcValueAwaiter<Req, typename RpcProtoId<Req>::Response>
 {
-	return {stManagerParam.Manager(), INVALID_SID, std::move(stRequestParam), stTimeoutParam, &stManagerParam};
+	return {stManager.Manager(), INVALID_SID, std::move(stRequest), stTimeout, &stManager};
 }
 
 // 常驻应用管理器用成员发送目标适配，不需要继承发送接口。
 template <typename Req>
-auto MakeRpcCallAwaiter(ProtoClientManager& stManagerParam, Req& stRequestParam, typename RpcProtoId<Req>::Response& stResponseParam,
-    ::OI::Timer::MS stTimeoutParam = ::OI::Timer::Seconds(180))
+auto MakeRpcCallAwaiter(ProtoClientManager& stManager, Req& stRequest, typename RpcProtoId<Req>::Response& stResponse,
+    ::OI::Timer::MS stTimeout = ::OI::Timer::Seconds(180))
 {
-	return MakeRpcCallAwaiter(stManagerParam.Sender(), stRequestParam, stResponseParam, stTimeoutParam);
+	return MakeRpcCallAwaiter(stManager.Sender(), stRequest, stResponse, stTimeout);
 }
 
 template <typename Req>
-[[nodiscard]] auto RpcCall(ProtoClientManager& stManagerParam, Req stRequestParam, typename RpcProtoId<Req>::Response& stResponseParam,
-    ::OI::Timer::MS stTimeoutParam = ::OI::Timer::Seconds(180))
+[[nodiscard]] auto RpcCall(ProtoClientManager& stManager, Req stRequest, typename RpcProtoId<Req>::Response& stResponse,
+    ::OI::Timer::MS stTimeout = ::OI::Timer::Seconds(180))
 {
-	return RpcCall(stManagerParam.Sender(), std::move(stRequestParam), stResponseParam, stTimeoutParam);
+	return RpcCall(stManager.Sender(), std::move(stRequest), stResponse, stTimeout);
 }
 
 template <typename Req>
-[[nodiscard]] auto RpcCall(ProtoClientManager& stManagerParam, Req stRequestParam,
-    ::OI::Timer::MS stTimeoutParam = ::OI::Timer::Seconds(180))
+[[nodiscard]] auto RpcCall(ProtoClientManager& stManager, Req stRequest,
+    ::OI::Timer::MS stTimeout = ::OI::Timer::Seconds(180))
 {
-	return RpcCall(stManagerParam.Sender(), std::move(stRequestParam), stTimeoutParam);
+	return RpcCall(stManager.Sender(), std::move(stRequest), stTimeout);
 }
 
 // 同一调用的查询、建连和回包共享单调时钟预算。非正值保持无限 RPC 等待语义。
@@ -1175,17 +566,17 @@ struct RpcDeadline
 {
 	int64_t iDeadlineMilliseconds = 0;
 	RpcDeadline() = default;
-	RpcDeadline(::OI::Timer::MS stTimeoutParam)
+	RpcDeadline(::OI::Timer::MS stTimeout)
 	{
-		if (stTimeoutParam.iMilliseconds > 0)
+		if (stTimeout.iMilliseconds > 0)
 		{
 			const int64_t iNow = ::OI::Timer::SteadyMilliseconds();
-			iDeadlineMilliseconds = stTimeoutParam.iMilliseconds > INT64_MAX - iNow ? INT64_MAX : iNow + stTimeoutParam.iMilliseconds;
+			iDeadlineMilliseconds = stTimeout.iMilliseconds > INT64_MAX - iNow ? INT64_MAX : iNow + stTimeout.iMilliseconds;
 		}
 	}
 	template <typename Duration, std::enable_if_t<std::is_convertible_v<Duration, ::OI::Timer::MS>, int> = 0>
-	RpcDeadline(Duration stTimeoutParam)
-	    : RpcDeadline(::OI::Timer::MS(stTimeoutParam))
+	RpcDeadline(Duration stTimeout)
+	    : RpcDeadline(::OI::Timer::MS(stTimeout))
 	{
 	}
 	bool Expired() const
@@ -1231,12 +622,12 @@ struct RouteConnectionInfo
 	uint64_t iIncompleteMilliseconds = 0;
 	std::pair<size_t, size_t> stPendingLimits;
 };
-RouteConnectionInfo GetRouteConnectionInfo(const RpcSender& stSenderParam);
-std::shared_ptr<void> GetRouteConnectionOwner(const RpcSender& stSenderParam);
+RouteConnectionInfo GetRouteConnectionInfo(const RpcSender& stSender);
+std::shared_ptr<void> GetRouteConnectionOwner(const RpcSender& stSender);
 
-inline int32_t RouteError(ServiceRouteStatus iStatusParam)
+inline int32_t RouteError(ServiceRouteStatus iStatus)
 {
-	switch (iStatusParam)
+	switch (iStatus)
 	{
 	case ServiceRouteStatus::Timeout:
 		return OI_ERR_TIMEOUT;
@@ -1267,19 +658,19 @@ enum class ServicePick
 	All,
 };
 
-// pManagerParam 是发起调用的管理器。不带分区且它自己就在看这个名字时，直接用它，不再另连。
-// 返回 true 表示不用再问注册表，结果已经写进 stRouteParam。
-bool PrepareRoute(::OI::Net::SessionManager* pManagerParam, const std::string& sNameParam, ServicePick iPickParam, const std::string& sZoneParam, ServiceRoute& stRouteParam);
-bool PrepareZones(::OI::Net::SessionManager* pManagerParam, const std::string& sNameParam, const std::vector<int32_t>& vZoneIdsParam, ServiceRoute& stRouteParam, std::vector<std::string>& vZonesParam);
-// bBatchParam 为真时只接受 name.*，否则只接受 name 或 name.分区。
-// 返回 true 表示目标字符串非法，结果在 stRouteParam。否则写出要拉取的名字、挑选方式和分区。
-bool PrepareTarget(const std::string& sTargetParam, bool bBatchParam, ServiceRoute& stRouteParam, std::string& sNameParam, ServicePick& iPickParam, std::string& sZoneParam);
+// pManager 是发起调用的管理器。不带分区且它自己就在看这个名字时，直接用它，不再另连。
+// 返回 true 表示不用再问注册表，结果已经写进 stRoute。
+bool PrepareRoute(::OI::Net::SessionManager* pManager, const std::string& sName, ServicePick iPick, const std::string& sZone, ServiceRoute& stRoute);
+bool PrepareZones(::OI::Net::SessionManager* pManager, const std::string& sName, const std::vector<int32_t>& vZoneIds, ServiceRoute& stRoute, std::vector<std::string>& vZones);
+// bBatch 为真时只接受 name.*，否则只接受 name 或 name.分区。
+// 返回 true 表示目标字符串非法，结果在 stRoute。否则写出要拉取的名字、挑选方式和分区。
+bool PrepareTarget(const std::string& sTarget, bool bBatch, ServiceRoute& stRoute, std::string& sName, ServicePick& iPick, std::string& sZone);
 // 拉取不占线程。fnDone 只调用一次，里面不能再等注册表。
-void PullRoute(const std::string& sNameParam, std::function<void(int32_t, const std::vector<::OI::Base::ServiceInstance>&)> fnDoneParam, int64_t iTimeoutMillisecondsParam = 1000);
+void PullRoute(const std::string& sName, std::function<void(int32_t, const std::vector<::OI::Base::ServiceInstance>&)> fnDone, int64_t iTimeoutMilliseconds = 1000);
 // 名单完成后的路由只引用固定地址的池连接；不读取或复用可能切换地址的订阅管理器。
-ServiceRoute FinishRoute(const std::string& sNameParam, ServicePick iPickParam, const std::string& sZoneParam, int32_t iCodeParam, const std::vector<::OI::Base::ServiceInstance>& vListParam, ::OI::Net::SessionManager* pManagerParam = nullptr);
+ServiceRoute FinishRoute(const std::string& sName, ServicePick iPick, const std::string& sZone, int32_t iCode, const std::vector<::OI::Base::ServiceInstance>& vList, ::OI::Net::SessionManager* pManager = nullptr);
 // vClients 与分区号等长，空指针表示这个分区当前没登记。
-ServiceRoute FinishZones(const std::string& sNameParam, const std::vector<std::string>& vZonesParam, int32_t iCodeParam, const std::vector<::OI::Base::ServiceInstance>& vListParam, ::OI::Net::SessionManager* pManagerParam = nullptr);
+ServiceRoute FinishZones(const std::string& sName, const std::vector<std::string>& vZones, int32_t iCode, const std::vector<::OI::Base::ServiceInstance>& vList, ::OI::Net::SessionManager* pManager = nullptr);
 
 // 挂起等注册表，不在调用线程里同步等。快路径（名字非法、自己已经连着）不挂起。
 struct RouteAwaiter
@@ -1306,16 +697,16 @@ struct RouteAwaiter
 	ServiceRoute stRoute;
 	std::coroutine_handle<> stHandle{}; // 调用方句柄。门已经是 Waiting 才 Schedule。
 	// 完成门。Idle 还在等拉取，Ready 回包已写入，Waiting 调用方已挂起。
-	std::atomic<coro::Gate> iGate{coro::Gate::Idle};
+	std::atomic<OI::Coro::Gate> iGate{OI::Coro::Gate::Idle};
 
 	bool await_ready() const noexcept
 	{
 		return false;
 	}
 	template <typename Promise>
-	bool await_suspend(std::coroutine_handle<Promise> stHandleParam)
+	bool await_suspend(std::coroutine_handle<Promise> stHandleLocal)
 	{
-		stHandle = stHandleParam;
+		stHandle = stHandleLocal;
 		if (iKind == Kind::Target)
 		{
 			if (PrepareTarget(sTarget, bBatch, stRoute, sName, iPick, sZone))
@@ -1344,25 +735,25 @@ struct RouteAwaiter
 			return false;
 		}
 		const int64_t iRemaining = stDeadline.Remaining().iMilliseconds;
-		PullRoute(sName, [this](int32_t iCodeParam, const std::vector<::OI::Base::ServiceInstance>& vListParam)
+		PullRoute(sName, [this](int32_t iCodeLocal, const std::vector<::OI::Base::ServiceInstance>& vListLocal)
 		{
-			iCode = iCodeParam;
+			iCode = iCodeLocal;
 			try
 			{
-				vList = vListParam;
+				vList = vListLocal;
 			}
 			catch (...)
 			{
 				iCode = OI_ERR_FAIL;
 			}
 			// Waiting→Ready 才调度。回包先到时门已是 Ready，下面的 exchange(Waiting) 会选择不挂起。
-			if (iGate.exchange(coro::Gate::Ready, std::memory_order_acq_rel) == coro::Gate::Waiting)
+			if (iGate.exchange(OI::Coro::Gate::Ready, std::memory_order_acq_rel) == OI::Coro::Gate::Waiting)
 			{
-				coro::Schedule(stHandle);
+				OI::Coro::Schedule(stHandle);
 			}
 		}, iRemaining > 0 ? (std::min)(iRemaining, int64_t(1000)) : 1000);
 		// 看见 Ready 表示回包已经写完，不挂起。
-		return iGate.exchange(coro::Gate::Waiting, std::memory_order_acq_rel) != coro::Gate::Ready;
+		return iGate.exchange(OI::Coro::Gate::Waiting, std::memory_order_acq_rel) != OI::Coro::Gate::Ready;
 	}
 	ServiceRoute await_resume()
 	{
@@ -1397,143 +788,142 @@ namespace Rpc
 {
 
 template <typename Res, typename Req>
-coro::TaskResult<RpcResult<Res>> FailNamed(int32_t iCodeParam)
+OI::Coro::TaskResult<RpcResult<Res>> FailNamed(int32_t iCode)
 {
-	co_return RpcResult<Res>(iCodeParam, Res{});
+	co_return RpcResult<Res>(iCode, Res{});
 }
 
 template <typename Res, typename Req>
-coro::TaskResult<RpcResult<Res>> CallNamed(::OI::Net::SessionManager* pManagerParam, std::string sNameParam, ServicePick iPickParam, std::string sZoneParam, Req stRequestParam, RpcDeadline stDeadlineParam)
+OI::Coro::TaskResult<RpcResult<Res>> CallNamed(::OI::Net::SessionManager* pManager, std::string sName, ServicePick iPick, std::string sZone, Req stRequest, RpcDeadline stDeadline)
 {
 	RouteAwaiter stWait;
-	stWait.stDeadline = stDeadlineParam;
+	stWait.stDeadline = stDeadline;
 	stWait.iKind = RouteAwaiter::Kind::Named;
-	stWait.pManager = pManagerParam;
-	stWait.sName = std::move(sNameParam);
-	stWait.iPick = iPickParam;
-	stWait.sZone = std::move(sZoneParam);
+	stWait.pManager = pManager;
+	stWait.sName = std::move(sName);
+	stWait.iPick = iPick;
+	stWait.sZone = std::move(sZone);
 	ServiceRoute stRoute = co_await stWait;
 	if (stRoute.iStatus != ServiceRouteStatus::Ok || stRoute.vClients.size() != 1 || !stRoute.vClients[0])
 	{
 		int32_t iCode = RouteError(stRoute.iStatus);
 		co_return RpcResult<Res>(iCode, Res{});
 	}
-	if (stDeadlineParam.Expired())
+	if (stDeadline.Expired())
 	{
 		co_return RpcResult<Res>(OI_ERR_TIMEOUT, Res{});
 	}
-	auto stCall = RpcCall(*stRoute.vClients[0], std::move(stRequestParam), stDeadlineParam.Remaining());
+	auto stCall = RpcCall(*stRoute.vClients[0], std::move(stRequest), stDeadline.Remaining());
 	co_return co_await stCall;
 }
 
 template <typename Res, typename Req>
-auto ProtoClientManager::CallAny(Req stRequestParam, ::OI::Timer::MS stTimeoutParam)
+auto ProtoClientManager::CallAny(Req stRequest, ::OI::Timer::MS stTimeout)
 {
 	static_assert(std::is_same_v<Res, typename RpcProtoId<Req>::Response>, "RPC response type does not match the request");
-	return CallNamed<Res>(this, sServiceName, ServicePick::Any, std::string(), std::move(stRequestParam), stTimeoutParam);
+	return CallNamed<Res>(this, sServiceName, ServicePick::Any, std::string(), std::move(stRequest), stTimeout);
 }
 
 template <typename Res, typename Req>
-auto ProtoClientManager::Call(int32_t iZoneIdParam, Req stRequestParam, ::OI::Timer::MS stTimeoutParam)
+auto ProtoClientManager::Call(int32_t iZoneId, Req stRequest, ::OI::Timer::MS stTimeout)
 {
 	static_assert(std::is_same_v<Res, typename RpcProtoId<Req>::Response>, "RPC response type does not match the request");
-	if (iZoneIdParam < 0)
+	if (iZoneId < 0)
 	{
 		return FailNamed<Res, Req>(OI_ERR_FAIL);
 	}
-	return CallNamed<Res>(this, sServiceName, ServicePick::Zone, std::to_string(iZoneIdParam), std::move(stRequestParam), stTimeoutParam);
+	return CallNamed<Res>(this, sServiceName, ServicePick::Zone, std::to_string(iZoneId), std::move(stRequest), stTimeout);
 }
 
 // 命名调用与直连共用同一个解包等待器，响应不经过 RpcResult 中转或复制。
 template <typename Req>
-coro::TaskResult<int32_t> RunNamedOutput(::OI::Net::SessionManager* pManagerParam, std::string sNameParam,
-    ServicePick iPickParam, std::string sZoneParam, std::optional<Req> stRequestParam,
-    typename RpcProtoId<Req>::Response& stResponseParam, RpcDeadline stDeadlineParam)
+OI::Coro::TaskResult<int32_t> RunNamedOutput(::OI::Net::SessionManager* pManager, std::string sName,
+    ServicePick iPick, std::string sZone, std::optional<Req> stRequest,
+    typename RpcProtoId<Req>::Response& stResponse, RpcDeadline stDeadline)
 {
-	RpcRequestRelease<Req> stRelease{stRequestParam};
+	RpcRequestRelease<Req> stRelease{stRequest};
 	RouteAwaiter stWait;
-	stWait.stDeadline = stDeadlineParam;
-	stWait.pManager = pManagerParam;
-	stWait.sName = std::move(sNameParam);
-	stWait.iPick = iPickParam;
-	stWait.sZone = std::move(sZoneParam);
+	stWait.stDeadline = stDeadline;
+	stWait.pManager = pManager;
+	stWait.sName = std::move(sName);
+	stWait.iPick = iPick;
+	stWait.sZone = std::move(sZone);
 	ServiceRoute stRoute = co_await stWait;
 	if (stRoute.iStatus != ServiceRouteStatus::Ok || stRoute.vClients.size() != 1 || !stRoute.vClients[0])
 	{
 		co_return RouteError(stRoute.iStatus);
 	}
-	if (stDeadlineParam.Expired())
+	if (stDeadline.Expired())
 	{
 		co_return OI_ERR_TIMEOUT;
 	}
-	auto stCall = MakeRpcCallAwaiter(*stRoute.vClients[0], *stRequestParam, stResponseParam, stDeadlineParam.Remaining());
+	auto stCall = MakeRpcCallAwaiter(*stRoute.vClients[0], *stRequest, stResponse, stDeadline.Remaining());
 	co_return co_await stCall;
 }
 template <typename Req>
-coro::TaskResult<int32_t> CallNamedOutput(::OI::Net::SessionManager* pManagerParam, std::string sNameParam,
-    ServicePick iPickParam, std::string sZoneParam, Req stRequestParam,
-    typename RpcProtoId<Req>::Response& stResponseParam, RpcDeadline stDeadlineParam)
+OI::Coro::TaskResult<int32_t> CallNamedOutput(::OI::Net::SessionManager* pManager, std::string sName,
+    ServicePick iPick, std::string sZone, Req stRequest,
+    typename RpcProtoId<Req>::Response& stResponse, RpcDeadline stDeadline)
 {
-	return RunNamedOutput<Req>(pManagerParam, std::move(sNameParam), iPickParam, std::move(sZoneParam),
-	    std::optional<Req>(std::in_place, std::move(stRequestParam)), stResponseParam, stDeadlineParam);
+	return RunNamedOutput<Req>(pManager, std::move(sName), iPick, std::move(sZone),
+	    std::optional<Req>(std::in_place, std::move(stRequest)), stResponse, stDeadline);
 }
 
-inline coro::TaskResult<int32_t> FailRpcOutput(int32_t iCodeParam)
+inline OI::Coro::TaskResult<int32_t> FailRpcOutput(int32_t iCode)
 {
-	co_return iCodeParam;
+	co_return iCode;
 }
 
 template <typename Req>
-[[nodiscard]] auto ProtoClientManager::Call(Req stRequestParam, typename RpcProtoId<Req>::Response& stResponseParam,
-    ::OI::Timer::MS stTimeoutParam)
+[[nodiscard]] auto ProtoClientManager::Call(Req stRequest, typename RpcProtoId<Req>::Response& stResponse,
+    ::OI::Timer::MS stTimeout)
 {
 	// 不指定分区时沿用当前客户端的连接、首次建连排队和固定配置。
-	return RpcCall(*this, std::move(stRequestParam), stResponseParam, stTimeoutParam);
+	return RpcCall(*this, std::move(stRequest), stResponse, stTimeout);
 }
 
 template <typename Req>
-[[nodiscard]] auto ProtoClientManager::CallAny(Req stRequestParam, typename RpcProtoId<Req>::Response& stResponseParam,
-    ::OI::Timer::MS stTimeoutParam)
+[[nodiscard]] auto ProtoClientManager::CallAny(Req stRequest, typename RpcProtoId<Req>::Response& stResponse,
+    ::OI::Timer::MS stTimeout)
 {
-	return CallNamedOutput(this, sServiceName, ServicePick::Any, std::string(), std::move(stRequestParam), stResponseParam, stTimeoutParam);
+	return CallNamedOutput(this, sServiceName, ServicePick::Any, std::string(), std::move(stRequest), stResponse, stTimeout);
 }
 
 template <typename Req>
-[[nodiscard]] auto ProtoClientManager::Call(int32_t iZoneIdParam, Req stRequestParam,
-    typename RpcProtoId<Req>::Response& stResponseParam, ::OI::Timer::MS stTimeoutParam)
+[[nodiscard]] auto ProtoClientManager::Call(int32_t iZoneId, Req stRequest,
+    typename RpcProtoId<Req>::Response& stResponse, ::OI::Timer::MS stTimeout)
 {
-	if (iZoneIdParam < 0)
+	if (iZoneId < 0)
 	{
 		return FailRpcOutput(OI_ERR_FAIL);
 	}
-	return CallNamedOutput(this, sServiceName, ServicePick::Zone, std::to_string(iZoneIdParam), std::move(stRequestParam), stResponseParam, stTimeoutParam);
+	return CallNamedOutput(this, sServiceName, ServicePick::Zone, std::to_string(iZoneId), std::move(stRequest), stResponse, stTimeout);
 }
 
 template <typename Req>
-[[nodiscard]] coro::TaskResult<int32_t> RpcCall(const std::string& sServiceParam, Req stRequestParam,
-    typename RpcProtoId<Req>::Response& stResponseParam, ::OI::Timer::MS stTimeoutParam = ::OI::Timer::Seconds(180))
+[[nodiscard]] OI::Coro::TaskResult<int32_t> RpcCall(const std::string& sService, Req stRequest,
+    typename RpcProtoId<Req>::Response& stResponse, ::OI::Timer::MS stTimeout = ::OI::Timer::Seconds(180))
 {
 	// 本函数不是协程，解析/拷贝在返回前完成；任务帧按值保存选路参数。
 	ServiceRoute stRoute;
 	std::string sName;
 	std::string sZone;
 	ServicePick iPick = ServicePick::Any;
-	if (PrepareTarget(sServiceParam, false, stRoute, sName, iPick, sZone))
+	if (PrepareTarget(sService, false, stRoute, sName, iPick, sZone))
 	{
 		return FailRpcOutput(OI_ERR_FAIL);
 	}
-	return CallNamedOutput(nullptr, std::move(sName), iPick, std::move(sZone), std::move(stRequestParam), stResponseParam, stTimeoutParam);
+	return CallNamedOutput(nullptr, std::move(sName), iPick, std::move(sZone), std::move(stRequest), stResponse, stTimeout);
 }
 
 template <typename Res, typename Req>
-coro::TaskResult<std::vector<RpcResult<Res>>> SendRouted(ServiceRoute stRouteParam, Req stRequestParam, RpcDeadline stDeadlineParam, size_t iFailureCountParam = 1)
+OI::Coro::TaskResult<std::vector<RpcResult<Res>>> SendRouted(ServiceRoute stRoute, Req stRequest, RpcDeadline stDeadline, size_t iFailureCount = 1)
 {
-	ServiceRoute stRoute = std::move(stRouteParam);
 	static_assert(std::is_same_v<Res, typename RpcProtoId<Req>::Response>, "RPC response type does not match the request");
 	if (stRoute.iStatus != ServiceRouteStatus::Ok)
 	{
 		int32_t iCode = RouteError(stRoute.iStatus);
-		co_return std::vector<RpcResult<Res>>(iFailureCountParam, RpcResult<Res>(iCode, Res{}));
+		co_return std::vector<RpcResult<Res>>(iFailureCount, RpcResult<Res>(iCode, Res{}));
 	}
 	std::deque<std::optional<RpcValueAwaiter<Req, Res>>> vCalls;
 	std::vector<int32_t> vSkipped(stRoute.vClients.size(), OI_ERR_CONNECT);
@@ -1549,13 +939,13 @@ coro::TaskResult<std::vector<RpcResult<Res>>> SendRouted(ServiceRoute stRoutePar
 				vCalls.emplace_back();
 				continue;
 			}
-			if (stDeadlineParam.Expired())
+			if (stDeadline.Expired())
 			{
 				vSkipped[iCurrentSlot] = OI_ERR_TIMEOUT;
 				vCalls.emplace_back();
 				continue;
 			}
-			vCalls.emplace_back(std::in_place, RpcCall(*pClient, stRequestParam, stDeadlineParam.Remaining()));
+			vCalls.emplace_back(std::in_place, RpcCall(*pClient, stRequest, stDeadline.Remaining()));
 			vCalls.back()->Submit();
 		}
 	}
@@ -1605,39 +995,39 @@ coro::TaskResult<std::vector<RpcResult<Res>>> SendRouted(ServiceRoute stRoutePar
 // 名字拷进任务。名单是任务跑起来时的注册表回包，等待不占线程。
 // 路由在执行期间持有连接租约，完成后释放；回包仍按调用号匹配等待器。
 template <typename Res, typename Req>
-coro::TaskResult<std::vector<RpcResult<Res>>> CallRouted(RouteAwaiter::Kind iKindParam, ::OI::Net::SessionManager* pManagerParam, std::string sNameParam, ServicePick iPickParam, std::string sZoneParam, std::vector<int32_t> vZonesParam, std::string sTargetParam, bool bBatchParam, Req stRequestParam, RpcDeadline stDeadlineParam)
+OI::Coro::TaskResult<std::vector<RpcResult<Res>>> CallRouted(RouteAwaiter::Kind iKind, ::OI::Net::SessionManager* pManager, std::string sName, ServicePick iPick, std::string sZone, std::vector<int32_t> vZones, std::string sTarget, bool bBatch, Req stRequest, RpcDeadline stDeadline)
 {
 	// 指定分区时，整体错误也必须保留每个输入槽（包括重复分区）。
-	const size_t iFailureCount = iKindParam == RouteAwaiter::Kind::Zones ? vZonesParam.size() : 1;
+	const size_t iFailureCount = iKind == RouteAwaiter::Kind::Zones ? vZones.size() : 1;
 	RouteAwaiter stWait;
-	stWait.stDeadline = stDeadlineParam;
-	stWait.iKind = iKindParam;
-	stWait.pManager = pManagerParam;
-	stWait.sName = std::move(sNameParam);
-	stWait.iPick = iPickParam;
-	stWait.sZone = std::move(sZoneParam);
-	stWait.vZones = std::move(vZonesParam);
-	stWait.sTarget = std::move(sTargetParam);
-	stWait.bBatch = bBatchParam;
+	stWait.stDeadline = stDeadline;
+	stWait.iKind = iKind;
+	stWait.pManager = pManager;
+	stWait.sName = std::move(sName);
+	stWait.iPick = iPick;
+	stWait.sZone = std::move(sZone);
+	stWait.vZones = std::move(vZones);
+	stWait.sTarget = std::move(sTarget);
+	stWait.bBatch = bBatch;
 	ServiceRoute stRoute = co_await stWait;
-	auto stBatch = SendRouted<Res>(std::move(stRoute), std::move(stRequestParam), stDeadlineParam, iFailureCount);
+	auto stBatch = SendRouted<Res>(std::move(stRoute), std::move(stRequest), stDeadline, iFailureCount);
 	co_return co_await stBatch;
 }
 
 template <typename Res, typename Req>
-coro::TaskResult<std::vector<RpcResult<Res>>> RpcCallBatch(const std::string& sServiceParam, Req stRequestParam, ::OI::Timer::MS stTimeoutParam = ::OI::Timer::Seconds(180))
+OI::Coro::TaskResult<std::vector<RpcResult<Res>>> RpcCallBatch(const std::string& sService, Req stRequest, ::OI::Timer::MS stTimeout = ::OI::Timer::Seconds(180))
 {
-	return CallRouted<Res>(RouteAwaiter::Kind::Target, nullptr, std::string(), ServicePick::Any, std::string(), {}, sServiceParam, true, std::move(stRequestParam), stTimeoutParam);
+	return CallRouted<Res>(RouteAwaiter::Kind::Target, nullptr, std::string(), ServicePick::Any, std::string(), {}, sService, true, std::move(stRequest), stTimeout);
 }
 
 template <typename Res, typename Req>
-coro::TaskResult<RpcResult<Res>> RunTargetCall(std::string sServiceParam, Req stRequestParam, RpcDeadline stDeadlineParam)
+OI::Coro::TaskResult<RpcResult<Res>> RunTargetCall(std::string sService, Req stRequest, RpcDeadline stDeadline)
 {
 	static_assert(std::is_same_v<Res, typename RpcProtoId<Req>::Response>, "RPC response type does not match the request");
 	RouteAwaiter stWait;
-	stWait.stDeadline = stDeadlineParam;
+	stWait.stDeadline = stDeadline;
 	stWait.iKind = RouteAwaiter::Kind::Target;
-	stWait.sTarget = std::move(sServiceParam);
+	stWait.sTarget = std::move(sService);
 	stWait.bBatch = false;
 	ServiceRoute stRoute = co_await stWait;
 	if (stRoute.iStatus != ServiceRouteStatus::Ok || stRoute.vClients.size() != 1 || !stRoute.vClients[0])
@@ -1645,30 +1035,30 @@ coro::TaskResult<RpcResult<Res>> RunTargetCall(std::string sServiceParam, Req st
 		int32_t iCode = RouteError(stRoute.iStatus);
 		co_return RpcResult<Res>(iCode, Res{});
 	}
-	if (stDeadlineParam.Expired())
+	if (stDeadline.Expired())
 	{
 		co_return RpcResult<Res>(OI_ERR_TIMEOUT, Res{});
 	}
-	auto stCall = RpcCall(*stRoute.vClients[0], std::move(stRequestParam), stDeadlineParam.Remaining());
+	auto stCall = RpcCall(*stRoute.vClients[0], std::move(stRequest), stDeadline.Remaining());
 	co_return co_await stCall;
 }
 
 template <typename Res, typename Req>
-coro::TaskResult<RpcResult<Res>> RpcCall(std::string sServiceParam, Req stRequestParam, ::OI::Timer::MS stTimeoutParam = ::OI::Timer::Seconds(180))
+OI::Coro::TaskResult<RpcResult<Res>> RpcCall(std::string sService, Req stRequest, ::OI::Timer::MS stTimeout = ::OI::Timer::Seconds(180))
 {
-	return RunTargetCall<Res>(std::move(sServiceParam), std::move(stRequestParam), RpcDeadline(stTimeoutParam));
+	return RunTargetCall<Res>(std::move(sService), std::move(stRequest), RpcDeadline(stTimeout));
 }
 
 template <typename Res, typename Req>
-auto ProtoClientManager::CallAll(const Req& stRequestParam, ::OI::Timer::MS stTimeoutParam)
+auto ProtoClientManager::CallAll(const Req& stRequest, ::OI::Timer::MS stTimeout)
 {
-	return CallRouted<Res>(RouteAwaiter::Kind::Named, this, sServiceName, ServicePick::All, std::string(), {}, std::string(), false, stRequestParam, stTimeoutParam);
+	return CallRouted<Res>(RouteAwaiter::Kind::Named, this, sServiceName, ServicePick::All, std::string(), {}, std::string(), false, stRequest, stTimeout);
 }
 
 template <typename Res, typename Req>
-auto ProtoClientManager::CallMany(const std::vector<int32_t>& vZoneIdsParam, const Req& stRequestParam, ::OI::Timer::MS stTimeoutParam)
+auto ProtoClientManager::CallMany(const std::vector<int32_t>& vZoneIds, const Req& stRequest, ::OI::Timer::MS stTimeout)
 {
-	return CallRouted<Res>(RouteAwaiter::Kind::Zones, this, sServiceName, ServicePick::Any, std::string(), vZoneIdsParam, std::string(), false, stRequestParam, stTimeoutParam);
+	return CallRouted<Res>(RouteAwaiter::Kind::Zones, this, sServiceName, ServicePick::Any, std::string(), vZoneIds, std::string(), false, stRequest, stTimeout);
 }
 
 }

@@ -31,8 +31,8 @@ class FnTimer : public BaseTimer
 	F m_fnFunction;
 
   public:
-	explicit FnTimer(F fnFunctionParam)
-	    : m_fnFunction(std::move(fnFunctionParam))
+	explicit FnTimer(F fnFunction)
+	    : m_fnFunction(std::move(fnFunction))
 	{
 	}
 	bool OnTimer()
@@ -77,46 +77,46 @@ class BaseTimerManager
 		return m_iTickOffsetMilliseconds;
 	}
 
-	uint32_t milling2tick(int iMillisecondParam)
+	uint32_t milling2tick(int iMillisecond)
 	{
-		int iOffset = iMillisecondParam / m_iTickOffsetMilliseconds;
+		int iOffset = iMillisecond / m_iTickOffsetMilliseconds;
 		//定时器时间向tick时间修正取整
-		iOffset += iMillisecondParam % m_iTickOffsetMilliseconds > 0 ? 1 : 0;
+		iOffset += iMillisecond % m_iTickOffsetMilliseconds > 0 ? 1 : 0;
 		return iOffset;
 	}
 
-	void AddTimer(BaseTimer* pTimerParam, int iMillisecondParam);
+	void AddTimer(BaseTimer* pTimer, int iMillisecond);
 
 	template <typename F>
 	typename std::enable_if<!std::is_base_of<BaseTimer, typename std::remove_pointer<typename std::decay<F>::type>::type>::value, void>::type
-	AddTimer(F fnFunctionParam, int iMillisecondParam)
+	AddTimer(F fnFunction, int iMillisecond)
 	{
 		typedef typename std::decay<F>::type Fn;
-		AddTimer(new FnTimer<Fn>(std::move(fnFunctionParam)), iMillisecondParam);
+		AddTimer(new FnTimer<Fn>(std::move(fnFunction)), iMillisecond);
 	}
 
-	bool RemoveTimer(BaseTimer* pTimerParam)
+	bool RemoveTimer(BaseTimer* pTimer)
 	{
 		::OI::Thread::MutexGuard stLock(m_stWheelMutex);
-		assert(pTimerParam->GetTimerLevel());
-		return pTimerParam->GetTimerLevel()->RemoveTimer(this, pTimerParam);
+		assert(pTimer->GetTimerLevel());
+		return pTimer->GetTimerLevel()->RemoveTimer(this, pTimer);
 	}
 	std::string GenTraceLog();
 
   private:
 	// 相对延时只用单调时钟；系统校时只影响日历快照。
-	int64_t TicksFromNow(int iMillisecondParam) const;
+	int64_t TicksFromNow(int iMillisecond) const;
 
 	//增加定时器
-	void add_timer(BaseTimer* pTimerParam);
+	void add_timer(BaseTimer* pTimer);
 	//执行定时器。不持锁调用，续期时自己加锁挂回去
-	void run_timer(BaseTimer* pTimerParam);
+	void run_timer(BaseTimer* pTimer);
 	//推进 1 tick，本 tick 到点的放进 due。持 _wheel_mu 调用
-	void run_tick(TimerList& vDueParam);
+	void run_tick(TimerList& vDue);
 	//均衡高级定时器
 	void try_uniform();
 	//取出最低一级本 tick 到点的定时器
-	void try_run_timer(TimerList& vDueParam);
+	void try_run_timer(TimerList& vDue);
 
   private:
 	friend class TimerLevel;

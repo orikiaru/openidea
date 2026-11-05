@@ -11,16 +11,16 @@ Config::Config()
 	m_pTomlConfig = cpptoml::make_table();
 }
 
-bool Config::Parse(const std::string& sConfFileNameParam)
+bool Config::Parse(const std::string& sConfFileName)
 {
 	std::shared_ptr<cpptoml::table> pConfig;
 	try
 	{
-		pConfig = cpptoml::parse_file(sConfFileNameParam);
+		pConfig = cpptoml::parse_file(sConfFileName);
 	}
 	catch (const cpptoml::parse_exception& stErrorLocal)
 	{
-		std::cerr << "Failed to parse " << sConfFileNameParam << ": " << stErrorLocal.what() << std::endl;
+		std::cerr << "Failed to parse " << sConfFileName << ": " << stErrorLocal.what() << std::endl;
 		return false;
 	}
 	for (const auto& [sName, pValue] : *pConfig)

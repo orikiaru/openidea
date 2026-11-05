@@ -56,22 +56,22 @@ class LogManager : public ::OI::Timer::BaseTimer
 	void Stop();
 
 	// 满时不消费正文；网络会话登记恢复，本地调用直接返回 false。
-	bool WriteLog(LOG_LEVEL iLevelParam, const char* pTextParam, size_t iLengthParam,
-	    LogServerSession* pSessionParam = nullptr);
+	bool WriteLog(LOG_LEVEL iLevel, const char* pText, size_t iLength,
+	    LogServerSession* pSession = nullptr);
 	// poll 单次解析达到预算，保留下一帧并排到等待队列尾部。
-	void DeferWrite(LogServerSession* pSessionParam, size_t iLengthParam);
+	void DeferWrite(LogServerSession* pSession, size_t iLength);
 
   private:
 	friend class LogFileInstance;
-	void CompleteWrite(size_t iBytesParam);
-	void QueueWaiter(LogServerSession* pSessionParam, size_t iBytesParam);
+	void CompleteWrite(size_t iBytes);
+	void QueueWaiter(LogServerSession* pSession, size_t iBytes);
 	void ScheduleResume();
-	static void ResumeOnLoop(void* pArgumentParam);
-	void ResumeWaiting(bool bShutdownParam);
+	static void ResumeOnLoop(void* pArgument);
+	void ResumeWaiting(bool bShutdown);
 	bool StartLogInstanceWork();
 	bool OpenAllLogFile();
 	bool CheckAndCreateRootPath();
-	bool OpenLogFile(LOG_LEVEL iLevelParam);
+	bool OpenLogFile(LOG_LEVEL iLevel);
 	void OnCrossDay();
 	virtual bool OnTimer();
 	std::string GetLogTitle();

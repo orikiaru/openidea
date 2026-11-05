@@ -8,20 +8,20 @@
 #include <memory>
 #include <string>
 
-static std::string DumpJson(const Json::Value& stValueParam)
+static std::string DumpJson(const Json::Value& stValue)
 {
 	Json::StreamWriterBuilder stBuilder;
 	stBuilder["indentation"] = "";
-	return Json::writeString(stBuilder, stValueParam);
+	return Json::writeString(stBuilder, stValue);
 }
 
-static bool ParseJson(const std::string& sTextParam, Json::Value& stOutputParam)
+static bool ParseJson(const std::string& sText, Json::Value& stOutput)
 {
 	Json::CharReaderBuilder stBuilder;
 	std::string sErrors;
 	const std::unique_ptr<Json::CharReader> pReader(stBuilder.newCharReader());
-	const char* pBegin = sTextParam.data();
-	return pReader->parse(pBegin, pBegin + sTextParam.size(), &stOutputParam, &sErrors);
+	const char* pBegin = sText.data();
+	return pReader->parse(pBegin, pBegin + sText.size(), &stOutput, &sErrors);
 }
 
 bool WebServer::Run()
@@ -37,46 +37,46 @@ bool WebServer::Run()
 	}
 
 	httplib::Server stSvr;
-	stSvr.Get("/health", [](const httplib::Request&, httplib::Response& stResponseParam)
+	stSvr.Get("/health", [](const httplib::Request&, httplib::Response& stResponse)
 	{
-		stResponseParam.set_content("ok", "text/plain");
+		stResponse.set_content("ok", "text/plain");
 	});
-	stSvr.Get("/query", [](const httplib::Request& stRequestParam, httplib::Response& stResponseParam)
+	stSvr.Get("/query", [](const httplib::Request& stRequest, httplib::Response& stResponse)
 	{
-		if (!stRequestParam.has_param("text"))
+		if (!stRequest.has_param("text"))
 		{
-			stResponseParam.status = 400;
+			stResponse.status = 400;
 			return;
 		}
 		Json::Value stOutput(Json::objectValue);
-		stOutput["text"] = stRequestParam.get_param_value("text");
-		stResponseParam.set_content(DumpJson(stOutput), "application/json");
+		stOutput["text"] = stRequest.get_param_value("text");
+		stResponse.set_content(DumpJson(stOutput), "application/json");
 	});
-	stSvr.Post("/json", [](const httplib::Request& stRequestParam, httplib::Response& stResponseParam)
+	stSvr.Post("/json", [](const httplib::Request& stRequest, httplib::Response& stResponse)
 	{
 		Json::Value stBody;
-		if (!ParseJson(stRequestParam.body, stBody) || !stBody.isObject())
+		if (!ParseJson(stRequest.body, stBody) || !stBody.isObject())
 		{
-			stResponseParam.status = 400;
+			stResponse.status = 400;
 			return;
 		}
 		stBody["ok"] = true;
-		stResponseParam.set_content(DumpJson(stBody), "application/json");
+		stResponse.set_content(DumpJson(stBody), "application/json");
 	});
-	stSvr.Post("/rpcjson", [](const httplib::Request& stRequestParam, httplib::Response& stResponseParam)
+	stSvr.Post("/rpcjson", [](const httplib::Request& stRequest, httplib::Response& stResponse)
 	{
 		::OI::RpcData::JsonAll stDataLocal;
-		if (!stDataLocal.FromJson(stRequestParam.body))
+		if (!stDataLocal.FromJson(stRequest.body))
 		{
-			stResponseParam.status = 400;
+			stResponse.status = 400;
 			return;
 		}
 		stDataLocal.iGap += 1;
-		stResponseParam.set_content(stDataLocal.ToJson(), "application/json");
+		stResponse.set_content(stDataLocal.ToJson(), "application/json");
 	});
-	stSvr.Post("/bin", [](const httplib::Request& stRequestParam, httplib::Response& stResponseParam)
+	stSvr.Post("/bin", [](const httplib::Request& stRequest, httplib::Response& stResponse)
 	{
-		stResponseParam.set_content(stRequestParam.body.data(), stRequestParam.body.size(), "application/octet-stream");
+		stResponse.set_content(stRequest.body.data(), stRequest.body.size(), "application/octet-stream");
 	});
 
 	printf("web server listen %s:%d\n", sIpLocal.c_str(), iPortLocal);

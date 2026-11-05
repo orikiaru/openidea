@@ -14,28 +14,28 @@
 #include <utility>
 #include <vector>
 
-static std::string DumpJson(const Json::Value& stValueParam)
+static std::string DumpJson(const Json::Value& stValue)
 {
 	Json::StreamWriterBuilder stBuilder;
 	stBuilder["indentation"] = "";
-	return Json::writeString(stBuilder, stValueParam);
+	return Json::writeString(stBuilder, stValue);
 }
 
-static bool ParseJson(const std::string& sTextParam, Json::Value& stOutputParam)
+static bool ParseJson(const std::string& sText, Json::Value& stOutput)
 {
 	Json::CharReaderBuilder stBuilder;
 	std::string sErrors;
 	const std::unique_ptr<Json::CharReader> pReader(stBuilder.newCharReader());
-	const char* pBegin = sTextParam.data();
-	return pReader->parse(pBegin, pBegin + sTextParam.size(), &stOutputParam, &sErrors);
+	const char* pBegin = sText.data();
+	return pReader->parse(pBegin, pBegin + sText.size(), &stOutput, &sErrors);
 }
 
-static bool OkStatus(const ::OI::Http::Response& stResponseParam)
+static bool OkStatus(const ::OI::Http::Response& stResponse)
 {
-	return !stResponseParam.bFail && stResponseParam.iStatus == 200;
+	return !stResponse.bFail && stResponse.iStatus == 200;
 }
 
-static coro::Task Run()
+static OI::Coro::Task Run()
 {
 	std::string sIpLocal = "127.0.0.1";
 	int32_t iPortLocal = 18080;
@@ -203,7 +203,7 @@ static coro::Task Run()
 
 void WebClient::Start()
 {
-	coro::StartTask([](coro::Token)
+	OI::Coro::StartTask([](OI::Coro::Token)
 	{
 		return Run();
 	});

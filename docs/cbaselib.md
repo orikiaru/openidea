@@ -6,7 +6,7 @@
 
 ## 目录
 
-`base` 是进程里的公共件。`Bytes` 是二进制缓冲，`BytesStream` 做序列化。`Config` 读 toml。`ThreadPool` 跑普通任务和协程句柄。应用侧用 `AddTask(lambda)` 或协程，不要自己继承 `Task` 再 `new`/`delete`。`Task` 的分配留在线程池里。`DECLARE_SINGLETON(T)` 提供 `T::GetInstance()`，返回唯一实例的引用，不进入继承链。`FilePath` 检查路径在不在，并补齐中间目录。
+`base` 是进程里的公共件。`Bytes` 是二进制缓冲，`BytesStream` 做序列化。`Config` 读 toml。`ThreadPool` 跑普通任务和协程句柄。协程任务、`WhenAll`、`yield` 在 `OI::Coro`（`oi_coro.h`），RPC、Redis、HTTP 复用它，不把协程运行时放在协议头里。应用侧用 `AddTask(lambda)` 或协程，不要自己继承 `Task` 再 `new`/`delete`。`Task` 的分配留在线程池里。`DECLARE_SINGLETON(T)` 提供 `T::GetInstance()`，返回唯一实例的引用，不进入继承链。`FilePath` 检查路径在不在，并补齐中间目录。
 
 `net` 是网络，类型在 `OI::Net`。`Poll` 包 libuv 的事件循环。文件读写改走 Linux io_uring、Windows IOCP 已排期，套接字和文件共用这条完成队列，见 [异步 IO](async-io.md)，现在还没改。`NetSocket`、`AcceptChannel`、`ConnectChannel`、`TcpChannel` 负责监听、连接和收发。`Session` 和 `SessionManager` 管一类连接，组件配置里的 ip、port、type 从这里读。`SendBytes` 只在查会话表时持管理器锁，拷贝数据在锁外、持会话锁做；会话带引用计数，通道销毁时先断开会话到通道的指针再释放引用。监听口在 `bind` 之前打开 `SO_REUSEADDR`。进程退出后旧连接还会在 `TIME_WAIT` 里待一会儿，但不再挡住下一次监听。客户端连出去不走 `bind`。按服务名发现地址在 [服务注册](registry.md)。表由 `registry` 进程管，存在 Redis，应用只连 registry。配置里写了 `<名字>.service` 时，`SessionManager::Init` 先向 registry 查，查不到再用同一段的 ip/port。监听方在 `StartServer` 成功后登记并定时报告在线。空间按 registry 的 `[Registry] project/env` 分开。
 
@@ -36,7 +36,7 @@ logd 的 `[Log] max_pending_bytes` 默认 64MiB，所有日志级别共享，包
 
 范围查询保留 Redis 语义：下标可为负；分数边界传字符串（例如 `"-inf"`、`"+inf"`、`"(10"`），字典边界使用 `"-"`、`"+"`、`"[abc"`、`"(abc"`。反向分数/字典查询的参数顺序是最大值、最小值，正向相反。按字典查询要求参与比较的成员分数相同。分数/字典范围可传 offset、count（默认 0、-1，表示全部）；大量数据应分页。字符串局部修改只接收 string，不对 rpcdata 二进制内容做片段修改。
 
-列表和集合的普通结果为 `vector<string>` 或 `vector<rpcdata>`；hash 全量为 `map<string, T>`；带分数结果为 `vector<RedisScored<T>>`，成员为 `stMember`、分数为 `dScore`。SMIsMember 返回与原生整数回执一致的 `vector<int64_t>`（每项 0/1），不用带代理引用的 `vector<bool>`。HMGet 返回 `vector<optional<T>>`，ZMScore 返回 `vector<optional<double>>`，缺失元素是空 optional，保留请求位置，不把整批判成失败。单 key 多元素输入不能为空，空输入返回 `OI_ERR_INVALID_ARGUMENT`。
+列表和集合的普通结果为 `vector<string>` 或 `vector<rpcdata>`；hash 全量为 `map<string, T>`；带分数结果为 `vector<RedisScored<T>>`，成员为 `stMember`、分数为 `dScore`。SMIsMember 返回与原生整数回执一致的 `vector<int64_t>`（每项 0/1）。`vector<bool>` 是标准库特化，元素是代理引用，模板解码直接 `static_assert` 拦住。用 `int64_t` 是因为 Redis 整数回执本身是 64 位，和 Lua 等整数数组同一条解码；0/1 用 `int32_t` 也装得下，但超过 32 位的值会按协议错误拒绝，不截断。HMGet 返回 `vector<optional<T>>`，ZMScore 返回 `vector<optional<double>>`，缺失元素是空 optional，保留请求位置，不把整批判成失败。单 key 多元素输入不能为空，空输入返回 `OI_ERR_INVALID_ARGUMENT`。
 
 HScan、SScan、ZScan 返回 `RedisScanPage<T>`：`iCursor` 是下次扫描游标，`stValues` 分别为 map、vector 或带分数 vector。从游标 0 开始，直到返回 0 才结束；中间空页不代表结束，COUNT 是提示而非页大小保证，可能重复返回元素。调用方按业务去重；并发修改时扫描不是快照。MATCH 用原始 Redis glob 匹配，rpcdata 二进制成员通常使用默认 `"*"`。
 

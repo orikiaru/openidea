@@ -6,7 +6,7 @@ namespace OI
 {
 namespace File
 {
-bool Exists(const std::string& sPathParam);
-bool MakeDirs(const std::string& sPathParam);
+bool Exists(const std::string& sPath);
+bool MakeDirs(const std::string& sPath);
 }
 }

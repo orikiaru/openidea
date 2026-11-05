@@ -58,15 +58,15 @@ const char* kListAllLua =
     "end "
     "return out";
 
-bool ValidSpacePart(const std::string& sTextParam)
+bool ValidSpacePart(const std::string& sText)
 {
-	if (sTextParam.empty())
+	if (sText.empty())
 	{
 		return false;
 	}
-	for (size_t iIndexLocal = 0; iIndexLocal < sTextParam.size(); ++iIndexLocal)
+	for (size_t iIndexLocal = 0; iIndexLocal < sText.size(); ++iIndexLocal)
 	{
-		char iCharacter = sTextParam[iIndexLocal];
+		char iCharacter = sText[iIndexLocal];
 		bool bOk = (iCharacter >= 'a' && iCharacter <= 'z') || (iCharacter >= 'A' && iCharacter <= 'Z') || (iCharacter >= '0' && iCharacter <= '9') || iCharacter == '_' || iCharacter == '-';
 		if (!bOk)
 		{
@@ -77,47 +77,47 @@ bool ValidSpacePart(const std::string& sTextParam)
 }
 
 // 值是 "ip port" 或 "ip port 分区"。名字、id、地址都一样就是同一个服务，重新登记直接续上；地址不一样才算被别人占了。
-bool ParseValue(const std::string& sValueParam, std::string& sIpParam, std::string& sPortParam, std::string& sZoneParam)
+bool ParseValue(const std::string& sValue, std::string& sIp, std::string& sPort, std::string& sZone)
 {
-	size_t iFirst = sValueParam.find(' ');
+	size_t iFirst = sValue.find(' ');
 	if (iFirst == std::string::npos || iFirst == 0)
 	{
 		return false;
 	}
-	size_t iSecond = sValueParam.find(' ', iFirst + 1);
-	sIpParam = sValueParam.substr(0, iFirst);
-	sPortParam = sValueParam.substr(iFirst + 1, iSecond == std::string::npos ? std::string::npos : iSecond - iFirst - 1);
-	sZoneParam.clear();
+	size_t iSecond = sValue.find(' ', iFirst + 1);
+	sIp = sValue.substr(0, iFirst);
+	sPort = sValue.substr(iFirst + 1, iSecond == std::string::npos ? std::string::npos : iSecond - iFirst - 1);
+	sZone.clear();
 	if (iSecond != std::string::npos)
 	{
-		sZoneParam = sValueParam.substr(iSecond + 1);
-		if (sZoneParam.empty() || sZoneParam.find(' ') != std::string::npos)
+		sZone = sValue.substr(iSecond + 1);
+		if (sZone.empty() || sZone.find(' ') != std::string::npos)
 		{
 			return false;
 		}
 	}
-	return !sIpParam.empty() && !sPortParam.empty();
+	return !sIp.empty() && !sPort.empty();
 }
 
-int ReplyInt(const ::OI::Redis::RedisResult& stRParam)
+int ReplyInt(const ::OI::Redis::RedisResult& stR)
 {
-	if (!stRParam || !stRParam.pReply || stRParam.pReply->type != REDIS_REPLY_INTEGER)
+	if (!stR || !stR.pReply || stR.pReply->type != REDIS_REPLY_INTEGER)
 	{
 		return -1;
 	}
-	return (int)stRParam.pReply->integer;
+	return (int)stR.pReply->integer;
 }
 
-std::string StrOf(const redisReply* pRParam)
+std::string StrOf(const redisReply* pR)
 {
-	return std::string(pRParam->str, (size_t)pRParam->len);
+	return std::string(pR->str, (size_t)pR->len);
 }
 
 class RegistryServerSession : public ::OI::Net::NetSession
 {
   public:
-	explicit RegistryServerSession(::OI::Net::SessionManager* pManagerParam)
-	    : ::OI::Net::NetSession(pManagerParam)
+	explicit RegistryServerSession(::OI::Net::SessionManager* pManager)
+	    : ::OI::Net::NetSession(pManager)
 	{
 	}
 
@@ -126,9 +126,9 @@ class RegistryServerSession : public ::OI::Net::NetSession
 	}
 	virtual void OnDataIn()
 	{
-		::OI::Base::ReadRegFrames(stInputBuffer, this, [this](uint32_t iIdParam, ::OI::Base::BytesStream& stBodyParam)
+		::OI::Base::ReadRegFrames(stInputBuffer, this, [this](uint32_t iIdLocal, ::OI::Base::BytesStream& stBody)
 		{
-			RegistryServer::GetInstance().Handle(this, iIdParam, stBodyParam);
+			RegistryServer::GetInstance().Handle(this, iIdLocal, stBody);
 		});
 	}
 };
@@ -175,16 +175,16 @@ bool RegistryServer::LoadSpace()
 	return true;
 }
 
-std::string RegistryServer::Key(const std::string& sTailParam) const
+std::string RegistryServer::Key(const std::string& sTail) const
 {
-	return m_sPrefix + sTailParam;
+	return m_sPrefix + sTail;
 }
 
 // 登记和续期共用：三个键是实例、id 集合、名字集合。
-std::vector<std::string> RegistryServer::EvalArgs(const char* pLuaParam, const Binding& stSecondParam) const
+std::vector<std::string> RegistryServer::EvalArgs(const char* pLua, const Binding& stSecond) const
 {
-	return {"EVAL", pLuaParam, "3", Key("svc:" + stSecondParam.sName + ":" + std::to_string(stSecondParam.iId)), Key("svc:" + stSecondParam.sName), Key("svc"),
-	    stSecondParam.sValue, std::to_string(m_iExpireMilliseconds), std::to_string(stSecondParam.iId), stSecondParam.sName};
+	return {"EVAL", pLua, "3", Key("svc:" + stSecond.sName + ":" + std::to_string(stSecond.iId)), Key("svc:" + stSecond.sName), Key("svc"),
+	    stSecond.sValue, std::to_string(m_iExpireMilliseconds), std::to_string(stSecond.iId), stSecond.sName};
 }
 
 bool RegistryServer::Init()
@@ -214,7 +214,7 @@ bool RegistryServer::Init()
 		return false;
 	}
 	::OI::Redis::RedisClient::GetInstance().StartClient();
-	coro::StartTask([this](coro::Token)
+	OI::Coro::StartTask([this](OI::Coro::Token)
 	{
 		return Boot();
 	});
@@ -222,7 +222,7 @@ bool RegistryServer::Init()
 	return true;
 }
 
-coro::Task RegistryServer::Boot()
+OI::Coro::Task RegistryServer::Boot()
 {
 	int iSpins = 0;
 	while (!::OI::Redis::RedisClient::GetInstance().IsConnect())
@@ -231,7 +231,7 @@ coro::Task RegistryServer::Boot()
 		{
 			LOG_TRACE("registry waiting redis");
 		}
-		co_await coro::yield(50);
+		co_await OI::Coro::yield(50);
 	}
 	StartReload();
 	::OI::Timer::BaseTimerManager::GetInstance().AddTimer(new ReloadTimer(), m_iPullMilliseconds);
@@ -242,15 +242,15 @@ coro::Task RegistryServer::Boot()
 	return new RegistryServerSession(this);
 }
 
-void RegistryServer::OnAddSession(::OI::Net::Session* pSessionParam)
+void RegistryServer::OnAddSession(::OI::Net::Session* pSession)
 {
-	m_vAlive.insert(pSessionParam->GetSessionID());
-	LOG_INFO("RegistryServer::OnAddSession sid=%d", pSessionParam->GetSessionID());
+	m_vAlive.insert(pSession->GetSessionID());
+	LOG_INFO("RegistryServer::OnAddSession sid=%d", pSession->GetSessionID());
 }
 
-void RegistryServer::OnDelSession(const ::OI::Net::Session* pSessionParam)
+void RegistryServer::OnDelSession(const ::OI::Net::Session* pSession)
 {
-	sid_t iSessionIdLocal = pSessionParam->GetSessionID();
+	sid_t iSessionIdLocal = pSession->GetSessionID();
 	m_vAlive.erase(iSessionIdLocal);
 	auto stIterator = m_mBindings.find(iSessionIdLocal);
 	if (stIterator != m_mBindings.end())
@@ -263,7 +263,7 @@ void RegistryServer::OnDelSession(const ::OI::Net::Session* pSessionParam)
 			Binding stSecond = vList[iIndexLocal];
 			DropSnapshot(stSecond.sName, stSecond.iId);
 			LOG_TRACE("registry offline %s id=%d (connection closed)", stSecond.sName.c_str(), stSecond.iId);
-			coro::StartTask([this, stSecond](coro::Token)
+			OI::Coro::StartTask([this, stSecond](OI::Coro::Token)
 			{
 				return Withdraw(stSecond);
 			});
@@ -273,16 +273,16 @@ void RegistryServer::OnDelSession(const ::OI::Net::Session* pSessionParam)
 	LOG_INFO("RegistryServer::OnDelSession sid=%d", iSessionIdLocal);
 }
 
-RegistryServer::Binding* RegistryServer::FindBinding(sid_t iSessionIdParam, const std::string& sNameParam, int32_t iIdParam)
+RegistryServer::Binding* RegistryServer::FindBinding(sid_t iSessionId, const std::string& sNameLocal, int32_t iIdLocal)
 {
-	auto stIterator = m_mBindings.find(iSessionIdParam);
+	auto stIterator = m_mBindings.find(iSessionId);
 	if (stIterator == m_mBindings.end())
 	{
 		return NULL;
 	}
 	for (size_t iIndexLocal = 0; iIndexLocal < stIterator->second.size(); ++iIndexLocal)
 	{
-		if (stIterator->second[iIndexLocal].sName == sNameParam && stIterator->second[iIndexLocal].iId == iIdParam)
+		if (stIterator->second[iIndexLocal].sName == sNameLocal && stIterator->second[iIndexLocal].iId == iIdLocal)
 		{
 			return &stIterator->second[iIndexLocal];
 		}
@@ -290,11 +290,11 @@ RegistryServer::Binding* RegistryServer::FindBinding(sid_t iSessionIdParam, cons
 	return NULL;
 }
 
-void RegistryServer::DropSnapshot(const std::string& sNameParam, int32_t iIdParam)
+void RegistryServer::DropSnapshot(const std::string& sNameLocal, int32_t iIdLocal)
 {
 	for (size_t iIndexLocal = 0; iIndexLocal < m_vSnapshot.size(); ++iIndexLocal)
 	{
-		if (m_vSnapshot[iIndexLocal].sName == sNameParam && m_vSnapshot[iIndexLocal].iId == iIdParam)
+		if (m_vSnapshot[iIndexLocal].sName == sNameLocal && m_vSnapshot[iIndexLocal].iId == iIdLocal)
 		{
 			m_vSnapshot.erase(m_vSnapshot.begin() + iIndexLocal);
 			return;
@@ -302,23 +302,23 @@ void RegistryServer::DropSnapshot(const std::string& sNameParam, int32_t iIdPara
 	}
 }
 
-void RegistryServer::PutSnapshot(const Binding& stSecondParam)
+void RegistryServer::PutSnapshot(const Binding& stSecond)
 {
-	DropSnapshot(stSecondParam.sName, stSecondParam.iId);
+	DropSnapshot(stSecond.sName, stSecond.iId);
 	::OI::Base::ServiceInstance stInst;
-	stInst.sName = stSecondParam.sName;
-	stInst.iId = stSecondParam.iId;
-	stInst.sIp = stSecondParam.sIp;
-	stInst.sPort = stSecondParam.sPort;
-	stInst.sZone = stSecondParam.sZone;
+	stInst.sName = stSecond.sName;
+	stInst.iId = stSecond.iId;
+	stInst.sIp = stSecond.sIp;
+	stInst.sPort = stSecond.sPort;
+	stInst.sZone = stSecond.sZone;
 	m_vSnapshot.push_back(stInst);
 }
 
-void RegistryServer::Reply(sid_t iSessionIdParam, uint32_t iIdParam, const ::OI::Rpc::Serialize& stMessageParam)
+void RegistryServer::Reply(sid_t iSessionId, uint32_t iIdLocal, const ::OI::Rpc::Serialize& stMessage)
 {
-	if (!SendBytes(iSessionIdParam, ::OI::Base::EncodeRegFrame(iIdParam, stMessageParam)))
+	if (!SendBytes(iSessionId, ::OI::Base::EncodeRegFrame(iIdLocal, stMessage)))
 	{
-		CloseSession(iSessionIdParam);
+		CloseSession(iSessionId);
 	}
 }
 
@@ -329,13 +329,13 @@ void RegistryServer::StartReload()
 		return;
 	}
 	m_bReloading = true;
-	coro::StartTask([this](coro::Token)
+	OI::Coro::StartTask([this](OI::Coro::Token)
 	{
 		return Reload();
 	});
 }
 
-coro::Task RegistryServer::Reload()
+OI::Coro::Task RegistryServer::Reload()
 {
 	std::vector<std::string> vArgumentsLocal = {"EVAL", kListAllLua, "1", Key("svc"), Key("svc:")};
 	::OI::Redis::RedisResult stR = co_await ::OI::Redis::CallRedis(std::move(vArgumentsLocal));
@@ -372,17 +372,17 @@ coro::Task RegistryServer::Reload()
 	m_bSnapshotOk = true;
 }
 
-coro::Task RegistryServer::Register(sid_t iSessionIdParam, Binding stSecondParam)
+OI::Coro::Task RegistryServer::Register(sid_t iSessionId, Binding stSecond)
 {
-	std::vector<std::string> vArgumentsLocal = EvalArgs(kRegisterLua, stSecondParam);
+	std::vector<std::string> vArgumentsLocal = EvalArgs(kRegisterLua, stSecond);
 	::OI::Redis::RedisResult stR = co_await ::OI::Redis::CallRedis(std::move(vArgumentsLocal));
 	int iReturnCodeLocal = ReplyInt(stR);
-	if (m_vAlive.count(iSessionIdParam) == 0)
+	if (m_vAlive.count(iSessionId) == 0)
 	{
 		// 等 Redis 的时候连接断了。OnDelSession 不知道这一份，这里补删。
 		if (iReturnCodeLocal == REG_OK)
 		{
-			co_await Withdraw(stSecondParam);
+			co_await Withdraw(stSecond);
 		}
 		co_return;
 	}
@@ -390,45 +390,45 @@ coro::Task RegistryServer::Register(sid_t iSessionIdParam, Binding stSecondParam
 	stResponseLocal.iCode = OI_ERR_FAIL;
 	if (iReturnCodeLocal == REG_OK)
 	{
-		Binding* pFound = FindBinding(iSessionIdParam, stSecondParam.sName, stSecondParam.iId);
+		Binding* pFound = FindBinding(iSessionId, stSecond.sName, stSecond.iId);
 		if (!pFound)
 		{
-			m_mBindings[iSessionIdParam].push_back(stSecondParam);
+			m_mBindings[iSessionId].push_back(stSecond);
 		}
 		else
 		{
-			*pFound = stSecondParam;
+			*pFound = stSecond;
 		}
-		PutSnapshot(stSecondParam);
+		PutSnapshot(stSecond);
 		stResponseLocal.iCode = OI_OK;
-		LOG_TRACE("registry online %s id=%d %s:%s", stSecondParam.sName.c_str(), stSecondParam.iId, stSecondParam.sIp.c_str(), stSecondParam.sPort.c_str());
+		LOG_TRACE("registry online %s id=%d %s:%s", stSecond.sName.c_str(), stSecond.iId, stSecond.sIp.c_str(), stSecond.sPort.c_str());
 		fflush(stdout);
 	}
 	else if (iReturnCodeLocal == REG_TAKEN)
 	{
 		stResponseLocal.iCode = OI_ERR_EXIST;
-		LOG_TRACE("registry %s id=%d already online, refuse sid=%d", stSecondParam.sName.c_str(), stSecondParam.iId, iSessionIdParam);
+		LOG_TRACE("registry %s id=%d already online, refuse sid=%d", stSecond.sName.c_str(), stSecond.iId, iSessionId);
 		fflush(stdout);
 	}
 	else
 	{
-		LOG_TRACE("registry register %s id=%d redis failed status=%d", stSecondParam.sName.c_str(), stSecondParam.iId, (int)stR.iStatus);
+		LOG_TRACE("registry register %s id=%d redis failed status=%d", stSecond.sName.c_str(), stSecond.iId, (int)stR.iStatus);
 	}
-	Reply(iSessionIdParam, ::OI::Base::PROTO_REG_REGISTER_RES, stResponseLocal);
+	Reply(iSessionId, ::OI::Base::PROTO_REG_REGISTER_RES, stResponseLocal);
 }
 
-coro::Task RegistryServer::Refresh(sid_t iSessionIdParam, Binding stSecondParam)
+OI::Coro::Task RegistryServer::Refresh(sid_t iSessionId, Binding stSecond)
 {
-	std::vector<std::string> vArgumentsLocal = EvalArgs(kRefreshLua, stSecondParam);
+	std::vector<std::string> vArgumentsLocal = EvalArgs(kRefreshLua, stSecond);
 	::OI::Redis::RedisResult stR = co_await ::OI::Redis::CallRedis(std::move(vArgumentsLocal));
 	int iReturnCodeLocal = ReplyInt(stR);
-	Binding* pFound = m_vAlive.count(iSessionIdParam) ? FindBinding(iSessionIdParam, stSecondParam.sName, stSecondParam.iId) : NULL;
-	if (!pFound || pFound->sValue != stSecondParam.sValue)
+	Binding* pFound = m_vAlive.count(iSessionId) ? FindBinding(iSessionId, stSecond.sName, stSecond.iId) : NULL;
+	if (!pFound || pFound->sValue != stSecond.sValue)
 	{
 		// 续期过程中连接断了或换了登记。续期可能把键又写回去了，按这份值删掉。
 		if (iReturnCodeLocal == REG_OK || iReturnCodeLocal == REG_RENEWED)
 		{
-			co_await Withdraw(stSecondParam);
+			co_await Withdraw(stSecond);
 		}
 		co_return;
 	}
@@ -438,18 +438,18 @@ coro::Task RegistryServer::Refresh(sid_t iSessionIdParam, Binding stSecondParam)
 	{
 		if (iReturnCodeLocal == REG_RENEWED)
 		{
-			PutSnapshot(stSecondParam);
-			LOG_TRACE("registry %s id=%d registered again", stSecondParam.sName.c_str(), stSecondParam.iId);
+			PutSnapshot(stSecond);
+			LOG_TRACE("registry %s id=%d registered again", stSecond.sName.c_str(), stSecond.iId);
 			fflush(stdout);
 		}
 		stResponseLocal.iCode = OI_OK;
 	}
 	else if (iReturnCodeLocal == REG_TAKEN)
 	{
-		std::vector<Binding>& vList = m_mBindings[iSessionIdParam];
+		std::vector<Binding>& vList = m_mBindings[iSessionId];
 		for (size_t iIndexLocal = 0; iIndexLocal < vList.size(); ++iIndexLocal)
 		{
-			if (vList[iIndexLocal].sName == stSecondParam.sName && vList[iIndexLocal].iId == stSecondParam.iId)
+			if (vList[iIndexLocal].sName == stSecond.sName && vList[iIndexLocal].iId == stSecond.iId)
 			{
 				vList.erase(vList.begin() + iIndexLocal);
 				break;
@@ -459,44 +459,44 @@ coro::Task RegistryServer::Refresh(sid_t iSessionIdParam, Binding stSecondParam)
 		for (size_t iIndexLocal = 0; iIndexLocal < m_vSnapshot.size(); ++iIndexLocal)
 		{
 			const ::OI::Base::ServiceInstance& stInst = m_vSnapshot[iIndexLocal];
-			if (stInst.sName == stSecondParam.sName && stInst.iId == stSecondParam.iId && stInst.sIp == stSecondParam.sIp && stInst.sPort == stSecondParam.sPort)
+			if (stInst.sName == stSecond.sName && stInst.iId == stSecond.iId && stInst.sIp == stSecond.sIp && stInst.sPort == stSecond.sPort)
 			{
 				m_vSnapshot.erase(m_vSnapshot.begin() + iIndexLocal);
 				break;
 			}
 		}
 		stResponseLocal.iCode = OI_ERR_EXIST;
-		LOG_TRACE("registry %s id=%d taken by another process", stSecondParam.sName.c_str(), stSecondParam.iId);
+		LOG_TRACE("registry %s id=%d taken by another process", stSecond.sName.c_str(), stSecond.iId);
 		fflush(stdout);
 	}
-	Reply(iSessionIdParam, ::OI::Base::PROTO_REG_HEARTBEAT_RES, stResponseLocal);
+	Reply(iSessionId, ::OI::Base::PROTO_REG_HEARTBEAT_RES, stResponseLocal);
 }
 
-coro::Task RegistryServer::Withdraw(Binding stSecondParam)
+OI::Coro::Task RegistryServer::Withdraw(Binding stSecond)
 {
-	std::vector<std::string> vArgumentsLocal = {"EVAL", kWithdrawLua, "2", Key("svc:" + stSecondParam.sName + ":" + std::to_string(stSecondParam.iId)), Key("svc:" + stSecondParam.sName), stSecondParam.sValue, std::to_string(stSecondParam.iId)};
+	std::vector<std::string> vArgumentsLocal = {"EVAL", kWithdrawLua, "2", Key("svc:" + stSecond.sName + ":" + std::to_string(stSecond.iId)), Key("svc:" + stSecond.sName), stSecond.sValue, std::to_string(stSecond.iId)};
 	co_await ::OI::Redis::CallRedis(std::move(vArgumentsLocal));
 	// 撤销之前发出的整量拉取可能又把它带回快照。这时还没人重新登记，就再摘一次。
 	for (const auto& [iSessionId, vBindings] : m_mBindings)
 	{
 		for (size_t iIndexLocal = 0; iIndexLocal < vBindings.size(); ++iIndexLocal)
 		{
-			if (vBindings[iIndexLocal].sName == stSecondParam.sName && vBindings[iIndexLocal].iId == stSecondParam.iId)
+			if (vBindings[iIndexLocal].sName == stSecond.sName && vBindings[iIndexLocal].iId == stSecond.iId)
 			{
 				co_return;
 			}
 		}
 	}
-	DropSnapshot(stSecondParam.sName, stSecondParam.iId);
+	DropSnapshot(stSecond.sName, stSecond.iId);
 }
 
-void RegistryServer::Handle(::OI::Net::Session* pSessionParam, uint32_t iIdParam, ::OI::Base::BytesStream& stBodyParam)
+void RegistryServer::Handle(::OI::Net::Session* pSession, uint32_t iIdLocal, ::OI::Base::BytesStream& stBody)
 {
-	sid_t iSessionIdLocal = pSessionParam->GetSessionID();
-	if (iIdParam == ::OI::Base::PROTO_REG_REGISTER)
+	sid_t iSessionIdLocal = pSession->GetSessionID();
+	if (iIdLocal == ::OI::Base::PROTO_REG_REGISTER)
 	{
 		::OI::RpcData::RegRegister stRequestLocal;
-		stRequestLocal.deserialize(stBodyParam);
+		stRequestLocal.deserialize(stBody);
 		if (!ValidSpacePart(stRequestLocal.sName) || stRequestLocal.iId <= 0 || stRequestLocal.sIp.empty() || stRequestLocal.sPort.empty() || (!stRequestLocal.sZone.empty() && !ValidSpacePart(stRequestLocal.sZone)))
 		{
 			::OI::RpcData::RegRegisterRes stResponseLocal;
@@ -515,16 +515,16 @@ void RegistryServer::Handle(::OI::Net::Session* pSessionParam, uint32_t iIdParam
 		{
 			stSecond.sValue += " " + stSecond.sZone;
 		}
-		coro::StartTask([this, iSessionIdLocal, stSecond](coro::Token)
+		OI::Coro::StartTask([this, iSessionIdLocal, stSecond](OI::Coro::Token)
 		{
 			return Register(iSessionIdLocal, stSecond);
 		});
 		return;
 	}
-	if (iIdParam == ::OI::Base::PROTO_REG_HEARTBEAT)
+	if (iIdLocal == ::OI::Base::PROTO_REG_HEARTBEAT)
 	{
 		::OI::RpcData::RegHeartbeat stRequestLocal;
-		stRequestLocal.deserialize(stBodyParam);
+		stRequestLocal.deserialize(stBody);
 		Binding* pFound = FindBinding(iSessionIdLocal, stRequestLocal.sName, stRequestLocal.iId);
 		if (!pFound)
 		{
@@ -535,16 +535,16 @@ void RegistryServer::Handle(::OI::Net::Session* pSessionParam, uint32_t iIdParam
 			return;
 		}
 		Binding stSecond = *pFound;
-		coro::StartTask([this, iSessionIdLocal, stSecond](coro::Token)
+		OI::Coro::StartTask([this, iSessionIdLocal, stSecond](OI::Coro::Token)
 		{
 			return Refresh(iSessionIdLocal, stSecond);
 		});
 		return;
 	}
-	if (iIdParam == ::OI::Base::PROTO_REG_PULL)
+	if (iIdLocal == ::OI::Base::PROTO_REG_PULL)
 	{
 		::OI::RpcData::RegPull stRequestLocal;
-		stRequestLocal.deserialize(stBodyParam);
+		stRequestLocal.deserialize(stBody);
 		::OI::RpcData::RegPullRes stResponseLocal;
 		stResponseLocal.iCode = OI_ERR_FAIL;
 		if (m_bSnapshotOk)

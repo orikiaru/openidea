@@ -7,8 +7,8 @@ class LogServerSession : public ::OI::Net::NetSession
 	bool m_bShutdown = false;
 
   public:
-	LogServerSession(::OI::Net::SessionManager* pMgrParam)
-	    : NetSession(pMgrParam)
+	LogServerSession(::OI::Net::SessionManager* pMgr)
+	    : NetSession(pMgr)
 	{
 	}
 	virtual ~LogServerSession()
@@ -16,7 +16,7 @@ class LogServerSession : public ::OI::Net::NetSession
 	}
 	void OnDataIn();
 	void WaitForWrite();
-	void ResumeWrite(bool bShutdownParam);
+	void ResumeWrite(bool bShutdown);
 	void OnDataOut()
 	{
 		assert(false && u8"logserver不需要回信");

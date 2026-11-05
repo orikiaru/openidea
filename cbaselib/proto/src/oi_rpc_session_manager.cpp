@@ -7,7 +7,7 @@ namespace OI
 namespace Rpc
 {
 
-bool ProtoClientManager::SendRaw(const ::OI::Base::Bytes& stDataParam)
+bool ProtoClientManager::SendRaw(const ::OI::Base::Bytes& stData)
 {
 	sid_t iSessionIdLocal = INVALID_SID;
 	{
@@ -21,10 +21,10 @@ bool ProtoClientManager::SendRaw(const ::OI::Base::Bytes& stDataParam)
 	{
 		return false;
 	}
-	return SendBytes(iSessionIdLocal, stDataParam);
+	return SendBytes(iSessionIdLocal, stData);
 }
 
-bool ProtoClientManager::SendRawOrPend(const ::OI::Base::Bytes& stDataParam, size_t iMaxPendingBytesParam)
+bool ProtoClientManager::SendRawOrPend(const ::OI::Base::Bytes& stData, size_t iMaxPendingBytes)
 {
 	sid_t iSessionIdLocal = INVALID_SID;
 	{
@@ -35,45 +35,45 @@ bool ProtoClientManager::SendRawOrPend(const ::OI::Base::Bytes& stDataParam, siz
 		}
 		else
 		{
-			iMaxPendingBytesParam = (std::min)(iMaxPendingBytesParam, iMaxSendQueueBytes);
-			if (m_iPendingBytes > iMaxPendingBytesParam || stDataParam.Size() > iMaxPendingBytesParam - m_iPendingBytes)
+			iMaxPendingBytes = (std::min)(iMaxPendingBytes, iMaxSendQueueBytes);
+			if (m_iPendingBytes > iMaxPendingBytes || stData.Size() > iMaxPendingBytes - m_iPendingBytes)
 			{
 				return false;
 			}
-			m_vPending.push_back(stDataParam);
-			m_iPendingBytes += stDataParam.Size();
+			m_vPending.push_back(stData);
+			m_iPendingBytes += stData.Size();
 			return true;
 		}
 	}
-	return SendBytes(iSessionIdLocal, stDataParam);
+	return SendBytes(iSessionIdLocal, stData);
 }
 
-bool ProtoClientManager::HoldCallLocked(uint64_t iCallIdParam, const ::OI::Base::Bytes& stDataParam)
+bool ProtoClientManager::HoldCallLocked(uint64_t iCallId, const ::OI::Base::Bytes& stData)
 {
-	if (m_vHeldCalls.size() >= m_iHeldMaxCount || m_iHeldBytes > m_iHeldMaxBytes || stDataParam.Size() > m_iHeldMaxBytes - m_iHeldBytes)
+	if (m_vHeldCalls.size() >= m_iHeldMaxCount || m_iHeldBytes > m_iHeldMaxBytes || stData.Size() > m_iHeldMaxBytes - m_iHeldBytes)
 	{
 		return false;
 	}
 	// 先标记再入队；超时回调会在客户端锁释放后删除。已经超时则不再留副本。
-	if (!MarkRpcAwaitingConnect(iCallIdParam))
+	if (!MarkRpcAwaitingConnect(iCallId))
 	{
 		return true;
 	}
-	m_vHeldCalls.push_back(HeldCall{iCallIdParam, stDataParam});
+	m_vHeldCalls.push_back(HeldCall{iCallId, stData});
 	try
 	{
-		m_mHeldIndex.emplace(iCallIdParam, std::prev(m_vHeldCalls.end()));
+		m_mHeldIndex.emplace(iCallId, std::prev(m_vHeldCalls.end()));
 	}
 	catch (...)
 	{
 		m_vHeldCalls.pop_back();
 		throw;
 	}
-	m_iHeldBytes += stDataParam.Size();
+	m_iHeldBytes += stData.Size();
 	return true;
 }
 
-bool ProtoClientManager::TryPendCall(uint64_t iCallIdParam, const ::OI::Base::Bytes& stDataParam)
+bool ProtoClientManager::TryPendCall(uint64_t iCallId, const ::OI::Base::Bytes& stData)
 {
 	{
 		::OI::Thread::SpinLockGuard stLock(m_stClientLocker);
@@ -81,17 +81,17 @@ bool ProtoClientManager::TryPendCall(uint64_t iCallIdParam, const ::OI::Base::By
 		{
 			return false;
 		}
-		if (HoldCallLocked(iCallIdParam, stDataParam))
+		if (HoldCallLocked(iCallId, stData))
 		{
 			return true;
 		}
 	}
 	// 不持客户端锁唤醒，回调允许再次发起请求。
-	WakeRpcCall(iCallIdParam, OI_ERR_BUSY, nullptr);
+	WakeRpcCall(iCallId, OI_ERR_BUSY, nullptr);
 	return true;
 }
 
-void ProtoClientManager::SubmitCall(uint64_t iCallIdParam, const ::OI::Base::Bytes& stDataParam)
+void ProtoClientManager::SubmitCall(uint64_t iCallId, const ::OI::Base::Bytes& stData)
 {
 	sid_t iSessionIdLocal = INVALID_SID;
 	int32_t iFailure = OI_ERR_CONNECT;
@@ -101,14 +101,14 @@ void ProtoClientManager::SubmitCall(uint64_t iCallIdParam, const ::OI::Base::Byt
 		{
 			iSessionIdLocal = m_iSessionId;
 			// 来源匹配必须与发送目标一致；已经超时的调用不再发出。
-			if (!ClaimRpcSend(iCallIdParam, iSessionIdLocal))
+			if (!ClaimRpcSend(iCallId, iSessionIdLocal))
 			{
 				return;
 			}
 		}
 		else if (!m_bEverConnected)
 		{
-			if (HoldCallLocked(iCallIdParam, stDataParam))
+			if (HoldCallLocked(iCallId, stData))
 			{
 				return;
 			}
@@ -117,20 +117,20 @@ void ProtoClientManager::SubmitCall(uint64_t iCallIdParam, const ::OI::Base::Byt
 	}
 	if (iSessionIdLocal != INVALID_SID)
 	{
-		iFailure = SendBytesResult(iSessionIdLocal, stDataParam);
+		iFailure = SendBytesResult(iSessionIdLocal, stData);
 		if (iFailure == OI_OK)
 		{
 			return;
 		}
 	}
 	// 完成可能反过来删除待发项，不能持客户端锁唤醒。
-	WakeRpcCall(iCallIdParam, iFailure, nullptr);
+	WakeRpcCall(iCallId, iFailure, nullptr);
 }
 
-void ProtoClientManager::DropPendingCall(uint64_t iCallIdParam)
+void ProtoClientManager::DropPendingCall(uint64_t iCallId)
 {
 	::OI::Thread::SpinLockGuard stLock(m_stClientLocker);
-	auto stIterator = m_mHeldIndex.find(iCallIdParam);
+	auto stIterator = m_mHeldIndex.find(iCallId);
 	if (stIterator == m_mHeldIndex.end())
 	{
 		return;
@@ -140,7 +140,7 @@ void ProtoClientManager::DropPendingCall(uint64_t iCallIdParam)
 	m_mHeldIndex.erase(stIterator);
 }
 
-void ProtoClientManager::FlushHeldCalls(sid_t iSessionIdParam)
+void ProtoClientManager::FlushHeldCalls(sid_t iSessionId)
 {
 	std::list<HeldCall> vHeld;
 	{
@@ -151,11 +151,11 @@ void ProtoClientManager::FlushHeldCalls(sid_t iSessionIdParam)
 	}
 	for (const auto& stCall : vHeld)
 	{
-		if (!ClaimRpcSend(stCall.iCallId, iSessionIdParam))
+		if (!ClaimRpcSend(stCall.iCallId, iSessionId))
 		{
 			continue;
 		}
-		const int32_t iRet = SendBytesResult(iSessionIdParam, stCall.stData);
+		const int32_t iRet = SendBytesResult(iSessionId, stCall.stData);
 		if (iRet != OI_OK)
 		{
 			WakeRpcCall(stCall.iCallId, iRet, NULL);
@@ -180,12 +180,12 @@ void ProtoClientManager::FailHeldCalls()
 	}
 }
 
-void ProtoClientManager::Reconnect(int iMillisecondParam)
+void ProtoClientManager::Reconnect(int iMillisecond)
 {
 	::OI::Timer::BaseTimerManager::GetInstance().AddTimer([this]()
 	{
 		StartClient();
-	}, iMillisecondParam > 0 ? iMillisecondParam : 1);
+	}, iMillisecond > 0 ? iMillisecond : 1);
 }
 }
 }

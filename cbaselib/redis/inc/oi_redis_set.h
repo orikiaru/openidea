@@ -7,205 +7,205 @@ namespace OI
 namespace Redis
 {
 // 单 key 接口：输入立即编码，输出对象必须活到调用完成。
-[[nodiscard]] inline coro::TaskResult<int32_t> RedisSCard(const std::string& sKeyParam, int64_t& iOutputParam)
+[[nodiscard]] inline OI::Coro::TaskResult<int32_t> RedisSCard(const std::string& sKey, int64_t& iOutput)
 {
-	return Detail::Read({"SCARD", sKeyParam}, iOutputParam);
+	return Detail::Read({"SCARD", sKey}, iOutput);
 }
 
-[[nodiscard]] inline int32_t RedisSCardSync(const std::string& sKeyParam, int64_t& iOutputParam)
+[[nodiscard]] inline int32_t RedisSCardSync(const std::string& sKey, int64_t& iOutput)
 {
-	return Detail::ReadSync({"SCARD", sKeyParam}, iOutputParam);
-}
-
-template <typename T>
-[[nodiscard]] inline coro::TaskResult<int32_t> RedisSAdd(const std::string& sKeyParam, const T& stValueParam)
-{
-	return Detail::Status({"SADD", sKeyParam, stValueParam}, REDIS_REPLY_INTEGER);
+	return Detail::ReadSync({"SCARD", sKey}, iOutput);
 }
 
 template <typename T>
-[[nodiscard]] inline int32_t RedisSAddSync(const std::string& sKeyParam, const T& stValueParam)
+[[nodiscard]] inline OI::Coro::TaskResult<int32_t> RedisSAdd(const std::string& sKey, const T& stValue)
 {
-	return Detail::StatusSync({"SADD", sKeyParam, stValueParam}, REDIS_REPLY_INTEGER);
+	return Detail::Status({"SADD", sKey, stValue}, REDIS_REPLY_INTEGER);
 }
 
 template <typename T>
-[[nodiscard]] inline coro::TaskResult<int32_t> RedisSAdd(const std::string& sKeyParam, const T& stValueParam, int64_t& iOutputParam)
+[[nodiscard]] inline int32_t RedisSAddSync(const std::string& sKey, const T& stValue)
 {
-	return Detail::Read({"SADD", sKeyParam, stValueParam}, iOutputParam);
+	return Detail::StatusSync({"SADD", sKey, stValue}, REDIS_REPLY_INTEGER);
 }
 
 template <typename T>
-[[nodiscard]] inline int32_t RedisSAddSync(const std::string& sKeyParam, const T& stValueParam, int64_t& iOutputParam)
+[[nodiscard]] inline OI::Coro::TaskResult<int32_t> RedisSAdd(const std::string& sKey, const T& stValue, int64_t& iOutput)
 {
-	return Detail::ReadSync({"SADD", sKeyParam, stValueParam}, iOutputParam);
+	return Detail::Read({"SADD", sKey, stValue}, iOutput);
 }
 
 template <typename T>
-[[nodiscard]] inline coro::TaskResult<int32_t> RedisSRem(const std::string& sKeyParam, const T& stValueParam)
+[[nodiscard]] inline int32_t RedisSAddSync(const std::string& sKey, const T& stValue, int64_t& iOutput)
 {
-	return Detail::Status({"SREM", sKeyParam, stValueParam}, REDIS_REPLY_INTEGER);
+	return Detail::ReadSync({"SADD", sKey, stValue}, iOutput);
 }
 
 template <typename T>
-[[nodiscard]] inline int32_t RedisSRemSync(const std::string& sKeyParam, const T& stValueParam)
+[[nodiscard]] inline OI::Coro::TaskResult<int32_t> RedisSRem(const std::string& sKey, const T& stValue)
 {
-	return Detail::StatusSync({"SREM", sKeyParam, stValueParam}, REDIS_REPLY_INTEGER);
+	return Detail::Status({"SREM", sKey, stValue}, REDIS_REPLY_INTEGER);
 }
 
 template <typename T>
-[[nodiscard]] inline coro::TaskResult<int32_t> RedisSRem(const std::string& sKeyParam, const T& stValueParam, int64_t& iOutputParam)
+[[nodiscard]] inline int32_t RedisSRemSync(const std::string& sKey, const T& stValue)
 {
-	return Detail::Read({"SREM", sKeyParam, stValueParam}, iOutputParam);
+	return Detail::StatusSync({"SREM", sKey, stValue}, REDIS_REPLY_INTEGER);
 }
 
 template <typename T>
-[[nodiscard]] inline int32_t RedisSRemSync(const std::string& sKeyParam, const T& stValueParam, int64_t& iOutputParam)
+[[nodiscard]] inline OI::Coro::TaskResult<int32_t> RedisSRem(const std::string& sKey, const T& stValue, int64_t& iOutput)
 {
-	return Detail::ReadSync({"SREM", sKeyParam, stValueParam}, iOutputParam);
+	return Detail::Read({"SREM", sKey, stValue}, iOutput);
 }
 
 template <typename T>
-[[nodiscard]] inline coro::TaskResult<int32_t> RedisSIsMember(const std::string& sKeyParam, const T& stValueParam, bool& bOutputParam)
+[[nodiscard]] inline int32_t RedisSRemSync(const std::string& sKey, const T& stValue, int64_t& iOutput)
 {
-	return Detail::Read({"SISMEMBER", sKeyParam, stValueParam}, bOutputParam);
+	return Detail::ReadSync({"SREM", sKey, stValue}, iOutput);
 }
 
 template <typename T>
-[[nodiscard]] inline int32_t RedisSIsMemberSync(const std::string& sKeyParam, const T& stValueParam, bool& bOutputParam)
+[[nodiscard]] inline OI::Coro::TaskResult<int32_t> RedisSIsMember(const std::string& sKey, const T& stValue, bool& bOutput)
 {
-	return Detail::ReadSync({"SISMEMBER", sKeyParam, stValueParam}, bOutputParam);
+	return Detail::Read({"SISMEMBER", sKey, stValue}, bOutput);
 }
 
 template <typename T>
-[[nodiscard]] inline coro::TaskResult<int32_t> RedisSMembers(const std::string& sKeyParam, std::vector<T>& vOutputParam)
+[[nodiscard]] inline int32_t RedisSIsMemberSync(const std::string& sKey, const T& stValue, bool& bOutput)
 {
-	return Detail::Read({"SMEMBERS", sKeyParam}, vOutputParam);
+	return Detail::ReadSync({"SISMEMBER", sKey, stValue}, bOutput);
 }
 
 template <typename T>
-[[nodiscard]] inline int32_t RedisSMembersSync(const std::string& sKeyParam, std::vector<T>& vOutputParam)
+[[nodiscard]] inline OI::Coro::TaskResult<int32_t> RedisSMembers(const std::string& sKey, std::vector<T>& vOutput)
 {
-	return Detail::ReadSync({"SMEMBERS", sKeyParam}, vOutputParam);
+	return Detail::Read({"SMEMBERS", sKey}, vOutput);
 }
 
 template <typename T>
-[[nodiscard]] inline coro::TaskResult<int32_t> RedisSAdd(const std::string& sKeyParam, const std::vector<T>& vValuesParam, int64_t& iOutputParam)
+[[nodiscard]] inline int32_t RedisSMembersSync(const std::string& sKey, std::vector<T>& vOutput)
 {
-	return Detail::Read(Detail::Members("SADD", sKeyParam, vValuesParam), iOutputParam);
+	return Detail::ReadSync({"SMEMBERS", sKey}, vOutput);
 }
 
 template <typename T>
-[[nodiscard]] inline int32_t RedisSAddSync(const std::string& sKeyParam, const std::vector<T>& vValuesParam, int64_t& iOutputParam)
+[[nodiscard]] inline OI::Coro::TaskResult<int32_t> RedisSAdd(const std::string& sKey, const std::vector<T>& vValues, int64_t& iOutput)
 {
-	return Detail::ReadSync(Detail::Members("SADD", sKeyParam, vValuesParam), iOutputParam);
+	return Detail::Read(Detail::Members("SADD", sKey, vValues), iOutput);
 }
 
 template <typename T>
-[[nodiscard]] inline coro::TaskResult<int32_t> RedisSRem(const std::string& sKeyParam, const std::vector<T>& vValuesParam, int64_t& iOutputParam)
+[[nodiscard]] inline int32_t RedisSAddSync(const std::string& sKey, const std::vector<T>& vValues, int64_t& iOutput)
 {
-	return Detail::Read(Detail::Members("SREM", sKeyParam, vValuesParam), iOutputParam);
+	return Detail::ReadSync(Detail::Members("SADD", sKey, vValues), iOutput);
 }
 
 template <typename T>
-[[nodiscard]] inline int32_t RedisSRemSync(const std::string& sKeyParam, const std::vector<T>& vValuesParam, int64_t& iOutputParam)
+[[nodiscard]] inline OI::Coro::TaskResult<int32_t> RedisSRem(const std::string& sKey, const std::vector<T>& vValues, int64_t& iOutput)
 {
-	return Detail::ReadSync(Detail::Members("SREM", sKeyParam, vValuesParam), iOutputParam);
+	return Detail::Read(Detail::Members("SREM", sKey, vValues), iOutput);
 }
 
 template <typename T>
-[[nodiscard]] inline coro::TaskResult<int32_t> RedisSPop(const std::string& sKeyParam, T& stOutputParam)
+[[nodiscard]] inline int32_t RedisSRemSync(const std::string& sKey, const std::vector<T>& vValues, int64_t& iOutput)
 {
-	return Detail::Read({"SPOP", sKeyParam}, stOutputParam);
+	return Detail::ReadSync(Detail::Members("SREM", sKey, vValues), iOutput);
 }
 
 template <typename T>
-[[nodiscard]] inline int32_t RedisSPopSync(const std::string& sKeyParam, T& stOutputParam)
+[[nodiscard]] inline OI::Coro::TaskResult<int32_t> RedisSPop(const std::string& sKey, T& stOutput)
 {
-	return Detail::ReadSync({"SPOP", sKeyParam}, stOutputParam);
+	return Detail::Read({"SPOP", sKey}, stOutput);
 }
 
 template <typename T>
-[[nodiscard]] inline coro::TaskResult<int32_t> RedisSPop(const std::string& sKeyParam, int64_t iCountParam, std::vector<T>& vOutputParam)
+[[nodiscard]] inline int32_t RedisSPopSync(const std::string& sKey, T& stOutput)
 {
-	return Detail::Read({"SPOP", sKeyParam, iCountParam}, vOutputParam);
+	return Detail::ReadSync({"SPOP", sKey}, stOutput);
 }
 
 template <typename T>
-[[nodiscard]] inline int32_t RedisSPopSync(const std::string& sKeyParam, int64_t iCountParam, std::vector<T>& vOutputParam)
+[[nodiscard]] inline OI::Coro::TaskResult<int32_t> RedisSPop(const std::string& sKey, int64_t iCount, std::vector<T>& vOutput)
 {
-	return Detail::ReadSync({"SPOP", sKeyParam, iCountParam}, vOutputParam);
+	return Detail::Read({"SPOP", sKey, iCount}, vOutput);
 }
 
 template <typename T>
-[[nodiscard]] inline coro::TaskResult<int32_t> RedisSRandMember(const std::string& sKeyParam, T& stOutputParam)
+[[nodiscard]] inline int32_t RedisSPopSync(const std::string& sKey, int64_t iCount, std::vector<T>& vOutput)
 {
-	return Detail::Read({"SRANDMEMBER", sKeyParam}, stOutputParam);
+	return Detail::ReadSync({"SPOP", sKey, iCount}, vOutput);
 }
 
 template <typename T>
-[[nodiscard]] inline int32_t RedisSRandMemberSync(const std::string& sKeyParam, T& stOutputParam)
+[[nodiscard]] inline OI::Coro::TaskResult<int32_t> RedisSRandMember(const std::string& sKey, T& stOutput)
 {
-	return Detail::ReadSync({"SRANDMEMBER", sKeyParam}, stOutputParam);
+	return Detail::Read({"SRANDMEMBER", sKey}, stOutput);
 }
 
 template <typename T>
-[[nodiscard]] inline coro::TaskResult<int32_t> RedisSRandMember(const std::string& sKeyParam, int64_t iCountParam, std::vector<T>& vOutputParam)
+[[nodiscard]] inline int32_t RedisSRandMemberSync(const std::string& sKey, T& stOutput)
 {
-	return Detail::Read({"SRANDMEMBER", sKeyParam, iCountParam}, vOutputParam);
+	return Detail::ReadSync({"SRANDMEMBER", sKey}, stOutput);
 }
 
 template <typename T>
-[[nodiscard]] inline int32_t RedisSRandMemberSync(const std::string& sKeyParam, int64_t iCountParam, std::vector<T>& vOutputParam)
+[[nodiscard]] inline OI::Coro::TaskResult<int32_t> RedisSRandMember(const std::string& sKey, int64_t iCount, std::vector<T>& vOutput)
 {
-	return Detail::ReadSync({"SRANDMEMBER", sKeyParam, iCountParam}, vOutputParam);
+	return Detail::Read({"SRANDMEMBER", sKey, iCount}, vOutput);
 }
 
 template <typename T>
-[[nodiscard]] inline coro::TaskResult<int32_t> RedisSMIsMember(const std::string& sKeyParam, const std::vector<T>& vValuesParam, std::vector<int64_t>& vOutputParam)
+[[nodiscard]] inline int32_t RedisSRandMemberSync(const std::string& sKey, int64_t iCount, std::vector<T>& vOutput)
 {
-	return Detail::Read(Detail::Members("SMISMEMBER", sKeyParam, vValuesParam), vOutputParam);
+	return Detail::ReadSync({"SRANDMEMBER", sKey, iCount}, vOutput);
 }
 
 template <typename T>
-[[nodiscard]] inline int32_t RedisSMIsMemberSync(const std::string& sKeyParam, const std::vector<T>& vValuesParam, std::vector<int64_t>& vOutputParam)
+[[nodiscard]] inline OI::Coro::TaskResult<int32_t> RedisSMIsMember(const std::string& sKey, const std::vector<T>& vValues, std::vector<int64_t>& vOutput)
 {
-	return Detail::ReadSync(Detail::Members("SMISMEMBER", sKeyParam, vValuesParam), vOutputParam);
+	return Detail::Read(Detail::Members("SMISMEMBER", sKey, vValues), vOutput);
 }
 
 template <typename T>
-[[nodiscard]] inline coro::TaskResult<int32_t> RedisSScan(const std::string& sKeyParam, uint64_t iCursorParam, RedisScanPage<std::vector<T>>& stOutputParam, int64_t iCountParam = 100, const std::string& sPatternParam = "*")
+[[nodiscard]] inline int32_t RedisSMIsMemberSync(const std::string& sKey, const std::vector<T>& vValues, std::vector<int64_t>& vOutput)
 {
-	return Detail::Read({"SSCAN", sKeyParam, std::to_string(iCursorParam), "MATCH", sPatternParam, "COUNT", iCountParam}, stOutputParam);
+	return Detail::ReadSync(Detail::Members("SMISMEMBER", sKey, vValues), vOutput);
 }
 
 template <typename T>
-[[nodiscard]] inline int32_t RedisSScanSync(const std::string& sKeyParam, uint64_t iCursorParam, RedisScanPage<std::vector<T>>& stOutputParam, int64_t iCountParam = 100, const std::string& sPatternParam = "*")
+[[nodiscard]] inline OI::Coro::TaskResult<int32_t> RedisSScan(const std::string& sKey, uint64_t iCursor, RedisScanPage<std::vector<T>>& stOutput, int64_t iCount = 100, const std::string& sPattern = "*")
 {
-	return Detail::ReadSync({"SSCAN", sKeyParam, std::to_string(iCursorParam), "MATCH", sPatternParam, "COUNT", iCountParam}, stOutputParam);
-}
-template <typename T>
-[[nodiscard]] inline coro::TaskResult<int32_t> RedisSAdd(const std::string& sKeyParam, const std::vector<T>& vValuesParam)
-{
-	return Detail::Status(Detail::Members("SADD", sKeyParam, vValuesParam), REDIS_REPLY_INTEGER);
+	return Detail::Read({"SSCAN", sKey, std::to_string(iCursor), "MATCH", sPattern, "COUNT", iCount}, stOutput);
 }
 
 template <typename T>
-[[nodiscard]] inline int32_t RedisSAddSync(const std::string& sKeyParam, const std::vector<T>& vValuesParam)
+[[nodiscard]] inline int32_t RedisSScanSync(const std::string& sKey, uint64_t iCursor, RedisScanPage<std::vector<T>>& stOutput, int64_t iCount = 100, const std::string& sPattern = "*")
 {
-	return Detail::StatusSync(Detail::Members("SADD", sKeyParam, vValuesParam), REDIS_REPLY_INTEGER);
+	return Detail::ReadSync({"SSCAN", sKey, std::to_string(iCursor), "MATCH", sPattern, "COUNT", iCount}, stOutput);
+}
+template <typename T>
+[[nodiscard]] inline OI::Coro::TaskResult<int32_t> RedisSAdd(const std::string& sKey, const std::vector<T>& vValues)
+{
+	return Detail::Status(Detail::Members("SADD", sKey, vValues), REDIS_REPLY_INTEGER);
 }
 
 template <typename T>
-[[nodiscard]] inline coro::TaskResult<int32_t> RedisSRem(const std::string& sKeyParam, const std::vector<T>& vValuesParam)
+[[nodiscard]] inline int32_t RedisSAddSync(const std::string& sKey, const std::vector<T>& vValues)
 {
-	return Detail::Status(Detail::Members("SREM", sKeyParam, vValuesParam), REDIS_REPLY_INTEGER);
+	return Detail::StatusSync(Detail::Members("SADD", sKey, vValues), REDIS_REPLY_INTEGER);
 }
 
 template <typename T>
-[[nodiscard]] inline int32_t RedisSRemSync(const std::string& sKeyParam, const std::vector<T>& vValuesParam)
+[[nodiscard]] inline OI::Coro::TaskResult<int32_t> RedisSRem(const std::string& sKey, const std::vector<T>& vValues)
 {
-	return Detail::StatusSync(Detail::Members("SREM", sKeyParam, vValuesParam), REDIS_REPLY_INTEGER);
+	return Detail::Status(Detail::Members("SREM", sKey, vValues), REDIS_REPLY_INTEGER);
+}
+
+template <typename T>
+[[nodiscard]] inline int32_t RedisSRemSync(const std::string& sKey, const std::vector<T>& vValues)
+{
+	return Detail::StatusSync(Detail::Members("SREM", sKey, vValues), REDIS_REPLY_INTEGER);
 }
 
 }

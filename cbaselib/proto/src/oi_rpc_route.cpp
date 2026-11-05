@@ -12,15 +12,15 @@ namespace Rpc
 {
 namespace
 {
-bool ValidServiceToken(const std::string& sTextParam)
+bool ValidServiceToken(const std::string& sText)
 {
-	if (sTextParam.empty())
+	if (sText.empty())
 	{
 		return false;
 	}
-	for (size_t iIndexLocal = 0; iIndexLocal < sTextParam.size(); ++iIndexLocal)
+	for (size_t iIndexLocal = 0; iIndexLocal < sText.size(); ++iIndexLocal)
 	{
-		char iCharacter = sTextParam[iIndexLocal];
+		char iCharacter = sText[iIndexLocal];
 		bool bOk = (iCharacter >= 'a' && iCharacter <= 'z') || (iCharacter >= 'A' && iCharacter <= 'Z') || (iCharacter >= '0' && iCharacter <= '9') || iCharacter == '_' || iCharacter == '-';
 		if (!bOk)
 		{
@@ -37,27 +37,27 @@ struct ParsedTarget
 	bool bAll = false;
 };
 
-bool ParseTarget(const std::string& sTargetParam, ParsedTarget& stTargetParam)
+bool ParseTarget(const std::string& sTarget, ParsedTarget& stTarget)
 {
-	if (sTargetParam.size() >= 3 && sTargetParam.compare(sTargetParam.size() - 2, 2, ".*") == 0)
+	if (sTarget.size() >= 3 && sTarget.compare(sTarget.size() - 2, 2, ".*") == 0)
 	{
-		stTargetParam.sName = sTargetParam.substr(0, sTargetParam.size() - 2);
-		stTargetParam.bAll = true;
-		return ValidServiceToken(stTargetParam.sName);
+		stTarget.sName = sTarget.substr(0, sTarget.size() - 2);
+		stTarget.bAll = true;
+		return ValidServiceToken(stTarget.sName);
 	}
-	size_t iDot = sTargetParam.find('.');
+	size_t iDot = sTarget.find('.');
 	if (iDot == std::string::npos)
 	{
-		stTargetParam.sName = sTargetParam;
-		return ValidServiceToken(stTargetParam.sName);
+		stTarget.sName = sTarget;
+		return ValidServiceToken(stTarget.sName);
 	}
-	if (sTargetParam.find('.', iDot + 1) != std::string::npos)
+	if (sTarget.find('.', iDot + 1) != std::string::npos)
 	{
 		return false;
 	}
-	stTargetParam.sName = sTargetParam.substr(0, iDot);
-	stTargetParam.sZone = sTargetParam.substr(iDot + 1);
-	return ValidServiceToken(stTargetParam.sName) && ValidServiceToken(stTargetParam.sZone);
+	stTarget.sName = sTarget.substr(0, iDot);
+	stTarget.sZone = sTarget.substr(iDot + 1);
+	return ValidServiceToken(stTarget.sName) && ValidServiceToken(stTarget.sZone);
 }
 
 struct RoutePolicy
@@ -69,24 +69,24 @@ struct RoutePolicy
 	size_t iHeldCount = 65536;
 	size_t iHeldBytes = 64 * 1024 * 1024;
 
-	explicit RoutePolicy(::OI::Net::SessionManager* pManagerParam)
+	explicit RoutePolicy(::OI::Net::SessionManager* pManager)
 	{
-		if (pManagerParam)
+		if (pManager)
 		{
-			iSendBytes = pManagerParam->MaxSendQueueBytes();
-			iReceiveBytes = pManagerParam->MaxReceiveBufferBytes();
-			iFrameBytes = pManagerParam->MaxFrameBytes();
-			iIncompleteMilliseconds = pManagerParam->IncompleteFrameTimeoutMilliseconds();
-			if (auto* pClient = dynamic_cast<ProtoClientManager*>(pManagerParam))
+			iSendBytes = pManager->MaxSendQueueBytes();
+			iReceiveBytes = pManager->MaxReceiveBufferBytes();
+			iFrameBytes = pManager->MaxFrameBytes();
+			iIncompleteMilliseconds = pManager->IncompleteFrameTimeoutMilliseconds();
+			if (auto* pClient = dynamic_cast<ProtoClientManager*>(pManager))
 			{
 				std::tie(iHeldCount, iHeldBytes) = pClient->PendingCallLimits();
 			}
 		}
 	}
-	bool operator<(const RoutePolicy& stOtherParam) const
+	bool operator<(const RoutePolicy& stOther) const
 	{
 		return std::tie(iSendBytes, iReceiveBytes, iFrameBytes, iIncompleteMilliseconds, iHeldCount, iHeldBytes) <
-		       std::tie(stOtherParam.iSendBytes, stOtherParam.iReceiveBytes, stOtherParam.iFrameBytes, stOtherParam.iIncompleteMilliseconds, stOtherParam.iHeldCount, stOtherParam.iHeldBytes);
+		       std::tie(stOther.iSendBytes, stOther.iReceiveBytes, stOther.iFrameBytes, stOther.iIncompleteMilliseconds, stOther.iHeldCount, stOther.iHeldBytes);
 	}
 };
 
@@ -105,7 +105,7 @@ class RouteManager final : public ProtoSessionManager
 		static RouteManager stManager;
 		return stManager;
 	}
-	sid_t Adopt(net_socket_t iSocketParam, const std::shared_ptr<RouteConnection>& pConnectionParam);
+	sid_t Adopt(net_socket_t iSocketLocal, const std::shared_ptr<RouteConnection>& pConnection);
 	const std::string GetIDString() override
 	{
 		return "RpcRoute";
@@ -142,15 +142,15 @@ struct RouteConnection
 	std::unordered_map<uint64_t, std::list<Held>::iterator> mHeld;
 	size_t iHeldBytes = 0;
 
-	RouteConnection(std::string sIpParam, std::string sPortParam, RoutePolicy stPolicyParam)
-	    : sIp(std::move(sIpParam)), sPort(std::move(sPortParam)), stPolicy(stPolicyParam)
+	RouteConnection(std::string sIp, std::string sPort, RoutePolicy stPolicy)
+	    : sIp(std::move(sIp)), sPort(std::move(sPort)), stPolicy(stPolicy)
 	{
-		stSender = {&RouteManager::Instance(), this, [](void* pContextParam, uint64_t iCallIdParam, const ::OI::Base::Bytes& stDataParam)
+		stSender = {&RouteManager::Instance(), this, [](void* pContext, uint64_t iCallId, const ::OI::Base::Bytes& stData)
 		{
-			static_cast<RouteConnection*>(pContextParam)->Submit(iCallIdParam, stDataParam);
-		}, [](void* pContextParam, uint64_t iCallIdParam)
+			static_cast<RouteConnection*>(pContext)->Submit(iCallId, stData);
+		}, [](void* pContext, uint64_t iCallId)
 		{
-			static_cast<RouteConnection*>(pContextParam)->Drop(iCallIdParam);
+			static_cast<RouteConnection*>(pContext)->Drop(iCallId);
 		}};
 	}
 	std::shared_ptr<RpcSender> AcquireLease()
@@ -178,27 +178,27 @@ struct RouteConnection
 	void Ensure();
 	void Begin();
 	void Retire();
-	void Connected(net_socket_t iSocketParam);
-	void Finish(sid_t iSessionIdParam)
+	void Connected(net_socket_t iSocketLocal);
+	void Finish(sid_t iSessionIdLocal)
 	{
 		std::list<Held> vReady;
 		{
 			::OI::Thread::MutexGuard stLock(stMutex);
 			bConnecting = false;
-			iSessionId = iSessionIdParam;
+			iSessionId = iSessionIdLocal;
 			vReady.swap(vHeld);
 			mHeld.clear();
 			iHeldBytes = 0;
 		}
 		for (const auto& stCall : vReady)
 		{
-			if (iSessionIdParam == INVALID_SID)
+			if (iSessionIdLocal == INVALID_SID)
 			{
 				WakeRpcCall(stCall.iCallId, OI_ERR_CONNECT, nullptr);
 			}
-			else if (ClaimRpcSend(stCall.iCallId, iSessionIdParam))
+			else if (ClaimRpcSend(stCall.iCallId, iSessionIdLocal))
 			{
-				const int32_t iResult = RouteManager::Instance().SendBytesResult(iSessionIdParam, stCall.stData);
+				const int32_t iResult = RouteManager::Instance().SendBytesResult(iSessionIdLocal, stCall.stData);
 				if (iResult != OI_OK)
 				{
 					WakeRpcCall(stCall.iCallId, iResult, nullptr);
@@ -206,18 +206,18 @@ struct RouteConnection
 			}
 		}
 	}
-	void Disconnected(sid_t iSessionIdParam)
+	void Disconnected(sid_t iSessionIdLocal)
 	{
 		::OI::Thread::MutexGuard stLock(stMutex);
-		if (iSessionId == iSessionIdParam)
+		if (iSessionId == iSessionIdLocal)
 		{
 			iSessionId = INVALID_SID;
 		}
 	}
-	void Drop(uint64_t iCallIdParam)
+	void Drop(uint64_t iCallId)
 	{
 		::OI::Thread::MutexGuard stLock(stMutex);
-		auto it = mHeld.find(iCallIdParam);
+		auto it = mHeld.find(iCallId);
 		if (it != mHeld.end())
 		{
 			iHeldBytes -= it->second->stData.Size();
@@ -225,7 +225,7 @@ struct RouteConnection
 			mHeld.erase(it);
 		}
 	}
-	void Submit(uint64_t iCallIdParam, const ::OI::Base::Bytes& stDataParam)
+	void Submit(uint64_t iCallId, const ::OI::Base::Bytes& stData)
 	{
 		sid_t iTarget = INVALID_SID;
 		int32_t iError = OI_OK;
@@ -238,28 +238,28 @@ struct RouteConnection
 			else if (iSessionId != INVALID_SID)
 			{
 				iTarget = iSessionId;
-				if (!ClaimRpcSend(iCallIdParam, iTarget))
+				if (!ClaimRpcSend(iCallId, iTarget))
 				{
 					return;
 				}
 			}
-			else if (vHeld.size() >= stPolicy.iHeldCount || iHeldBytes > stPolicy.iHeldBytes || stDataParam.Size() > stPolicy.iHeldBytes - iHeldBytes)
+			else if (vHeld.size() >= stPolicy.iHeldCount || iHeldBytes > stPolicy.iHeldBytes || stData.Size() > stPolicy.iHeldBytes - iHeldBytes)
 			{
 				iError = OI_ERR_BUSY;
 			}
-			else if (MarkRpcAwaitingConnect(iCallIdParam))
+			else if (MarkRpcAwaitingConnect(iCallId))
 			{
-				vHeld.push_back({iCallIdParam, stDataParam});
+				vHeld.push_back({iCallId, stData});
 				try
 				{
-					mHeld.emplace(iCallIdParam, std::prev(vHeld.end()));
+					mHeld.emplace(iCallId, std::prev(vHeld.end()));
 				}
 				catch (...)
 				{
 					vHeld.pop_back();
 					throw;
 				}
-				iHeldBytes += stDataParam.Size();
+				iHeldBytes += stData.Size();
 			}
 			else
 			{
@@ -268,14 +268,14 @@ struct RouteConnection
 		}
 		if (iError != OI_OK)
 		{
-			WakeRpcCall(iCallIdParam, iError, nullptr);
+			WakeRpcCall(iCallId, iError, nullptr);
 		}
 		else if (iTarget != INVALID_SID)
 		{
-			const int32_t iResult = RouteManager::Instance().SendBytesResult(iTarget, stDataParam);
+			const int32_t iResult = RouteManager::Instance().SendBytesResult(iTarget, stData);
 			if (iResult != OI_OK)
 			{
-				WakeRpcCall(iCallIdParam, iResult, nullptr);
+				WakeRpcCall(iCallId, iResult, nullptr);
 			}
 		}
 		else
@@ -290,8 +290,8 @@ class RouteSession final : public ProtoSession
 	std::shared_ptr<RouteConnection> m_pConnection;
 
   public:
-	RouteSession(RouteManager* pManagerParam, std::shared_ptr<RouteConnection> pConnectionParam)
-	    : ProtoSession(pManagerParam), m_pConnection(std::move(pConnectionParam))
+	RouteSession(RouteManager* pManager, std::shared_ptr<RouteConnection> pConnection)
+	    : ProtoSession(pManager), m_pConnection(std::move(pConnection))
 	{
 		SetFrameLimits(m_pConnection->stPolicy.iFrameBytes, m_pConnection->stPolicy.iIncompleteMilliseconds);
 	}
@@ -312,7 +312,7 @@ class RouteSession final : public ProtoSession
 	}
 };
 
-sid_t RouteManager::Adopt(net_socket_t iSocketParam, const std::shared_ptr<RouteConnection>& pConnectionParam)
+sid_t RouteManager::Adopt(net_socket_t iSocketLocal, const std::shared_ptr<RouteConnection>& pConnection)
 {
 	struct SocketOwner
 	{
@@ -324,15 +324,15 @@ sid_t RouteManager::Adopt(net_socket_t iSocketParam, const std::shared_ptr<Route
 				NetOs_Close(iSocket);
 			}
 		}
-	} stOwner{iSocketParam};
-	auto pSession = std::make_unique<RouteSession>(this, pConnectionParam);
+	} stOwner{iSocketLocal};
+	auto pSession = std::make_unique<RouteSession>(this, pConnection);
 	::OI::Net::NetSocket stSocket;
-	stSocket.Attach(iSocketParam);
+	stSocket.Attach(iSocketLocal);
 	auto pChannel = std::make_unique<::OI::Net::TCP_Channel>(stSocket, pSession.get());
 	stOwner.iSocket = INVALID_SOCKET_ID; // 从这里起由通道关闭描述符。
 	pSession->SetChannel(pChannel.get());
-	AddSession(pSession.get(), pConnectionParam->sIp + ":" + pConnectionParam->sPort,
-	    pConnectionParam->stPolicy.iSendBytes, pConnectionParam->stPolicy.iReceiveBytes);
+	AddSession(pSession.get(), pConnection->sIp + ":" + pConnection->sPort,
+	    pConnection->stPolicy.iSendBytes, pConnection->stPolicy.iReceiveBytes);
 	const sid_t iSessionId = pSession->GetSessionID();
 	try
 	{
@@ -361,8 +361,8 @@ class RouteConnector final : public ::OI::Net::Channel
 	bool m_bClosed = false;
 
   public:
-	RouteConnector(::OI::Net::NetSocket stSocketParam, std::shared_ptr<RouteConnection> pConnectionParam)
-	    : Channel(stSocketParam, nullptr), m_pConnection(std::move(pConnectionParam))
+	RouteConnector(::OI::Net::NetSocket stSocket, std::shared_ptr<RouteConnection> pConnection)
+	    : Channel(stSocket, nullptr), m_pConnection(std::move(pConnection))
 	{
 	}
 	void DataIn() override
@@ -403,9 +403,9 @@ class RouteConnector final : public ::OI::Net::Channel
 	}
 };
 
-void RouteConnection::Connected(net_socket_t iSocketParam)
+void RouteConnection::Connected(net_socket_t iSocketLocal)
 {
-	if (iSocketParam == INVALID_SOCKET_ID)
+	if (iSocketLocal == INVALID_SOCKET_ID)
 	{
 		Finish(INVALID_SID);
 		return;
@@ -413,7 +413,7 @@ void RouteConnection::Connected(net_socket_t iSocketParam)
 	sid_t iConnected = INVALID_SID;
 	try
 	{
-		iConnected = RouteManager::Instance().Adopt(iSocketParam, pSelf.lock());
+		iConnected = RouteManager::Instance().Adopt(iSocketLocal, pSelf.lock());
 	}
 	catch (...)
 	{
@@ -504,9 +504,9 @@ void RouteConnection::Ensure()
 	try
 	{
 		auto pRequest = std::make_unique<std::shared_ptr<RouteConnection>>(pSelf.lock());
-		::OI::Net::Poll::GetInstance().CallOnLoop([](void* pArgumentParam)
+		::OI::Net::Poll::GetInstance().CallOnLoop([](void* pArgument)
 		{
-			std::unique_ptr<std::shared_ptr<RouteConnection>> pHeld(static_cast<std::shared_ptr<RouteConnection>*>(pArgumentParam));
+			std::unique_ptr<std::shared_ptr<RouteConnection>> pHeld(static_cast<std::shared_ptr<RouteConnection>*>(pArgument));
 			try
 			{
 				(*pHeld)->Begin();
@@ -590,7 +590,7 @@ RoutePool& RoutedPool()
 	return stPool;
 }
 
-void SweepRoutePool(bool bStopParam)
+void SweepRoutePool(bool bStop)
 {
 	assert(::OI::Net::Poll::GetInstance().InLoopThread());
 	auto& stPool = RoutedPool();
@@ -599,14 +599,14 @@ void SweepRoutePool(bool bStopParam)
 	{
 		::OI::Thread::MutexGuard stLock(stPool.stMutex);
 		vRetired.reserve(stPool.mClients.size());
-		if (bStopParam)
+		if (bStop)
 		{
 			stPool.bStopped = true;
 		}
 		for (auto it = stPool.mClients.begin(); it != stPool.mClients.end();)
 		{
 			auto& stEntry = it->second;
-			if (!bStopParam && stEntry.pClient->HasLease())
+			if (!bStop && stEntry.pClient->HasLease())
 			{
 				stEntry.iIdleSinceMilliseconds = 0;
 				++it;
@@ -616,7 +616,7 @@ void SweepRoutePool(bool bStopParam)
 			{
 				stEntry.iIdleSinceMilliseconds = iNow;
 			}
-			if (!bStopParam && iNow - stEntry.iIdleSinceMilliseconds < stPool.iIdleMilliseconds)
+			if (!bStop && iNow - stEntry.iIdleSinceMilliseconds < stPool.iIdleMilliseconds)
 			{
 				++it;
 				continue;
@@ -674,7 +674,7 @@ void ArmRoutePool(void*)
 	}
 }
 
-std::shared_ptr<RpcSender> ClientFor(const std::string& sIpParam, const std::string& sPortParam, ::OI::Net::SessionManager* pManagerParam)
+std::shared_ptr<RpcSender> ClientFor(const std::string& sIp, const std::string& sPort, ::OI::Net::SessionManager* pManager)
 {
 	auto& stPool = RoutedPool();
 	std::call_once(stPool.stArmOnce, []()
@@ -684,7 +684,7 @@ std::shared_ptr<RpcSender> ClientFor(const std::string& sIpParam, const std::str
 			::OI::Net::Poll::GetInstance().CallOnLoop(ArmRoutePool, nullptr);
 		}
 	});
-	const auto stKey = std::make_tuple(sIpParam, sPortParam, RoutePolicy(pManagerParam));
+	const auto stKey = std::make_tuple(sIp, sPort, RoutePolicy(pManager));
 	std::shared_ptr<RpcSender> pLease;
 	{
 		::OI::Thread::MutexGuard stLock(stPool.stMutex);
@@ -699,7 +699,7 @@ std::shared_ptr<RpcSender> ClientFor(const std::string& sIpParam, const std::str
 			{
 				return {};
 			}
-			auto pClient = std::make_shared<RouteConnection>(sIpParam, sPortParam, std::get<2>(stKey));
+			auto pClient = std::make_shared<RouteConnection>(sIp, sPort, std::get<2>(stKey));
 			pClient->pSelf = pClient;
 			it = stPool.mClients.emplace(stKey, RoutePool::Entry{std::move(pClient), 0}).first;
 		}
@@ -713,29 +713,29 @@ std::shared_ptr<RpcSender> ClientFor(const std::string& sIpParam, const std::str
 	return pLease;
 }
 
-bool AddRouteClient(ServiceRoute& stRouteParam, const std::string& sIpParam, const std::string& sPortParam, ::OI::Net::SessionManager* pManagerParam)
+bool AddRouteClient(ServiceRoute& stRoute, const std::string& sIp, const std::string& sPort, ::OI::Net::SessionManager* pManager)
 {
-	auto pOwner = ClientFor(sIpParam, sPortParam, pManagerParam);
+	auto pOwner = ClientFor(sIp, sPort, pManager);
 	if (!pOwner)
 	{
-		stRouteParam.vClients.clear();
-		stRouteParam.vOwners.clear();
-		stRouteParam.iStatus = ServiceRouteStatus::Busy;
+		stRoute.vClients.clear();
+		stRoute.vOwners.clear();
+		stRoute.iStatus = ServiceRouteStatus::Busy;
 		return false;
 	}
-	stRouteParam.vClients.push_back(pOwner.get());
-	stRouteParam.vOwners.push_back(std::move(pOwner));
+	stRoute.vClients.push_back(pOwner.get());
+	stRoute.vOwners.push_back(std::move(pOwner));
 	return true;
 }
 }
 
-RouteConnectionInfo GetRouteConnectionInfo(const RpcSender& stSenderParam)
+RouteConnectionInfo GetRouteConnectionInfo(const RpcSender& stSender)
 {
-	if (stSenderParam.pManager != &RouteManager::Instance())
+	if (stSender.pManager != &RouteManager::Instance())
 	{
 		return {};
 	}
-	auto* pConnection = static_cast<RouteConnection*>(stSenderParam.pContext);
+	auto* pConnection = static_cast<RouteConnection*>(stSender.pContext);
 	::OI::Thread::MutexGuard stLock(pConnection->stMutex);
 	const auto& stPolicy = pConnection->stPolicy;
 	return {pConnection->sIp, pConnection->sPort, pConnection->iSessionId, stPolicy.iSendBytes,
@@ -743,13 +743,13 @@ RouteConnectionInfo GetRouteConnectionInfo(const RpcSender& stSenderParam)
 	    {stPolicy.iHeldCount, stPolicy.iHeldBytes}};
 }
 
-std::shared_ptr<void> GetRouteConnectionOwner(const RpcSender& stSenderParam)
+std::shared_ptr<void> GetRouteConnectionOwner(const RpcSender& stSender)
 {
-	if (stSenderParam.pManager != &RouteManager::Instance())
+	if (stSender.pManager != &RouteManager::Instance())
 	{
 		return {};
 	}
-	return static_cast<RouteConnection*>(stSenderParam.pContext)->pSelf.lock();
+	return static_cast<RouteConnection*>(stSender.pContext)->pSelf.lock();
 }
 
 RoutePoolStats GetRoutePoolStats()
@@ -771,28 +771,28 @@ RoutePoolStats GetRoutePoolStats()
 	return stStats;
 }
 
-bool PrepareRoute(::OI::Net::SessionManager* pManagerParam, const std::string& sNameParam, ServicePick iPickParam, const std::string& sZoneParam, ServiceRoute& stRouteParam)
+bool PrepareRoute(::OI::Net::SessionManager* pManager, const std::string& sNameLocal, ServicePick iPickLocal, const std::string& sZoneLocal, ServiceRoute& stRoute)
 {
-	if (!ValidServiceToken(sNameParam) || (iPickParam == ServicePick::Zone && !ValidServiceToken(sZoneParam)))
+	if (!ValidServiceToken(sNameLocal) || (iPickLocal == ServicePick::Zone && !ValidServiceToken(sZoneLocal)))
 	{
-		stRouteParam.iStatus = ServiceRouteStatus::BadName;
+		stRoute.iStatus = ServiceRouteStatus::BadName;
 		return true;
 	}
-	if (iPickParam == ServicePick::Any && pManagerParam)
+	if (iPickLocal == ServicePick::Any && pManager)
 	{
-		std::vector<::OI::Net::SessionManager*> vWatchers = ::OI::Base::ServiceTable::GetInstance().Watchers(sNameParam);
+		std::vector<::OI::Net::SessionManager*> vWatchers = ::OI::Base::ServiceTable::GetInstance().Watchers(sNameLocal);
 		for (auto* pWatcher : vWatchers)
 		{
-			if (pWatcher != pManagerParam)
+			if (pWatcher != pManager)
 			{
 				continue;
 			}
-			ProtoClientManager* pClient = dynamic_cast<ProtoClientManager*>(pManagerParam);
+			ProtoClientManager* pClient = dynamic_cast<ProtoClientManager*>(pManager);
 			if (pClient && pClient->IsConnect())
 			{
-				stRouteParam.iStatus = ServiceRouteStatus::Ok;
-				stRouteParam.vClients.push_back(&pClient->Sender());
-				stRouteParam.vOwners.push_back({});
+				stRoute.iStatus = ServiceRouteStatus::Ok;
+				stRoute.vClients.push_back(&pClient->Sender());
+				stRoute.vOwners.push_back({});
 				return true;
 			}
 		}
@@ -800,60 +800,60 @@ bool PrepareRoute(::OI::Net::SessionManager* pManagerParam, const std::string& s
 	return false;
 }
 
-void PullRoute(const std::string& sNameParam, std::function<void(int32_t, const std::vector<::OI::Base::ServiceInstance>&)> fnDoneParam, int64_t iTimeoutMillisecondsParam)
+void PullRoute(const std::string& sNameLocal, std::function<void(int32_t, const std::vector<::OI::Base::ServiceInstance>&)> fnDone, int64_t iTimeoutMilliseconds)
 {
-	::OI::Base::RegistryClient::GetInstance().PullAsync(sNameParam, std::move(fnDoneParam), iTimeoutMillisecondsParam);
+	::OI::Base::RegistryClient::GetInstance().PullAsync(sNameLocal, std::move(fnDone), iTimeoutMilliseconds);
 }
 
-bool PrepareTarget(const std::string& sTargetParam, bool bBatchParam, ServiceRoute& stRouteParam, std::string& sNameParam, ServicePick& iPickParam, std::string& sZoneParam)
+bool PrepareTarget(const std::string& sTarget, bool bBatch, ServiceRoute& stRoute, std::string& sNameLocal, ServicePick& iPickLocal, std::string& sZoneLocal)
 {
 	ParsedTarget stTarget;
-	if (!ParseTarget(sTargetParam, stTarget) || stTarget.bAll != bBatchParam)
+	if (!ParseTarget(sTarget, stTarget) || stTarget.bAll != bBatch)
 	{
-		stRouteParam.iStatus = ServiceRouteStatus::BadName;
+		stRoute.iStatus = ServiceRouteStatus::BadName;
 		return true;
 	}
-	sNameParam = stTarget.sName;
-	sZoneParam = stTarget.sZone;
-	iPickParam = ServicePick::Any;
-	if (bBatchParam)
+	sNameLocal = stTarget.sName;
+	sZoneLocal = stTarget.sZone;
+	iPickLocal = ServicePick::Any;
+	if (bBatch)
 	{
-		iPickParam = ServicePick::All;
+		iPickLocal = ServicePick::All;
 	}
 	else if (!stTarget.sZone.empty())
 	{
-		iPickParam = ServicePick::Zone;
+		iPickLocal = ServicePick::Zone;
 	}
 	return false;
 }
 
-bool PrepareZones(::OI::Net::SessionManager* pManagerParam, const std::string& sNameParam, const std::vector<int32_t>& vZoneIdsParam, ServiceRoute& stRouteParam, std::vector<std::string>& vZonesParam)
+bool PrepareZones(::OI::Net::SessionManager* pManager, const std::string& sNameLocal, const std::vector<int32_t>& vZoneIds, ServiceRoute& stRoute, std::vector<std::string>& vZones)
 {
-	(void)pManagerParam;
-	vZonesParam.clear();
-	if (!ValidServiceToken(sNameParam) || vZoneIdsParam.empty())
+	(void)pManager;
+	vZones.clear();
+	if (!ValidServiceToken(sNameLocal) || vZoneIds.empty())
 	{
-		stRouteParam.iStatus = ServiceRouteStatus::BadName;
+		stRoute.iStatus = ServiceRouteStatus::BadName;
 		return true;
 	}
-	vZonesParam.reserve(vZoneIdsParam.size());
-	for (int32_t iZoneId : vZoneIdsParam)
+	vZones.reserve(vZoneIds.size());
+	for (int32_t iZoneId : vZoneIds)
 	{
 		if (iZoneId < 0)
 		{
-			stRouteParam.iStatus = ServiceRouteStatus::BadName;
-			vZonesParam.clear();
+			stRoute.iStatus = ServiceRouteStatus::BadName;
+			vZones.clear();
 			return true;
 		}
-		vZonesParam.push_back(std::to_string(iZoneId));
+		vZones.push_back(std::to_string(iZoneId));
 	}
 	return false;
 }
 
-ServiceRoute FinishRoute(const std::string& sNameParam, ServicePick iPickParam, const std::string& sZoneParam, int32_t iCodeParam, const std::vector<::OI::Base::ServiceInstance>& vListParam, ::OI::Net::SessionManager* pManagerParam)
+ServiceRoute FinishRoute(const std::string& sNameLocal, ServicePick iPickLocal, const std::string& sZoneLocal, int32_t iCode, const std::vector<::OI::Base::ServiceInstance>& vList, ::OI::Net::SessionManager* pManager)
 {
 	ServiceRoute stRoute;
-	if (iCodeParam != OI_OK)
+	if (iCode != OI_OK)
 	{
 		stRoute.iStatus = ServiceRouteStatus::Offline;
 		return stRoute;
@@ -861,9 +861,9 @@ ServiceRoute FinishRoute(const std::string& sNameParam, ServicePick iPickParam, 
 	bool bGlobal = false;
 	bool bZoned = false;
 	std::vector<::OI::Base::ServiceInstance> vMatched;
-	for (const auto& stInst : vListParam)
+	for (const auto& stInst : vList)
 	{
-		if (stInst.sName != sNameParam)
+		if (stInst.sName != sNameLocal)
 		{
 			continue;
 		}
@@ -875,9 +875,9 @@ ServiceRoute FinishRoute(const std::string& sNameParam, ServicePick iPickParam, 
 		{
 			bZoned = true;
 		}
-		if (iPickParam == ServicePick::Zone)
+		if (iPickLocal == ServicePick::Zone)
 		{
-			if (stInst.sZone == sZoneParam)
+			if (stInst.sZone == sZoneLocal)
 			{
 				vMatched.push_back(stInst);
 			}
@@ -892,7 +892,7 @@ ServiceRoute FinishRoute(const std::string& sNameParam, ServicePick iPickParam, 
 		stRoute.iStatus = ServiceRouteStatus::WrongKind;
 		return stRoute;
 	}
-	if (iPickParam == ServicePick::Zone && bGlobal)
+	if (iPickLocal == ServicePick::Zone && bGlobal)
 	{
 		stRoute.iStatus = ServiceRouteStatus::WrongKind;
 		return stRoute;
@@ -902,15 +902,15 @@ ServiceRoute FinishRoute(const std::string& sNameParam, ServicePick iPickParam, 
 		stRoute.iStatus = ServiceRouteStatus::Offline;
 		return stRoute;
 	}
-	std::sort(vMatched.begin(), vMatched.end(), [](const ::OI::Base::ServiceInstance& stLeftParam, const ::OI::Base::ServiceInstance& stRightParam)
+	std::sort(vMatched.begin(), vMatched.end(), [](const ::OI::Base::ServiceInstance& stLeft, const ::OI::Base::ServiceInstance& stRight)
 	{
-		return stLeftParam.iId < stRightParam.iId;
+		return stLeft.iId < stRight.iId;
 	});
-	if (iPickParam == ServicePick::All)
+	if (iPickLocal == ServicePick::All)
 	{
 		for (const auto& stInst : vMatched)
 		{
-			if (!AddRouteClient(stRoute, stInst.sIp, stInst.sPort, pManagerParam))
+			if (!AddRouteClient(stRoute, stInst.sIp, stInst.sPort, pManager))
 			{
 				return stRoute;
 			}
@@ -919,14 +919,14 @@ ServiceRoute FinishRoute(const std::string& sNameParam, ServicePick iPickParam, 
 	else
 	{
 		size_t iPick = 0;
-		if (iPickParam == ServicePick::Any && vMatched.size() > 1)
+		if (iPickLocal == ServicePick::Any && vMatched.size() > 1)
 		{
 			static std::atomic<uint32_t> iCursor{0};
 			iPick = iCursor.fetch_add(1, std::memory_order_relaxed) % vMatched.size();
 		}
 		const ::OI::Base::ServiceInstance& stInst = vMatched[iPick];
 		// 名单已选定地址，使用固定地址的连接；订阅管理器可能在提交前改连其他分区。
-		if (!AddRouteClient(stRoute, stInst.sIp, stInst.sPort, pManagerParam))
+		if (!AddRouteClient(stRoute, stInst.sIp, stInst.sPort, pManager))
 		{
 			return stRoute;
 		}
@@ -935,18 +935,18 @@ ServiceRoute FinishRoute(const std::string& sNameParam, ServicePick iPickParam, 
 	return stRoute;
 }
 
-ServiceRoute FinishZones(const std::string& sNameParam, const std::vector<std::string>& vZonesParam, int32_t iCodeParam, const std::vector<::OI::Base::ServiceInstance>& vListParam, ::OI::Net::SessionManager* pManagerParam)
+ServiceRoute FinishZones(const std::string& sNameLocal, const std::vector<std::string>& vZones, int32_t iCode, const std::vector<::OI::Base::ServiceInstance>& vList, ::OI::Net::SessionManager* pManager)
 {
 	ServiceRoute stRoute;
-	if (iCodeParam != OI_OK)
+	if (iCode != OI_OK)
 	{
 		stRoute.iStatus = ServiceRouteStatus::Offline;
 		return stRoute;
 	}
 	bool bGlobal = false;
-	for (const auto& stInst : vListParam)
+	for (const auto& stInst : vList)
 	{
-		if (stInst.sName != sNameParam)
+		if (stInst.sName != sNameLocal)
 		{
 			continue;
 		}
@@ -960,12 +960,12 @@ ServiceRoute FinishZones(const std::string& sNameParam, const std::vector<std::s
 		stRoute.iStatus = ServiceRouteStatus::WrongKind;
 		return stRoute;
 	}
-	for (const auto& sZone : vZonesParam)
+	for (const auto& sZone : vZones)
 	{
 		const ::OI::Base::ServiceInstance* pBest = nullptr;
-		for (const auto& stInst : vListParam)
+		for (const auto& stInst : vList)
 		{
-			if (stInst.sName != sNameParam || stInst.sZone != sZone)
+			if (stInst.sName != sNameLocal || stInst.sZone != sZone)
 			{
 				continue;
 			}
@@ -981,7 +981,7 @@ ServiceRoute FinishZones(const std::string& sNameParam, const std::vector<std::s
 			continue;
 		}
 		// 每个槽位固定到本次名单中的地址，不能随调用方管理器的服务切换而漂移。
-		if (!AddRouteClient(stRoute, pBest->sIp, pBest->sPort, pManagerParam))
+		if (!AddRouteClient(stRoute, pBest->sIp, pBest->sPort, pManager))
 		{
 			return stRoute;
 		}

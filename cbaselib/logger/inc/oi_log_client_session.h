@@ -9,8 +9,8 @@ namespace Log
 class LogClientSession : public ::OI::Net::NetSession
 {
   public:
-	LogClientSession(::OI::Net::SessionManager* pMgrParam)
-	    : NetSession(pMgrParam)
+	LogClientSession(::OI::Net::SessionManager* pMgr)
+	    : NetSession(pMgr)
 	{
 	}
 	virtual ~LogClientSession()

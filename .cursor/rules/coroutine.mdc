@@ -5,13 +5,13 @@ alwaysApply: false
 
 # 协程
 
-先读 `docs/coroutine.md`。要结果用 `co_await`，不等用 `coro::StartTask`，让时间用 `co_await coro::yield(毫秒)`。`yield(0)` 只回队列，这一轮不再跑它。
+先读 `docs/coroutine.md`。要结果用 `co_await`，不等用 `OI::Coro::StartTask`，让时间用 `co_await OI::Coro::yield(毫秒)`。`yield(0)` 只回队列，这一轮不再跑它。
 
-应用层空等必须先对上 `modules/ipcclient/src/log_mgr.cpp` 的 `Pump`：`co_await coro::yield(毫秒)`。对上了再写。不要用 `sleep`、`sleep_for`、`Sleep`、`usleep`。单线程睡下去，poll 停转。
+应用层空等必须先对上 `modules/ipcclient/src/log_mgr.cpp` 的 `Pump`：`co_await OI::Coro::yield(毫秒)`。对上了再写。不要用 `sleep`、`sleep_for`、`Sleep`、`usleep`。单线程睡下去，poll 停转。
 
 任务创建即运行：协程里调用协程函数，会在调用方栈上跑到第一次挂起再返回。不要在第一次挂起前层层调用子任务。带捕获的协程 lambda 必须经 `StartTask` 或 `TaskScope::Start` 启动。没有 `YieldToPool`、`Park`、`Wake`。
 
-等一批任务：在协程里直接调用协程函数拿到 Task，放进 vector，再 `co_await coro::WhenAll(std::move(vTasks))`。无返回值等到全部结束；有返回值按原顺序得到 `std::vector<T>`。不要用 `TaskResult<bool>`。有前后依赖的步骤仍逐个 `co_await`。不要用原子计数加 `yield` 轮询等子任务，也不要只为汇合去开 `TaskScope`。一个测试项写成一个函数，返回自己的失败数。
+等一批任务：在协程里直接调用协程函数拿到 Task，放进 vector，再 `co_await OI::Coro::WhenAll(std::move(vTasks))`。无返回值等到全部结束；有返回值按原顺序得到 `std::vector<T>`。`TaskResult<bool>` 汇合后是 `vector<int32_t>` 的 0/1。有前后依赖的步骤仍逐个 `co_await`。不要用原子计数加 `yield` 轮询等子任务，也不要只为汇合去开 `TaskScope`。一个测试项写成一个函数，返回自己的失败数。
 
 标准用例是服务端原样回包，以及客户端在根任务里起固定数量的工作协程，每个循环领编号、发一次、等回包，在途数量不超过服务端额度，全部结束后统一汇报：
 
@@ -25,22 +25,22 @@ static OI_RPC_SYNC_HANDLER(AllEcho, HandleAllEcho)
 ```
 
 ```cpp
-coro::StartTask([](coro::Token) {
+OI::Coro::StartTask([](OI::Coro::Token) {
     return EchoMgr::GetInstance().Run();
 });
 
-coro::Task EchoMgr::Run()
+OI::Coro::Task EchoMgr::Run()
 {
-    std::vector<coro::Task> vWorkers;
+    std::vector<OI::Coro::Task> vWorkers;
     for (int32_t iWorker = 0; iWorker < iWorkers; ++iWorker)
     {
         vWorkers.push_back(Pump());
     }
-    co_await coro::WhenAll(std::move(vWorkers));
+    co_await OI::Coro::WhenAll(std::move(vWorkers));
     Report();
 }
 
-coro::Task EchoMgr::Pump()
+OI::Coro::Task EchoMgr::Pump()
 {
     for (;;)
     {
@@ -54,4 +54,4 @@ coro::Task EchoMgr::Pump()
 }
 ```
 
-服务端要等，照 `Hold`：`co_await coro::yield(stRequest.iDelayMilliseconds)` 再填回包。`yield` 也接受 `OI::Timer::MS`。捕获的引用不要当协程状态用，参数才进帧。
+服务端要等，照 `Hold`：`co_await OI::Coro::yield(stRequest.iDelayMilliseconds)` 再填回包。`yield` 也接受 `OI::Timer::MS`。捕获的引用不要当协程状态用，参数才进帧。

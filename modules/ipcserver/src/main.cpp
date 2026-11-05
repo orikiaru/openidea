@@ -3,12 +3,12 @@
 #include "oi_base.h"
 #include "ipcserver.h"
 
-int main(int iArgumentCountParam, char* vArgumentsParam[])
+int main(int iArgumentCount, char* vArguments[])
 {
 	const char* pConfigPath = "../config/ipcserver.toml";
-	if (iArgumentCountParam > 1 && vArgumentsParam[1] != NULL && vArgumentsParam[1][0] != '\0')
+	if (iArgumentCount > 1 && vArguments[1] != NULL && vArguments[1][0] != '\0')
 	{
-		pConfigPath = vArgumentsParam[1];
+		pConfigPath = vArguments[1];
 	}
 	int iCodeLocal = ::OI::Base::StartFramework(pConfigPath);
 	if (iCodeLocal != 0)

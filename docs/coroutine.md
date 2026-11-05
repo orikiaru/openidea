@@ -1,24 +1,24 @@
 # 协程
 
-无返回值任务用 `coro::Task`，有返回值用 `coro::TaskResult<T>`；RPC 服务端用其别名 `OI::Rpc::RpcTask` 返回 `int32_t` 状态码。单线程和多线程走同一个挂起、唤醒路径，差别在句柄放进哪条队列。
+无返回值任务用 `OI::Coro::Task`，有返回值用 `OI::Coro::TaskResult<T>`；RPC 服务端用其别名 `OI::Rpc::RpcTask` 返回 `int32_t` 状态码。单线程和多线程走同一个挂起、唤醒路径，差别在句柄放进哪条队列。
 
 ## 怎么写
 
-调用协程函数就开始执行。要结果就 `co_await` 它返回的 Task。想并发，先调用拿到几个 Task，再 `co_await coro::WhenAll(std::move(vTasks))`：无返回值等到全部结束，有返回值得到按原顺序排列的 `std::vector<T>`。全部结束前不返回；其中一条失败时，其余任务仍跑完，再按序号抛出第一条异常。空列表直接完成。`TaskResult<bool>` 不能交给 `WhenAll`，那会得到带代理引用的 `vector<bool>`。有前后依赖的步骤仍逐个 `co_await`。不要用原子计数加 `yield` 轮询，也不要只为汇合去开 `TaskScope`。`ipcclient` 的 `HoldMgr::Pump` 按这个写法把每个测试项拆成一个返回失败数的函数。带捕获的协程 lambda 和要在独立调用号下运行的任务用 `coro::StartTask`。让出一段时间用 `co_await coro::yield(毫秒)`。
+调用协程函数就开始执行。要结果就 `co_await` 它返回的 Task。想并发，先调用拿到几个 Task，再 `co_await OI::Coro::WhenAll(std::move(vTasks))`：无返回值等到全部结束，有返回值得到按原顺序排列的 `std::vector<T>`。全部结束前不返回；其中一条失败时，其余任务仍跑完，再按序号抛出第一条异常。空列表直接完成。`std::vector<bool>` 是标准库的特化，不是装 `bool` 的普通数组，`operator[]` 返回代理引用，不能拿引用、不能当普通元素用，模板里一实例化就踩坑。因此凡是模板参数为 `bool`、结果却是 `vector<T>` 的接口都必须拦住，禁止返回这个特化。`TaskResult<bool>` 单独等待仍得到 `bool`；交给 `WhenAll` 时得到按原顺序排列的 `vector<int32_t>`，1 为真，0 为假。Redis 的整数回执是 64 位，0/1 标记数组用 `vector<int64_t>`，和原生整数同一条解码，不是因为这个标志位需要 64 位；`int32_t` 装得下 0/1，但更大的整数数组会越界失败。有前后依赖的步骤仍逐个 `co_await`。不要用原子计数加 `yield` 轮询，也不要只为汇合去开 `TaskScope`。`ipcclient` 的 `HoldMgr::Pump` 按这个写法把每个测试项拆成一个返回失败数的函数。带捕获的协程 lambda 和要在独立调用号下运行的任务用 `OI::Coro::StartTask`。让出一段时间用 `co_await OI::Coro::yield(毫秒)`。
 
 - `yield(ms)` 在 `ms > 0` 时进时间轮，到点再跑，等待期间不占 CPU
 - `ms <= 0` 只把句柄放回队列，这一轮不再碰它。主循环会先去 poll，再跑新挂上的
-- 应用层要空等一段时间，只用 `co_await coro::yield(毫秒)`。不要 `sleep`、`sleep_for`、`Sleep`、`usleep`。单线程就这一条线程，睡下去 poll 停转，套接字里的数据发不出去
+- 应用层要空等一段时间，只用 `co_await OI::Coro::yield(毫秒)`。不要 `sleep`、`sleep_for`、`Sleep`、`usleep`。单线程就这一条线程，睡下去 poll 停转，套接字里的数据发不出去
 
 任务创建即运行。时序见 [单线程](sequence-diagram/single-thread/task.md) 和 [多线程](sequence-diagram/multi-thread/task.md)。在协程里调用协程函数，子协程当场在调用方的栈上跑到第一次挂起，再把 Task 返回给调用方；子协程当场跑完，之后的 `co_await` 直接取结果，调用方不挂起。在协程外调用（网络回调、定时器回调、main），子协程只放进运行队列，不在回调线程上跑。子协程停住（等回包或定时）后，`co_await` 把调用方登记到等待列表，子协程结束后逐个 `Schedule` 等待者。
 
 所以不要在第一次挂起之前层层调用子任务，栈会随层数涨。`StartTask` 和 `TaskScope::Start` 总是入队，不加栈。
 
-`co_return` 才结束一条 `coro::Task`。同一个 Task / TaskResult 可以重复或并发 `co_await`，任务只执行一次；完成后再等，直接取得已保存的结果或异常。`StartTask` 启动独立任务并返回对应的 Task / TaskResult 实例；可直接 await，也可按值传给多个协程。需要调用号时用 `stTask.GetToken()`。不接返回值仍然正常独立执行，不取消任务。底层 `task.Start()` 只把任务标成独立任务（分配 token、异常直接报告），可重复调用，不会再次执行。
+`co_return` 才结束一条 `OI::Coro::Task`。同一个 Task / TaskResult 可以重复或并发 `co_await`，任务只执行一次。两个等待者都在完成前，会挂进 `pWaiters`，结束时逐个 `Schedule`；一个在完成前、一个在完成后，先来的入队，后来的看见 `bReady` 当场取结果；两个都在完成后，都不挂起，各复制一次结果。时序见 [单线程](sequence-diagram/single-thread/waiters.md) 和 [多线程](sequence-diagram/multi-thread/waiters.md)。完成后再等，直接取得已保存的结果或异常。`StartTask` 启动独立任务并返回对应的 Task / TaskResult 实例；可直接 await，也可按值传给多个协程。需要调用号时用 `stTask.GetToken()`。不接返回值仍然正常独立执行，不取消任务。底层 `task.Start()` 只把任务标成独立任务（分配 token、异常直接报告），可重复调用，不会再次执行。
 
 Task 对象、每个等待器及运行中的帧各持一份引用。任务对象析构不会取消已启动任务，等待器可独立保活；最后一个引用释放才销毁帧。任务对象可复制或移动；复制只增加共享引用，不复制任务或结果，已经登记的等待不受影响；移后对象再次 Start/await 抛 logic_error。不支持一边移动/销毁同一个 C++ 对象一边从其他线程访问它。
 
-跨协程共享直接使用 `auto stTask = coro::StartTask(任务函数);`，后续 `StartTask` 的回调按值捕获 `[stTask]` 并 `co_await stTask`，不需要外套 shared_ptr。任务正常执行，不等等待者到齐：未完成就登记等待，已完成就直接返回保存的结果，不重新入队。等待者数量不限于两个。创建者析构自己的实例不影响其他副本；拷贝/移动赋值和自赋值同样安全。不同副本可以并发使用，同一个实例的赋值/析构与访问仍须由应用同步。
+跨协程共享直接使用 `auto stTask = OI::Coro::StartTask(任务函数);`，后续 `StartTask` 的回调按值捕获 `[stTask]` 并 `co_await stTask`，不需要外套 shared_ptr。任务正常执行，不等等待者到齐：未完成就登记等待，已完成就直接返回保存的结果，不重新入队。等待者数量不限于两个。创建者析构自己的实例不影响其他副本；拷贝/移动赋值和自赋值同样安全。不同副本可以并发使用，同一个实例的赋值/析构与访问仍须由应用同步。
 
 TaskResult 每次等待返回一份结果副本，不移走共享结果。大对象或不可复制对象使用 `TaskResult<std::shared_ptr<T>>`，多个等待者共享同一个对象；其业务数据的并发读写仍由应用同步。异常保留并在每次 await 时重抛。RPC 的输出引用接口本身返回 TaskResult<int32_t>，可以共享等待；不带输出的直连 RPC 等待对象及 Redis/HTTP 请求等待对象仍是单次请求，要共享可以封装到一个 TaskResult 中。
 
@@ -28,7 +28,7 @@ TaskResult 每次等待返回一份结果副本，不移走共享结果。大对
 
 挂起只把句柄放回队列，不在回调里直接 `resume`。RPC 回包和超时也是 `Schedule`。
 
-单次等待走 `coro::Gate`。`Idle` 还没人认领，`Ready` 是结果已经写好，`Waiting` 是调用方已经挂起。完成方先把结果写进状态，再 `exchange(Ready)`，只有看见 `Waiting` 才 `Schedule`。等待方先记下句柄并提交，再 `exchange(Waiting)`，看见 `Ready` 就不挂起，当场 `await_resume`。时序见 [单线程](sequence-diagram/single-thread/gate.md) 和 [多线程](sequence-diagram/multi-thread/gate.md)。`Task` 的多个等待者仍是完成列表，不走这道门。
+单次等待走 `OI::Coro::Gate`。`Idle` 还没人认领，`Ready` 是结果已经写好，`Waiting` 是调用方已经挂起。完成方先把结果写进状态，再 `exchange(Ready)`，只有看见 `Waiting` 才 `Schedule`。等待方先记下句柄并提交，再 `exchange(Waiting)`，看见 `Ready` 就不挂起，当场 `await_resume`。时序见 [单线程](sequence-diagram/single-thread/gate.md) 和 [多线程](sequence-diagram/multi-thread/gate.md)。`Task` 的多个等待者仍是完成列表，不走这道门。
 
 时间轮只能在 poll 线程上改。`yield` 经 `OI::Net::Poll::CallOnLoop` 到 poll 线程再 `AddTimer`，到点把句柄放回队列。
 
@@ -36,7 +36,7 @@ TaskResult 每次等待返回一份结果副本，不移走共享结果。大对
 
 单线程主循环每一轮只跑进入时已经在队列里的普通 `Task`，再 `StScheduler::Poll` 只 `resume` 进入时已经在协程队列里的句柄。这一轮里 `yield(0)` 和 `StartTask` 进的是原队列，这次碰不到。然后如果还有待跑的任务或协程，`PollWait(0)` 只试一次网络；什么都没有才 `PollWait(1000)` 堵住等。
 
-多线程由 `ThreadPool::PostCoroutine` 把句柄放进工人队列。工人和单线程队列都经 `coro::ResumeTask` 恢复协程，期间新建的任务算作“在协程里”，当场执行。协程在 `final_suspend` 里登记执行引用回收，这次 `resume` 返回后 `DrainDetached` 再释放该引用。当场跑完的子任务在调用方下一次 `co_await` 时回收，不等最外层协程挂起。仍有任务对象或等待者时保留帧与结果。
+多线程由 `ThreadPool::PostCoroutine` 把句柄放进工人队列。工人和单线程队列都经 `OI::Coro::ResumeTask` 恢复协程，期间新建的任务算作“在协程里”，当场执行。协程在 `final_suspend` 里登记执行引用回收，这次 `resume` 返回后 `DrainDetached` 再释放该引用。当场跑完的子任务在调用方下一次 `co_await` 时回收，不等最外层协程挂起。仍有任务对象或等待者时保留帧与结果。
 
 完成与等待登记使用框架 Mutex，单线程下锁为空操作。等待节点内嵌在父协程帧，不另分配堆节点；唤醒前缓存节点的下一项和父句柄，发布后不再访问可能已经销毁的节点。执行引用保证通知期间子帧仍然有效。
 
@@ -54,7 +54,7 @@ HandleRpc<AllEchoReq>([](const AllEchoReq& req, AllEchoRes& res) -> OI::Rpc::Rpc
 });
 ```
 
-要在处理里等一段时间，直接 `co_await coro::yield(毫秒)`，不要占着工人空转。`Hold` 就是这样把回包推迟的。
+要在处理里等一段时间，直接 `co_await OI::Coro::yield(毫秒)`，不要占着工人空转。`Hold` 就是这样把回包推迟的。
 
 `StartTask` 按值持有可调用对象直到任务结束，支持带捕获的协程 lambda；`HandleRpc` 也在包装协程中持有处理函数。捕获引用、裸 `this` 不会延长其指向对象的寿命，需由调用方保证有效，或按值捕获 `shared_ptr`。
 
@@ -67,7 +67,7 @@ HandleRpc<AllEchoReq>([](const AllEchoReq& req, AllEchoRes& res) -> OI::Rpc::Rpc
 按服务名调用不传 `sessionid`，见 [服务注册](registry.md)，时序见 [单线程](sequence-diagram/single-thread/route.md) 和 [多线程](sequence-diagram/multi-thread/route.md)。`CallAny` 不带分区，`Call` 打一个分区，`CallAll` 打当前名单上的每一份，`CallMany` 打给出的分区号列表。调用时记下 `RpcDeadline`，查询、建连和回包共用这一份预算，发出去时只剩剩余毫秒。选实例时挂起等注册表回包，不占线程。`CallAll` 和 `CallMany` 先全部发出，再逐个等。这几个接口返回 `TaskResult`，调用时就开始选实例并发请求；同一个对象可以给多个协程等，请求只发一次，大家拿同一份结果。
 
 ```cpp
-coro::StartTask([n](coro::Token) {
+OI::Coro::StartTask([n](OI::Coro::Token) {
     return RunOne(n);
 });
 
@@ -90,11 +90,30 @@ auto& res = result.GetRes();
 
 `Days(n)` 是每单位 24 小时的持续时长；日历跨天、跨周等刷新判断仍使用时间辅助接口。
 
+## 和 C# 的对应
+
+应用层就认这几样，名字先沿用现在的，不另起一套。
+
+| C# | 这边 |
+| --- | --- |
+| `Task` / `Task<T>` | `OI::Coro::Task` / `TaskResult<T>` |
+| `await` | `co_await` |
+| `Task.WhenAll` | `OI::Coro::WhenAll` |
+| `Task.Run` | `OI::Coro::StartTask` |
+| `Task.Yield` | `co_await OI::Coro::yield(0)` |
+| `CancellationToken` | `OI::Coro::StopToken`，任务自己看 `StopRequested()` |
+| `TaskCompletionSource` | 完成门 `OI::Coro::Gate`。结果先写好，再按门的状态决定要不要把已经挂起的人叫醒。RPC、Redis、HTTP 的单次等待用它 |
+| 一组后台任务，统一取消再 `WhenAll` | `OI::Coro::TaskScope` |
+
+`TaskScope` 不是 `TaskCompletionSource`。它只负责圈住一组任务：`Start` 放进去，`RequestStop` 给 `StopToken`，`Join` 等它们结束。只取消某一段等待时，传 `StopToken` 即可，不必建作用域。
+
+线程池的 `AddTask(lambda)` 留给还不是协程的普通任务。`PostCoroutine`、`PumpOnce`、`SetDrain`、`SetPending`、`SetResume` 只有运行时用，应用层不调用。
+
 ## 异常和任务作用域
 
 子任务的异常在父任务 `co_await` 处重新抛出，可以用 try/catch 捕获。独立根任务异常默认打印到 stderr，也可用 `SetTaskErrorHandler` 设置线程安全的错误处理函数。普通任务的异常如果直到最后一个引用释放都没有被 `co_await` 取走，也交给同一个处理函数，不会悄悄丢掉。
 
-`TaskScope` 持有一组任务；`scope.Start(fn)` 的 fn 接收 `(coro::Token, coro::StopToken)`，循环检查 `StopRequested()`。`RequestStop()` 关闭入口并请求协作停止，`co_await scope.Join()` 等待所有任务完成后转交第一个异常。Join 本身也关闭入口。模块销毁前必须先完成 Join，再停止框架线程池。析构只请求停止，不能代替异步 Join。
+`TaskScope` 持有一组任务；`scope.Start(fn)` 的 fn 接收 `(OI::Coro::Token, OI::Coro::StopToken)`，循环检查 `StopRequested()`。`RequestStop()` 关闭入口并请求协作停止，`co_await scope.Join()` 等待所有任务完成后转交第一个异常。Join 本身也关闭入口。模块销毁前必须先完成 Join，再停止框架线程池。析构只请求停止，不能代替异步 Join。
 
 停止不强拆正在等待的 RPC、Redis 或定时器：它们正常完成或超时后任务检查停止标记；因此作用域任务需要设置有限超时，避免无限等待。捕获裸 this 的生命周期由模块 Join 保证。
 
@@ -103,11 +122,11 @@ auto& res = result.GetRes();
 首次连接前的 RPC 默认最多等待 65536 条、64MiB；可通过 `SetPendingCallLimits(count, bytes)` 调整，0 表示不允许排队。达到任意限额返回 `OI_ERR_BUSY`，超时删除通过调用号索引完成。
 
 ```cpp
-coro::TaskScope tasks;
-tasks.Start([](coro::Token token, coro::StopToken stop) -> coro::Task {
+OI::Coro::TaskScope tasks;
+tasks.Start([](OI::Coro::Token token, OI::Coro::StopToken stop) -> OI::Coro::Task {
     while (!stop.StopRequested()) {
         // 一轮业务；网络调用必须给出有限超时。
-        co_await coro::yield(OI::Timer::Milliseconds(100));
+        co_await OI::Coro::yield(OI::Timer::Milliseconds(100));
     }
 });
 // 模块退出协程内，先关闭任务，再销毁业务数据。
@@ -122,7 +141,7 @@ RPC 超时桶按单调时钟绝对截止时间所在的 200 毫秒刻度分桶�
 
 ## 简化客户端调用
 
-单次调用推荐由调用方提供响应，返回 `coro::TaskResult<int32_t>`，与服务端的 `RpcTask` 是同一种任务类型。请求由任务按值持有，响应类型由请求自动关联，传错响应类型会编译失败：
+单次调用推荐由调用方提供响应，返回 `OI::Coro::TaskResult<int32_t>`，与服务端的 `RpcTask` 是同一种任务类型。请求由任务按值持有，响应类型由请求自动关联，传错响应类型会编译失败：
 
 ```cpp
 OI::RpcData::HoldRes stResponse;
@@ -174,7 +193,7 @@ int32_t ret = co_await RpcCall(client, req, output);
 
 `GetRet()` 返回 `int32_t`。`GetRes()` 在成功时返回引用，结果对象必须仍然存活；也可 `auto res = result.GetRes()` 复制响应，或 `auto res = std::move(result).GetRes()` 转移响应。错误时访问响应抛出 `std::logic_error`，不会把默认响应伪装成成功。结果字段通过这两个方法访问。
 
-服务端推荐只接收 `(req, res)`，注册只写请求类型 `HandleRpc<Req>`，响应类型自动配对。需要连接信息时接收 `(const RpcContext&, req, res)`，上下文包含 `iToken`、`stManager` 引用和 `iSessionId`，仅在本次处理期间有效。协程处理函数返回 `OI::Rpc::RpcTask`，用 `co_return int32_t` 返回状态码；同步处理函数直接返回 `int32_t`。不再接受旧五参数回调或无返回值的 `coro::Task` 处理函数：
+服务端推荐只接收 `(req, res)`，注册只写请求类型 `HandleRpc<Req>`，响应类型自动配对。需要连接信息时接收 `(const RpcContext&, req, res)`，上下文包含 `iToken`、`stManager` 引用和 `iSessionId`，仅在本次处理期间有效。协程处理函数返回 `OI::Rpc::RpcTask`，用 `co_return int32_t` 返回状态码；同步处理函数直接返回 `int32_t`。不再接受旧五参数回调或无返回值的 `OI::Coro::Task` 处理函数：
 
 ```cpp
 HandleRpc<HoldReq>([](const HoldReq& req, HoldRes& res) -> OI::Rpc::RpcTask {
@@ -186,7 +205,7 @@ HandleRpc<HoldReq>([](const HoldReq& req, HoldRes& res) -> OI::Rpc::RpcTask {
 });
 ```
 
-`RpcTask` 是 `coro::TaskResult<int32_t>` 的别名，与无返回值 `coro::Task` 共用同一套帧、调度和完成门，不增加包装层。带返回值的任务也支持嵌套 `co_await`、`StartTask` 和异常传播。请求解码异常或处理函数异常返回 `OI_ERR_FAIL`，处理函数异常还会交给任务错误处理器。等待登记/发送时的本地 C++ 异常仍按原约定从 `co_await` 抛出。
+`RpcTask` 是 `OI::Coro::TaskResult<int32_t>` 的别名，与无返回值 `OI::Coro::Task` 共用同一套帧、调度和完成门，不增加包装层。带返回值的任务也支持嵌套 `co_await`、`StartTask` 和异常传播。请求解码异常或处理函数异常返回 `OI_ERR_FAIL`，处理函数异常还会交给任务错误处理器。等待登记/发送时的本地 C++ 异常仍按原约定从 `co_await` 抛出。
 
 ## 应用层推荐：命名函数 + 宏注册
 
@@ -196,7 +215,7 @@ HandleRpc<HoldReq>([](const HoldReq& req, HoldRes& res) -> OI::Rpc::RpcTask {
 static OI_RPC_HANDLER(Hold, HandleHold)
 {
     if (stRequest.iDelayMilliseconds < 0) co_return 1001;
-    if (stRequest.iDelayMilliseconds > 0) co_await coro::yield(stRequest.iDelayMilliseconds);
+    if (stRequest.iDelayMilliseconds > 0) co_await OI::Coro::yield(stRequest.iDelayMilliseconds);
     stResponse.iMark = stRequest.iMark;
     co_return 0;
 }

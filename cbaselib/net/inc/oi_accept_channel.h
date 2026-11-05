@@ -11,8 +11,8 @@ class AcceptChannel : public Channel
 	SessionManager* m_pSessionManager;
 
   public:
-	AcceptChannel(NetSocket stTextParam, SessionManager* pMgrParam)
-	    : Channel(stTextParam, 0), m_pSessionManager(pMgrParam)
+	AcceptChannel(NetSocket stText, SessionManager* pMgr)
+	    : Channel(stText, 0), m_pSessionManager(pMgr)
 	{
 	}
 	virtual void DataIn();
@@ -20,10 +20,10 @@ class AcceptChannel : public Channel
 	virtual bool TryClose();
 
   public:
-	static bool StartAccept(SessionManager* pMgrParam, bool bAsyncParam);
+	static bool StartAccept(SessionManager* pMgr, bool bAsync);
 
   private:
-	static bool StartTcpAccept(SessionManager* pMgrParam, bool bAsyncParam);
+	static bool StartTcpAccept(SessionManager* pMgr, bool bAsync);
 };
 }
 }

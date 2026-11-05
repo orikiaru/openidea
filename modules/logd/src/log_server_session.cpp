@@ -59,9 +59,9 @@ void LogServerSession::WaitForWrite()
 	}
 }
 
-void LogServerSession::ResumeWrite(bool bShutdownParam)
+void LogServerSession::ResumeWrite(bool bShutdown)
 {
-	m_bShutdown = bShutdownParam;
+	m_bShutdown = bShutdown;
 	m_bWaiting = false;
 	// EOF 可能和最后一次读取同时到达。即使已断开，也必须排空已读完整帧。
 	OnDataIn();

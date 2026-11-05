@@ -8,8 +8,8 @@ namespace Redis
 class RedisClientSession : public ::OI::Net::NetSession
 {
   public:
-	RedisClientSession(::OI::Net::SessionManager* pManagerParam)
-	    : ::OI::Net::NetSession(pManagerParam)
+	RedisClientSession(::OI::Net::SessionManager* pManager)
+	    : ::OI::Net::NetSession(pManager)
 	{
 	}
 	virtual void OnDataIn();

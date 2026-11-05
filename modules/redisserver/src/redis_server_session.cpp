@@ -9,38 +9,38 @@ namespace
 const int64_t kMaxBulk = 512LL * 1024 * 1024;
 
 // 从 p 读一个十进制整数，到 \r\n 为止。返回下一段的起点，数据不够返回 NULL，格式错把 bad 置真。
-const char* ReadLine(const char* pPointerParam, const char* pEndParam, int64_t& iValueParam, bool& bBadParam)
+const char* ReadLine(const char* pPointer, const char* pEnd, int64_t& iValueLocal, bool& bBad)
 {
 	bool bNeg = false;
-	if (pPointerParam < pEndParam && *pPointerParam == '-')
+	if (pPointer < pEnd && *pPointer == '-')
 	{
 		bNeg = true;
-		++pPointerParam;
+		++pPointer;
 	}
 	int64_t iValue = 0;
 	int iDigits = 0;
-	for (; pPointerParam < pEndParam; ++pPointerParam)
+	for (; pPointer < pEnd; ++pPointer)
 	{
-		if (*pPointerParam == '\r')
+		if (*pPointer == '\r')
 		{
-			if (pPointerParam + 1 >= pEndParam)
+			if (pPointer + 1 >= pEnd)
 			{
 				return NULL;
 			}
-			if (pPointerParam[1] != '\n' || iDigits == 0)
+			if (pPointer[1] != '\n' || iDigits == 0)
 			{
-				bBadParam = true;
+				bBad = true;
 				return NULL;
 			}
-			iValueParam = bNeg ? -iValue : iValue;
-			return pPointerParam + 2;
+			iValueLocal = bNeg ? -iValue : iValue;
+			return pPointer + 2;
 		}
-		if (*pPointerParam < '0' || *pPointerParam > '9' || iDigits >= 18)
+		if (*pPointer < '0' || *pPointer > '9' || iDigits >= 18)
 		{
-			bBadParam = true;
+			bBad = true;
 			return NULL;
 		}
-		iValue = iValue * 10 + (*pPointerParam - '0');
+		iValue = iValue * 10 + (*pPointer - '0');
 		++iDigits;
 	}
 	return NULL;
@@ -48,77 +48,77 @@ const char* ReadLine(const char* pPointerParam, const char* pEndParam, int64_t& 
 
 // 一条完整的 RESP 命令：*N\r\n 后跟 N 个 $len\r\n<data>\r\n。
 // 返回这条命令的字节数；不完整返回 0；格式不对把 bad 置真。
-size_t ScanCommand(const char* pBeginParam, const char* pEndParam, int64_t& iArgumentCountParam, bool& bBadParam, size_t iMaxBytesParam)
+size_t ScanCommand(const char* pBegin, const char* pEnd, int64_t& iArgumentCount, bool& bBad, size_t iMaxBytes)
 {
-	const char* pPointer = pBeginParam;
-	if (pPointer >= pEndParam)
+	const char* pPointer = pBegin;
+	if (pPointer >= pEnd)
 	{
 		return 0;
 	}
 	if (*pPointer != '*')
 	{
-		bBadParam = true;
+		bBad = true;
 		return 0;
 	}
-	pPointer = ReadLine(pPointer + 1, pEndParam, iArgumentCountParam, bBadParam);
+	pPointer = ReadLine(pPointer + 1, pEnd, iArgumentCount, bBad);
 	if (!pPointer)
 	{
 		return 0;
 	}
-	if (iArgumentCountParam <= 0)
+	if (iArgumentCount <= 0)
 	{
-		bBadParam = true;
+		bBad = true;
 		return 0;
 	}
-	for (int64_t iIndexLocal = 0; iIndexLocal < iArgumentCountParam; ++iIndexLocal)
+	for (int64_t iIndexLocal = 0; iIndexLocal < iArgumentCount; ++iIndexLocal)
 	{
-		if (pPointer >= pEndParam)
+		if (pPointer >= pEnd)
 		{
 			return 0;
 		}
 		if (*pPointer != '$')
 		{
-			bBadParam = true;
+			bBad = true;
 			return 0;
 		}
 		int64_t iLength = 0;
-		pPointer = ReadLine(pPointer + 1, pEndParam, iLength, bBadParam);
+		pPointer = ReadLine(pPointer + 1, pEnd, iLength, bBad);
 		if (!pPointer)
 		{
 			return 0;
 		}
 		if (iLength < 0 || iLength > kMaxBulk)
 		{
-			bBadParam = true;
+			bBad = true;
 			return 0;
 		}
-		const size_t iPrefixBytes = static_cast<size_t>(pPointer - pBeginParam);
-		if (iPrefixBytes > iMaxBytesParam || static_cast<uint64_t>(iLength) + 2 > iMaxBytesParam - iPrefixBytes)
+		const size_t iPrefixBytes = static_cast<size_t>(pPointer - pBegin);
+		if (iPrefixBytes > iMaxBytes || static_cast<uint64_t>(iLength) + 2 > iMaxBytes - iPrefixBytes)
 		{
-			bBadParam = true;
+			bBad = true;
 			return 0;
 		}
-		if (pEndParam - pPointer < iLength + 2)
+		if (pEnd - pPointer < iLength + 2)
 		{
 			return 0;
 		}
 		if (pPointer[iLength] != '\r' || pPointer[iLength + 1] != '\n')
 		{
-			bBadParam = true;
+			bBad = true;
 			return 0;
 		}
 		pPointer += iLength + 2;
 	}
-	return (size_t)(pPointer - pBeginParam);
+	return (size_t)(pPointer - pBegin);
 }
 
-bool ChangesConnection(const char* pBeginParam, const char* pEndParam)
+bool ChangesConnection(const char* pBegin, const char* pEnd)
 {
 	bool bBad = false;
 	int64_t iCount = 0;
-	const char* pPointer = ReadLine(pBeginParam + 1, pEndParam, iCount, bBad);
+	const char* pPointer = ReadLine(pBegin + 1, pEnd, iCount, bBad);
 	int64_t iLength = 0;
-	pPointer = ReadLine(pPointer + 1, pEndParam, iLength, bBad);
+	pPointer = ReadLine(pPointer + 1, pEnd, iLength, bBad);
 	std::string sCommand(pPointer, (size_t)iLength);
 	for (char& iCharacter : sCommand)
 	{
@@ -145,7 +145,7 @@ bool ChangesConnection(const char* pBeginParam, const char* pEndParam)
 	if (sCommand == "SCRIPT" && iCount >= 2)
 	{
 		pPointer += iLength + 2;
-		pPointer = ReadLine(pPointer + 1, pEndParam, iLength, bBad);
+		pPointer = ReadLine(pPointer + 1, pEnd, iLength, bBad);
 		std::string sSubcommand(pPointer, static_cast<size_t>(iLength));
 		for (auto& iCharacter : sSubcommand)
 		{
@@ -176,8 +176,8 @@ bool ChangesConnection(const char* pBeginParam, const char* pEndParam)
 }
 }
 
-RedisServerSession::RedisServerSession(RedisServer* pOwnerParam)
-    : ::OI::Net::NetSession(pOwnerParam), m_pOwner(pOwnerParam), m_iLink(0)
+RedisServerSession::RedisServerSession(RedisServer* pOwner)
+    : ::OI::Net::NetSession(pOwner), m_pOwner(pOwner), m_iLink(0)
 {
 }
 
@@ -210,7 +210,7 @@ void RedisServerSession::OnDataIn()
 	ProcessInput(32);
 }
 
-size_t RedisServerSession::ProcessInput(size_t iBudgetParam)
+size_t RedisServerSession::ProcessInput(size_t iBudget)
 {
 	if (m_bReadPaused || IsClosed())
 	{
@@ -256,7 +256,7 @@ size_t RedisServerSession::ProcessInput(size_t iBudgetParam)
 			}
 		}
 		pPointer += iNumber;
-		if (--iBudgetParam == 0 && pPointer < pEnd)
+		if (--iBudget == 0 && pPointer < pEnd)
 		{
 			m_bReadPaused = true;
 			ForbidRead();

@@ -36,8 +36,8 @@ struct HoldRequestResource
 {
 	std::vector<char> vPayload = std::vector<char>(1024 * 1024, 'R');
 	std::shared_ptr<std::atomic<int>> pDestroyed;
-	explicit HoldRequestResource(std::shared_ptr<std::atomic<int>> pDestroyedParam)
-	    : pDestroyed(std::move(pDestroyedParam))
+	explicit HoldRequestResource(std::shared_ptr<std::atomic<int>> pDestroyed)
+	    : pDestroyed(std::move(pDestroyed))
 	{
 	}
 	~HoldRequestResource()
@@ -50,7 +50,7 @@ struct ResourceHoldRequest : OI::RpcData::HoldReq
 {
 	std::shared_ptr<HoldRequestResource> pResource;
 	bool bThrow = false;
-	OI::Base::BytesStream& serialize(OI::Base::BytesStream& stOutputParam) const override
+	OI::Base::BytesStream& serialize(OI::Base::BytesStream& stOutput) const override
 	{
 		if (!pResource || pResource->vPayload.size() != 1024 * 1024)
 		{
@@ -60,7 +60,7 @@ struct ResourceHoldRequest : OI::RpcData::HoldReq
 		{
 			throw std::runtime_error("request resource serialization failure");
 		}
-		return HoldReq::serialize(stOutputParam);
+		return HoldReq::serialize(stOutput);
 	}
 };
 
@@ -82,7 +82,7 @@ static std::atomic<int> iReverseFinished{0};
 static OI_RPC_HANDLER(Hold, HandleReverseHold)
 {
 	++iReverseStarted;
-	co_await coro::yield(stRequest.iDelayMilliseconds);
+	co_await OI::Coro::yield(stRequest.iDelayMilliseconds);
 	stResponse.iMark = stRequest.iMark;
 	++iReverseFinished;
 	co_return 0;
@@ -103,23 +103,23 @@ void HoldMgr::Load()
 	TryGetConfig("RedisClient.timeout_ms", m_iRedisTimeoutMilliseconds);
 }
 
-void HoldMgr::Start(sid_t iSessionIdParam)
+void HoldMgr::Start(sid_t iSessionId)
 {
 	if (!m_bEnabled)
 	{
 		return;
 	}
-	m_iSessionId = iSessionIdParam;
+	m_iSessionId = iSessionId;
 	TestBoard::GetInstance().Arm();
-	coro::StartTask([](coro::Token)
+	OI::Coro::StartTask([](OI::Coro::Token)
 	{
 		return HoldMgr::GetInstance().Pump();
 	});
 }
 
-static long long CpuMs(std::clock_t iBeginParam)
+static long long CpuMs(std::clock_t iBegin)
 {
-	double dMilliseconds = 1000.0 * (double)(std::clock() - iBeginParam) / (double)CLOCKS_PER_SEC;
+	double dMilliseconds = 1000.0 * (double)(std::clock() - iBegin) / (double)CLOCKS_PER_SEC;
 	if (dMilliseconds < 0)
 	{
 		dMilliseconds = 0;
@@ -127,14 +127,14 @@ static long long CpuMs(std::clock_t iBeginParam)
 	return (long long)dMilliseconds;
 }
 
-static long long WallMs(int64_t iBeginMillisecondsParam)
+static long long WallMs(int64_t iBeginMilliseconds)
 {
-	return ::OI::Timer::SteadyMilliseconds() - iBeginMillisecondsParam;
+	return ::OI::Timer::SteadyMilliseconds() - iBeginMilliseconds;
 }
 
-static bool Pong(const ::OI::Redis::RedisResult& stResultParam)
+static bool Pong(const ::OI::Redis::RedisResult& stResult)
 {
-	return !stResultParam.bTimeout && stResultParam.pReply && stResultParam.pReply->type == REDIS_REPLY_STATUS && stResultParam.pReply->str && std::strcmp(stResultParam.pReply->str, "PONG") == 0;
+	return !stResult.bTimeout && stResult.pReply && stResult.pReply->type == REDIS_REPLY_STATUS && stResult.pReply->str && std::strcmp(stResult.pReply->str, "PONG") == 0;
 }
 
 enum class RaceOutcome
@@ -144,15 +144,15 @@ enum class RaceOutcome
 	Bad,
 };
 
-static coro::TaskResult<RaceOutcome> RaceOne(int32_t iMarkParam, int32_t iDelayParam)
+static OI::Coro::TaskResult<RaceOutcome> RaceOne(int32_t iMarkLocal, int32_t iDelay)
 {
 	::OI::RpcData::HoldReq stOne;
-	stOne.iDelayMilliseconds = iDelayParam;
-	stOne.iMark = iMarkParam;
+	stOne.iDelayMilliseconds = iDelay;
+	stOne.iMark = iMarkLocal;
 	auto stResult = co_await IpcClient::GetInstance().CallAny<::OI::RpcData::HoldRes>(stOne, ::OI::Timer::Seconds(1));
 	if (stResult.GetRet() == 0)
 	{
-		co_return stResult.GetRes().iMark == iMarkParam ? RaceOutcome::Reply : RaceOutcome::Bad;
+		co_return stResult.GetRes().iMark == iMarkLocal ? RaceOutcome::Reply : RaceOutcome::Bad;
 	}
 	co_return stResult.GetRet() == OI_ERR_TIMEOUT ? RaceOutcome::Timeout : RaceOutcome::Bad;
 }
@@ -375,8 +375,8 @@ class ClientConnectProbe : public OI::Net::SessionManager
 	class ProbeSession : public OI::Net::NetSession
 	{
 	  public:
-		explicit ProbeSession(ClientConnectProbe* pOwnerParam)
-		    : NetSession(pOwnerParam)
+		explicit ProbeSession(ClientConnectProbe* pOwner)
+		    : NetSession(pOwner)
 		{
 		}
 		void OnDataIn() override
@@ -394,11 +394,11 @@ class ClientConnectProbe : public OI::Net::SessionManager
 	{
 		return new ProbeSession(this);
 	}
-	void OnAddSession(OI::Net::Session* pSessionParam) override
+	void OnAddSession(OI::Net::Session* pSession) override
 	{
 		if (++m_iConnections == 1 && m_bReconnectInCallback)
 		{
-			CloseSession(pSessionParam->GetSessionID());
+			CloseSession(pSession->GetSessionID());
 			DefaultInit("127.0.0.1", "0");
 			m_stRetry.emplace(StartClient());
 		}
@@ -408,10 +408,10 @@ class ClientConnectProbe : public OI::Net::SessionManager
 	}
 
   public:
-	explicit ClientConnectProbe(const std::string& sPortParam, bool bReconnectParam = false)
-	    : m_bReconnectInCallback(bReconnectParam)
+	explicit ClientConnectProbe(const std::string& sPortLocal, bool bReconnect = false)
+	    : m_bReconnectInCallback(bReconnect)
 	{
-		DefaultInit("127.0.0.1", sPortParam);
+		DefaultInit("127.0.0.1", sPortLocal);
 	}
 	ConnectAwaiter& Retry()
 	{
@@ -423,12 +423,12 @@ class ClientConnectProbe : public OI::Net::SessionManager
 	}
 };
 
-static coro::TaskResult<int> AwaitClientConnect(ClientConnectProbe* pProbeParam)
+static OI::Coro::TaskResult<int> AwaitClientConnect(ClientConnectProbe* pProbe)
 {
-	co_return (co_await pProbeParam->StartClient()) ? 0 : 1;
+	co_return (co_await pProbe->StartClient()) ? 0 : 1;
 }
 
-static coro::TaskResult<int> CheckClientConnect()
+static OI::Coro::TaskResult<int> CheckClientConnect()
 {
 	static ClientConnectProbe stGood(IpcServerPort()), stRefused("0");
 	int iBad = 0;
@@ -438,7 +438,7 @@ static coro::TaskResult<int> CheckClientConnect()
 	const int64_t iDeadline = ::OI::Timer::SteadyMilliseconds() + ::OI::Timer::MS(::OI::Timer::Seconds(3)).iMilliseconds;
 	while ((stEager.Connections() != 1 || stDelayedAwait.Connections() != 1) && ::OI::Timer::SteadyMilliseconds() < iDeadline)
 	{
-		co_await coro::yield(1);
+		co_await OI::Coro::yield(1);
 	}
 	if (stEager.Connections() != 1 || stDelayedAwait.Connections() != 1 || !(co_await stConnecting))
 	{
@@ -469,12 +469,12 @@ static coro::TaskResult<int> CheckClientConnect()
 		bool bReturned = false;
 	};
 	auto pResult = std::make_shared<Result>();
-	OI::Net::Poll::GetInstance().PostOnLoop([](void* pArgumentParam)
+	OI::Net::Poll::GetInstance().PostOnLoop([](void* pArgument)
 	{
-		auto* pState = static_cast<Result*>(pArgumentParam);
-		OI::Net::Poll::GetInstance().PostOnLoop([](void* pNestedParam)
+		auto* pState = static_cast<Result*>(pArgument);
+		OI::Net::Poll::GetInstance().PostOnLoop([](void* pNestedLocal)
 		{
-			auto* pNested = static_cast<Result*>(pNestedParam);
+			auto* pNested = static_cast<Result*>(pNestedLocal);
 			if (!pNested->bReturned)
 			{
 				++pNested->iBad;
@@ -485,10 +485,10 @@ static coro::TaskResult<int> CheckClientConnect()
 	}, pResult.get());
 	while (!pResult->bDone.load())
 	{
-		co_await coro::yield(1);
+		co_await OI::Coro::yield(1);
 	}
 	static ClientConnectProbe stAwait(IpcServerPort()), stAwaitRefused("0");
-	std::vector<coro::TaskResult<int>> vConnects;
+	std::vector<OI::Coro::TaskResult<int>> vConnects;
 	for (int iIndex = 0; iIndex < 32; ++iIndex)
 	{
 		vConnects.push_back(AwaitClientConnect(&stAwait));
@@ -532,8 +532,8 @@ struct TimerExceptionProbe
 struct TimerClosureProbe
 {
 	std::shared_ptr<TimerExceptionProbe> pState;
-	explicit TimerClosureProbe(std::shared_ptr<TimerExceptionProbe> pStateParam)
-	    : pState(std::move(pStateParam))
+	explicit TimerClosureProbe(std::shared_ptr<TimerExceptionProbe> pState)
+	    : pState(std::move(pState))
 	{
 	}
 	~TimerClosureProbe()
@@ -542,13 +542,13 @@ struct TimerClosureProbe
 	}
 };
 
-static coro::TaskResult<int> CheckTimerExceptions()
+static OI::Coro::TaskResult<int> CheckTimerExceptions()
 {
 	auto pState = std::make_shared<TimerExceptionProbe>();
 	// 帧持有状态直到 uv_close 回调完成；冻结时间轮也不会阻止独立看门狗。
-	OI::Net::Poll::GetInstance().CallOnLoop([](void* pArgumentParam)
+	OI::Net::Poll::GetInstance().CallOnLoop([](void* pArgument)
 	{
-		auto* pProbe = static_cast<TimerExceptionProbe*>(pArgumentParam);
+		auto* pProbe = static_cast<TimerExceptionProbe*>(pArgument);
 		auto* pLoop = OI::Net::Poll::GetInstance().Loop();
 		if (uv_timer_init(pLoop, &pProbe->stWatchdog) != 0)
 		{
@@ -557,26 +557,26 @@ static coro::TaskResult<int> CheckTimerExceptions()
 		}
 		pProbe->stWatchdog.data = pProbe;
 		pProbe->iDeadlineMilliseconds = uv_now(pLoop) + 10000;
-		const int iReturnCode = uv_timer_start(&pProbe->stWatchdog, [](uv_timer_t* pTimerParam)
+		const int iReturnCode = uv_timer_start(&pProbe->stWatchdog, [](uv_timer_t* pTimer)
 		{
-			auto* pProbeLocal = static_cast<TimerExceptionProbe*>(pTimerParam->data);
+			auto* pProbeLocal = static_cast<TimerExceptionProbe*>(pTimer->data);
 			const bool bComplete = pProbeLocal->iExecuted == 5 && pProbeLocal->iDestroyed == 5;
-			if (!bComplete && uv_now(pTimerParam->loop) < pProbeLocal->iDeadlineMilliseconds)
+			if (!bComplete && uv_now(pTimer->loop) < pProbeLocal->iDeadlineMilliseconds)
 			{
 				return;
 			}
 			pProbeLocal->bPassed = bComplete;
-			uv_timer_stop(pTimerParam);
-			uv_close(reinterpret_cast<uv_handle_t*>(pTimerParam), [](uv_handle_t* pHandleParam)
+			uv_timer_stop(pTimer);
+			uv_close(reinterpret_cast<uv_handle_t*>(pTimer), [](uv_handle_t* pHandle)
 			{
-				static_cast<TimerExceptionProbe*>(pHandleParam->data)->bClosed = true;
+				static_cast<TimerExceptionProbe*>(pHandle->data)->bClosed = true;
 			});
 		}, 10, 10);
 		if (iReturnCode != 0)
 		{
-			uv_close(reinterpret_cast<uv_handle_t*>(&pProbe->stWatchdog), [](uv_handle_t* pHandleParam)
+			uv_close(reinterpret_cast<uv_handle_t*>(&pProbe->stWatchdog), [](uv_handle_t* pHandle)
 			{
-				static_cast<TimerExceptionProbe*>(pHandleParam->data)->bClosed = true;
+				static_cast<TimerExceptionProbe*>(pHandle->data)->bClosed = true;
 			});
 		}
 	}, pState.get());
@@ -605,7 +605,7 @@ static coro::TaskResult<int> CheckTimerExceptions()
 	}, 0);
 	while (!pState->bClosed.load())
 	{
-		co_await coro::yield(0);
+		co_await OI::Coro::yield(0);
 	}
 	int iBad = pState->bPassed ? 0 : 1;
 	if (pState->vTicks[0] != pState->vTicks[1].load() || pState->vTicks[2] != pState->vTicks[3].load() || pState->vTicks[4] <= pState->vTicks[3].load())
@@ -617,26 +617,26 @@ static coro::TaskResult<int> CheckTimerExceptions()
 	co_return iBad;
 }
 
-static coro::TaskResult<int> ResultStressChild(int iValueParam)
+static OI::Coro::TaskResult<int> ResultStressChild(int iValue)
 {
-	if (iValueParam & 1)
+	if (iValue & 1)
 	{
-		co_await coro::yield(0);
+		co_await OI::Coro::yield(0);
 	}
-	if (iValueParam % 8 == 2 || iValueParam % 8 == 3)
+	if (iValue % 8 == 2 || iValue % 8 == 3)
 	{
 		throw std::runtime_error("hold nested result exception");
 	}
-	if (iValueParam % 8 == 4 || iValueParam % 8 == 5)
+	if (iValue % 8 == 4 || iValue % 8 == 5)
 	{
-		throw iValueParam;
+		throw iValue;
 	}
-	co_return iValueParam;
+	co_return iValue;
 }
 
-static coro::TaskResult<int> ResultStressParent(int iValueParam)
+static OI::Coro::TaskResult<int> ResultStressParent(int iValue)
 {
-	co_return (co_await ResultStressChild(iValueParam)) + 1;
+	co_return (co_await ResultStressChild(iValue)) + 1;
 }
 
 struct NestedCounts
@@ -646,12 +646,12 @@ struct NestedCounts
 	int iBad = 0;
 };
 
-static coro::TaskResult<NestedCounts> NestedResultsWorker(int iWorkerParam)
+static OI::Coro::TaskResult<NestedCounts> NestedResultsWorker(int iWorker)
 {
 	NestedCounts stCounts;
 	for (int iIndex = 0; iIndex < 512; ++iIndex)
 	{
-		const int iValue = iWorkerParam * 512 + iIndex;
+		const int iValue = iWorker * 512 + iIndex;
 		try
 		{
 			const int iResult = co_await ResultStressParent(iValue);
@@ -685,16 +685,16 @@ static coro::TaskResult<NestedCounts> NestedResultsWorker(int iWorkerParam)
 	co_return stCounts;
 }
 
-static coro::TaskResult<int> CheckNestedResults()
+static OI::Coro::TaskResult<int> CheckNestedResults()
 {
-	co_await coro::WhenAll(std::vector<coro::Task>{});
-	const std::vector<int> vEmpty = co_await coro::WhenAll(std::vector<coro::TaskResult<int>>{});
-	std::vector<coro::TaskResult<NestedCounts>> vWorkers;
+	co_await OI::Coro::WhenAll(std::vector<OI::Coro::Task>{});
+	const std::vector<int> vEmpty = co_await OI::Coro::WhenAll(std::vector<OI::Coro::TaskResult<int>>{});
+	std::vector<OI::Coro::TaskResult<NestedCounts>> vWorkers;
 	for (int iWorker = 0; iWorker < 64; ++iWorker)
 	{
 		vWorkers.push_back(NestedResultsWorker(iWorker));
 	}
-	const std::vector<NestedCounts> vCounts = co_await coro::WhenAll(std::move(vWorkers));
+	const std::vector<NestedCounts> vCounts = co_await OI::Coro::WhenAll(std::move(vWorkers));
 	NestedCounts stTotal;
 	if (!vEmpty.empty() || vCounts.size() != 64)
 	{
@@ -715,33 +715,33 @@ static coro::TaskResult<int> CheckNestedResults()
 	co_return stTotal.iBad;
 }
 
-static coro::TaskResult<std::string> SharedResultChild(std::shared_ptr<std::atomic<int>> pRunsParam, bool bThrowParam)
+static OI::Coro::TaskResult<std::string> SharedResultChild(std::shared_ptr<std::atomic<int>> pRuns, bool bThrow)
 {
-	++*pRunsParam;
-	co_await coro::yield(OI::Timer::Milliseconds(20));
-	if (bThrowParam)
+	++*pRuns;
+	co_await OI::Coro::yield(OI::Timer::Milliseconds(20));
+	if (bThrow)
 	{
 		throw std::runtime_error("shared task failure");
 	}
 	co_return std::string(256, 's');
 }
-static coro::Task SharedVoidChild(std::shared_ptr<std::atomic<int>> pRunsParam)
+static OI::Coro::Task SharedVoidChild(std::shared_ptr<std::atomic<int>> pRuns)
 {
-	++*pRunsParam;
-	co_await coro::yield(0);
+	++*pRuns;
+	co_await OI::Coro::yield(0);
 }
 static thread_local bool g_bInHotStartCallback = false;
-static coro::Task HotStartChild(std::shared_ptr<std::atomic<int>> pStepParam, std::shared_ptr<std::atomic<bool>> pInCallbackParam = {})
+static OI::Coro::Task HotStartChild(std::shared_ptr<std::atomic<int>> pStep, std::shared_ptr<std::atomic<bool>> pInCallback = {})
 {
-	if (pInCallbackParam)
+	if (pInCallback)
 	{
-		pInCallbackParam->store(g_bInHotStartCallback);
+		pInCallback->store(g_bInHotStartCallback);
 	}
-	pStepParam->store(1);
-	co_await coro::yield(0);
-	pStepParam->store(2);
+	pStep->store(1);
+	co_await OI::Coro::yield(0);
+	pStep->store(2);
 }
-static coro::TaskResult<int> CheckHotStart()
+static OI::Coro::TaskResult<int> CheckHotStart()
 {
 	int iBad = 0;
 	auto pStep = std::make_shared<std::atomic<int>>(0);
@@ -761,14 +761,14 @@ static coro::TaskResult<int> CheckHotStart()
 	struct Probe
 	{
 		std::atomic<bool> bDone{false};
-		std::optional<coro::Task> stTask;
+		std::optional<OI::Coro::Task> stTask;
 		std::shared_ptr<std::atomic<int>> pStep = std::make_shared<std::atomic<int>>(0);
 		std::shared_ptr<std::atomic<bool>> pInCallback = std::make_shared<std::atomic<bool>>(true);
 	};
 	auto pProbe = std::make_shared<Probe>();
-	OI::Net::Poll::GetInstance().PostOnLoop([](void* pArgumentParam)
+	OI::Net::Poll::GetInstance().PostOnLoop([](void* pArgument)
 	{
-		auto* pProbeLocal = static_cast<Probe*>(pArgumentParam);
+		auto* pProbeLocal = static_cast<Probe*>(pArgument);
 		g_bInHotStartCallback = true;
 		pProbeLocal->stTask.emplace(HotStartChild(pProbeLocal->pStep, pProbeLocal->pInCallback));
 		g_bInHotStartCallback = false;
@@ -776,7 +776,7 @@ static coro::TaskResult<int> CheckHotStart()
 	}, pProbe.get());
 	while (!pProbe->bDone.load())
 	{
-		co_await coro::yield(1);
+		co_await OI::Coro::yield(1);
 	}
 	co_await *pProbe->stTask;
 	if (pProbe->pStep->load() != 2 || pProbe->pInCallback->load())
@@ -794,27 +794,27 @@ struct SharedWaitersState
 	std::atomic<int> iAwakened{0};
 	std::atomic<int> iBad{0};
 	std::vector<std::atomic<int>> vHits;
-	explicit SharedWaitersState(int iCountParam)
-	    : vHits(iCountParam)
+	explicit SharedWaitersState(int iCount)
+	    : vHits(iCount)
 	{
 	}
 };
-static coro::TaskResult<int> SharedWaitersChild(std::shared_ptr<SharedWaitersState> pStateParam)
+static OI::Coro::TaskResult<int> SharedWaitersChild(std::shared_ptr<SharedWaitersState> pState)
 {
-	++pStateParam->iRuns;
-	co_await coro::yield(OI::Timer::Milliseconds(20));
+	++pState->iRuns;
+	co_await OI::Coro::yield(OI::Timer::Milliseconds(20));
 	co_return 42;
 }
-static coro::Task SharedWaiter(coro::TaskResult<int> stTaskParam, std::shared_ptr<SharedWaitersState> pStateParam, int iIndexParam)
+static OI::Coro::Task SharedWaiter(OI::Coro::TaskResult<int> stTask, std::shared_ptr<SharedWaitersState> pState, int iIndex)
 {
-	const int iResult = co_await stTaskParam;
-	if (iResult != 42 || pStateParam->vHits[iIndexParam].fetch_add(1) != 0)
+	const int iResult = co_await stTask;
+	if (iResult != 42 || pState->vHits[iIndex].fetch_add(1) != 0)
 	{
-		++pStateParam->iBad;
+		++pState->iBad;
 	}
-	++pStateParam->iAwakened;
+	++pState->iAwakened;
 }
-static coro::TaskResult<int> CheckStartedTaskWaiters()
+static OI::Coro::TaskResult<int> CheckStartedTaskWaiters()
 {
 	int iBad = 0;
 	for (const auto& iCount : {2, 8, 64, 256})
@@ -822,9 +822,9 @@ static coro::TaskResult<int> CheckStartedTaskWaiters()
 		for (int iMode = 0; iMode < 3; ++iMode)
 		{
 			auto pState = std::make_shared<SharedWaitersState>(iCount);
-			std::vector<coro::Task> vWaiters;
+			std::vector<OI::Coro::Task> vWaiters;
 			{
-				auto stTask = coro::StartTask([pState](coro::Token)
+				auto stTask = OI::Coro::StartTask([pState](OI::Coro::Token)
 				{
 					return SharedWaitersChild(pState);
 				});
@@ -868,7 +868,7 @@ static coro::TaskResult<int> CheckStartedTaskWaiters()
 	}
 	co_return iBad;
 }
-static coro::TaskResult<int> SharedResultWaiter(coro::TaskResult<std::string> stTaskParam, bool bThrowParam)
+static OI::Coro::TaskResult<int> SharedResultWaiter(OI::Coro::TaskResult<std::string> stTask, bool bThrow)
 {
 	int iBad = 0;
 	// 第二遍是完成后再次等待，不能重新执行，也不能拿到被移空的字符串。
@@ -876,15 +876,15 @@ static coro::TaskResult<int> SharedResultWaiter(coro::TaskResult<std::string> st
 	{
 		try
 		{
-			auto sResult = co_await stTaskParam;
-			if (bThrowParam || sResult != std::string(256, 's'))
+			auto sResult = co_await stTask;
+			if (bThrow || sResult != std::string(256, 's'))
 			{
 				++iBad;
 			}
 		}
 		catch (const std::runtime_error& stError)
 		{
-			if (!bThrowParam || std::string(stError.what()) != "shared task failure")
+			if (!bThrow || std::string(stError.what()) != "shared task failure")
 			{
 				++iBad;
 			}
@@ -892,21 +892,21 @@ static coro::TaskResult<int> SharedResultWaiter(coro::TaskResult<std::string> st
 	}
 	co_return iBad;
 }
-static coro::Task SharedVoidStarter(coro::Task stTaskParam)
+static OI::Coro::Task SharedVoidStarter(OI::Coro::Task stTask)
 {
-	stTaskParam.Start();
-	stTaskParam.Start();
-	co_await stTaskParam;
-	co_await stTaskParam;
+	stTask.Start();
+	stTask.Start();
+	co_await stTask;
+	co_await stTask;
 }
-static coro::TaskResult<int> CheckSharedTasks()
+static OI::Coro::TaskResult<int> CheckSharedTasks()
 {
 	int iBad = 0;
 	for (int iMode = 0; iMode < 2; ++iMode)
 	{
 		auto pRuns = std::make_shared<std::atomic<int>>(0);
 		auto stTask = SharedResultChild(pRuns, iMode != 0);
-		std::vector<coro::TaskResult<int>> vWaiters;
+		std::vector<OI::Coro::TaskResult<int>> vWaiters;
 		for (int iIndex = 0; iIndex < 64; ++iIndex)
 		{
 			vWaiters.push_back(SharedResultWaiter(stTask, iMode != 0));
@@ -922,7 +922,7 @@ static coro::TaskResult<int> CheckSharedTasks()
 	}
 	auto pRuns = std::make_shared<std::atomic<int>>(0);
 	auto stTask = SharedVoidChild(pRuns);
-	std::vector<coro::Task> vStarters;
+	std::vector<OI::Coro::Task> vStarters;
 	for (int iIndex = 0; iIndex < 64; ++iIndex)
 	{
 		vStarters.push_back(SharedVoidStarter(stTask));
@@ -937,7 +937,7 @@ static coro::TaskResult<int> CheckSharedTasks()
 	}
 	// 等待器独立保活：创建等待器后移动/销毁原 Task 仍安全。
 	auto pLifetimeRuns = std::make_shared<std::atomic<int>>(0);
-	auto pLifetimeTask = std::make_unique<coro::TaskResult<std::string>>(SharedResultChild(pLifetimeRuns, false));
+	auto pLifetimeTask = std::make_unique<OI::Coro::TaskResult<std::string>>(SharedResultChild(pLifetimeRuns, false));
 	auto stWaiter = pLifetimeTask->operator co_await();
 	pLifetimeTask.reset();
 	if ((co_await stWaiter) != std::string(256, 's') || pLifetimeRuns->load() != 1)
@@ -1014,7 +1014,7 @@ class DirectBudgetProbe : public DeferredRpcProbe
 	}
 };
 
-static coro::TaskResult<int> CheckDirectBackpressure()
+static OI::Coro::TaskResult<int> CheckDirectBackpressure()
 {
 	static DirectBudgetProbe stClient;
 	int iBad = 0;
@@ -1061,10 +1061,10 @@ class OutputRpcProbe : public DeferredRpcProbe
 	std::atomic<int> m_iSubmissions{0};
 
   public:
-	void SubmitCall(uint64_t iIdParam, const OI::Base::Bytes& stDataParam) override
+	void SubmitCall(uint64_t iId, const OI::Base::Bytes& stData) override
 	{
 		m_iSubmissions.fetch_add(1, std::memory_order_relaxed);
-		ProtoClientManager::SubmitCall(iIdParam, stDataParam);
+		ProtoClientManager::SubmitCall(iId, stData);
 	}
 	int Submissions() const
 	{
@@ -1072,11 +1072,11 @@ class OutputRpcProbe : public DeferredRpcProbe
 	}
 };
 
-static coro::TaskResult<int> AwaitOutputRpc(coro::TaskResult<int32_t> stTaskParam)
+static OI::Coro::TaskResult<int> AwaitOutputRpc(OI::Coro::TaskResult<int32_t> stTask)
 {
 	try
 	{
-		co_return (co_await stTaskParam) == 0 ? 0 : 1;
+		co_return (co_await stTask) == 0 ? 0 : 1;
 	}
 	catch (const std::exception&)
 	{
@@ -1084,7 +1084,7 @@ static coro::TaskResult<int> AwaitOutputRpc(coro::TaskResult<int32_t> stTaskPara
 	}
 }
 
-static coro::TaskResult<int> CheckOutputRpcTask(sid_t iSessionIdParam)
+static OI::Coro::TaskResult<int> CheckOutputRpcTask(sid_t iSessionId)
 {
 	int iBad = 0;
 	static OutputRpcProbe stClient;
@@ -1101,11 +1101,11 @@ static coro::TaskResult<int> CheckOutputRpcTask(sid_t iSessionIdParam)
 		stLocal.iMark = -731;
 		return stTask;
 	}();
-	static_assert(std::is_same_v<decltype(stCall), coro::TaskResult<int32_t>>);
-	std::vector<coro::TaskResult<int>> vWaiters;
+	static_assert(std::is_same_v<decltype(stCall), OI::Coro::TaskResult<int32_t>>);
+	std::vector<OI::Coro::TaskResult<int>> vWaiters;
 	for (int iIndex = 0; iIndex < 16; ++iIndex)
 	{
-		vWaiters.push_back(coro::StartTask([stCall](coro::Token)
+		vWaiters.push_back(OI::Coro::StartTask([stCall](OI::Coro::Token)
 		{
 			return AwaitOutputRpc(stCall);
 		}));
@@ -1127,7 +1127,7 @@ static coro::TaskResult<int> CheckOutputRpcTask(sid_t iSessionIdParam)
 	vWaiters.clear();
 	for (int iIndex = 0; iIndex < 16; ++iIndex)
 	{
-		vWaiters.push_back(coro::StartTask([stCall](coro::Token)
+		vWaiters.push_back(OI::Coro::StartTask([stCall](OI::Coro::Token)
 		{
 			return AwaitOutputRpc(stCall);
 		}));
@@ -1147,14 +1147,14 @@ static coro::TaskResult<int> CheckOutputRpcTask(sid_t iSessionIdParam)
 	stRequest.iMark = 733;
 	auto& stManager = IpcClient::GetInstance();
 	auto stDirect = stManager.Call(stRequest, stOutput, OI::Timer::Seconds(3));
-	static_assert(std::is_same_v<decltype(stDirect), coro::TaskResult<int32_t>>);
+	static_assert(std::is_same_v<decltype(stDirect), OI::Coro::TaskResult<int32_t>>);
 	if (co_await stDirect != 0 || stOutput.iMark != 733)
 	{
 		++iBad;
 	}
 	stRequest.iMark = 734;
-	auto stPinned = OI::Rpc::RpcCall(stManager, iSessionIdParam, stRequest, stOutput, OI::Timer::Seconds(3));
-	static_assert(std::is_same_v<decltype(stPinned), coro::TaskResult<int32_t>>);
+	auto stPinned = OI::Rpc::RpcCall(stManager, iSessionId, stRequest, stOutput, OI::Timer::Seconds(3));
+	static_assert(std::is_same_v<decltype(stPinned), OI::Coro::TaskResult<int32_t>>);
 	if (co_await stPinned != 0 || stOutput.iMark != 734)
 	{
 		++iBad;
@@ -1187,7 +1187,7 @@ static coro::TaskResult<int> CheckOutputRpcTask(sid_t iSessionIdParam)
 	{
 		++iBad;
 	}
-	co_await coro::yield(OI::Timer::Milliseconds(1200));
+	co_await OI::Coro::yield(OI::Timer::Milliseconds(1200));
 	if (stOutput.iMark != 736 || co_await stTimeout != OI_ERR_TIMEOUT || stOutput.iMark != 736)
 	{
 		++iBad;
@@ -1199,11 +1199,11 @@ static coro::TaskResult<int> CheckOutputRpcTask(sid_t iSessionIdParam)
 }
 
 template <typename T>
-static coro::TaskResult<bool> AwaitSingleUse(std::shared_ptr<T> pCallParam)
+static OI::Coro::TaskResult<bool> AwaitSingleUse(std::shared_ptr<T> pCall)
 {
 	try
 	{
-		(void)(co_await *pCallParam);
+		(void)(co_await *pCall);
 	}
 	catch (const std::logic_error&)
 	{
@@ -1214,23 +1214,23 @@ static coro::TaskResult<bool> AwaitSingleUse(std::shared_ptr<T> pCallParam)
 
 // 两次并发等待只能接受一次；完成后再等也必须拒绝。
 template <typename T>
-static coro::TaskResult<int> CheckSingleUse(std::shared_ptr<T> pCallParam)
+static OI::Coro::TaskResult<int> CheckSingleUse(std::shared_ptr<T> pCall)
 {
 	auto pReadyCount = std::make_shared<std::atomic<int>>(0);
-	auto fnContend = [pCallParam, pReadyCount](coro::Token) -> coro::TaskResult<bool>
+	auto fnContend = [pCall, pReadyCount](OI::Coro::Token) -> OI::Coro::TaskResult<bool>
 	{
 		pReadyCount->fetch_add(1, std::memory_order_acq_rel);
 		// 两个独立任务都就绪后再争抢；单线程等待时让出调度。
 		while (pReadyCount->load(std::memory_order_acquire) < 2)
 		{
-			co_await coro::yield(0);
+			co_await OI::Coro::yield(0);
 		}
-		co_return co_await AwaitSingleUse(pCallParam);
+		co_return co_await AwaitSingleUse(pCall);
 	};
-	auto stFirst = coro::StartTask(fnContend);
-	auto stSecond = coro::StartTask(fnContend);
+	auto stFirst = OI::Coro::StartTask(fnContend);
+	auto stSecond = OI::Coro::StartTask(fnContend);
 	int iAccepted = (co_await stFirst ? 1 : 0) + (co_await stSecond ? 1 : 0);
-	if (co_await AwaitSingleUse(pCallParam))
+	if (co_await AwaitSingleUse(pCall))
 	{
 		++iAccepted;
 	}
@@ -1253,12 +1253,12 @@ class SharedConnectProbe : public DeferredRpcProbe
 	}
 };
 
-static coro::TaskResult<bool> AwaitConnect(std::shared_ptr<OI::Net::SessionManager::ConnectAwaiter> pConnectParam)
+static OI::Coro::TaskResult<bool> AwaitConnect(std::shared_ptr<OI::Net::SessionManager::ConnectAwaiter> pConnect)
 {
-	co_return co_await *pConnectParam;
+	co_return co_await *pConnect;
 }
 
-static coro::TaskResult<int> CheckAwaitOwnership()
+static OI::Coro::TaskResult<int> CheckAwaitOwnership()
 {
 	int iBad = 0;
 	OI::RpcData::HoldReq stRequest;
@@ -1329,7 +1329,7 @@ static coro::TaskResult<int> CheckAwaitOwnership()
 	}, nullptr);
 	auto pConnect = std::make_shared<OI::Net::SessionManager::ConnectAwaiter>(stClient.StartClient());
 	// 每个等待者创建时就跑到挂起，循环结束后 32 个都已登记。
-	std::vector<coro::TaskResult<bool>> vWaiters;
+	std::vector<OI::Coro::TaskResult<bool>> vWaiters;
 	for (int iIndex = 0; iIndex < 32; ++iIndex)
 	{
 		vWaiters.push_back(AwaitConnect(pConnect));
@@ -1338,9 +1338,10 @@ static coro::TaskResult<int> CheckAwaitOwnership()
 	{
 		stClient.Finish();
 	}, nullptr);
-	for (const auto& stWaiter : vWaiters)
+	const auto vConnect = co_await OI::Coro::WhenAll(std::move(vWaiters));
+	for (const auto iFailed : vConnect)
 	{
-		if (co_await stWaiter)
+		if (iFailed != 0)
 		{
 			++iBad;
 		}
@@ -1377,12 +1378,12 @@ static coro::TaskResult<int> CheckAwaitOwnership()
 }
 
 // 成功且标记对上返回 0，其他结果原样返回状态码。
-static coro::TaskResult<int32_t> AdmissionCall(DeferredRpcProbe* pClientParam)
+static OI::Coro::TaskResult<int32_t> AdmissionCall(DeferredRpcProbe* pClient)
 {
 	OI::RpcData::HoldReq stRequest;
 	stRequest.iDelayMilliseconds = 1000;
 	stRequest.iMark = 71;
-	auto stResult = co_await OI::Rpc::RpcCall(*pClientParam, stRequest, OI::Timer::Seconds(5));
+	auto stResult = co_await OI::Rpc::RpcCall(*pClient, stRequest, OI::Timer::Seconds(5));
 	if (stResult.GetRet() == 0 && stResult.GetRes().iMark != 71)
 	{
 		co_return OI_ERR_FAIL;
@@ -1390,7 +1391,7 @@ static coro::TaskResult<int32_t> AdmissionCall(DeferredRpcProbe* pClientParam)
 	co_return stResult.GetRet();
 }
 
-static coro::TaskResult<int> CheckRpcAdmission()
+static OI::Coro::TaskResult<int> CheckRpcAdmission()
 {
 	static DeferredRpcProbe vClients[3];
 	int iBad = 0;
@@ -1403,7 +1404,7 @@ static coro::TaskResult<int> CheckRpcAdmission()
 	}
 	for (int iRound = 0; iRound < 3; ++iRound)
 	{
-		std::vector<coro::TaskResult<int32_t>> vCalls;
+		std::vector<OI::Coro::TaskResult<int32_t>> vCalls;
 		for (int iClient = 0; iClient < 3; ++iClient)
 		{
 			for (int iIndex = 0; iIndex < 2; ++iIndex)
@@ -1442,7 +1443,7 @@ static coro::TaskResult<int> CheckRpcAdmission()
 			}
 		}
 		LOG_TRACE("hold rpc admission round=%d ok=%d busy=%d bad=%d", iRound, iOk, iBusy, iBad);
-		co_await coro::yield(50);
+		co_await OI::Coro::yield(50);
 	}
 	// 超大请求拒绝不占额度，错误回执也必须归还；随后正常请求仍可执行。
 	bool bBytes = false;
@@ -1451,11 +1452,11 @@ static coro::TaskResult<int> CheckRpcAdmission()
 	{
 		struct LargeRequest : OI::RpcData::HoldReq
 		{
-			OI::Base::BytesStream& serialize(OI::Base::BytesStream& stOutputParam) const override
+			OI::Base::BytesStream& serialize(OI::Base::BytesStream& stOutput) const override
 			{
-				HoldReq::serialize(stOutputParam);
-				stOutputParam.WritePb(99, std::string(128, 'x'));
-				return stOutputParam;
+				HoldReq::serialize(stOutput);
+				stOutput.WritePb(99, std::string(128, 'x'));
+				return stOutput;
 			}
 		} stLarge;
 		OI::RpcData::HoldReq& stBase = stLarge;
@@ -1476,7 +1477,7 @@ static coro::TaskResult<int> CheckRpcAdmission()
 		{
 			++iBad;
 		}
-		co_await coro::yield(50);
+		co_await OI::Coro::yield(50);
 	}
 	for (auto& stClient : vClients)
 	{
@@ -1487,7 +1488,7 @@ static coro::TaskResult<int> CheckRpcAdmission()
 	co_return iBad;
 }
 
-static coro::TaskResult<int> CheckDeferredRpcSession()
+static OI::Coro::TaskResult<int> CheckDeferredRpcSession()
 {
 	static DeferredRpcProbe stClient;
 	OI::RpcData::HoldReq stRequest;
@@ -1530,29 +1531,29 @@ static coro::TaskResult<int> CheckDeferredRpcSession()
 }
 
 // 重复 StartClient 不能顶掉已有连接；RPC 和 Redis 各自收到自己的回包。
-static coro::TaskResult<int> IsolationCall(int iIndexParam)
+static OI::Coro::TaskResult<int> IsolationCall(int iIndex)
 {
 	int iBad = 0;
 	IpcClient::GetInstance().StartClient();
 	OI::Redis::RedisClient::GetInstance().StartClient();
 	OI::Log::LogClient::GetInstance().StartClient();
 	OI::RpcData::HoldReq stRequest;
-	stRequest.iMark = 10000 + iIndexParam;
+	stRequest.iMark = 10000 + iIndex;
 	auto stResult = co_await IpcClient::GetInstance().CallAny<OI::RpcData::HoldRes>(stRequest, OI::Timer::Seconds(3));
 	if (stResult.GetRet() != 0 || stResult.GetRes().iMark != stRequest.iMark)
 	{
 		++iBad;
 	}
-	std::vector<std::string> vArguments{"ECHO", std::to_string(iIndexParam)};
+	std::vector<std::string> vArguments{"ECHO", std::to_string(iIndex)};
 	auto stReply = co_await OI::Redis::CallRedis(std::move(vArguments));
-	if (!stReply || !stReply.pReply->str || std::string(stReply.pReply->str, stReply.pReply->len) != std::to_string(iIndexParam))
+	if (!stReply || !stReply.pReply->str || std::string(stReply.pReply->str, stReply.pReply->len) != std::to_string(iIndex))
 	{
 		++iBad;
 	}
 	co_return iBad;
 }
 
-static coro::TaskResult<int> CheckConnectionIsolation()
+static OI::Coro::TaskResult<int> CheckConnectionIsolation()
 {
 	int iBad = 0;
 	auto& stClient = IpcClient::GetInstance();
@@ -1560,7 +1561,7 @@ static coro::TaskResult<int> CheckConnectionIsolation()
 	const int64_t iDeadline = ::OI::Timer::SteadyMilliseconds() + ::OI::Timer::MS(::OI::Timer::Seconds(5)).iMilliseconds;
 	while (!stRedis.IsConnect() && ::OI::Timer::SteadyMilliseconds() < iDeadline)
 	{
-		co_await coro::yield(1);
+		co_await OI::Coro::yield(1);
 	}
 	const sid_t iRpcSid = stClient.ConnectedSid();
 	const sid_t iRedisSid = stRedis.ConnectedSid();
@@ -1568,7 +1569,7 @@ static coro::TaskResult<int> CheckConnectionIsolation()
 	{
 		co_return 1;
 	}
-	std::vector<coro::TaskResult<int>> vCalls;
+	std::vector<OI::Coro::TaskResult<int>> vCalls;
 	for (int iIndex = 0; iIndex < 32; ++iIndex)
 	{
 		vCalls.push_back(IsolationCall(iIndex));
@@ -1588,9 +1589,9 @@ static coro::TaskResult<int> CheckConnectionIsolation()
 	};
 	auto pProbe = std::make_shared<ProbeResult>();
 	// 协程帧持有 pProbe，回调完成前不退出；回调结束后只读已发布的结果。
-	OI::Net::Poll::GetInstance().CallOnLoop([](void* pArgumentParam)
+	OI::Net::Poll::GetInstance().CallOnLoop([](void* pArgument)
 	{
-		auto* pResult = static_cast<ProbeResult*>(pArgumentParam);
+		auto* pResult = static_cast<ProbeResult*>(pArgument);
 		ConnectGenerationProbe stProbe;
 		pResult->iBad = stProbe.Check();
 		auto& stRedisLocal = OI::Redis::RedisClient::GetInstance();
@@ -1600,7 +1601,7 @@ static coro::TaskResult<int> CheckConnectionIsolation()
 	}, pProbe.get());
 	while (!pProbe->bDone.load())
 	{
-		co_await coro::yield(1);
+		co_await OI::Coro::yield(1);
 	}
 	if (!Pong(co_await OI::Redis::CallRedis({"PING"})))
 	{
@@ -1614,9 +1615,9 @@ static coro::TaskResult<int> CheckConnectionIsolation()
 class ZoneService final : public ::OI::Rpc::ProtoClientManager
 {
   public:
-	explicit ZoneService(std::string sNameParam)
+	explicit ZoneService(std::string sName)
 	{
-		sServiceName = std::move(sNameParam);
+		sServiceName = std::move(sName);
 	}
 	const std::string GetIDString()
 	{
@@ -1637,7 +1638,7 @@ enum class NamedOutcome
 	Rejected,
 };
 
-static coro::TaskResult<bool> MoveRouteProbe(ZoneService* pManagerParam, std::string sIpParam, std::string sPortParam)
+static OI::Coro::TaskResult<bool> MoveRouteProbe(ZoneService* pManagerLocal, std::string sIpLocal, std::string sPortLocal)
 {
 	struct ServiceMove
 	{
@@ -1648,13 +1649,13 @@ static coro::TaskResult<bool> MoveRouteProbe(ZoneService* pManagerParam, std::st
 		std::atomic<bool> bDone{false};
 	};
 	auto pMove = std::make_shared<ServiceMove>();
-	pMove->pManager = pManagerParam;
-	pMove->sIp = std::move(sIpParam);
-	pMove->sPort = std::move(sPortParam);
+	pMove->pManager = pManagerLocal;
+	pMove->sIp = std::move(sIpLocal);
+	pMove->sPort = std::move(sPortLocal);
 	// 帧保活状态直到 poll 发布完成；模拟注册更新，地址只在 poll 线程修改。
-	OI::Net::Poll::GetInstance().CallOnLoop([](void* pArgumentParam)
+	OI::Net::Poll::GetInstance().CallOnLoop([](void* pArgument)
 	{
-		auto* pMoveLocal = static_cast<ServiceMove*>(pArgumentParam);
+		auto* pMoveLocal = static_cast<ServiceMove*>(pArgument);
 		try
 		{
 			pMoveLocal->pManager->ApplyService(pMoveLocal->sIp, pMoveLocal->sPort, true);
@@ -1667,16 +1668,16 @@ static coro::TaskResult<bool> MoveRouteProbe(ZoneService* pManagerParam, std::st
 	}, pMove.get());
 	while (!pMove->bDone.load(std::memory_order_acquire))
 	{
-		co_await coro::yield(1);
+		co_await OI::Coro::yield(1);
 	}
 	if (pMove->stError)
 	{
 		std::rethrow_exception(pMove->stError);
 	}
-	co_return co_await pManagerParam->StartClient();
+	co_return co_await pManagerLocal->StartClient();
 }
 
-static coro::TaskResult<int> CheckRouteTargetStability()
+static OI::Coro::TaskResult<int> CheckRouteTargetStability()
 {
 	OI::Rpc::RouteAwaiter stPoolWait;
 	stPoolWait.iKind = OI::Rpc::RouteAwaiter::Kind::Zones;
@@ -1747,11 +1748,11 @@ static coro::TaskResult<int> CheckRouteTargetStability()
 }
 
 template <typename T>
-static coro::TaskResult<NamedOutcome> AwaitNamedHold(T stCallParam)
+static OI::Coro::TaskResult<NamedOutcome> AwaitNamedHold(T stCall)
 {
 	try
 	{
-		auto stReply = co_await stCallParam;
+		auto stReply = co_await stCall;
 		co_return stReply.GetRet() == 0 && stReply.GetRes().iMark == 77 ? NamedOutcome::Success : NamedOutcome::Failed;
 	}
 	catch (const std::logic_error&)
@@ -1763,14 +1764,14 @@ static coro::TaskResult<NamedOutcome> AwaitNamedHold(T stCallParam)
 class RoutePolicyProbe : public OI::Rpc::ProtoClientManager
 {
   public:
-	explicit RoutePolicyProbe(size_t iScaleParam)
+	explicit RoutePolicyProbe(size_t iScale)
 	{
 		sServiceName = "gameserver";
-		iMaxSendQueueBytes = 256 * iScaleParam;
-		iMaxReceiveBufferBytes = 512 * iScaleParam + 8;
-		iMaxFrameBytes = 512 * iScaleParam;
-		iIncompleteFrameTimeoutMilliseconds = 300 * iScaleParam;
-		SetPendingCallLimits(2 * iScaleParam, 1024 * iScaleParam);
+		iMaxSendQueueBytes = 256 * iScale;
+		iMaxReceiveBufferBytes = 512 * iScale + 8;
+		iMaxFrameBytes = 512 * iScale;
+		iIncompleteFrameTimeoutMilliseconds = 300 * iScale;
+		SetPendingCallLimits(2 * iScale, 1024 * iScale);
 	}
 	void OnClientConnect(OI::Net::Session*) override
 	{
@@ -1780,7 +1781,7 @@ class RoutePolicyProbe : public OI::Rpc::ProtoClientManager
 	}
 };
 
-static coro::TaskResult<int> CheckRoutePoolLifetime()
+static OI::Coro::TaskResult<int> CheckRoutePoolLifetime()
 {
 	int iBad = 0;
 	RoutePolicyProbe stSmall(1), stLarge(16);
@@ -1854,7 +1855,7 @@ static coro::TaskResult<int> CheckRoutePoolLifetime()
 	stRequest.iMark = 821;
 	OI::RpcData::HoldRes stHeldOutput;
 	auto stHeld = OI::Rpc::RpcCall(*pLarge, stRequest, stHeldOutput, OI::Timer::Seconds(3));
-	co_await coro::yield(OI::Timer::Milliseconds(600));
+	co_await OI::Coro::yield(OI::Timer::Milliseconds(600));
 	if (OI::Rpc::GetRoutePoolStats().iLeasedClients < 2 || co_await stHeld != 0 || stHeldOutput.iMark != 821)
 	{
 		++iBad;
@@ -1864,11 +1865,11 @@ static coro::TaskResult<int> CheckRoutePoolLifetime()
 	std::weak_ptr<OI::Rpc::RpcSender> pLargeLease = stLargeRoute.vOwners[0];
 	stSmallRoute = {};
 	stLargeRoute = {};
-	co_await coro::yield(OI::Timer::Milliseconds(600));
+	co_await OI::Coro::yield(OI::Timer::Milliseconds(600));
 	const int64_t iDeadlineMilliseconds = OI::Timer::SteadyMilliseconds() + 3000;
 	while ((!pSmallOwner.expired() || !pLargeOwner.expired()) && OI::Timer::SteadyMilliseconds() < iDeadlineMilliseconds)
 	{
-		co_await coro::yield(20);
+		co_await OI::Coro::yield(20);
 	}
 	const auto stAfter = OI::Rpc::GetRoutePoolStats();
 	if (!pSmallLease.expired() || !pLargeLease.expired() || !pSmallOwner.expired() || !pLargeOwner.expired() ||
@@ -1887,7 +1888,7 @@ static coro::TaskResult<int> CheckRoutePoolLifetime()
 	co_return iBad;
 }
 
-static coro::TaskResult<int> CheckRouteInboundAndReconnect()
+static OI::Coro::TaskResult<int> CheckRouteInboundAndReconnect()
 {
 	int iBad = 0;
 	static ZoneService stGames("gameserver");
@@ -1928,10 +1929,10 @@ static coro::TaskResult<int> CheckRouteInboundAndReconnect()
 	const int64_t iStartDeadlineMilliseconds = OI::Timer::SteadyMilliseconds() + 3000;
 	while (iReverseStarted.load() == 0 && OI::Timer::SteadyMilliseconds() < iStartDeadlineMilliseconds)
 	{
-		co_await coro::yield(10);
+		co_await OI::Coro::yield(10);
 	}
 	stRoute = {}; // 唯一出站租约释放，反向处理仍应保活且阻止空闲关闭。
-	co_await coro::yield(600);
+	co_await OI::Coro::yield(600);
 	if (iReverseStarted.load() != 1 || iReverseFinished.load() != 0 || pWeakOwner.expired())
 	{
 		++iBad;
@@ -1939,7 +1940,7 @@ static coro::TaskResult<int> CheckRouteInboundAndReconnect()
 	const int64_t iEndDeadlineMilliseconds = OI::Timer::SteadyMilliseconds() + 5000;
 	while (!pWeakOwner.expired() && OI::Timer::SteadyMilliseconds() < iEndDeadlineMilliseconds)
 	{
-		co_await coro::yield(20);
+		co_await OI::Coro::yield(20);
 	}
 	if (iReverseFinished.load() != 1 || !pWeakOwner.expired())
 	{
@@ -1950,13 +1951,13 @@ static coro::TaskResult<int> CheckRouteInboundAndReconnect()
 	co_return iBad;
 }
 
-static coro::TaskResult<int> CheckRoutePoolCapacity()
+static OI::Coro::TaskResult<int> CheckRoutePoolCapacity()
 {
 	int iBad = 0;
 	int64_t iDeadlineMilliseconds = OI::Timer::SteadyMilliseconds() + 3000;
 	while (OI::Rpc::GetRoutePoolStats().iClients != 0 && OI::Timer::SteadyMilliseconds() < iDeadlineMilliseconds)
 	{
-		co_await coro::yield(20);
+		co_await OI::Coro::yield(20);
 	}
 	const auto stEmpty = OI::Rpc::GetRoutePoolStats();
 	if (stEmpty.iClients != 0 || stEmpty.iMaxClients != 8)
@@ -1996,7 +1997,7 @@ static coro::TaskResult<int> CheckRoutePoolCapacity()
 		++iBad;
 	}
 	// 池满不影响已持有的合法路由，且活跃租约跨扫描仍可真实收发。
-	co_await coro::yield(600);
+	co_await OI::Coro::yield(600);
 	if (vRoutes[0].vClients.size() == 1)
 	{
 		if (co_await OI::Rpc::RpcCall(*vRoutes[0].vClients[0], stRequest, stOutput, OI::Timer::Seconds(3)) != 0 || stOutput.iMark != 822)
@@ -2008,7 +2009,7 @@ static coro::TaskResult<int> CheckRoutePoolCapacity()
 	iDeadlineMilliseconds = OI::Timer::SteadyMilliseconds() + 3000;
 	while (OI::Rpc::GetRoutePoolStats().iClients != 0 && OI::Timer::SteadyMilliseconds() < iDeadlineMilliseconds)
 	{
-		co_await coro::yield(20);
+		co_await OI::Coro::yield(20);
 	}
 	if (OI::Rpc::GetRoutePoolStats().iClients != 0 || co_await stOverflow.CallAny(stRequest, stOutput, OI::Timer::Seconds(3)) != 0 || stOutput.iMark != 822)
 	{
@@ -2019,11 +2020,11 @@ static coro::TaskResult<int> CheckRoutePoolCapacity()
 	co_return iBad;
 }
 
-static coro::TaskResult<bool> RegistryFaultHandshake(std::string sPathParam, std::string sCommandParam)
+static OI::Coro::TaskResult<bool> RegistryFaultHandshake(std::string sPath, std::string sCommand)
 {
 	{
-		std::ofstream stFile(sPathParam + ".request", std::ios::trunc);
-		stFile << sCommandParam;
+		std::ofstream stFile(sPath + ".request", std::ios::trunc);
+		stFile << sCommand;
 		if (!stFile)
 		{
 			co_return false;
@@ -2032,19 +2033,19 @@ static coro::TaskResult<bool> RegistryFaultHandshake(std::string sPathParam, std
 	const int64_t iDeadlineMilliseconds = OI::Timer::SteadyMilliseconds() + 5000;
 	while (OI::Timer::SteadyMilliseconds() < iDeadlineMilliseconds)
 	{
-		std::ifstream stFile(sPathParam + ".ack");
+		std::ifstream stFile(sPath + ".ack");
 		std::string sAck;
 		stFile >> sAck;
-		if (sAck == sCommandParam)
+		if (sAck == sCommand)
 		{
 			co_return true;
 		}
-		co_await coro::yield(10);
+		co_await OI::Coro::yield(10);
 	}
 	co_return false;
 }
 
-static coro::TaskResult<int> CheckRegistryBoundsAndBudget()
+static OI::Coro::TaskResult<int> CheckRegistryBoundsAndBudget()
 {
 	std::string sFaultPath;
 	TryGetConfig("Regression.registry_fault_path", sFaultPath);
@@ -2085,22 +2086,22 @@ static coro::TaskResult<int> CheckRegistryBoundsAndBudget()
 		for (int iIndex = 0; iIndex < 64; ++iIndex)
 		{
 			auto pSeen = std::make_shared<std::atomic<bool>>(false);
-			stRegistry.PullAsync("missing_timeout_" + std::to_string(iIndex), [pProbe, pSeen](int32_t iCodeParam, const std::vector<OI::Base::ServiceInstance>&)
+			stRegistry.PullAsync("missing_timeout_" + std::to_string(iIndex), [pProbe, pSeen](int32_t iCode, const std::vector<OI::Base::ServiceInstance>&)
 			{
 				if (pSeen->exchange(true))
 				{
 					++pProbe->iDuplicates;
 					return;
 				}
-				if (iCodeParam == OI_ERR_BUSY)
+				if (iCode == OI_ERR_BUSY)
 				{
 					++pProbe->iBusy;
 				}
-				else if (iCodeParam == OI_ERR_TIMEOUT)
+				else if (iCode == OI_ERR_TIMEOUT)
 				{
 					++pProbe->iTimeout;
 				}
-				else if (iCodeParam != OI_ERR_CONNECT)
+				else if (iCode != OI_ERR_CONNECT)
 				{
 					++pProbe->iUnexpected;
 				}
@@ -2125,9 +2126,9 @@ static coro::TaskResult<int> CheckRegistryBoundsAndBudget()
 		const int64_t iDeadlineMilliseconds = OI::Timer::SteadyMilliseconds() + 3000;
 		while (pProbe->iCompleted.load() < 64 && OI::Timer::SteadyMilliseconds() < iDeadlineMilliseconds)
 		{
-			co_await coro::yield(10);
+			co_await OI::Coro::yield(10);
 		}
-		co_await coro::yield(100);
+		co_await OI::Coro::yield(100);
 		if (pProbe->iCompleted.load() != 64 || pProbe->iDuplicates.load() != 0 || pProbe->iUnexpected.load() != 0 ||
 		    stRegistry.GetPendingPullCount() != 0)
 		{
@@ -2145,7 +2146,7 @@ static coro::TaskResult<int> CheckRegistryBoundsAndBudget()
 		co_return iBad + 1;
 	}
 	// 让后台订阅拉取完成，再用真实已知分区验证恢复后回包配对。
-	co_await coro::yield(1200);
+	co_await OI::Coro::yield(1200);
 	static ZoneService stGames("gameserver");
 	OI::RpcData::HoldReq stRequest;
 	stRequest.iMark = 831;
@@ -2202,7 +2203,7 @@ static coro::TaskResult<int> CheckRegistryBoundsAndBudget()
 			++iBad;
 		}
 	}
-	co_await coro::yield(1000);
+	co_await OI::Coro::yield(1000);
 	if (stOutput.iMark != -831 || stStringOutput.iMark != -831)
 	{
 		++iBad;
@@ -2212,7 +2213,7 @@ static coro::TaskResult<int> CheckRegistryBoundsAndBudget()
 	co_return iBad;
 }
 
-static coro::TaskResult<int> CheckCompletedRpcRequests(sid_t iSessionIdParam)
+static OI::Coro::TaskResult<int> CheckCompletedRpcRequests(sid_t iSessionId)
 {
 	int iBad = 0;
 	static ZoneService stGames("gameserver");
@@ -2220,7 +2221,7 @@ static coro::TaskResult<int> CheckCompletedRpcRequests(sid_t iSessionIdParam)
 	auto pDestroyed = std::make_shared<std::atomic<int>>(0);
 	std::vector<OI::RpcData::HoldRes> vOutputs(20);
 	std::vector<std::weak_ptr<HoldRequestResource>> vResources;
-	std::vector<coro::TaskResult<int32_t>> vTasks;
+	std::vector<OI::Coro::TaskResult<int32_t>> vTasks;
 	// 六个公开输出入口各测成功、业务失败、序列化异常，再测超时和选路失败。
 	for (int iIndex = 0; iIndex < 20; ++iIndex)
 	{
@@ -2237,7 +2238,7 @@ static coro::TaskResult<int> CheckCompletedRpcRequests(sid_t iSessionIdParam)
 			vTasks.push_back(OI::Rpc::RpcCall(stManager, std::move(stRequest), vOutputs[iIndex], OI::Timer::Seconds(3)));
 			break;
 		case 1:
-			vTasks.push_back(OI::Rpc::RpcCall(stManager, iSessionIdParam, std::move(stRequest), vOutputs[iIndex], OI::Timer::Seconds(3)));
+			vTasks.push_back(OI::Rpc::RpcCall(stManager, iSessionId, std::move(stRequest), vOutputs[iIndex], OI::Timer::Seconds(3)));
 			break;
 		case 2:
 			vTasks.push_back(stManager.Call(std::move(stRequest), vOutputs[iIndex], OI::Timer::Seconds(3)));
@@ -2299,7 +2300,7 @@ static coro::TaskResult<int> CheckCompletedRpcRequests(sid_t iSessionIdParam)
 		}
 	}
 	// 超时任务的迟到回包也不能重新使用已释放请求或覆盖保留的输出。
-	co_await coro::yield(OI::Timer::Milliseconds(800));
+	co_await OI::Coro::yield(OI::Timer::Milliseconds(800));
 	if (vOutputs[18].iMark != -900 || pDestroyed->load(std::memory_order_relaxed) != 20)
 	{
 		++iBad;
@@ -2309,7 +2310,7 @@ static coro::TaskResult<int> CheckCompletedRpcRequests(sid_t iSessionIdParam)
 	co_return iBad;
 }
 
-static coro::TaskResult<int> CheckNamedOutputRpcTask()
+static OI::Coro::TaskResult<int> CheckNamedOutputRpcTask()
 {
 	int iBad = 0;
 	static ZoneService stGames("gameserver");
@@ -2319,14 +2320,14 @@ static coro::TaskResult<int> CheckNamedOutputRpcTask()
 	OI::RpcData::HoldRes stOutput;
 	stOutput.iMark = -1;
 	auto stAny = stManager.CallAny(stRequest, stOutput, OI::Timer::Seconds(3));
-	static_assert(std::is_same_v<decltype(stAny), coro::TaskResult<int32_t>>);
+	static_assert(std::is_same_v<decltype(stAny), OI::Coro::TaskResult<int32_t>>);
 	if (co_await stAny != 0 || stOutput.iMark != 811)
 	{
 		++iBad;
 	}
 	stRequest.iMark = 812;
 	auto stZone = stGames.Call(1001, stRequest, stOutput, OI::Timer::Seconds(3));
-	static_assert(std::is_same_v<decltype(stZone), coro::TaskResult<int32_t>>);
+	static_assert(std::is_same_v<decltype(stZone), OI::Coro::TaskResult<int32_t>>);
 	if (co_await stZone != 0 || stOutput.iMark != 812)
 	{
 		++iBad;
@@ -2343,11 +2344,11 @@ static coro::TaskResult<int> CheckNamedOutputRpcTask()
 		stLocal.iMark = -813;
 		return stTask;
 	}();
-	static_assert(std::is_same_v<decltype(stNamed), coro::TaskResult<int32_t>>);
-	std::vector<coro::TaskResult<int>> vWaiters;
+	static_assert(std::is_same_v<decltype(stNamed), OI::Coro::TaskResult<int32_t>>);
+	std::vector<OI::Coro::TaskResult<int>> vWaiters;
 	for (int iIndex = 0; iIndex < 8; ++iIndex)
 	{
-		vWaiters.push_back(coro::StartTask([stNamed](coro::Token)
+		vWaiters.push_back(OI::Coro::StartTask([stNamed](OI::Coro::Token)
 		{
 			return AwaitOutputRpc(stNamed);
 		}));
@@ -2383,7 +2384,7 @@ static coro::TaskResult<int> CheckNamedOutputRpcTask()
 	co_return iBad;
 }
 
-static coro::TaskResult<int> CheckNamedServiceRpc()
+static OI::Coro::TaskResult<int> CheckNamedServiceRpc()
 {
 	int iBad = 0;
 	static ZoneService stGames("gameserver");
@@ -2414,7 +2415,7 @@ static coro::TaskResult<int> CheckNamedServiceRpc()
 		{
 			break;
 		}
-		co_await coro::yield(::OI::Timer::Milliseconds(200));
+		co_await OI::Coro::yield(::OI::Timer::Milliseconds(200));
 	}
 	if (iGlobal != 1 || iAny != 1 || iZone != 1 || iBatch != 2)
 	{
@@ -2500,7 +2501,7 @@ static coro::TaskResult<int> CheckNamedServiceRpc()
 		stLocal.iMark = 914;
 		return stGames.CallMany<OI::RpcData::HoldRes>({1001, 1002}, stLocal, OI::Timer::Seconds(3));
 	}();
-	co_await coro::yield(0);
+	co_await OI::Coro::yield(0);
 	auto vDeferred = co_await stDeferred;
 	if (vDeferred.size() != 2)
 	{
@@ -2521,7 +2522,7 @@ static coro::TaskResult<int> CheckNamedServiceRpc()
 		}
 	}
 	auto stSingle = stGames.Call<OI::RpcData::HoldRes>(1001, stHold, OI::Timer::Seconds(3));
-	std::vector<coro::TaskResult<NamedOutcome>> vContenders;
+	std::vector<OI::Coro::TaskResult<NamedOutcome>> vContenders;
 	for (int iIndex = 0; iIndex < 8; ++iIndex)
 	{
 		vContenders.push_back(AwaitNamedHold(stSingle));
@@ -2547,7 +2548,7 @@ static coro::TaskResult<int> CheckNamedServiceRpc()
 	co_return iBad;
 }
 
-static coro::TaskResult<int> RegistryLookups()
+static OI::Coro::TaskResult<int> RegistryLookups()
 {
 	int iBad = 0;
 	for (int iRound = 0; iRound < 8; ++iRound)
@@ -2559,14 +2560,14 @@ static coro::TaskResult<int> RegistryLookups()
 		{
 			++iBad;
 		}
-		co_await coro::yield(0);
+		co_await OI::Coro::yield(0);
 	}
 	co_return iBad;
 }
 
-static coro::TaskResult<int> CheckRegistryPairing()
+static OI::Coro::TaskResult<int> CheckRegistryPairing()
 {
-	std::vector<coro::TaskResult<int>> vLookups;
+	std::vector<OI::Coro::TaskResult<int>> vLookups;
 	for (int iIndex = 0; iIndex < 8; ++iIndex)
 	{
 		vLookups.push_back(RegistryLookups());
@@ -2581,7 +2582,7 @@ static coro::TaskResult<int> CheckRegistryPairing()
 }
 
 // 异常必须释放闭包；随后继续执行普通任务，不能终止工作线程。
-static coro::TaskResult<int> CheckTaskExceptions()
+static OI::Coro::TaskResult<int> CheckTaskExceptions()
 {
 	int iBadLocal = 0;
 	for (int iKind = 0; iKind < 2; ++iKind)
@@ -2603,7 +2604,7 @@ static coro::TaskResult<int> CheckTaskExceptions()
 		const int64_t iDeadline = ::OI::Timer::SteadyMilliseconds() + ::OI::Timer::MS(::OI::Timer::Seconds(3)).iMilliseconds;
 		while (!pWeak.expired() && ::OI::Timer::SteadyMilliseconds() < iDeadline)
 		{
-			co_await coro::yield(1);
+			co_await OI::Coro::yield(1);
 		}
 		if (!pWeak.expired())
 		{
@@ -2621,7 +2622,7 @@ static coro::TaskResult<int> CheckTaskExceptions()
 	const int64_t iTaskDeadline = ::OI::Timer::SteadyMilliseconds() + ::OI::Timer::MS(::OI::Timer::Seconds(3)).iMilliseconds;
 	while (!pOrdinary->load() && ::OI::Timer::SteadyMilliseconds() < iTaskDeadline)
 	{
-		co_await coro::yield(1);
+		co_await OI::Coro::yield(1);
 	}
 	if (!pOrdinary->load())
 	{
@@ -2631,7 +2632,7 @@ static coro::TaskResult<int> CheckTaskExceptions()
 	co_return iBadLocal;
 }
 
-static coro::TaskResult<int> CheckServerEncoding()
+static OI::Coro::TaskResult<int> CheckServerEncoding()
 {
 	int iBadLocal = 0;
 	OI::RpcData::HoldReq stRequest;
@@ -2676,10 +2677,10 @@ static coro::TaskResult<int> CheckServerEncoding()
 	co_return iBadLocal;
 }
 
-static coro::TaskResult<int> CheckHttpFraming(int32_t iHttpPortParam)
+static OI::Coro::TaskResult<int> CheckHttpFraming(int32_t iHttpPort)
 {
 	int iBadLocal = 0;
-	OI::Http::Client stHttp("127.0.0.1", iHttpPortParam, 1000);
+	OI::Http::Client stHttp("127.0.0.1", iHttpPort, 1000);
 	struct HttpCase
 	{
 		const char* pPath;
@@ -2703,10 +2704,10 @@ static coro::TaskResult<int> CheckHttpFraming(int32_t iHttpPortParam)
 }
 
 // 不复用时每条请求都重新连。服务端看到同一条连接上的后续请求会回 reused。
-static coro::TaskResult<int> CheckHttpNoReuse(int32_t iHttpPortParam)
+static OI::Coro::TaskResult<int> CheckHttpNoReuse(int32_t iHttpPort)
 {
 	int iBadLocal = 0;
-	OI::Http::Client stHttp("127.0.0.1", iHttpPortParam, 1000, false);
+	OI::Http::Client stHttp("127.0.0.1", iHttpPort, 1000, false);
 	for (int iIndex = 0; iIndex < 2; ++iIndex)
 	{
 		auto stResult = co_await stHttp.Get("/good", {});
@@ -2735,10 +2736,10 @@ static size_t AllocatedBytes()
 }
 
 // 长超时期间连续成功的大响应，不应把已完成的收包容量留到超时。
-static coro::TaskResult<int> CheckHttpRelease(int32_t iHttpPortParam)
+static OI::Coro::TaskResult<int> CheckHttpRelease(int32_t iHttpPort)
 {
 	int iBadLocal = 0;
-	OI::Http::Client stLargeHttp("127.0.0.1", iHttpPortParam, 30000);
+	OI::Http::Client stLargeHttp("127.0.0.1", iHttpPort, 30000);
 	const size_t iBefore = AllocatedBytes();
 	for (int iIndex = 0; iIndex < 32; ++iIndex)
 	{
@@ -2801,24 +2802,24 @@ static int CheckSendBudget()
 }
 
 // 持续就绪的协程不能饿死同优先级普通任务。
-static coro::TaskResult<int> CheckSchedulerFairness()
+static OI::Coro::TaskResult<int> CheckSchedulerFairness()
 {
 	int iBadLocal = 0;
 	std::atomic<bool> bOrdinaryDone{false};
-	coro::TaskScope stBusyScope;
+	OI::Coro::TaskScope stBusyScope;
 	const int64_t iFairnessBegin = ::OI::Timer::SteadyMilliseconds();
 	const int64_t iFairnessLimit = ::OI::Timer::MS(::OI::Timer::Seconds(3)).iMilliseconds;
 	for (int iIndexLocal = 0; iIndexLocal < 64; ++iIndexLocal)
 	{
-		stBusyScope.Start([&bOrdinaryDone, iFairnessBegin, iFairnessLimit](coro::Token, coro::StopToken stStopParam) -> coro::Task
+		stBusyScope.Start([&bOrdinaryDone, iFairnessBegin, iFairnessLimit](OI::Coro::Token, OI::Coro::StopToken stStop) -> OI::Coro::Task
 		{
-			while (!bOrdinaryDone.load() && !stStopParam.StopRequested() && ::OI::Timer::SteadyMilliseconds() - iFairnessBegin < iFairnessLimit)
+			while (!bOrdinaryDone.load() && !stStop.StopRequested() && ::OI::Timer::SteadyMilliseconds() - iFairnessBegin < iFairnessLimit)
 			{
-				co_await coro::yield(0);
+				co_await OI::Coro::yield(0);
 			}
 		});
 	}
-	co_await coro::yield(OI::Timer::Milliseconds(50));
+	co_await OI::Coro::yield(OI::Timer::Milliseconds(50));
 	if (!OI::Thread::ThreadPool::GetInstance().AddTask([&bOrdinaryDone]()
 	{
 		bOrdinaryDone.store(true);
@@ -2829,7 +2830,7 @@ static coro::TaskResult<int> CheckSchedulerFairness()
 	}
 	while (!bOrdinaryDone.load())
 	{
-		co_await coro::yield(0);
+		co_await OI::Coro::yield(0);
 	}
 	if (WallMs(iFairnessBegin) > 1500)
 	{
@@ -2842,15 +2843,15 @@ static coro::TaskResult<int> CheckSchedulerFairness()
 }
 
 // 子任务异常跨挂起点传回父任务；作用域关闭后不再接受任务。
-static coro::TaskResult<int> CheckTaskScope()
+static OI::Coro::TaskResult<int> CheckTaskScope()
 {
 	int iBadLocal = 0;
-	auto fnThrowing = [](coro::Token, coro::StopToken) -> coro::Task
+	auto fnThrowing = [](OI::Coro::Token, OI::Coro::StopToken) -> OI::Coro::Task
 	{
-		co_await coro::yield(::OI::Timer::Milliseconds(10));
+		co_await OI::Coro::yield(::OI::Timer::Milliseconds(10));
 		throw std::runtime_error("scope regression");
 	};
-	coro::TaskScope stFailures;
+	OI::Coro::TaskScope stFailures;
 	stFailures.Start(fnThrowing);
 	bool bCaught = false;
 	try
@@ -2865,23 +2866,23 @@ static coro::TaskResult<int> CheckTaskScope()
 	{
 		++iBadLocal;
 	}
-	coro::TaskScope stScope;
+	OI::Coro::TaskScope stScope;
 	std::atomic<int> iFinishedLocal{0}, iStarted{0};
 	for (int iIndexLocal = 0; iIndexLocal < 128; ++iIndexLocal)
 	{
-		stScope.Start([&iFinishedLocal, &iStarted](coro::Token, coro::StopToken stStopParam) -> coro::Task
+		stScope.Start([&iFinishedLocal, &iStarted](OI::Coro::Token, OI::Coro::StopToken stStop) -> OI::Coro::Task
 		{
 			++iStarted;
-			while (!stStopParam.StopRequested())
+			while (!stStop.StopRequested())
 			{
-				co_await coro::yield(::OI::Timer::Milliseconds(10));
+				co_await OI::Coro::yield(::OI::Timer::Milliseconds(10));
 			}
 			++iFinishedLocal;
 		});
 	}
 	while (iStarted.load() != 128)
 	{
-		co_await coro::yield(::OI::Timer::Milliseconds(10));
+		co_await OI::Coro::yield(::OI::Timer::Milliseconds(10));
 	}
 	stScope.RequestStop();
 	co_await stScope.Join();
@@ -2902,16 +2903,16 @@ static coro::TaskResult<int> CheckTaskScope()
 }
 
 // 真正的带捕获协程 lambda：临时闭包离开后、挂起恢复后仍访问捕获。
-static coro::TaskResult<int> CheckCapturedTasks()
+static OI::Coro::TaskResult<int> CheckCapturedTasks()
 {
-	std::vector<coro::TaskResult<int>> vTasks;
+	std::vector<OI::Coro::TaskResult<int>> vTasks;
 	for (int iIndexLocal = 0; iIndexLocal < 32; ++iIndexLocal)
 	{
-		vTasks.push_back(coro::StartTask([text = std::string(4096, 'a' + iIndexLocal % 26), iIndexLocal](coro::Token iTokenParam) -> coro::TaskResult<int>
+		vTasks.push_back(OI::Coro::StartTask([text = std::string(4096, 'a' + iIndexLocal % 26), iIndexLocal](OI::Coro::Token iToken) -> OI::Coro::TaskResult<int>
 		{
-			co_await coro::yield(::OI::Timer::Milliseconds(0));
-			co_await coro::yield(::OI::Timer::Milliseconds(10));
-			co_return (!iTokenParam || text != std::string(4096, 'a' + iIndexLocal % 26)) ? 1 : 0;
+			co_await OI::Coro::yield(::OI::Timer::Milliseconds(0));
+			co_await OI::Coro::yield(::OI::Timer::Milliseconds(10));
+			co_return (!iToken || text != std::string(4096, 'a' + iIndexLocal % 26)) ? 1 : 0;
 		}));
 	}
 	int iBad = 0;
@@ -2927,9 +2928,9 @@ static coro::TaskResult<int> CheckCapturedTasks()
 struct PendingClient : OI::Rpc::ProtoClientManager
 {
 	int iFailureMode = 0;
-	void SetSendLimit(size_t iBytesParam)
+	void SetSendLimit(size_t iBytes)
 	{
-		iMaxSendQueueBytes = iBytesParam;
+		iMaxSendQueueBytes = iBytes;
 	}
 	OI::Rpc::ProtoSession* AttachForTest()
 	{
@@ -2943,26 +2944,26 @@ struct PendingClient : OI::Rpc::ProtoClientManager
 	void OnClientDisconnect(const OI::Net::Session*) override
 	{
 	}
-	void SubmitCall(uint64_t iIdParam, const OI::Base::Bytes& stDataParam) override
+	void SubmitCall(uint64_t iId, const OI::Base::Bytes& stData) override
 	{
 		if (!iFailureMode)
 		{
-			ProtoClientManager::SubmitCall(iIdParam, stDataParam);
+			ProtoClientManager::SubmitCall(iId, stData);
 			return;
 		}
 		if (iFailureMode == 2)
 		{
-			OI::Rpc::WakeRpcCall(iIdParam, OI_ERR_FAIL, nullptr);
+			OI::Rpc::WakeRpcCall(iId, OI_ERR_FAIL, nullptr);
 		}
 		if (iFailureMode == 3)
 		{
-			ProtoClientManager::TryPendCall(iIdParam, stDataParam);
+			ProtoClientManager::TryPendCall(iId, stData);
 		}
 		if (iFailureMode == 4)
 		{
-			coro::StartTask([iIdParam](coro::Token) -> coro::Task
+			OI::Coro::StartTask([iId](OI::Coro::Token) -> OI::Coro::Task
 			{
-				OI::Rpc::WakeRpcCall(iIdParam, OI_ERR_FAIL, nullptr);
+				OI::Rpc::WakeRpcCall(iId, OI_ERR_FAIL, nullptr);
 				co_return;
 			});
 		}
@@ -2970,10 +2971,10 @@ struct PendingClient : OI::Rpc::ProtoClientManager
 	}
 };
 
-static bool SameWaitStats(const OI::Rpc::RpcWaitStats& stBaselineParam)
+static bool SameWaitStats(const OI::Rpc::RpcWaitStats& stBaseline)
 {
 	const auto stNow = OI::Rpc::GetRpcWaitStats();
-	return stNow.iCalls == stBaselineParam.iCalls && stNow.iExpirations == stBaselineParam.iExpirations && stNow.iBuckets == stBaselineParam.iBuckets && stNow.iSessionEntries == stBaselineParam.iSessionEntries && stNow.iSessionBuckets == stBaselineParam.iSessionBuckets;
+	return stNow.iCalls == stBaseline.iCalls && stNow.iExpirations == stBaseline.iExpirations && stNow.iBuckets == stBaseline.iBuckets && stNow.iSessionEntries == stBaseline.iSessionEntries && stNow.iSessionBuckets == stBaseline.iSessionBuckets;
 }
 
 static int CheckPreconnectSendBudget()
@@ -2998,7 +2999,7 @@ static int CheckPreconnectSendBudget()
 }
 
 // 标准回调的可选上下文跨挂起保持有效。
-static coro::TaskResult<int> CheckRpcContext(PendingClient& stPendingParam)
+static OI::Coro::TaskResult<int> CheckRpcContext(PendingClient& stPending)
 {
 	using Req = OI::RpcData::HoldReq;
 	using Res = OI::RpcData::HoldRes;
@@ -3009,17 +3010,17 @@ static coro::TaskResult<int> CheckRpcContext(PendingClient& stPendingParam)
 	stRequestLocal.iMark = 73;
 	stRequestLocal.serialize(stBody);
 	int iCallbacks = 0;
-	auto fnContextHandler = [&](const OI::Rpc::RpcContext& stContextParam, const Req& stRequestParam, Res&) -> OI::Rpc::RpcTask
+	auto fnContextHandler = [&](const OI::Rpc::RpcContext& stContext, const Req& stRequest, Res&) -> OI::Rpc::RpcTask
 	{
-		co_await coro::yield(0);
-		if (stContextParam.iToken != 88 || &stContextParam.stManager != &stPendingParam || stContextParam.iSessionId != 77 || stRequestParam.iMark != 73)
+		co_await OI::Coro::yield(0);
+		if (stContext.iToken != 88 || &stContext.stManager != &stPending || stContext.iSessionId != 77 || stRequest.iMark != 73)
 		{
 			++iBadLocal;
 		}
 		++iCallbacks;
 		co_return 1001;
 	};
-	co_await OI::Rpc::RunHandledRpc<Req, Res>(fnContextHandler, OI::Rpc::RpcProtoId<Res>::iValue, 88, &stPendingParam, 77, std::move(stBody));
+	co_await OI::Rpc::RunHandledRpc<Req, Res>(fnContextHandler, OI::Rpc::RpcProtoId<Res>::iValue, 88, &stPending, 77, std::move(stBody));
 	if (iCallbacks != 1)
 	{
 		++iBadLocal;
@@ -3028,45 +3029,45 @@ static coro::TaskResult<int> CheckRpcContext(PendingClient& stPendingParam)
 	co_return iBadLocal;
 }
 
-static uint64_t BindPendingCall(PendingClient& stPendingParam, int32_t* pResultParam, int64_t iTimeoutMillisecondsParam)
+static uint64_t BindPendingCall(PendingClient& stPending, int32_t* pResult, int64_t iTimeoutMilliseconds)
 {
-	return OI::Rpc::BindRpcCall(&stPendingParam, INVALID_SID, 0, {}, pResultParam, iTimeoutMillisecondsParam, {}, []()
+	return OI::Rpc::BindRpcCall(&stPending, INVALID_SID, 0, {}, pResult, iTimeoutMilliseconds, {}, []()
 	{
 	});
 }
 
-static int CheckPendingLimits(PendingClient& stPendingParam)
+static int CheckPendingLimits(PendingClient& stPending)
 {
 	int iBadLocal = 0;
-	stPendingParam.SetPendingCallLimits(1, 8);
+	stPending.SetPendingCallLimits(1, 8);
 	OI::Base::BytesStream stFrame;
 	stFrame << uint64_t(1);
 	int32_t iFirstResult = 0, iSecondResult = 0;
-	const auto iFirstCall = BindPendingCall(stPendingParam, &iFirstResult, 0);
-	stPendingParam.TryPendCall(iFirstCall, stFrame.GetMutableBuff());
-	auto iSecondCall = BindPendingCall(stPendingParam, &iSecondResult, 0);
-	stPendingParam.TryPendCall(iSecondCall, stFrame.GetMutableBuff());
+	const auto iFirstCall = BindPendingCall(stPending, &iFirstResult, 0);
+	stPending.TryPendCall(iFirstCall, stFrame.GetMutableBuff());
+	auto iSecondCall = BindPendingCall(stPending, &iSecondResult, 0);
+	stPending.TryPendCall(iSecondCall, stFrame.GetMutableBuff());
 	if (iSecondResult != OI_ERR_BUSY)
 	{
 		++iBadLocal;
 	}
 	OI::Rpc::WakeRpcCall(iFirstCall, OI_ERR_TIMEOUT, nullptr);
 	iSecondResult = 0;
-	iSecondCall = BindPendingCall(stPendingParam, &iSecondResult, 0);
-	stPendingParam.TryPendCall(iSecondCall, stFrame.GetMutableBuff());
+	iSecondCall = BindPendingCall(stPending, &iSecondResult, 0);
+	stPending.TryPendCall(iSecondCall, stFrame.GetMutableBuff());
 	if (iSecondResult != 0)
 	{
 		++iBadLocal;
 	}
-	stPendingParam.FailHeldCalls();
+	stPending.FailHeldCalls();
 	if (iSecondResult != OI_ERR_CONNECT)
 	{
 		++iBadLocal;
 	}
-	stPendingParam.SetPendingCallLimits(8, 7);
+	stPending.SetPendingCallLimits(8, 7);
 	iSecondResult = 0;
-	iSecondCall = BindPendingCall(stPendingParam, &iSecondResult, 0);
-	stPendingParam.TryPendCall(iSecondCall, stFrame.GetMutableBuff());
+	iSecondCall = BindPendingCall(stPending, &iSecondResult, 0);
+	stPending.TryPendCall(iSecondCall, stFrame.GetMutableBuff());
 	if (iSecondResult != OI_ERR_BUSY)
 	{
 		++iBadLocal;
@@ -3076,7 +3077,7 @@ static int CheckPendingLimits(PendingClient& stPendingParam)
 }
 
 // 会话索引换绑后，旧连接断开只能完成仍属于它的调用。
-static int CheckRpcSessionIndex(PendingClient& stPendingParam)
+static int CheckRpcSessionIndex(PendingClient& stPending)
 {
 	int iBadLocal = 0;
 	const auto stBaseline = OI::Rpc::GetRpcWaitStats();
@@ -3084,7 +3085,7 @@ static int CheckRpcSessionIndex(PendingClient& stPendingParam)
 	std::vector<uint64_t> vIndexedCalls;
 	for (size_t iIndexLocal = 0; iIndexLocal < vIndexedResults.size(); ++iIndexLocal)
 	{
-		const auto iCallLocal = OI::Rpc::BindRpcCall(&stPendingParam, iIndexLocal < 32 ? 123 : 456, 0, {}, &vIndexedResults[iIndexLocal], 180000, {}, []()
+		const auto iCallLocal = OI::Rpc::BindRpcCall(&stPending, iIndexLocal < 32 ? 123 : 456, 0, {}, &vIndexedResults[iIndexLocal], 180000, {}, []()
 		{
 		});
 		vIndexedCalls.push_back(iCallLocal);
@@ -3096,7 +3097,7 @@ static int CheckRpcSessionIndex(PendingClient& stPendingParam)
 			++iBadLocal;
 		}
 	}
-	OI::Rpc::FailRpcCalls(&stPendingParam, 123);
+	OI::Rpc::FailRpcCalls(&stPending, 123);
 	for (size_t iIndexLocal = 0; iIndexLocal < vIndexedResults.size(); ++iIndexLocal)
 	{
 		if (vIndexedResults[iIndexLocal] != (iIndexLocal >= 16 && iIndexLocal < 32 ? OI_ERR_CONNECT : -99))
@@ -3104,7 +3105,7 @@ static int CheckRpcSessionIndex(PendingClient& stPendingParam)
 			++iBadLocal;
 		}
 	}
-	OI::Rpc::FailRpcCalls(&stPendingParam, 789);
+	OI::Rpc::FailRpcCalls(&stPending, 789);
 	for (size_t iIndexLocal = 0; iIndexLocal < vIndexedResults.size(); ++iIndexLocal)
 	{
 		if (vIndexedResults[iIndexLocal] != (iIndexLocal < 32 ? OI_ERR_CONNECT : -99))
@@ -3122,7 +3123,7 @@ static int CheckRpcSessionIndex(PendingClient& stPendingParam)
 }
 
 // 跨分片、跨批次断连清理：回调抛异常也必须完成后续项并归还所有 guard。
-static int CheckRpcDisconnectDrain(PendingClient& stPendingParam)
+static int CheckRpcDisconnectDrain(PendingClient& stPending)
 {
 	const auto stBaseline = OI::Rpc::GetRpcWaitStats();
 	std::vector<int32_t> vResults(4096, -99);
@@ -3130,7 +3131,7 @@ static int CheckRpcDisconnectDrain(PendingClient& stPendingParam)
 	auto pCallbacks = std::make_shared<std::atomic<int32_t>>(0);
 	for (size_t iIndex = 0; iIndex < vResults.size(); ++iIndex)
 	{
-		OI::Rpc::BindRpcCall(&stPendingParam, 987654, 0, {}, &vResults[iIndex], 180000, {}, [pCallbacks]()
+		OI::Rpc::BindRpcCall(&stPending, 987654, 0, {}, &vResults[iIndex], 180000, {}, [pCallbacks]()
 		{
 			if (pCallbacks->fetch_add(1) == 0)
 			{
@@ -3138,7 +3139,7 @@ static int CheckRpcDisconnectDrain(PendingClient& stPendingParam)
 			}
 		}, pGuard);
 	}
-	OI::Rpc::FailRpcCalls(&stPendingParam, 987654);
+	OI::Rpc::FailRpcCalls(&stPending, 987654);
 	int iBad = pCallbacks->load() == 4096 && pGuard->load() == 0 && SameWaitStats(stBaseline) ? 0 : 1;
 	for (const auto& iResult : vResults)
 	{
@@ -3152,7 +3153,7 @@ static int CheckRpcDisconnectDrain(PendingClient& stPendingParam)
 }
 
 // 登记后序列化异常，以及发送异常与完成回调竞争；恢复后不能留下悬空等待项。
-static coro::TaskResult<int> CheckRpcExceptions(PendingClient& stPendingParam)
+static OI::Coro::TaskResult<int> CheckRpcExceptions(PendingClient& stPending)
 {
 	int iBadLocal = 0;
 	const auto stBaseline = OI::Rpc::GetRpcWaitStats();
@@ -3168,7 +3169,7 @@ static coro::TaskResult<int> CheckRpcExceptions(PendingClient& stPendingParam)
 	int iCaughtErrors = 0;
 	try
 	{
-		co_await OI::Rpc::MakeRpcCallAwaiter(stPendingParam, INVALID_SID, stThrowingBase, stUnused, OI::Timer::Milliseconds(50));
+		co_await OI::Rpc::MakeRpcCallAwaiter(stPending, INVALID_SID, stThrowingBase, stUnused, OI::Timer::Milliseconds(50));
 	}
 	catch (const std::runtime_error&)
 	{
@@ -3178,16 +3179,16 @@ static coro::TaskResult<int> CheckRpcExceptions(PendingClient& stPendingParam)
 	{
 		++iBadLocal;
 	}
-	stPendingParam.SetPendingCallLimits(64, 64 * 1024 * 1024);
+	stPending.SetPendingCallLimits(64, 64 * 1024 * 1024);
 	OI::RpcData::HoldReq stOrdinary;
 	for (int iMode = 1; iMode <= 4; ++iMode)
 	{
-		stPendingParam.iFailureMode = iMode;
+		stPending.iFailureMode = iMode;
 		for (int iIndexLocal = 0; iIndexLocal < 128; ++iIndexLocal)
 		{
 			try
 			{
-				co_await OI::Rpc::MakeRpcCallAwaiter(stPendingParam, stOrdinary, stUnused, OI::Timer::Milliseconds(50));
+				co_await OI::Rpc::MakeRpcCallAwaiter(stPending, stOrdinary, stUnused, OI::Timer::Milliseconds(50));
 			}
 			catch (const std::runtime_error&)
 			{
@@ -3199,8 +3200,8 @@ static coro::TaskResult<int> CheckRpcExceptions(PendingClient& stPendingParam)
 			}
 		}
 	}
-	stPendingParam.iFailureMode = 0;
-	co_await coro::yield(OI::Timer::Milliseconds(250));
+	stPending.iFailureMode = 0;
+	co_await OI::Coro::yield(OI::Timer::Milliseconds(250));
 	if (iCaughtErrors != 513 || !SameWaitStats(stBaseline))
 	{
 		++iBadLocal;
@@ -3210,17 +3211,17 @@ static coro::TaskResult<int> CheckRpcExceptions(PendingClient& stPendingParam)
 }
 
 // 每个分片留一条长超时请求堵住队首，再拒绝十万条；索引数量必须保持不变。
-static int CheckRpcExpiry(PendingClient& stPendingParam)
+static int CheckRpcExpiry(PendingClient& stPending)
 {
 	int iBadLocal = 0;
 	const auto stBaseline = OI::Rpc::GetRpcWaitStats();
 	OI::Base::BytesStream stFrame;
 	stFrame << uint64_t(1);
-	stPendingParam.SetPendingCallLimits(64, 64 * 8);
+	stPending.SetPendingCallLimits(64, 64 * 8);
 	int32_t vAnchorResults[64]{};
 	for (auto& iAnchorResult : vAnchorResults)
 	{
-		stPendingParam.TryPendCall(BindPendingCall(stPendingParam, &iAnchorResult, 180000), stFrame.GetMutableBuff());
+		stPending.TryPendCall(BindPendingCall(stPending, &iAnchorResult, 180000), stFrame.GetMutableBuff());
 	}
 	const auto stAnchored = OI::Rpc::GetRpcWaitStats();
 	if (stAnchored.iCalls != stBaseline.iCalls + 64 || stAnchored.iExpirations != stBaseline.iExpirations + 64)
@@ -3230,7 +3231,7 @@ static int CheckRpcExpiry(PendingClient& stPendingParam)
 	for (int iIndexLocal = 0; iIndexLocal < 100000; ++iIndexLocal)
 	{
 		int32_t iRejected = 0;
-		stPendingParam.TryPendCall(BindPendingCall(stPendingParam, &iRejected, 180000 + iIndexLocal % 17), stFrame.GetMutableBuff());
+		stPending.TryPendCall(BindPendingCall(stPending, &iRejected, 180000 + iIndexLocal % 17), stFrame.GetMutableBuff());
 		if (iRejected != OI_ERR_BUSY)
 		{
 			++iBadLocal;
@@ -3241,7 +3242,7 @@ static int CheckRpcExpiry(PendingClient& stPendingParam)
 	{
 		++iBadLocal;
 	}
-	stPendingParam.FailHeldCalls();
+	stPending.FailHeldCalls();
 	for (const int32_t iCodeLocal : vAnchorResults)
 	{
 		if (iCodeLocal != OI_ERR_CONNECT)
@@ -3257,7 +3258,7 @@ static int CheckRpcExpiry(PendingClient& stPendingParam)
 	return iBadLocal;
 }
 
-static coro::TaskResult<int> CheckDeadlineBuckets()
+static OI::Coro::TaskResult<int> CheckDeadlineBuckets()
 {
 	int iBad = 0;
 	auto& stManager = IpcClient::GetInstance();
@@ -3306,7 +3307,7 @@ static coro::TaskResult<int> CheckDeadlineBuckets()
 	const int64_t iLimitMilliseconds = OI::Timer::SteadyMilliseconds() + 4000;
 	while (pProbe->iCompleted.load() != 32 && OI::Timer::SteadyMilliseconds() < iLimitMilliseconds)
 	{
-		co_await coro::yield(20);
+		co_await OI::Coro::yield(20);
 	}
 	for (const auto& iCall : vCalls)
 	{
@@ -3323,13 +3324,13 @@ static coro::TaskResult<int> CheckDeadlineBuckets()
 }
 
 // 只在内部配对入口注入错误来源，不构造另一套网络客户端。
-static int CheckRpcSource(sid_t iSessionIdParam)
+static int CheckRpcSource(sid_t iSessionId)
 {
 	int iBadLocal = 0;
 	auto& stManagerLocal = IpcClient::GetInstance();
 	const auto iResponseIdLocal = ::OI::Rpc::RpcProtoId<::OI::RpcData::HoldRes>::iValue;
 	int iDecoded = 0, iResumed = 0, iResultLocal = -99;
-	uint64_t iCall = ::OI::Rpc::BindRpcCall(&stManagerLocal, iSessionIdParam, iResponseIdLocal, {}, &iResultLocal, 0, [pDecoded = &iDecoded](::OI::Base::BytesStream&, sid_t)
+	uint64_t iCall = ::OI::Rpc::BindRpcCall(&stManagerLocal, iSessionId, iResponseIdLocal, {}, &iResultLocal, 0, [pDecoded = &iDecoded](::OI::Base::BytesStream&, sid_t)
 	{
 		++*pDecoded;
 		return true;
@@ -3337,25 +3338,25 @@ static int CheckRpcSource(sid_t iSessionIdParam)
 	{
 		++iResumed;
 	});
-	auto fnDeliver = [&](::OI::Net::SessionManager* pSourceParam, sid_t iSourceSessionParam)
+	auto fnDeliver = [&](::OI::Net::SessionManager* pSource, sid_t iSourceSession)
 	{
 		::OI::Base::BytesStream stBody;
 		stBody << iCall;
-		::OI::Rpc::DeliverRpc(iResponseIdLocal, stBody, pSourceParam, iSourceSessionParam);
+		::OI::Rpc::DeliverRpc(iResponseIdLocal, stBody, pSource, iSourceSession);
 	};
-	fnDeliver(&stManagerLocal, iSessionIdParam + 100000);
-	fnDeliver(&::OI::Redis::RedisClient::GetInstance(), iSessionIdParam);
+	fnDeliver(&stManagerLocal, iSessionId + 100000);
+	fnDeliver(&::OI::Redis::RedisClient::GetInstance(), iSessionId);
 	if (iDecoded || iResumed)
 	{
 		++iBadLocal;
 	}
-	fnDeliver(&stManagerLocal, iSessionIdParam);
+	fnDeliver(&stManagerLocal, iSessionId);
 	if (iDecoded != 1 || iResumed != 1)
 	{
 		++iBadLocal;
 	}
 	iResumed = 0;
-	const sid_t iFakeSessionId = iSessionIdParam + 100000;
+	const sid_t iFakeSessionId = iSessionId + 100000;
 	::OI::Rpc::BindRpcCall(&stManagerLocal, iFakeSessionId, iResponseIdLocal, {}, &iResultLocal, 0, {}, [&]()
 	{
 		++iResumed;
@@ -3370,7 +3371,7 @@ static int CheckRpcSource(sid_t iSessionIdParam)
 	return iBadLocal;
 }
 
-static coro::TaskResult<int> CheckStandardizedReply()
+static OI::Coro::TaskResult<int> CheckStandardizedReply()
 {
 	int iBadLocal = 0;
 	auto& stManagerLocal = IpcClient::GetInstance();
@@ -3430,18 +3431,18 @@ static coro::TaskResult<int> CheckStandardizedReply()
 			++iBadLocal;
 		}
 	}
-	auto fnValueTask = []() -> coro::TaskResult<int32_t>
+	auto fnValueTask = []() -> OI::Coro::TaskResult<int32_t>
 	{
-		co_await coro::yield(0);
+		co_await OI::Coro::yield(0);
 		co_return 77;
 	};
 	if (co_await fnValueTask() != 77)
 	{
 		++iBadLocal;
 	}
-	auto fnThrowingTask = []() -> coro::TaskResult<int32_t>
+	auto fnThrowingTask = []() -> OI::Coro::TaskResult<int32_t>
 	{
-		co_await coro::yield(0);
+		co_await OI::Coro::yield(0);
 		throw std::runtime_error("result task test");
 		co_return 0;
 	};
@@ -3463,7 +3464,7 @@ static coro::TaskResult<int> CheckStandardizedReply()
 }
 
 // 超时后迟到的回包只能丢弃，不能配给后面的调用。
-static coro::TaskResult<int> CheckRpcLateReply()
+static OI::Coro::TaskResult<int> CheckRpcLateReply()
 {
 	int iBadLocal = 0;
 	::OI::RpcData::HoldReq stRequestLocal;
@@ -3475,7 +3476,7 @@ static coro::TaskResult<int> CheckRpcLateReply()
 	{
 		++iBadLocal;
 	}
-	co_await coro::yield(::OI::Timer::Milliseconds(700));
+	co_await OI::Coro::yield(::OI::Timer::Milliseconds(700));
 	stRequestLocal.iDelayMilliseconds = 0;
 	auto stEarly = co_await IpcClient::GetInstance().CallAny<::OI::RpcData::HoldRes>(stRequestLocal, ::OI::Timer::Seconds(10));
 	int iReturnCodeLocal = stEarly.GetRet();
@@ -3504,7 +3505,7 @@ static coro::TaskResult<int> CheckRpcLateReply()
 		iBadLocal += 1;
 	}
 	// 回包还在路上。让这一下把迟到的包和已经武装的超时定时器都消化掉。
-	co_await coro::yield(1500);
+	co_await OI::Coro::yield(1500);
 	LOG_TRACE("hold rpc late-reply cpu_ms=%lld wall_ms=%lld",
 	    CpuMs(iCpuBegin), WallMs(iWallBegin));
 	fflush(stdout);
@@ -3525,12 +3526,12 @@ static coro::TaskResult<int> CheckRpcLateReply()
 }
 
 // 服务端延迟落在客户端超时前后，每个调用只能拿到回包或超时之一。
-static coro::TaskResult<int> CheckRpcRace()
+static OI::Coro::TaskResult<int> CheckRpcRace()
 {
 	const int vDelays[] = {800, 900, 1000, 1100, 1200, 1400, 1600, 1800};
 	const std::clock_t iCpuBegin = std::clock();
 	const int64_t iWallBegin = ::OI::Timer::SteadyMilliseconds();
-	std::vector<coro::TaskResult<RaceOutcome>> vCalls;
+	std::vector<OI::Coro::TaskResult<RaceOutcome>> vCalls;
 	for (int iIndexLocal = 0; iIndexLocal < 8; ++iIndexLocal)
 	{
 		vCalls.push_back(RaceOne(100 + iIndexLocal, vDelays[iIndexLocal]));
@@ -3549,21 +3550,21 @@ static coro::TaskResult<int> CheckRpcRace()
 	co_return iRaceBad;
 }
 
-static coro::TaskResult<int> CheckRedisPing(const char* pLabelParam)
+static OI::Coro::TaskResult<int> CheckRedisPing(const char* pLabel)
 {
 	const int64_t iWallBegin = ::OI::Timer::SteadyMilliseconds();
 	const auto stPing = co_await ::OI::Redis::CallRedis({"PING"});
-	LOG_TRACE("hold redis %sping ok=%d status=%d reply_type=%d wall_ms=%lld", pLabelParam, Pong(stPing) ? 1 : 0,
+	LOG_TRACE("hold redis %sping ok=%d status=%d reply_type=%d wall_ms=%lld", pLabel, Pong(stPing) ? 1 : 0,
 	    static_cast<int>(stPing.iStatus), stPing.pReply ? stPing.pReply->type : -1, WallMs(iWallBegin));
 	fflush(stdout);
 	co_return Pong(stPing) ? 0 : 1;
 }
 
 // Redis 超时后迟到的回复不能串给下一条命令；回复与超时同时到也只能取其一。
-static coro::TaskResult<int> CheckRedisLateReply(int32_t iRedisTimeoutMillisecondsParam)
+static OI::Coro::TaskResult<int> CheckRedisLateReply(int32_t iRedisTimeoutMilliseconds)
 {
 	int iSpins = 0;
-	int iLimit = iRedisTimeoutMillisecondsParam > 0 ? iRedisTimeoutMillisecondsParam / 50 : 100;
+	int iLimit = iRedisTimeoutMilliseconds > 0 ? iRedisTimeoutMilliseconds / 50 : 100;
 	if (iLimit < 1)
 	{
 		iLimit = 1;
@@ -3576,10 +3577,10 @@ static coro::TaskResult<int> CheckRedisLateReply(int32_t iRedisTimeoutMillisecon
 			fflush(stdout);
 			co_return 1;
 		}
-		co_await coro::yield(50);
+		co_await OI::Coro::yield(50);
 	}
 	int iBadLocal = co_await CheckRedisPing("");
-	int iSeconds = iRedisTimeoutMillisecondsParam / 1000;
+	int iSeconds = iRedisTimeoutMilliseconds / 1000;
 	if (iSeconds < 1)
 	{
 		iSeconds = 1;
@@ -3614,19 +3615,19 @@ static coro::TaskResult<int> CheckRedisLateReply(int32_t iRedisTimeoutMillisecon
 	co_return iBadLocal;
 }
 
-static coro::Task CloseSessionLater(sid_t iSessionIdParam)
+static OI::Coro::Task CloseSessionLater(sid_t iSessionId)
 {
-	co_await coro::yield(::OI::Timer::Milliseconds(100));
-	IpcClient::GetInstance().CloseSession(iSessionIdParam);
+	co_await OI::Coro::yield(::OI::Timer::Milliseconds(100));
+	IpcClient::GetInstance().CloseSession(iSessionId);
 }
 
 // 真断开当前会话：已发出的 RPC 应及时失败，不能继续等十秒超时。
-static coro::TaskResult<int> CheckRpcDisconnect(sid_t iSessionIdParam)
+static OI::Coro::TaskResult<int> CheckRpcDisconnect(sid_t iSessionId)
 {
 	::OI::RpcData::HoldReq stRequestLocal;
 	stRequestLocal.iDelayMilliseconds = 5000;
 	stRequestLocal.iMark = 4;
-	auto stClose = CloseSessionLater(iSessionIdParam);
+	auto stClose = CloseSessionLater(iSessionId);
 	const int64_t iWallBegin = ::OI::Timer::SteadyMilliseconds();
 	auto stClosed = co_await IpcClient::GetInstance().CallAny<::OI::RpcData::HoldRes>(stRequestLocal, ::OI::Timer::Seconds(10));
 	const long long iWallMilliseconds = WallMs(iWallBegin);
@@ -3635,7 +3636,7 @@ static coro::TaskResult<int> CheckRpcDisconnect(sid_t iSessionIdParam)
 	co_return (stClosed.GetRet() != OI_ERR_CONNECT || iWallMilliseconds > 2000) ? 1 : 0;
 }
 
-coro::Task HoldMgr::Pump()
+OI::Coro::Task HoldMgr::Pump()
 {
 	bool bAdmission = false;
 	TryGetConfig("Regression.rpc_admission", bAdmission);

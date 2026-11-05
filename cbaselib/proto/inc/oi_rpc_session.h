@@ -16,11 +16,11 @@ class ProtoSession : public ::OI::Net::NetSession
 	uint64_t m_iFrameTimeoutMilliseconds;
 
   public:
-	ProtoSession(::OI::Net::SessionManager* pMgrParam);
-	void SetFrameLimits(size_t iBytesParam, uint64_t iTimeoutMillisecondsParam)
+	ProtoSession(::OI::Net::SessionManager* pMgr);
+	void SetFrameLimits(size_t iBytes, uint64_t iTimeoutMilliseconds)
 	{
-		m_iFrameBytes = iBytesParam;
-		m_iFrameTimeoutMilliseconds = iTimeoutMillisecondsParam;
+		m_iFrameBytes = iBytes;
+		m_iFrameTimeoutMilliseconds = iTimeoutMilliseconds;
 	}
 	virtual void OnDataIn();  //raw_data->real_data   decode or decrypt
 	virtual void OnDataOut(); //real_data->raw_data 	encode or encrypt

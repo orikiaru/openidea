@@ -18,68 +18,68 @@ Bytes::Bytes()
 {
 }
 
-Bytes::Bytes(const char* pDataParam, size_t iLengthParam)
+Bytes::Bytes(const char* pData, size_t iLength)
     : m_pMemory(NULL), m_iCapacity(0), m_iHead(0), m_iSize(0)
 {
-	if (iLengthParam == 0)
+	if (iLength == 0)
 	{
 		return;
 	}
-	assert(pDataParam);
-	Grow(iLengthParam);
-	memcpy(Mutable(), pDataParam, iLengthParam);
-	m_iSize = iLengthParam;
+	assert(pData);
+	Grow(iLength);
+	memcpy(Mutable(), pData, iLength);
+	m_iSize = iLength;
 }
 
-Bytes::Bytes(const Bytes& stOtherParam)
+Bytes::Bytes(const Bytes& stOther)
     : m_pMemory(NULL), m_iCapacity(0), m_iHead(0), m_iSize(0)
 {
-	if (stOtherParam.m_iSize > 0)
+	if (stOther.m_iSize > 0)
 	{
-		Grow(stOtherParam.m_iSize);
-		memcpy(Mutable(), stOtherParam.Data(), stOtherParam.m_iSize);
-		m_iSize = stOtherParam.m_iSize;
+		Grow(stOther.m_iSize);
+		memcpy(Mutable(), stOther.Data(), stOther.m_iSize);
+		m_iSize = stOther.m_iSize;
 	}
 }
 
-Bytes& Bytes::operator=(const Bytes& stOtherParam)
+Bytes& Bytes::operator=(const Bytes& stOther)
 {
-	if (this != &stOtherParam)
+	if (this != &stOther)
 	{
 		m_iHead = 0;
 		m_iSize = 0;
-		if (stOtherParam.m_iSize > 0)
+		if (stOther.m_iSize > 0)
 		{
-			Grow(stOtherParam.m_iSize);
-			memcpy(Mutable(), stOtherParam.Data(), stOtherParam.m_iSize);
-			m_iSize = stOtherParam.m_iSize;
+			Grow(stOther.m_iSize);
+			memcpy(Mutable(), stOther.Data(), stOther.m_iSize);
+			m_iSize = stOther.m_iSize;
 		}
 	}
 	return *this;
 }
 
-Bytes::Bytes(Bytes&& stOtherParam)
-    : m_pMemory(stOtherParam.m_pMemory), m_iCapacity(stOtherParam.m_iCapacity), m_iHead(stOtherParam.m_iHead), m_iSize(stOtherParam.m_iSize)
+Bytes::Bytes(Bytes&& stOther)
+    : m_pMemory(stOther.m_pMemory), m_iCapacity(stOther.m_iCapacity), m_iHead(stOther.m_iHead), m_iSize(stOther.m_iSize)
 {
-	stOtherParam.m_pMemory = NULL;
-	stOtherParam.m_iCapacity = 0;
-	stOtherParam.m_iHead = 0;
-	stOtherParam.m_iSize = 0;
+	stOther.m_pMemory = NULL;
+	stOther.m_iCapacity = 0;
+	stOther.m_iHead = 0;
+	stOther.m_iSize = 0;
 }
 
-Bytes& Bytes::operator=(Bytes&& stOtherParam)
+Bytes& Bytes::operator=(Bytes&& stOther)
 {
-	if (this != &stOtherParam)
+	if (this != &stOther)
 	{
 		free(m_pMemory);
-		m_pMemory = stOtherParam.m_pMemory;
-		m_iCapacity = stOtherParam.m_iCapacity;
-		m_iHead = stOtherParam.m_iHead;
-		m_iSize = stOtherParam.m_iSize;
-		stOtherParam.m_pMemory = NULL;
-		stOtherParam.m_iCapacity = 0;
-		stOtherParam.m_iHead = 0;
-		stOtherParam.m_iSize = 0;
+		m_pMemory = stOther.m_pMemory;
+		m_iCapacity = stOther.m_iCapacity;
+		m_iHead = stOther.m_iHead;
+		m_iSize = stOther.m_iSize;
+		stOther.m_pMemory = NULL;
+		stOther.m_iCapacity = 0;
+		stOther.m_iHead = 0;
+		stOther.m_iSize = 0;
 	}
 	return *this;
 }
@@ -89,14 +89,14 @@ Bytes::~Bytes()
 	free(m_pMemory);
 }
 
-void Bytes::Grow(size_t iNeedParam)
+void Bytes::Grow(size_t iNeed)
 {
-	if (m_iHead + iNeedParam <= m_iCapacity)
+	if (m_iHead + iNeed <= m_iCapacity)
 	{
 		return;
 	}
 	// 头部空出来的比有效数据多才挪，挪的字节不超过已经删掉的，均摊下来不会退化。
-	if (iNeedParam <= m_iCapacity && m_iHead >= m_iSize)
+	if (iNeed <= m_iCapacity && m_iHead >= m_iSize)
 	{
 		if (m_iSize > 0)
 		{
@@ -113,7 +113,7 @@ void Bytes::Grow(size_t iNeedParam)
 			throw std::bad_alloc();
 		}
 		iCapacity *= 2;
-	} while (iCapacity < iNeedParam);
+	} while (iCapacity < iNeed);
 	char* pMem = (char*)malloc(iCapacity);
 	if (!pMem)
 	{
@@ -149,12 +149,12 @@ char* Bytes::End()
 	return Begin() + m_iSize;
 }
 
-size_t Bytes::Reserve(size_t iSizeParam)
+size_t Bytes::Reserve(size_t iSize)
 {
-	Grow(iSizeParam);
-	if (iSizeParam < m_iSize)
+	Grow(iSize);
+	if (iSize < m_iSize)
 	{
-		m_iSize = iSizeParam;
+		m_iSize = iSize;
 	}
 	if (m_iSize == 0)
 	{
@@ -163,27 +163,27 @@ size_t Bytes::Reserve(size_t iSizeParam)
 	return Capacity();
 }
 
-void Bytes::Commit(size_t iNumberParam)
+void Bytes::Commit(size_t iNumber)
 {
-	if (iNumberParam > Capacity() - m_iSize)
+	if (iNumber > Capacity() - m_iSize)
 	{
 		throw std::out_of_range("Bytes::Commit past capacity");
 	}
-	m_iSize += iNumberParam;
+	m_iSize += iNumber;
 }
 
-bool Bytes::Overlaps(const void* pDataParam) const
+bool Bytes::Overlaps(const void* pData) const
 {
-	const char* pPointer = (const char*)pDataParam;
+	const char* pPointer = (const char*)pData;
 	return m_pMemory && pPointer >= m_pMemory && pPointer < m_pMemory + m_iCapacity;
 }
 
-void Bytes::Swap(Bytes& stOtherParam)
+void Bytes::Swap(Bytes& stOther)
 {
-	std::swap(m_pMemory, stOtherParam.m_pMemory);
-	std::swap(m_iCapacity, stOtherParam.m_iCapacity);
-	std::swap(m_iHead, stOtherParam.m_iHead);
-	std::swap(m_iSize, stOtherParam.m_iSize);
+	std::swap(m_pMemory, stOther.m_pMemory);
+	std::swap(m_iCapacity, stOther.m_iCapacity);
+	std::swap(m_iHead, stOther.m_iHead);
+	std::swap(m_iSize, stOther.m_iSize);
 }
 
 void Bytes::Clear()
@@ -192,131 +192,131 @@ void Bytes::Clear()
 	m_iHead = 0;
 }
 
-size_t Bytes::Append(const void* pDataParam, size_t iLengthParam)
+size_t Bytes::Append(const void* pData, size_t iLength)
 {
-	if (iLengthParam == 0)
+	if (iLength == 0)
 	{
 		return 0;
 	}
-	assert(pDataParam);
-	if (iLengthParam > SIZE_MAX - m_iSize)
+	assert(pData);
+	if (iLength > SIZE_MAX - m_iSize)
 	{
 		throw std::bad_alloc();
 	}
 	// 源在自己的缓冲里，扩容会把它释放掉。先拷出来。
-	if (Overlaps(pDataParam))
+	if (Overlaps(pData))
 	{
-		Bytes stCopy((const char*)pDataParam, iLengthParam);
-		return Append(stCopy.Data(), iLengthParam);
+		Bytes stCopy((const char*)pData, iLength);
+		return Append(stCopy.Data(), iLength);
 	}
-	Grow(m_iSize + iLengthParam);
-	memcpy(Mutable() + m_iSize, pDataParam, iLengthParam);
-	m_iSize += iLengthParam;
-	return iLengthParam;
+	Grow(m_iSize + iLength);
+	memcpy(Mutable() + m_iSize, pData, iLength);
+	m_iSize += iLength;
+	return iLength;
 }
 
-size_t Bytes::Append(const Bytes& stBytesParam)
+size_t Bytes::Append(const Bytes& stBytes)
 {
-	return Append(stBytesParam.Data(), stBytesParam.Size());
+	return Append(stBytes.Data(), stBytes.Size());
 }
 
-size_t Bytes::AppendForward(const void* pDataParam, size_t iLengthParam)
+size_t Bytes::AppendForward(const void* pData, size_t iLength)
 {
-	return Insert(0, pDataParam, iLengthParam);
+	return Insert(0, pData, iLength);
 }
 
-size_t Bytes::Erase(size_t iOffsetParam, size_t iLengthParam)
+size_t Bytes::Erase(size_t iOffset, size_t iLength)
 {
-	if (iOffsetParam > m_iSize)
+	if (iOffset > m_iSize)
 	{
 		return 0;
 	}
-	if (iLengthParam > m_iSize - iOffsetParam)
+	if (iLength > m_iSize - iOffset)
 	{
-		iLengthParam = m_iSize - iOffsetParam;
+		iLength = m_iSize - iOffset;
 	}
-	if (iLengthParam == 0)
+	if (iLength == 0)
 	{
 		return 0;
 	}
-	if (iOffsetParam == 0)
+	if (iOffset == 0)
 	{
-		m_iHead += iLengthParam;
-		m_iSize -= iLengthParam;
+		m_iHead += iLength;
+		m_iSize -= iLength;
 		if (m_iSize == 0)
 		{
 			m_iHead = 0;
 		}
-		return iLengthParam;
+		return iLength;
 	}
-	memmove(Mutable() + iOffsetParam, Mutable() + iOffsetParam + iLengthParam, m_iSize - iOffsetParam - iLengthParam);
-	m_iSize -= iLengthParam;
-	return iLengthParam;
+	memmove(Mutable() + iOffset, Mutable() + iOffset + iLength, m_iSize - iOffset - iLength);
+	m_iSize -= iLength;
+	return iLength;
 }
 
-void Bytes::Erase(const char* pBeginParam, size_t iLengthParam)
+void Bytes::Erase(const char* pBegin, size_t iLength)
 {
 	const char* pBase = Data();
-	if (pBeginParam < pBase || pBeginParam > pBase + m_iSize)
+	if (pBegin < pBase || pBegin > pBase + m_iSize)
 	{
 		return;
 	}
-	Erase((size_t)(pBeginParam - pBase), iLengthParam);
+	Erase((size_t)(pBegin - pBase), iLength);
 }
 
-size_t Bytes::Insert(size_t iOffsetParam, const void* pDataParam, size_t iLengthParam)
+size_t Bytes::Insert(size_t iOffset, const void* pData, size_t iLength)
 {
-	if (iOffsetParam >= m_iSize)
+	if (iOffset >= m_iSize)
 	{
-		assert(iOffsetParam == m_iSize);
-		return Append(pDataParam, iLengthParam);
+		assert(iOffset == m_iSize);
+		return Append(pData, iLength);
 	}
-	if (iLengthParam == 0)
+	if (iLength == 0)
 	{
 		return 0;
 	}
-	assert(pDataParam);
-	if (iLengthParam > SIZE_MAX - m_iSize)
+	assert(pData);
+	if (iLength > SIZE_MAX - m_iSize)
 	{
 		throw std::bad_alloc();
 	}
-	if (Overlaps(pDataParam))
+	if (Overlaps(pData))
 	{
-		Bytes stCopy((const char*)pDataParam, iLengthParam);
-		return Insert(iOffsetParam, stCopy.Data(), iLengthParam);
+		Bytes stCopy((const char*)pData, iLength);
+		return Insert(iOffset, stCopy.Data(), iLength);
 	}
-	if (iOffsetParam == 0 && m_iHead >= iLengthParam)
+	if (iOffset == 0 && m_iHead >= iLength)
 	{
-		m_iHead -= iLengthParam;
-		m_iSize += iLengthParam;
-		memcpy(Mutable(), pDataParam, iLengthParam);
-		return iLengthParam;
+		m_iHead -= iLength;
+		m_iSize += iLength;
+		memcpy(Mutable(), pData, iLength);
+		return iLength;
 	}
-	Grow(m_iSize + iLengthParam);
-	memmove(Mutable() + iOffsetParam + iLengthParam, Mutable() + iOffsetParam, m_iSize - iOffsetParam);
-	memcpy(Mutable() + iOffsetParam, pDataParam, iLengthParam);
-	m_iSize += iLengthParam;
-	return iLengthParam;
+	Grow(m_iSize + iLength);
+	memmove(Mutable() + iOffset + iLength, Mutable() + iOffset, m_iSize - iOffset);
+	memcpy(Mutable() + iOffset, pData, iLength);
+	m_iSize += iLength;
+	return iLength;
 }
 
-size_t Bytes::Replace(size_t iOffsetParam, const void* pDataParam, size_t iLengthParam)
+size_t Bytes::Replace(size_t iOffset, const void* pData, size_t iLength)
 {
-	if (iOffsetParam > m_iSize || iLengthParam > m_iSize - iOffsetParam)
+	if (iOffset > m_iSize || iLength > m_iSize - iOffset)
 	{
 		assert(false);
-		if (iOffsetParam >= m_iSize)
+		if (iOffset >= m_iSize)
 		{
 			return 0;
 		}
-		iLengthParam = m_iSize - iOffsetParam;
+		iLength = m_iSize - iOffset;
 	}
-	if (iLengthParam == 0)
+	if (iLength == 0)
 	{
 		return 0;
 	}
-	assert(pDataParam);
-	memcpy(Mutable() + iOffsetParam, pDataParam, iLengthParam);
-	return iLengthParam;
+	assert(pData);
+	memcpy(Mutable() + iOffset, pData, iLength);
+	return iLength;
 }
 }
 }

@@ -136,9 +136,9 @@ class MutexCond
 	std::condition_variable_any m_stConditionVariable;
 
   public:
-	void Wait(Mutex& stLockerParam)
+	void Wait(Mutex& stLocker)
 	{
-		m_stConditionVariable.wait(stLockerParam.m_stMutex);
+		m_stConditionVariable.wait(stLocker.m_stMutex);
 	}
 	void Signal()
 	{
@@ -156,8 +156,8 @@ class LockGuard
 	T* m_pLock;
 
   public:
-	LockGuard(T& stLockParam)
-	    : m_pLock(&stLockParam)
+	LockGuard(T& stLock)
+	    : m_pLock(&stLock)
 	{
 		m_pLock->Lock();
 	}

@@ -5,12 +5,12 @@
 #include "log_manager.h"
 
 // logd 自己的日志直接进本地文件，不作为日志客户端连自己。
-static bool WriteSelfLog(LOG_LEVEL iLevelParam, const char* pTextParam, size_t iLengthParam)
+static bool WriteSelfLog(LOG_LEVEL iLevel, const char* pText, size_t iLength)
 {
-	return LogManager::GetInstance().WriteLog(iLevelParam, pTextParam, iLengthParam);
+	return LogManager::GetInstance().WriteLog(iLevel, pText, iLength);
 }
 
-int main(int iArgumentCountParam, char* vArgumentsParam[])
+int main(int iArgumentCount, char* vArguments[])
 {
 	int iCodeLocal = ::OI::Base::StartFramework("../config/logd.toml");
 	if (iCodeLocal != 0)

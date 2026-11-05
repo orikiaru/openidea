@@ -8,8 +8,8 @@ namespace Net
 class TCP_Channel : public NetChannel
 {
   public:
-	TCP_Channel(NetSocket stTextParam, Session* pSessionParam)
-	    : NetChannel(stTextParam, pSessionParam)
+	TCP_Channel(NetSocket stText, Session* pSession)
+	    : NetChannel(stText, pSession)
 	{
 	}
 	virtual ~TCP_Channel()

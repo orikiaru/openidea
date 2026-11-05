@@ -17,7 +17,7 @@ class NetChannel : public Channel
 	::OI::Base::Bytes stOutputBuffer;
 
   public:
-	NetChannel(NetSocket, Session* pSessionParam);
+	NetChannel(NetSocket, Session* pSession);
 	virtual ~NetChannel();
 	//epoll事件回调接口
 	virtual void DataIn() = 0;  //real_data_handle

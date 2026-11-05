@@ -5,16 +5,16 @@ namespace OI
 namespace Timer
 {
 
-void BaseTimer::InitData(BaseTimerManager* pMgrParam, int iMillsecParam, int64_t iTicksParam)
+void BaseTimer::InitData(BaseTimerManager* pMgr, int iMillsec, int64_t iTicks)
 {
-	assert(iMillsecParam > 0);
-	assert(iTicksParam > 0);
+	assert(iMillsec > 0);
+	assert(iTicks > 0);
 
-	m_stData.m_iOffsetMilliseconds = iMillsecParam;
-	m_stData.m_iTriggerTick = pMgrParam->GetCurTick() + iTicksParam;
-	m_stData.m_stTriggerTimestamp = pMgrParam->GetCurTickTime();
+	m_stData.m_iOffsetMilliseconds = iMillsec;
+	m_stData.m_iTriggerTick = pMgr->GetCurTick() + iTicks;
+	m_stData.m_stTriggerTimestamp = pMgr->GetCurTickTime();
 	int64_t iUs = (int64_t)m_stData.m_stTriggerTimestamp.tv_sec * 1000000 + (int64_t)m_stData.m_stTriggerTimestamp.tv_usec;
-	iUs += iTicksParam * (int64_t)pMgrParam->GetTickOffsetMS() * 1000;
+	iUs += iTicks * (int64_t)pMgr->GetTickOffsetMS() * 1000;
 	m_stData.m_stTriggerTimestamp.tv_sec = (decltype(m_stData.m_stTriggerTimestamp.tv_sec))(iUs / 1000000);
 	m_stData.m_stTriggerTimestamp.tv_usec = (decltype(m_stData.m_stTriggerTimestamp.tv_usec))(iUs % 1000000);
 }

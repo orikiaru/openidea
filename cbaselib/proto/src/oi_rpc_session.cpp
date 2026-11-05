@@ -8,8 +8,8 @@ namespace OI
 {
 namespace Rpc
 {
-ProtoSession::ProtoSession(::OI::Net::SessionManager* pMgrParam)
-    : NetSession(pMgrParam), m_iFrameBytes(pMgrParam->MaxFrameBytes()), m_iFrameTimeoutMilliseconds(pMgrParam->IncompleteFrameTimeoutMilliseconds())
+ProtoSession::ProtoSession(::OI::Net::SessionManager* pMgr)
+    : NetSession(pMgr), m_iFrameBytes(pMgr->MaxFrameBytes()), m_iFrameTimeoutMilliseconds(pMgr->IncompleteFrameTimeoutMilliseconds())
 {
 }
 struct ProtoSession::PartialFrameTimer
@@ -27,9 +27,9 @@ void ProtoSession::CancelIncompleteTimer()
 	auto* pTimer = m_pIncompleteTimer;
 	m_pIncompleteTimer = nullptr;
 	uv_timer_stop(&pTimer->stTimer);
-	uv_close(reinterpret_cast<uv_handle_t*>(&pTimer->stTimer), [](uv_handle_t* pHandleParam)
+	uv_close(reinterpret_cast<uv_handle_t*>(&pTimer->stTimer), [](uv_handle_t* pHandle)
 	{
-		auto* pTimerLocal = static_cast<PartialFrameTimer*>(pHandleParam->data);
+		auto* pTimerLocal = static_cast<PartialFrameTimer*>(pHandle->data);
 		pTimerLocal->pSession->Release();
 		delete pTimerLocal;
 	});
@@ -58,9 +58,9 @@ void ProtoSession::ArmIncompleteTimer()
 	pTimer->stTimer.data = pTimer;
 	AddRef(); // uv_close 完成前，计时器持有会话。
 	m_pIncompleteTimer = pTimer;
-	if (uv_timer_start(&pTimer->stTimer, [](uv_timer_t* pHandleParam)
+	if (uv_timer_start(&pTimer->stTimer, [](uv_timer_t* pHandle)
 	{
-		auto* pSessionLocal = static_cast<PartialFrameTimer*>(pHandleParam->data)->pSession;
+		auto* pSessionLocal = static_cast<PartialFrameTimer*>(pHandle->data)->pSession;
 		pSessionLocal->CancelIncompleteTimer();
 		pSessionLocal->PassiveClose(ETIMEDOUT);
 	}, m_iFrameTimeoutMilliseconds, 0) != 0)

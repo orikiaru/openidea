@@ -43,8 +43,8 @@ class RedisServer : public ::OI::Net::SessionManager
 	std::vector<RedisLink> m_vLinks;
 	size_t m_iMaxPendingBytes = 64 * 1024 * 1024;
 	size_t m_iMaxPendingCommands = 65536;
-	void Resume(RedisLink* pLinkParam);
-	void ArmResume(RedisLink* pLinkParam);
+	void Resume(RedisLink* pLink);
+	void ArmResume(RedisLink* pLink);
 
   public:
 	virtual ~RedisServer();
@@ -55,18 +55,18 @@ class RedisServer : public ::OI::Net::SessionManager
 	virtual bool Init();
 	// cmd 是一条完整的 RESP 命令，原样转给上游
 	// false 表示额度不足，调用方保留当前完整命令并暂停读取。
-	bool Issue(int32_t iLinkParam, sid_t iSessionIdParam, const char* pCmdParam, size_t iLengthParam);
+	bool Issue(int32_t iLink, sid_t iSessionId, const char* pCmd, size_t iLength);
 	size_t MaxCommandBytes() const
 	{
 		return m_iMaxPendingBytes;
 	}
-	void ReleaseCredit(RedisLink* pLinkParam);
-	void Pause(int32_t iLinkParam, sid_t iSessionIdParam);
-	void Open(RedisLink* pLinkParam);
-	void ArmReconnect(RedisLink* pLinkParam);
+	void ReleaseCredit(RedisLink* pLink);
+	void Pause(int32_t iLink, sid_t iSessionId);
+	void Open(RedisLink* pLink);
+	void ArmReconnect(RedisLink* pLink);
 
   private:
 	virtual ::OI::Net::Session* CloneSession();
-	virtual void OnAddSession(::OI::Net::Session* pSessionParam);
-	virtual void OnDelSession(const ::OI::Net::Session* pSessionParam);
+	virtual void OnAddSession(::OI::Net::Session* pSession);
+	virtual void OnDelSession(const ::OI::Net::Session* pSession);
 };

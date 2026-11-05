@@ -11,11 +11,11 @@ void TestBoard::Arm()
 	m_iLeft.fetch_add(1);
 }
 
-void TestBoard::Done(int iCodeParam)
+void TestBoard::Done(int iCode)
 {
-	if (iCodeParam != 0)
+	if (iCode != 0)
 	{
-		m_iCode.store(iCodeParam);
+		m_iCode.store(iCode);
 	}
 	if (m_iLeft.fetch_sub(1) == 1)
 	{

@@ -16,25 +16,25 @@ enum
 	LOG_FRAME_MAX = 8 * 1024 * 1024
 };
 
-inline void AppendLogFrame(::OI::Base::Bytes& stOutputParam, int iLevelParam, const char* pTextParam, size_t iTextLengthParam)
+inline void AppendLogFrame(::OI::Base::Bytes& stOutput, int iLevel, const char* pText, size_t iTextLength)
 {
-	uint32_t iPayload = (uint32_t)(1 + iTextLengthParam);
+	uint32_t iPayload = (uint32_t)(1 + iTextLength);
 	uint8_t vHdr[5];
 	vHdr[0] = (uint8_t)(iPayload);
 	vHdr[1] = (uint8_t)(iPayload >> 8);
 	vHdr[2] = (uint8_t)(iPayload >> 16);
 	vHdr[3] = (uint8_t)(iPayload >> 24);
-	vHdr[4] = (uint8_t)iLevelParam;
-	stOutputParam.Append(vHdr, 5);
-	if (iTextLengthParam > 0 && pTextParam)
+	vHdr[4] = (uint8_t)iLevel;
+	stOutput.Append(vHdr, 5);
+	if (iTextLength > 0 && pText)
 	{
-		stOutputParam.Append(pTextParam, iTextLengthParam);
+		stOutput.Append(pText, iTextLength);
 	}
 }
 
-inline uint32_t ReadLogFrameLen(const char* pPointerParam)
+inline uint32_t ReadLogFrameLen(const char* pPointer)
 {
-	const uint8_t* pU = (const uint8_t*)pPointerParam;
+	const uint8_t* pU = (const uint8_t*)pPointer;
 	return (uint32_t)pU[0] | ((uint32_t)pU[1] << 8) | ((uint32_t)pU[2] << 16) | ((uint32_t)pU[3] << 24);
 }
 }

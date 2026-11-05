@@ -33,11 +33,11 @@ class LogFileInstance
 	bool m_bRotationPending = false;
 
   public:
-	LogFileInstance(LogManager* pManagerParam, LOG_LEVEL iLevelParam);
+	LogFileInstance(LogManager* pManager, LOG_LEVEL iLevel);
 	~LogFileInstance();
 	//跨天需要更换文件指针
-	bool CreateNewFile(const char* pPathParam);
-	void OnCreateNewFile(FILE* pNewFileParam);
+	bool CreateNewFile(const char* pPath);
+	void OnCreateNewFile(FILE* pNewFile);
 	bool StartWriteThread();
 	// 打退出标记并 join。返回时队列里的日志都已写盘并 fflush。
 	void StopWriteThread();
@@ -49,11 +49,11 @@ class LogFileInstance
 
   private:
 	// 只能由管理器在预留全局额度后调用。
-	void AddLog(::OI::Base::Bytes& stLogParam);
+	void AddLog(::OI::Base::Bytes& stLog);
 	//实际log_thread处理积压日志时,再做切换
 	FILE* GetActiveFile();
 	//激活当前日志文件对应线程
 	void Active();
 	void Passive();
-	static void* WriteLogThreadHandle(void* pArgumentParam);
+	static void* WriteLogThreadHandle(void* pArgument);
 };

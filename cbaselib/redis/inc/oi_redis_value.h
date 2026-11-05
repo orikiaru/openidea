@@ -31,34 +31,34 @@ struct RedisScanPage
 
 namespace Detail
 {
-inline std::string Encode(const std::string& sValueParam)
+inline std::string Encode(const std::string& sValue)
 {
-	return sValueParam;
+	return sValue;
 }
-inline std::string Encode(const char* pValueParam)
+inline std::string Encode(const char* pValue)
 {
-	if (!pValueParam)
+	if (!pValue)
 	{
 		throw std::invalid_argument("null Redis value");
 	}
-	return pValueParam;
+	return pValue;
 }
 template <typename T>
     requires std::is_base_of_v<OI::Rpc::RpcData, T>
-std::string Encode(const T& stValueParam)
+std::string Encode(const T& stValue)
 {
 	OI::Base::BytesStream stBytes;
-	stValueParam.serialize(stBytes);
+	stValue.serialize(stBytes);
 	return stBytes.Size() ? std::string(stBytes.Begin(), stBytes.Size()) : std::string();
 }
-inline std::string Score(double dValueParam)
+inline std::string Score(double dValue)
 {
-	if (std::isnan(dValueParam))
+	if (std::isnan(dValue))
 	{
 		throw std::invalid_argument("NaN Redis score");
 	}
 	char vBuffer[64];
-	const auto stResult = std::to_chars(vBuffer, vBuffer + sizeof(vBuffer), dValueParam, std::chars_format::general, std::numeric_limits<double>::max_digits10);
+	const auto stResult = std::to_chars(vBuffer, vBuffer + sizeof(vBuffer), dValue, std::chars_format::general, std::numeric_limits<double>::max_digits10);
 	if (stResult.ec != std::errc())
 	{
 		throw std::invalid_argument("invalid Redis score");
@@ -66,29 +66,29 @@ inline std::string Score(double dValueParam)
 	return std::string(vBuffer, stResult.ptr);
 }
 
-inline std::string Encode(int64_t iValueParam)
+inline std::string Encode(int64_t iValue)
 {
-	return std::to_string(iValueParam);
+	return std::to_string(iValue);
 }
-inline std::string Encode(double dValueParam)
+inline std::string Encode(double dValue)
 {
-	return Score(dValueParam);
+	return Score(dValue);
 }
 struct Arguments
 {
 	std::vector<std::string> vValues;
 	int32_t iRet = OI_OK;
-	explicit Arguments(std::vector<std::string> vArgumentsParam)
-	    : vValues(std::move(vArgumentsParam))
+	explicit Arguments(std::vector<std::string> vArguments)
+	    : vValues(std::move(vArguments))
 	{
 	}
 	template <typename... T>
-	Arguments(const T&... stValuesParam)
+	Arguments(const T&... stValues)
 	{
 		try
 		{
 			vValues.reserve(sizeof...(T));
-			(vValues.emplace_back(Encode(stValuesParam)), ...);
+			(vValues.emplace_back(Encode(stValues)), ...);
 		}
 		catch (const std::invalid_argument&)
 		{
@@ -100,7 +100,7 @@ struct Arguments
 		}
 	}
 	template <typename T>
-	void Append(const T& stValueParam)
+	void Append(const T& stValue)
 	{
 		if (iRet != OI_OK)
 		{
@@ -108,7 +108,7 @@ struct Arguments
 		}
 		try
 		{
-			vValues.push_back(Encode(stValueParam));
+			vValues.push_back(Encode(stValue));
 		}
 		catch (const std::invalid_argument&)
 		{
@@ -122,28 +122,28 @@ struct Arguments
 };
 
 template <typename T>
-Arguments Members(const char* pCommandParam, const std::string& sKeyParam, const std::vector<T>& vValuesParam)
+Arguments Members(const char* pCommand, const std::string& sKey, const std::vector<T>& vValues)
 {
-	Arguments stArguments{pCommandParam, sKeyParam};
-	if (vValuesParam.empty())
+	Arguments stArguments{pCommand, sKey};
+	if (vValues.empty())
 	{
 		stArguments.iRet = OI_ERR_INVALID_ARGUMENT;
 	}
-	for (const auto& stValue : vValuesParam)
+	for (const auto& stValue : vValues)
 	{
 		stArguments.Append(stValue);
 	}
 	return stArguments;
 }
 template <typename T>
-Arguments HashFields(const std::string& sKeyParam, const std::map<std::string, T>& mValuesParam)
+Arguments HashFields(const std::string& sKey, const std::map<std::string, T>& mValues)
 {
-	Arguments stArguments{"HSET", sKeyParam};
-	if (mValuesParam.empty())
+	Arguments stArguments{"HSET", sKey};
+	if (mValues.empty())
 	{
 		stArguments.iRet = OI_ERR_INVALID_ARGUMENT;
 	}
-	for (const auto& [sField, stValue] : mValuesParam)
+	for (const auto& [sField, stValue] : mValues)
 	{
 		stArguments.Append(sField);
 		stArguments.Append(stValue);
@@ -151,14 +151,14 @@ Arguments HashFields(const std::string& sKeyParam, const std::map<std::string, T
 	return stArguments;
 }
 template <typename T>
-Arguments ScoredMembers(const std::string& sKeyParam, const std::vector<RedisScored<T>>& vValuesParam)
+Arguments ScoredMembers(const std::string& sKey, const std::vector<RedisScored<T>>& vValues)
 {
-	Arguments stArguments{"ZADD", sKeyParam};
-	if (vValuesParam.empty())
+	Arguments stArguments{"ZADD", sKey};
+	if (vValues.empty())
 	{
 		stArguments.iRet = OI_ERR_INVALID_ARGUMENT;
 	}
-	for (const auto& stValue : vValuesParam)
+	for (const auto& stValue : vValues)
 	{
 		stArguments.Append(stValue.dScore);
 		stArguments.Append(stValue.stMember);
@@ -168,40 +168,40 @@ Arguments ScoredMembers(const std::string& sKeyParam, const std::vector<RedisSco
 
 // Decode 只写临时对象，整份回复成功后才提交到应用输出。
 template <typename T>
-int32_t Decode(const redisReply& stReplyParam, T& stOutputParam)
+int32_t Decode(const redisReply& stReply, T& stOutput)
 {
-	if (stReplyParam.type == REDIS_REPLY_NIL)
+	if (stReply.type == REDIS_REPLY_NIL)
 	{
 		return OI_ERR_NOT_FOUND;
 	}
 	if constexpr (std::is_same_v<T, std::string>)
 	{
-		if (stReplyParam.type != REDIS_REPLY_STRING && stReplyParam.type != REDIS_REPLY_STATUS)
+		if (stReply.type != REDIS_REPLY_STRING && stReply.type != REDIS_REPLY_STATUS)
 		{
 			return OI_ERR_PROTOCOL;
 		}
-		if (!stReplyParam.str && stReplyParam.len)
+		if (!stReply.str && stReply.len)
 		{
 			return OI_ERR_PROTOCOL;
 		}
-		stOutputParam.assign(stReplyParam.str ? stReplyParam.str : "", stReplyParam.len);
+		stOutput.assign(stReply.str ? stReply.str : "", stReply.len);
 	}
 	else if constexpr (std::is_integral_v<T>)
 	{
-		if (stReplyParam.type != REDIS_REPLY_INTEGER || !std::in_range<T>(stReplyParam.integer))
+		if (stReply.type != REDIS_REPLY_INTEGER || !std::in_range<T>(stReply.integer))
 		{
 			return OI_ERR_PROTOCOL;
 		}
-		stOutputParam = static_cast<T>(stReplyParam.integer);
+		stOutput = static_cast<T>(stReply.integer);
 	}
 	else if constexpr (std::is_same_v<T, double>)
 	{
-		if (stReplyParam.type != REDIS_REPLY_STRING || !stReplyParam.str || !stReplyParam.len)
+		if (stReply.type != REDIS_REPLY_STRING || !stReply.str || !stReply.len)
 		{
 			return OI_ERR_PROTOCOL;
 		}
-		const auto stResult = std::from_chars(stReplyParam.str, stReplyParam.str + stReplyParam.len, stOutputParam, std::chars_format::general);
-		if (stResult.ec != std::errc() || stResult.ptr != stReplyParam.str + stReplyParam.len || std::isnan(stOutputParam))
+		const auto stResult = std::from_chars(stReply.str, stReply.str + stReply.len, stOutput, std::chars_format::general);
+		if (stResult.ec != std::errc() || stResult.ptr != stReply.str + stReply.len || std::isnan(stOutput))
 		{
 			return OI_ERR_PROTOCOL;
 		}
@@ -209,14 +209,14 @@ int32_t Decode(const redisReply& stReplyParam, T& stOutputParam)
 	else
 	{
 		static_assert(std::is_base_of_v<OI::Rpc::RpcData, T>, "Redis value must be string or rpcdata");
-		if (stReplyParam.type != REDIS_REPLY_STRING || (!stReplyParam.str && stReplyParam.len))
+		if (stReply.type != REDIS_REPLY_STRING || (!stReply.str && stReply.len))
 		{
 			return OI_ERR_PROTOCOL;
 		}
 		try
 		{
-			OI::Base::BytesStream stBytes(stReplyParam.str ? stReplyParam.str : "", stReplyParam.len);
-			stOutputParam.deserialize(stBytes);
+			OI::Base::BytesStream stBytes(stReply.str ? stReply.str : "", stReply.len);
+			stOutput.deserialize(stBytes);
 			if (stBytes.RemainSize() != 0)
 			{
 				return OI_ERR_DECODE;
@@ -230,218 +230,218 @@ int32_t Decode(const redisReply& stReplyParam, T& stOutputParam)
 	return OI_OK;
 }
 // bool 不能用 std::in_range；整数回执只接受 Redis 的 0/1。
-inline int32_t Decode(const redisReply& stReplyParam, bool& bOutputParam)
+inline int32_t Decode(const redisReply& stReply, bool& bOutput)
 {
-	if (stReplyParam.type == REDIS_REPLY_NIL)
+	if (stReply.type == REDIS_REPLY_NIL)
 	{
 		return OI_ERR_NOT_FOUND;
 	}
-	if (stReplyParam.type != REDIS_REPLY_INTEGER || (stReplyParam.integer != 0 && stReplyParam.integer != 1))
+	if (stReply.type != REDIS_REPLY_INTEGER || (stReply.integer != 0 && stReply.integer != 1))
 	{
 		return OI_ERR_PROTOCOL;
 	}
-	bOutputParam = stReplyParam.integer != 0;
+	bOutput = stReply.integer != 0;
 	return OI_OK;
 }
 template <typename T>
-int32_t Decode(const redisReply& stReplyParam, std::optional<T>& stOutputParam)
+int32_t Decode(const redisReply& stReply, std::optional<T>& stOutput)
 {
-	if (stReplyParam.type == REDIS_REPLY_NIL)
+	if (stReply.type == REDIS_REPLY_NIL)
 	{
-		stOutputParam.reset();
+		stOutput.reset();
 		return OI_OK;
 	}
 	T stValue{};
-	const int32_t iRet = Decode(stReplyParam, stValue);
+	const int32_t iRet = Decode(stReply, stValue);
 	if (iRet == OI_OK)
 	{
-		stOutputParam = std::move(stValue);
+		stOutput = std::move(stValue);
 	}
 	return iRet;
 }
 
 template <typename T>
-int32_t Decode(const redisReply& stReplyParam, std::vector<T>& vOutputParam)
+int32_t Decode(const redisReply& stReply, std::vector<T>& vOutput)
 {
 	static_assert(!std::is_same_v<T, bool>, "Use vector<int64_t> for Redis 0/1 arrays; vector<bool> has proxy references");
-	if (stReplyParam.type == REDIS_REPLY_NIL)
+	if (stReply.type == REDIS_REPLY_NIL)
 	{
 		return OI_ERR_NOT_FOUND;
 	}
-	if (stReplyParam.type != REDIS_REPLY_ARRAY || (stReplyParam.elements && !stReplyParam.element))
+	if (stReply.type != REDIS_REPLY_ARRAY || (stReply.elements && !stReply.element))
 	{
 		return OI_ERR_PROTOCOL;
 	}
-	vOutputParam.reserve(stReplyParam.elements);
-	for (size_t iIndex = 0; iIndex < stReplyParam.elements; ++iIndex)
+	vOutput.reserve(stReply.elements);
+	for (size_t iIndex = 0; iIndex < stReply.elements; ++iIndex)
 	{
-		if (!stReplyParam.element[iIndex])
+		if (!stReply.element[iIndex])
 		{
 			return OI_ERR_PROTOCOL;
 		}
 		T stValue{};
-		const int32_t iRet = Decode(*stReplyParam.element[iIndex], stValue);
+		const int32_t iRet = Decode(*stReply.element[iIndex], stValue);
 		if (iRet != OI_OK)
 		{
 			return iRet;
 		}
-		vOutputParam.push_back(std::move(stValue));
+		vOutput.push_back(std::move(stValue));
 	}
 	return OI_OK;
 }
 template <typename T>
-int32_t Decode(const redisReply& stReplyParam, std::vector<RedisScored<T>>& vOutputParam)
+int32_t Decode(const redisReply& stReply, std::vector<RedisScored<T>>& vOutput)
 {
-	if (stReplyParam.type == REDIS_REPLY_NIL)
+	if (stReply.type == REDIS_REPLY_NIL)
 	{
 		return OI_ERR_NOT_FOUND;
 	}
-	if (stReplyParam.type != REDIS_REPLY_ARRAY || stReplyParam.elements % 2 || (stReplyParam.elements && !stReplyParam.element))
+	if (stReply.type != REDIS_REPLY_ARRAY || stReply.elements % 2 || (stReply.elements && !stReply.element))
 	{
 		return OI_ERR_PROTOCOL;
 	}
-	vOutputParam.reserve(stReplyParam.elements / 2);
-	for (size_t iIndex = 0; iIndex < stReplyParam.elements; iIndex += 2)
+	vOutput.reserve(stReply.elements / 2);
+	for (size_t iIndex = 0; iIndex < stReply.elements; iIndex += 2)
 	{
-		if (!stReplyParam.element[iIndex] || !stReplyParam.element[iIndex + 1])
+		if (!stReply.element[iIndex] || !stReply.element[iIndex + 1])
 		{
 			return OI_ERR_PROTOCOL;
 		}
 		RedisScored<T> stValue;
-		int32_t iRet = Decode(*stReplyParam.element[iIndex], stValue.stMember);
+		int32_t iRet = Decode(*stReply.element[iIndex], stValue.stMember);
 		if (iRet != OI_OK)
 		{
 			return iRet;
 		}
-		iRet = Decode(*stReplyParam.element[iIndex + 1], stValue.dScore);
+		iRet = Decode(*stReply.element[iIndex + 1], stValue.dScore);
 		if (iRet != OI_OK)
 		{
 			return iRet;
 		}
-		vOutputParam.push_back(std::move(stValue));
+		vOutput.push_back(std::move(stValue));
 	}
 	return OI_OK;
 }
 template <typename T>
-int32_t Decode(const redisReply& stReplyParam, std::map<std::string, T>& mOutputParam)
+int32_t Decode(const redisReply& stReply, std::map<std::string, T>& mOutput)
 {
-	if (stReplyParam.type == REDIS_REPLY_NIL)
+	if (stReply.type == REDIS_REPLY_NIL)
 	{
 		return OI_ERR_NOT_FOUND;
 	}
-	if (stReplyParam.type != REDIS_REPLY_ARRAY || stReplyParam.elements % 2 || (stReplyParam.elements && !stReplyParam.element))
+	if (stReply.type != REDIS_REPLY_ARRAY || stReply.elements % 2 || (stReply.elements && !stReply.element))
 	{
 		return OI_ERR_PROTOCOL;
 	}
-	for (size_t iIndex = 0; iIndex < stReplyParam.elements; iIndex += 2)
+	for (size_t iIndex = 0; iIndex < stReply.elements; iIndex += 2)
 	{
-		if (!stReplyParam.element[iIndex] || !stReplyParam.element[iIndex + 1])
+		if (!stReply.element[iIndex] || !stReply.element[iIndex + 1])
 		{
 			return OI_ERR_PROTOCOL;
 		}
 		std::string sField;
 		T stValue{};
-		int32_t iRet = Decode(*stReplyParam.element[iIndex], sField);
+		int32_t iRet = Decode(*stReply.element[iIndex], sField);
 		if (iRet != OI_OK)
 		{
 			return iRet;
 		}
-		iRet = Decode(*stReplyParam.element[iIndex + 1], stValue);
+		iRet = Decode(*stReply.element[iIndex + 1], stValue);
 		if (iRet != OI_OK)
 		{
 			return iRet;
 		}
-		mOutputParam.insert_or_assign(std::move(sField), std::move(stValue));
+		mOutput.insert_or_assign(std::move(sField), std::move(stValue));
 	}
 	return OI_OK;
 }
 template <typename T>
-int32_t Decode(const redisReply& stReplyParam, RedisScanPage<T>& stOutputParam)
+int32_t Decode(const redisReply& stReply, RedisScanPage<T>& stOutput)
 {
-	if (stReplyParam.type != REDIS_REPLY_ARRAY || stReplyParam.elements != 2 || !stReplyParam.element || !stReplyParam.element[0] || !stReplyParam.element[1])
+	if (stReply.type != REDIS_REPLY_ARRAY || stReply.elements != 2 || !stReply.element || !stReply.element[0] || !stReply.element[1])
 	{
 		return OI_ERR_PROTOCOL;
 	}
-	const auto& stCursor = *stReplyParam.element[0];
+	const auto& stCursor = *stReply.element[0];
 	if (stCursor.type != REDIS_REPLY_STRING || !stCursor.str || !stCursor.len)
 	{
 		return OI_ERR_PROTOCOL;
 	}
-	const auto stResult = std::from_chars(stCursor.str, stCursor.str + stCursor.len, stOutputParam.iCursor);
+	const auto stResult = std::from_chars(stCursor.str, stCursor.str + stCursor.len, stOutput.iCursor);
 	if (stResult.ec != std::errc() || stResult.ptr != stCursor.str + stCursor.len)
 	{
 		return OI_ERR_PROTOCOL;
 	}
-	return Decode(*stReplyParam.element[1], stOutputParam.stValues);
+	return Decode(*stReply.element[1], stOutput.stValues);
 }
 
 template <typename T>
-int32_t ReadResult(const RedisResult& stResultParam, T& stOutputParam)
+int32_t ReadResult(const RedisResult& stResult, T& stOutput)
 {
-	const int32_t iRet = stResultParam.GetRet();
+	const int32_t iRet = stResult.GetRet();
 	if (iRet != OI_OK)
 	{
 		return iRet;
 	}
 	T stDecoded{};
-	const int32_t iDecoded = Decode(*stResultParam.pReply, stDecoded);
+	const int32_t iDecoded = Decode(*stResult.pReply, stDecoded);
 	if (iDecoded == OI_OK)
 	{
-		stOutputParam = std::move(stDecoded);
+		stOutput = std::move(stDecoded);
 	}
 	return iDecoded;
 }
-inline int32_t StatusResult(const RedisResult& stResultParam, int iReplyTypeParam)
+inline int32_t StatusResult(const RedisResult& stResult, int iReplyType)
 {
-	const int32_t iRet = stResultParam.GetRet();
+	const int32_t iRet = stResult.GetRet();
 	if (iRet != OI_OK)
 	{
 		return iRet;
 	}
-	if (stResultParam.pReply->type != iReplyTypeParam)
+	if (stResult.pReply->type != iReplyType)
 	{
 		return OI_ERR_PROTOCOL;
 	}
-	if (iReplyTypeParam == REDIS_REPLY_STATUS && (!stResultParam.pReply->str || std::string_view(stResultParam.pReply->str, stResultParam.pReply->len) != "OK"))
+	if (iReplyType == REDIS_REPLY_STATUS && (!stResult.pReply->str || std::string_view(stResult.pReply->str, stResult.pReply->len) != "OK"))
 	{
 		return OI_ERR_PROTOCOL;
 	}
 	return OI_OK;
 }
 template <typename T>
-coro::TaskResult<int32_t> Read(Arguments stArgumentsParam, T& stOutputParam)
+OI::Coro::TaskResult<int32_t> Read(Arguments stArguments, T& stOutput)
 {
-	if (stArgumentsParam.iRet != OI_OK)
+	if (stArguments.iRet != OI_OK)
 	{
-		co_return stArgumentsParam.iRet;
+		co_return stArguments.iRet;
 	}
-	const auto stResult = co_await CallRedis(std::move(stArgumentsParam.vValues));
-	co_return ReadResult(stResult, stOutputParam);
+	const auto stResult = co_await CallRedis(std::move(stArguments.vValues));
+	co_return ReadResult(stResult, stOutput);
 }
 template <typename T>
-int32_t ReadSync(Arguments stArgumentsParam, T& stOutputParam)
+int32_t ReadSync(Arguments stArguments, T& stOutput)
 {
-	if (stArgumentsParam.iRet != OI_OK)
+	if (stArguments.iRet != OI_OK)
 	{
-		return stArgumentsParam.iRet;
+		return stArguments.iRet;
 	}
-	return ReadResult(CallRedisSync(std::move(stArgumentsParam.vValues)), stOutputParam);
+	return ReadResult(CallRedisSync(std::move(stArguments.vValues)), stOutput);
 }
-inline coro::TaskResult<int32_t> Status(Arguments stArgumentsParam, int iReplyTypeParam)
+inline OI::Coro::TaskResult<int32_t> Status(Arguments stArguments, int iReplyType)
 {
-	if (stArgumentsParam.iRet != OI_OK)
+	if (stArguments.iRet != OI_OK)
 	{
-		co_return stArgumentsParam.iRet;
+		co_return stArguments.iRet;
 	}
-	co_return StatusResult(co_await CallRedis(std::move(stArgumentsParam.vValues)), iReplyTypeParam);
+	co_return StatusResult(co_await CallRedis(std::move(stArguments.vValues)), iReplyType);
 }
-inline int32_t StatusSync(Arguments stArgumentsParam, int iReplyTypeParam)
+inline int32_t StatusSync(Arguments stArguments, int iReplyType)
 {
-	if (stArgumentsParam.iRet != OI_OK)
+	if (stArguments.iRet != OI_OK)
 	{
-		return stArgumentsParam.iRet;
+		return stArguments.iRet;
 	}
-	return StatusResult(CallRedisSync(std::move(stArgumentsParam.vValues)), iReplyTypeParam);
+	return StatusResult(CallRedisSync(std::move(stArguments.vValues)), iReplyType);
 }
 }
 }

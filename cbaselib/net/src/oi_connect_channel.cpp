@@ -12,8 +12,8 @@ namespace OI
 namespace Net
 {
 
-ConnectChannel::ConnectChannel(NetSocket stTextParam, SessionManager* pMgrParam, uint64_t iGenerationParam)
-    : Channel(stTextParam, 0), m_bClose(false), m_iGeneration(iGenerationParam), m_pSessionManager(pMgrParam)
+ConnectChannel::ConnectChannel(NetSocket stText, SessionManager* pMgr, uint64_t iGeneration)
+    : Channel(stText, 0), m_bClose(false), m_iGeneration(iGeneration), m_pSessionManager(pMgr)
 {
 	// StartConnect 已切到 poll；随后 IOEventRegister 同步完成，不留下 POLL_PENDING。
 	assert(Poll::GetInstance().InLoopThread());
@@ -94,13 +94,13 @@ bool ConnectChannel::CheckTcpConnect()
 	return true;
 }
 
-bool ConnectChannel::StartConnect(SessionManager* pMgrParam, bool bAsyncParam)
+bool ConnectChannel::StartConnect(SessionManager* pMgr, bool bAsync)
 {
-	SESSION_TYPE iTextType = pMgrParam->GetSessionType();
+	SESSION_TYPE iTextType = pMgr->GetSessionType();
 	switch (iTextType)
 	{
 	case SESSION_TYPE_TCP:
-		return StartTcpConnect(pMgrParam, bAsyncParam);
+		return StartTcpConnect(pMgr, bAsync);
 	default:
 		printf("ConnectChannel::StartConnect not support session_type=%d\n", iTextType);
 		assert(false);
@@ -108,15 +108,15 @@ bool ConnectChannel::StartConnect(SessionManager* pMgrParam, bool bAsyncParam)
 	return false;
 }
 
-bool ConnectChannel::StartTcpConnect(SessionManager* pMgrParam, bool bAsyncParam)
+bool ConnectChannel::StartTcpConnect(SessionManager* pMgr, bool bAsync)
 {
 	NetSocket stText;
-	if (!stText.CreateSocket(pMgrParam, bAsyncParam))
+	if (!stText.CreateSocket(pMgr, bAsync))
 	{
 		return false;
 	}
 
-	return stText.SocketConnect(pMgrParam);
+	return stText.SocketConnect(pMgr);
 }
 }
 }

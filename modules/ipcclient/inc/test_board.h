@@ -13,5 +13,5 @@ class TestBoard
 
   public:
 	void Arm();
-	void Done(int iCodeParam);
+	void Done(int iCode);
 };

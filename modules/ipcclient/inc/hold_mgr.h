@@ -17,6 +17,6 @@ class HoldMgr
 	{
 		return m_bEnabled;
 	}
-	void Start(sid_t iSessionIdParam);
-	coro::Task Pump();
+	void Start(sid_t iSessionId);
+	OI::Coro::Task Pump();
 };

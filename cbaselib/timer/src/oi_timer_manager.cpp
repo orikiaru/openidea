@@ -173,14 +173,14 @@ void BaseTimerManager::Update()
 	}
 }
 
-void BaseTimerManager::AddTimer(BaseTimer* pTimerParam, int iMillisecondParam)
+void BaseTimerManager::AddTimer(BaseTimer* pTimer, int iMillisecond)
 {
 	::OI::Thread::MutexGuard stLock(m_stWheelMutex);
-	pTimerParam->InitData(this, iMillisecondParam, TicksFromNow(iMillisecondParam));
-	add_timer(pTimerParam);
+	pTimer->InitData(this, iMillisecond, TicksFromNow(iMillisecond));
+	add_timer(pTimer);
 }
 
-int64_t BaseTimerManager::TicksFromNow(int iMillisecondParam) const
+int64_t BaseTimerManager::TicksFromNow(int iMillisecond) const
 {
 	int64_t iElapsedUs = std::chrono::duration_cast<std::chrono::microseconds>(
 	    std::chrono::steady_clock::now() - m_stLastTickMonotonic)
@@ -190,7 +190,7 @@ int64_t BaseTimerManager::TicksFromNow(int iMillisecondParam) const
 		iElapsedUs = 0;
 	}
 	const int64_t iTickUs = (int64_t)m_iTickOffsetMilliseconds * 1000;
-	const int64_t iDueUs = iElapsedUs + (int64_t)iMillisecondParam * 1000;
+	const int64_t iDueUs = iElapsedUs + (int64_t)iMillisecond * 1000;
 	int64_t iTicks = (iDueUs + iTickUs - 1) / iTickUs;
 	if (iTicks < 1)
 	{
@@ -199,9 +199,9 @@ int64_t BaseTimerManager::TicksFromNow(int iMillisecondParam) const
 	return iTicks;
 }
 
-void BaseTimerManager::add_timer(BaseTimer* pTimerParam)
+void BaseTimerManager::add_timer(BaseTimer* pTimer)
 {
-	int64_t iOffset = pTimerParam->m_stData.m_iTriggerTick - m_iCurrentTick;
+	int64_t iOffset = pTimer->m_stData.m_iTriggerTick - m_iCurrentTick;
 	// 粗层倒出来时可能已经过了点。放到下一跳，避免在均匀过程里再进回调。
 	if (iOffset <= 0)
 	{
@@ -220,7 +220,7 @@ void BaseTimerManager::add_timer(BaseTimer* pTimerParam)
 			continue;
 		}
 
-		stCurrentLevel.AddTimer(this, pTimerParam, (uint32_t)iLevelOffset);
+		stCurrentLevel.AddTimer(this, pTimer, (uint32_t)iLevelOffset);
 		bAdded = true;
 		break;
 	}
@@ -228,21 +228,21 @@ void BaseTimerManager::add_timer(BaseTimer* pTimerParam)
 	if (!bAdded)
 	{
 		TimerLevel& stCurrentLevel = m_vTimerLevels[m_iTimerLevelCount - 1];
-		stCurrentLevel.AddTimer(this, pTimerParam, 0);
+		stCurrentLevel.AddTimer(this, pTimer, 0);
 	}
 }
 
-void BaseTimerManager::run_timer(BaseTimer* pTimerParam)
+void BaseTimerManager::run_timer(BaseTimer* pTimer)
 {
-	assert(pTimerParam);
+	assert(pTimer);
 
-	if (pTimerParam->OnTimer())
+	if (pTimer->OnTimer())
 	{
 		::OI::Thread::MutexGuard stLock(m_stWheelMutex);
 		// 周期定时器按逻辑 tick 续，停顿时后面的跳还能补上。
-		int64_t iTicks = milling2tick(pTimerParam->GetOffsetTime());
-		pTimerParam->InitData(this, pTimerParam->GetOffsetTime(), iTicks);
-		add_timer(pTimerParam);
+		int64_t iTicks = milling2tick(pTimer->GetOffsetTime());
+		pTimer->InitData(this, pTimer->GetOffsetTime(), iTicks);
+		add_timer(pTimer);
 	}
 }
 
@@ -259,19 +259,19 @@ void BaseTimerManager::try_uniform()
 	}
 }
 
-void BaseTimerManager::try_run_timer(TimerList& vDueParam)
+void BaseTimerManager::try_run_timer(TimerList& vDue)
 {
 	//取出本tick到点的定时器
 	TimerLevel& stLevel = m_vTimerLevels[0];
-	stLevel.RunTick(this, &vDueParam);
+	stLevel.RunTick(this, &vDue);
 }
 
-void BaseTimerManager::run_tick(TimerList& vDueParam)
+void BaseTimerManager::run_tick(TimerList& vDue)
 {
 	m_stLastTickMonotonic += std::chrono::milliseconds(m_iTickOffsetMilliseconds);
 	++m_iCurrentTick;
 
-	try_run_timer(vDueParam);
+	try_run_timer(vDue);
 
 	//第一层如果到尾,需要触发上级均匀
 	if (m_vTimerLevels[0].IsLevelEnd())

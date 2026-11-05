@@ -2,19 +2,19 @@
 #include <string.h>
 
 #ifdef _WIN32
-static void NetOs_MapError(int iWsaErrorParam)
+static void NetOs_MapError(int iWsaError)
 {
-	if (iWsaErrorParam == WSAEWOULDBLOCK || iWsaErrorParam == WSAEINPROGRESS)
+	if (iWsaError == WSAEWOULDBLOCK || iWsaError == WSAEINPROGRESS)
 	{
 		errno = EINPROGRESS;
 	}
-	else if (iWsaErrorParam == WSAEINTR)
+	else if (iWsaError == WSAEINTR)
 	{
 		errno = EINTR;
 	}
 	else
 	{
-		errno = iWsaErrorParam;
+		errno = iWsaError;
 	}
 }
 #endif
@@ -33,7 +33,7 @@ void NetOs_Startup()
 #endif
 }
 
-net_socket_t NetOs_CreateTcp(bool bNonblockParam)
+net_socket_t NetOs_CreateTcp(bool bNonblock)
 {
 	NetOs_Startup();
 #ifdef _WIN32
@@ -43,7 +43,7 @@ net_socket_t NetOs_CreateTcp(bool bNonblockParam)
 		NetOs_MapError(WSAGetLastError());
 		return INVALID_SOCKET_ID;
 	}
-	if (bNonblockParam)
+	if (bNonblock)
 	{
 		NetOs_SetNonblock((net_socket_t)iDescriptorLocal);
 	}
@@ -54,7 +54,7 @@ net_socket_t NetOs_CreateTcp(bool bNonblockParam)
 	iFlags |= SOCK_CLOEXEC;
 #endif
 #ifdef SOCK_NONBLOCK
-	if (bNonblockParam)
+	if (bNonblock)
 	{
 		iFlags |= SOCK_NONBLOCK;
 	}
@@ -65,7 +65,7 @@ net_socket_t NetOs_CreateTcp(bool bNonblockParam)
 		return INVALID_SOCKET_ID;
 	}
 #ifndef SOCK_NONBLOCK
-	if (bNonblockParam)
+	if (bNonblock)
 	{
 		NetOs_SetNonblock(iDescriptorLocal);
 	}
@@ -74,58 +74,58 @@ net_socket_t NetOs_CreateTcp(bool bNonblockParam)
 #endif
 }
 
-int NetOs_SetNonblock(net_socket_t iDescriptorParam)
+int NetOs_SetNonblock(net_socket_t iDescriptor)
 {
 #ifdef _WIN32
 	u_long iMode = 1;
-	if (ioctlsocket((SOCKET)iDescriptorParam, FIONBIO, &iMode) != 0)
+	if (ioctlsocket((SOCKET)iDescriptor, FIONBIO, &iMode) != 0)
 	{
 		NetOs_MapError(WSAGetLastError());
 		return -1;
 	}
 	return 0;
 #else
-	int iFlags = fcntl(iDescriptorParam, F_GETFL, 0);
+	int iFlags = fcntl(iDescriptor, F_GETFL, 0);
 	if (iFlags < 0)
 	{
 		return -1;
 	}
-	return fcntl(iDescriptorParam, F_SETFL, iFlags | O_NONBLOCK);
+	return fcntl(iDescriptor, F_SETFL, iFlags | O_NONBLOCK);
 #endif
 }
 
-int NetOs_SetNoDelay(net_socket_t iDescriptorParam)
+int NetOs_SetNoDelay(net_socket_t iDescriptor)
 {
 	int iOn = 1;
 #ifdef _WIN32
-	if (setsockopt((SOCKET)iDescriptorParam, IPPROTO_TCP, TCP_NODELAY, (const char*)&iOn, sizeof(iOn)) != 0)
+	if (setsockopt((SOCKET)iDescriptor, IPPROTO_TCP, TCP_NODELAY, (const char*)&iOn, sizeof(iOn)) != 0)
 	{
 		NetOs_MapError(WSAGetLastError());
 		return -1;
 	}
 	return 0;
 #else
-	return setsockopt((int)iDescriptorParam, IPPROTO_TCP, TCP_NODELAY, &iOn, sizeof(iOn));
+	return setsockopt((int)iDescriptor, IPPROTO_TCP, TCP_NODELAY, &iOn, sizeof(iOn));
 #endif
 }
 
-int NetOs_Close(net_socket_t iDescriptorParam)
+int NetOs_Close(net_socket_t iDescriptor)
 {
-	if (iDescriptorParam == INVALID_SOCKET_ID)
+	if (iDescriptor == INVALID_SOCKET_ID)
 	{
 		return 0;
 	}
 #ifdef _WIN32
-	return closesocket((SOCKET)iDescriptorParam);
+	return closesocket((SOCKET)iDescriptor);
 #else
-	return close((int)iDescriptorParam);
+	return close((int)iDescriptor);
 #endif
 }
 
-int NetOs_Recv(net_socket_t iDescriptorParam, void* pBufferParam, size_t iLengthParam)
+int NetOs_Recv(net_socket_t iDescriptor, void* pBuffer, size_t iLength)
 {
 #ifdef _WIN32
-	int iCount = recv((SOCKET)iDescriptorParam, (char*)pBufferParam, (int)iLengthParam, 0);
+	int iCount = recv((SOCKET)iDescriptor, (char*)pBuffer, (int)iLength, 0);
 	if (iCount == SOCKET_ERROR)
 	{
 		int iError = WSAGetLastError();
@@ -145,14 +145,14 @@ int NetOs_Recv(net_socket_t iDescriptorParam, void* pBufferParam, size_t iLength
 	}
 	return iCount;
 #else
-	return (int)read((int)iDescriptorParam, pBufferParam, iLengthParam);
+	return (int)read((int)iDescriptor, pBuffer, iLength);
 #endif
 }
 
-int NetOs_Send(net_socket_t iDescriptorParam, const void* pBufferParam, size_t iLengthParam)
+int NetOs_Send(net_socket_t iDescriptor, const void* pBuffer, size_t iLength)
 {
 #ifdef _WIN32
-	int iCount = send((SOCKET)iDescriptorParam, (const char*)pBufferParam, (int)iLengthParam, 0);
+	int iCount = send((SOCKET)iDescriptor, (const char*)pBuffer, (int)iLength, 0);
 	if (iCount == SOCKET_ERROR)
 	{
 		int iError = WSAGetLastError();
@@ -172,14 +172,14 @@ int NetOs_Send(net_socket_t iDescriptorParam, const void* pBufferParam, size_t i
 	}
 	return iCount;
 #else
-	return (int)write((int)iDescriptorParam, pBufferParam, iLengthParam);
+	return (int)write((int)iDescriptor, pBuffer, iLength);
 #endif
 }
 
-net_socket_t NetOs_Accept(net_socket_t iDescriptorParam)
+net_socket_t NetOs_Accept(net_socket_t iDescriptor)
 {
 #ifdef _WIN32
-	SOCKET iClient = accept((SOCKET)iDescriptorParam, NULL, NULL);
+	SOCKET iClient = accept((SOCKET)iDescriptor, NULL, NULL);
 	if (iClient == INVALID_SOCKET)
 	{
 		int iError = WSAGetLastError();
@@ -200,7 +200,7 @@ net_socket_t NetOs_Accept(net_socket_t iDescriptorParam)
 	NetOs_SetNonblock((net_socket_t)iClient);
 	return (net_socket_t)iClient;
 #else
-	int iClient = accept((int)iDescriptorParam, 0, 0);
+	int iClient = accept((int)iDescriptor, 0, 0);
 	if (iClient >= 0)
 	{
 		NetOs_SetNonblock(iClient);
@@ -209,12 +209,12 @@ net_socket_t NetOs_Accept(net_socket_t iDescriptorParam)
 #endif
 }
 
-net_socket_t NetOs_Dup(net_socket_t iDescriptorParam)
+net_socket_t NetOs_Dup(net_socket_t iDescriptor)
 {
 #ifdef _WIN32
 	WSAPROTOCOL_INFOW stInfo;
 	memset(&stInfo, 0, sizeof(stInfo));
-	if (WSADuplicateSocketW((SOCKET)iDescriptorParam, GetCurrentProcessId(), &stInfo) != 0)
+	if (WSADuplicateSocketW((SOCKET)iDescriptor, GetCurrentProcessId(), &stInfo) != 0)
 	{
 		NetOs_MapError(WSAGetLastError());
 		return INVALID_SOCKET_ID;
@@ -228,69 +228,69 @@ net_socket_t NetOs_Dup(net_socket_t iDescriptorParam)
 	NetOs_SetNonblock((net_socket_t)iDuplicateDescriptor);
 	return (net_socket_t)iDuplicateDescriptor;
 #else
-	return dup((int)iDescriptorParam);
+	return dup((int)iDescriptor);
 #endif
 }
 
-int NetOs_Bind(net_socket_t iDescriptorParam, const sockaddr* pAddrParam, int iLengthParam)
+int NetOs_Bind(net_socket_t iDescriptor, const sockaddr* pAddr, int iLength)
 {
 	// 监听口关掉之后，旧连接还会在 TIME_WAIT 里占着这个端口。允许复用，重启才能再绑上。
 	int iOn = 1;
 #ifdef _WIN32
-	if (setsockopt((SOCKET)iDescriptorParam, SOL_SOCKET, SO_REUSEADDR, (const char*)&iOn, sizeof(iOn)) != 0)
+	if (setsockopt((SOCKET)iDescriptor, SOL_SOCKET, SO_REUSEADDR, (const char*)&iOn, sizeof(iOn)) != 0)
 	{
 		NetOs_MapError(WSAGetLastError());
 		return -1;
 	}
-	if (bind((SOCKET)iDescriptorParam, pAddrParam, iLengthParam) != 0)
-	{
-		NetOs_MapError(WSAGetLastError());
-		return -1;
-	}
-	return 0;
-#else
-	if (setsockopt((int)iDescriptorParam, SOL_SOCKET, SO_REUSEADDR, &iOn, sizeof(iOn)) != 0)
-	{
-		return -1;
-	}
-	return bind((int)iDescriptorParam, pAddrParam, iLengthParam);
-#endif
-}
-
-int NetOs_Listen(net_socket_t iDescriptorParam, int iBacklogParam)
-{
-#ifdef _WIN32
-	if (listen((SOCKET)iDescriptorParam, iBacklogParam) != 0)
+	if (bind((SOCKET)iDescriptor, pAddr, iLength) != 0)
 	{
 		NetOs_MapError(WSAGetLastError());
 		return -1;
 	}
 	return 0;
 #else
-	return listen((int)iDescriptorParam, iBacklogParam);
+	if (setsockopt((int)iDescriptor, SOL_SOCKET, SO_REUSEADDR, &iOn, sizeof(iOn)) != 0)
+	{
+		return -1;
+	}
+	return bind((int)iDescriptor, pAddr, iLength);
 #endif
 }
 
-int NetOs_Connect(net_socket_t iDescriptorParam, const sockaddr* pAddrParam, int iLengthParam)
+int NetOs_Listen(net_socket_t iDescriptor, int iBacklog)
 {
 #ifdef _WIN32
-	if (connect((SOCKET)iDescriptorParam, pAddrParam, iLengthParam) == 0)
+	if (listen((SOCKET)iDescriptor, iBacklog) != 0)
+	{
+		NetOs_MapError(WSAGetLastError());
+		return -1;
+	}
+	return 0;
+#else
+	return listen((int)iDescriptor, iBacklog);
+#endif
+}
+
+int NetOs_Connect(net_socket_t iDescriptor, const sockaddr* pAddr, int iLength)
+{
+#ifdef _WIN32
+	if (connect((SOCKET)iDescriptor, pAddr, iLength) == 0)
 	{
 		return 0;
 	}
 	NetOs_MapError(WSAGetLastError());
 	return -1;
 #else
-	return connect((int)iDescriptorParam, pAddrParam, iLengthParam);
+	return connect((int)iDescriptor, pAddr, iLength);
 #endif
 }
 
-int NetOs_GetSocketError(net_socket_t iDescriptorParam)
+int NetOs_GetSocketError(net_socket_t iDescriptor)
 {
 	int iValue = 0;
 #ifdef _WIN32
 	int iLength = sizeof(iValue);
-	if (getsockopt((SOCKET)iDescriptorParam, SOL_SOCKET, SO_ERROR, (char*)&iValue, &iLength) != 0)
+	if (getsockopt((SOCKET)iDescriptor, SOL_SOCKET, SO_ERROR, (char*)&iValue, &iLength) != 0)
 	{
 		return WSAGetLastError();
 	}
@@ -305,7 +305,7 @@ int NetOs_GetSocketError(net_socket_t iDescriptorParam)
 	return iValue;
 #else
 	socklen_t iLength = sizeof(iValue);
-	if (getsockopt((int)iDescriptorParam, SOL_SOCKET, SO_ERROR, &iValue, &iLength) != 0)
+	if (getsockopt((int)iDescriptor, SOL_SOCKET, SO_ERROR, &iValue, &iLength) != 0)
 	{
 		return errno;
 	}

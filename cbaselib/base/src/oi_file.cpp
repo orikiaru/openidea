@@ -6,33 +6,33 @@ namespace OI
 {
 namespace File
 {
-bool Exists(const std::string& sPathParam)
+bool Exists(const std::string& sPath)
 {
-	if (sPathParam.empty())
+	if (sPath.empty())
 	{
 		return false;
 	}
 	std::error_code stEc;
-	return std::filesystem::exists(sPathParam, stEc) && !stEc;
+	return std::filesystem::exists(sPath, stEc) && !stEc;
 }
 
-bool MakeDirs(const std::string& sPathParam)
+bool MakeDirs(const std::string& sPath)
 {
-	if (sPathParam.empty())
+	if (sPath.empty())
 	{
 		return false;
 	}
 	std::error_code stEc;
-	if (std::filesystem::is_directory(sPathParam, stEc))
+	if (std::filesystem::is_directory(sPath, stEc))
 	{
 		return true;
 	}
-	std::filesystem::create_directories(sPathParam, stEc);
+	std::filesystem::create_directories(sPath, stEc);
 	if (stEc)
 	{
 		return false;
 	}
-	return std::filesystem::is_directory(sPathParam, stEc);
+	return std::filesystem::is_directory(sPath, stEc);
 }
 }
 }

@@ -22,10 +22,10 @@ NetAddr::NetAddr()
 {
 }
 
-bool NetAddr::Init(SessionManager* pMgrParam)
+bool NetAddr::Init(SessionManager* pMgr)
 {
-	const std::string& sIpLocal = pMgrParam->GetStrIP();
-	const std::string& sPortLocal = pMgrParam->GetStrPort();
+	const std::string& sIpLocal = pMgr->GetStrIP();
+	const std::string& sPortLocal = pMgr->GetStrPort();
 	m_iProtocolType = AF_INET;
 	switch (m_iProtocolType)
 	{
@@ -38,14 +38,14 @@ bool NetAddr::Init(SessionManager* pMgrParam)
 		long iPortNumber = strtol(sPortLocal.c_str(), &pEnd, 10);
 		if (sPortLocal.empty() || *pEnd != '\0' || iPortNumber < 0 || iPortNumber > 65535)
 		{
-			LOG_ERROR("NetAddr::Init bad port=%s id=%s", sPortLocal.c_str(), pMgrParam->GetIDString().c_str());
+			LOG_ERROR("NetAddr::Init bad port=%s id=%s", sPortLocal.c_str(), pMgr->GetIDString().c_str());
 			return false;
 		}
 		stAddr.sin_port = htons((uint16_t)iPortNumber);
 		// 只收点分 IPv4。解析失败不能按 255.255.255.255 去连。
 		if (inet_pton(AF_INET, sIpLocal.c_str(), &stAddr.sin_addr) != 1)
 		{
-			LOG_ERROR("NetAddr::Init bad ip=%s id=%s", sIpLocal.c_str(), pMgrParam->GetIDString().c_str());
+			LOG_ERROR("NetAddr::Init bad ip=%s id=%s", sIpLocal.c_str(), pMgr->GetIDString().c_str());
 			return false;
 		}
 		m_stAddressData.Clear();
@@ -93,11 +93,11 @@ NetSocket::NetSocket()
 {
 }
 
-bool NetSocket::Init(net_socket_t iSessionIdParam, SessionManager* pMgrParam)
+bool NetSocket::Init(net_socket_t iSessionId, SessionManager* pMgr)
 {
-	m_iSocketDescriptor = iSessionIdParam;
+	m_iSocketDescriptor = iSessionId;
 	m_iMask |= NSM_INIT;
-	return m_stAddress.Init(pMgrParam);
+	return m_stAddress.Init(pMgr);
 }
 
 bool NetSocket::IsBind()
@@ -149,9 +149,9 @@ bool NetSocket::IsAsync()
 	return m_iMask & NSM_ASYNC;
 }
 
-void NetSocket::SetAsync(bool bAsyncParam)
+void NetSocket::SetAsync(bool bAsync)
 {
-	if (bAsyncParam)
+	if (bAsync)
 	{
 		m_iMask |= NSM_ASYNC;
 	}
@@ -161,40 +161,40 @@ void NetSocket::SetAsync(bool bAsyncParam)
 	}
 }
 
-bool NetSocket::CreateSocket(SessionManager* pMgrParam, bool bAsyncParam)
+bool NetSocket::CreateSocket(SessionManager* pMgr, bool bAsync)
 {
-	return NetHelper::CreateSocket(*this, pMgrParam, bAsyncParam);
+	return NetHelper::CreateSocket(*this, pMgr, bAsync);
 }
 
-bool NetSocket::SocketBind(SessionManager* pMgrParam)
+bool NetSocket::SocketBind(SessionManager* pMgr)
 {
-	return NetHelper::SocketBind(*this, pMgrParam);
+	return NetHelper::SocketBind(*this, pMgr);
 }
 
-bool NetSocket::SocketListen(SessionManager* pMgrParam)
+bool NetSocket::SocketListen(SessionManager* pMgr)
 {
-	return NetHelper::SocketListen(*this, pMgrParam);
+	return NetHelper::SocketListen(*this, pMgr);
 }
 
-bool NetSocket::SocketListenAndBind(SessionManager* pMgrParam)
+bool NetSocket::SocketListenAndBind(SessionManager* pMgr)
 {
-	return NetHelper::SocketListenAndBind(*this, pMgrParam);
+	return NetHelper::SocketListenAndBind(*this, pMgr);
 }
 
-bool NetSocket::SocketConnect(SessionManager* pMgrParam)
+bool NetSocket::SocketConnect(SessionManager* pMgr)
 {
-	return NetHelper::SocketConnect(*this, pMgrParam);
+	return NetHelper::SocketConnect(*this, pMgr);
 }
 
 //accept一个套接字,返回-1失败,返回0说明没有可接受的了
-int NetSocket::SocketAcceptOne(SessionManager* pMgrParam)
+int NetSocket::SocketAcceptOne(SessionManager* pMgr)
 {
-	return NetHelper::SocketAcceptOne(*this, pMgrParam);
+	return NetHelper::SocketAcceptOne(*this, pMgr);
 }
 
-NetAddr NetSocket::GetNetAddr(SessionManager* pMgrParam)
+NetAddr NetSocket::GetNetAddr(SessionManager* pMgr)
 {
-	return NetHelper::GetNetAddr(pMgrParam);
+	return NetHelper::GetNetAddr(pMgr);
 }
 }
 }

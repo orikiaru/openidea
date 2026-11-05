@@ -21,8 +21,8 @@ class Channel
 
   public:
 	friend class Poll;
-	Channel(NetSocket stTextParam, Session* pSessionParam)
-	    : iEventMask(0), pPollToken(NULL), stSocket(stTextParam), pSession(pSessionParam)
+	Channel(NetSocket stText, Session* pSession)
+	    : iEventMask(0), pPollToken(NULL), stSocket(stText), pSession(pSession)
 	{
 	}
 	virtual ~Channel();

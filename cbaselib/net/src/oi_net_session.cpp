@@ -6,23 +6,23 @@ namespace OI
 {
 namespace Net
 {
-void NetSession::PassiveClose(int iErrorParam)
+void NetSession::PassiveClose(int iError)
 {
 	{
 		::OI::Thread::MutexGuard stLock(stLocker);
-		Close(iErrorParam);
+		Close(iError);
 	}
 	//输出日志不能持有会话锁,否则会死锁的.
-	if (iErrorParam > 0)
+	if (iError > 0)
 	{
-		LOG_TRACE("NetSession::PassiveClose sid=%d, system_err=%s", GetSessionID(), NetOs_StrError(iErrorParam));
+		LOG_TRACE("NetSession::PassiveClose sid=%d, system_err=%s", GetSessionID(), NetOs_StrError(iError));
 	}
 	else
 	{
-		LOG_TRACE("NetSession::PassiveClose sid=%d, errno=%d", GetSessionID(), iErrorParam);
+		LOG_TRACE("NetSession::PassiveClose sid=%d, errno=%d", GetSessionID(), iError);
 	}
 
-	if (iErrorParam != SESSION_MANAGER_NORMAL_CLOSE)
+	if (iError != SESSION_MANAGER_NORMAL_CLOSE)
 	{
 		pSessionManager->CloseSession(GetSessionID());
 	}
@@ -34,14 +34,14 @@ void NetSession::ActiveClose()
 	Close(SESSION_MANAGER_NORMAL_CLOSE);
 }
 
-void NetSession::Close(int iErrorParam)
+void NetSession::Close(int iError)
 {
 	if (iStatus == IO_ST_CONNECTED)
 	{
-		iErrorCode.store(iErrorParam, std::memory_order_relaxed);
+		iErrorCode.store(iError, std::memory_order_relaxed);
 		iStatus.store(IO_ST_WILL_CLOSE, std::memory_order_release);
 		AllowSend();
-		if (iErrorParam > 0)
+		if (iError > 0)
 		{
 			//LOG_TRACE("NetSession::Close system_err=%s", strerror(err));
 			return;

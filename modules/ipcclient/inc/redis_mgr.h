@@ -26,8 +26,8 @@ class RedisMgr
 	}
 	void Start();
 	void Report();
-	void SyncStress(int iIdParam);
-	coro::Task Pump();
-	coro::Task Check();
-	coro::Task Stress(int iIdParam);
+	void SyncStress(int iId);
+	OI::Coro::Task Pump();
+	OI::Coro::Task Check();
+	OI::Coro::Task Stress(int iId);
 };

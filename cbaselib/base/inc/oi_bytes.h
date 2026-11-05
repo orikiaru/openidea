@@ -19,43 +19,43 @@ class Bytes
 	size_t m_iSize;
 	static char m_iEmptyCharacter;
 
-	void Grow(size_t iNeedParam);
+	void Grow(size_t iNeed);
 	char* Mutable();
-	bool Overlaps(const void* pDataParam) const;
+	bool Overlaps(const void* pData) const;
 
   public:
 	Bytes();
-	Bytes(const char* pDataParam, size_t iLengthParam);
-	Bytes(const Bytes& stOtherParam);
-	Bytes& operator=(const Bytes& stOtherParam);
-	Bytes(Bytes&& stOtherParam);
-	Bytes& operator=(Bytes&& stOtherParam);
+	Bytes(const char* pData, size_t iLength);
+	Bytes(const Bytes& stOther);
+	Bytes& operator=(const Bytes& stOther);
+	Bytes(Bytes&& stOther);
+	Bytes& operator=(Bytes&& stOther);
 	virtual ~Bytes();
 
-	void Erase(const void* pBeginParam, size_t iLengthParam)
+	void Erase(const void* pBegin, size_t iLength)
 	{
-		Erase((const char*)pBeginParam, iLengthParam);
+		Erase((const char*)pBegin, iLength);
 	}
-	void Erase(const char* pBeginParam, size_t iLengthParam);
-	void Erase(int iOffsetParam, size_t iLengthParam)
+	void Erase(const char* pBegin, size_t iLength);
+	void Erase(int iOffset, size_t iLength)
 	{
-		if (iOffsetParam >= 0)
+		if (iOffset >= 0)
 		{
-			Erase((size_t)iOffsetParam, iLengthParam);
+			Erase((size_t)iOffset, iLength);
 		}
 	}
 	// 删除 [offset, offset+len)，超出末尾的部分会被截断
-	size_t Erase(size_t iOffsetParam, size_t iLengthParam);
+	size_t Erase(size_t iOffset, size_t iLength);
 
 	// 插到 offset。offset == Size() 时等同 Append；offset 更大则断言
-	size_t Insert(size_t iOffsetParam, const void* pDataParam, size_t iLengthParam);
+	size_t Insert(size_t iOffset, const void* pData, size_t iLength);
 
-	size_t Append(const void* pDataParam, size_t iLengthParam);
-	size_t Append(const Bytes& stBytesParam);
-	size_t AppendForward(const void* pDataParam, size_t iLengthParam);
+	size_t Append(const void* pData, size_t iLength);
+	size_t Append(const Bytes& stBytes);
+	size_t AppendForward(const void* pData, size_t iLength);
 
 	// 覆盖 [offset, offset+len)。超出 Size() 会断言并截断
-	size_t Replace(size_t iOffsetParam, const void* pDataParam, size_t iLengthParam);
+	size_t Replace(size_t iOffset, const void* pData, size_t iLength);
 
 	const char* Data() const;
 	char* Begin();
@@ -73,10 +73,10 @@ class Bytes
 
 	// n 大于当前有效长度时只扩容，不改 Size()。
 	// n 更小时把 Size() 收到 n，容量保留，避免写缓冲反复缩容。
-	size_t Reserve(size_t iSizeParam);
+	size_t Reserve(size_t iSize);
 	// 直接往 End() 写了 n 字节后调用。n 超过 Capacity() - Size() 抛 std::out_of_range
-	void Commit(size_t iNumberParam);
-	void Swap(Bytes& stOtherParam);
+	void Commit(size_t iNumber);
+	void Swap(Bytes& stOther);
 	void Clear();
 };
 }

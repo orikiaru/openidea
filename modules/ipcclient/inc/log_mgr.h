@@ -20,6 +20,6 @@ class LogMgr
   public:
 	void Load();
 	void Start();
-	coro::Task Run();
-	coro::Task Pump();
+	OI::Coro::Task Run();
+	OI::Coro::Task Pump();
 };

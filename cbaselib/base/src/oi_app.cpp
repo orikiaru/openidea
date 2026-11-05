@@ -9,9 +9,9 @@ namespace OI
 {
 namespace Base
 {
-int StartFramework(const char* pConfigPathParam)
+int StartFramework(const char* pConfigPath)
 {
-	if (!Config::GlobalMutableConfig().Parse(pConfigPathParam))
+	if (!Config::GlobalMutableConfig().Parse(pConfigPath))
 	{
 		printf("ParseConfigError\n");
 		return -2;

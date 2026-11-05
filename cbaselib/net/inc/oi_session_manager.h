@@ -10,9 +10,12 @@
 #include <vector>
 #include <coroutine>
 #include <set>
-namespace coro
+namespace OI
 {
-void Schedule(std::coroutine_handle<> stHandleParam);
+namespace Coro
+{
+void Schedule(std::coroutine_handle<> stHandle);
+}
 }
 namespace OI
 {
@@ -38,9 +41,9 @@ class SessionManager
 {
 	struct ConnectWait;
 	std::vector<std::weak_ptr<ConnectWait>> m_vConnectWaiters;
-	void FinishConnectWaiters(bool bResultParam);
-	void StartConnect(const std::shared_ptr<ConnectWait>& pWaitParam);
-	void BeginConnect(const std::shared_ptr<ConnectWait>& pWaitParam);
+	void FinishConnectWaiters(bool bResult);
+	void StartConnect(const std::shared_ptr<ConnectWait>& pWait);
+	void BeginConnect(const std::shared_ptr<ConnectWait>& pWait);
 
   protected:
 	typedef std::map<sid_t, Session*> SessionMap;
@@ -67,19 +70,19 @@ class SessionManager
 	class ConnectAwaiter
 	{
 		std::shared_ptr<ConnectWait> m_pWait;
-		bool Suspend(std::coroutine_handle<> stHandleParam, void (*fnScheduleParam)(std::coroutine_handle<>));
+		bool Suspend(std::coroutine_handle<> stHandle, void (*fnSchedule)(std::coroutine_handle<>));
 
 	  public:
-		explicit ConnectAwaiter(SessionManager* pManagerParam);
+		explicit ConnectAwaiter(SessionManager* pManager);
 		ConnectAwaiter(const ConnectAwaiter&) = delete;
 		ConnectAwaiter(ConnectAwaiter&&) = default;
 		bool await_ready() const noexcept
 		{
 			return false;
 		}
-		bool await_suspend(std::coroutine_handle<> stHandleParam)
+		bool await_suspend(std::coroutine_handle<> stHandle)
 		{
-			return Suspend(stHandleParam, coro::Schedule);
+			return Suspend(stHandle, ::OI::Coro::Schedule);
 		}
 		bool await_resume() const noexcept;
 	};
@@ -89,7 +92,7 @@ class SessionManager
 	}
 	virtual ~SessionManager();
 	// 管理器常驻；入站任务仅持有连接的业务租约。
-	std::shared_ptr<void> HoldSessionTask(sid_t iSessionIdParam);
+	std::shared_ptr<void> HoldSessionTask(sid_t iSessionId);
 	size_t MaxSendQueueBytes() const
 	{
 		return iMaxSendQueueBytes;
@@ -98,11 +101,11 @@ class SessionManager
 	{
 		return iMaxReceiveBufferBytes;
 	}
-	void DefaultInit(const std::string& sSipParam, const std::string& sPortParam, SESSION_TYPE iSessionTypeParam = SESSION_TYPE_TCP)
+	void DefaultInit(const std::string& sSip, const std::string& sPortLocal, SESSION_TYPE iSessionTypeLocal = SESSION_TYPE_TCP)
 	{
-		sIpAddress = sSipParam;
-		sPort = sPortParam;
-		iSessionType = iSessionTypeParam;
+		sIpAddress = sSip;
+		sPort = sPortLocal;
+		iSessionType = iSessionTypeLocal;
 	}
 	size_t MaxFrameBytes() const
 	{
@@ -129,21 +132,21 @@ class SessionManager
 	{
 		return ConnectAwaiter(this);
 	}
-	bool StartServer(bool bAsyncParam = true); //目前不支持同步操作
+	bool StartServer(bool bAsync = true); //目前不支持同步操作
 	// 定期拉到的服务列表。online 为假表示这个名字已经从列表里消失。
-	void ApplyService(const std::string& sIpParam, const std::string& sPortParam, bool bOnlineParam);
+	void ApplyService(const std::string& sIp, const std::string& sPortLocal, bool bOnline);
 	void CloseAllSessions();
-	void CloseEndpoint(const std::string& sEndpointParam);
-	bool HasEndpoint(const std::string& sEndpointParam);
+	void CloseEndpoint(const std::string& sEndpoint);
+	bool HasEndpoint(const std::string& sEndpoint);
 
-	bool SendBytes(sid_t iSessionIdParam, const ::OI::Base::Bytes& stDataParam);
-	int32_t SendBytesResult(sid_t iSessionIdParam, const ::OI::Base::Bytes& stDataParam);
+	bool SendBytes(sid_t iSessionId, const ::OI::Base::Bytes& stData);
+	int32_t SendBytesResult(sid_t iSessionId, const ::OI::Base::Bytes& stData);
 
-	static SESSION_TYPE GetSessionTypeByString(const std::string& sTypeParam);
+	static SESSION_TYPE GetSessionTypeByString(const std::string& sType);
 
   public:
 	//主动关闭会话
-	void CloseSession(sid_t iSessionIdParam);
+	void CloseSession(sid_t iSessionId);
 
   protected:
 	friend class NetSession;
@@ -151,14 +154,14 @@ class SessionManager
 	friend class ConnectChannel;
 	friend class NetHelper;
 	//AcceptSession调用,必然由IO线程触发
-	void AddSession(net_socket_t iNewDescriptorParam);
-	void AddSession(Session* pSessionParam);
-	void AddSession(Session* pSessionParam, const std::string& sEndpointParam, size_t iSendBytesParam, size_t iReceiveBytesParam);
+	void AddSession(net_socket_t iNewDescriptor);
+	void AddSession(Session* pSession);
+	void AddSession(Session* pSession, const std::string& sEndpoint, size_t iSendBytes, size_t iReceiveBytes);
 	//ConnectSession调用,必然有IO线程触发
-	void AbortSession(uint64_t iGenerationParam);
-	void CompleteConnect(net_socket_t iDescriptorParam, uint64_t iGenerationParam);
+	void AbortSession(uint64_t iGeneration);
+	void CompleteConnect(net_socket_t iDescriptor, uint64_t iGeneration);
 	//不用怕重入,必然由IO线程触发
-	void DelSession(const Session* pSessionParam);
+	void DelSession(const Session* pSession);
 
 	/*---------------以下是需要重写的内容--------------*/
   public:
@@ -167,8 +170,8 @@ class SessionManager
 
   protected:
 	virtual Session* CloneSession() = 0; //{ 	return new TCPSession(fd, this);	}	//自定制回话类型
-	virtual void OnAddSession(Session* pSessionParam) = 0;
-	virtual void OnDelSession(const Session* pSessionParam) = 0;
+	virtual void OnAddSession(Session* pSession) = 0;
+	virtual void OnDelSession(const Session* pSession) = 0;
 	virtual void OnSessionClosed(sid_t)
 	{
 	}

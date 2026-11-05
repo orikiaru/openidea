@@ -9,115 +9,115 @@ namespace Timer
 {
 namespace
 {
-int64_t FloorDiv(int64_t iFirstParam, int64_t iSecondParam)
+int64_t FloorDiv(int64_t iFirst, int64_t iSecond)
 {
-	int64_t iQ = iFirstParam / iSecondParam;
-	int64_t iR = iFirstParam % iSecondParam;
-	if (iR != 0 && ((iFirstParam < 0) != (iSecondParam < 0)))
+	int64_t iQ = iFirst / iSecond;
+	int64_t iR = iFirst % iSecond;
+	if (iR != 0 && ((iFirst < 0) != (iSecond < 0)))
 	{
 		--iQ;
 	}
 	return iQ;
 }
 
-int64_t CivilDays(int iYearParam, unsigned iMonthParam, unsigned iDayParam)
+int64_t CivilDays(int iYear, unsigned iMonth, unsigned iDay)
 {
-	iYearParam -= iMonthParam <= 2;
-	const int iEra = (iYearParam >= 0 ? iYearParam : iYearParam - 399) / 400;
-	const unsigned iYoe = (unsigned)(iYearParam - iEra * 400);
-	const unsigned iDoy = (153 * (iMonthParam + (iMonthParam > 2 ? -3 : 9)) + 2) / 5 + iDayParam - 1;
+	iYear -= iMonth <= 2;
+	const int iEra = (iYear >= 0 ? iYear : iYear - 399) / 400;
+	const unsigned iYoe = (unsigned)(iYear - iEra * 400);
+	const unsigned iDoy = (153 * (iMonth + (iMonth > 2 ? -3 : 9)) + 2) / 5 + iDay - 1;
 	const unsigned iDoe = iYoe * 365 + iYoe / 4 - iYoe / 100 + iDoy;
 	return (int64_t)iEra * 146097 + (int64_t)iDoe - 719468;
 }
 
-bool ToLocal(time_t iTimestampParam, int64_t iOffsetSecondsParam, tm* pOutputParam)
+bool ToLocal(time_t iTimestamp, int64_t iOffsetSecondsLocal, tm* pOutput)
 {
-	int64_t iShifted = (int64_t)iTimestampParam + iOffsetSecondsParam;
+	int64_t iShifted = (int64_t)iTimestamp + iOffsetSecondsLocal;
 	time_t iClock = (time_t)iShifted;
-	return localtime_r(&iClock, pOutputParam) != NULL;
+	return localtime_r(&iClock, pOutput) != NULL;
 }
 
-int64_t DayOf(const tm& stLocalParam)
+int64_t DayOf(const tm& stLocal)
 {
-	return CivilDays(stLocalParam.tm_year + 1900, (unsigned)stLocalParam.tm_mon + 1, (unsigned)stLocalParam.tm_mday);
+	return CivilDays(stLocal.tm_year + 1900, (unsigned)stLocal.tm_mon + 1, (unsigned)stLocal.tm_mday);
 }
 
-int64_t WeekStarting(const tm& stLocalParam, int iWeekdayParam)
+int64_t WeekStarting(const tm& stLocal, int iWeekday)
 {
 	// 1970-01-01 是周四。weekday 用 tm_wday 的数，周一就是现在的 CrossWeek。
-	return FloorDiv(DayOf(stLocalParam) + (4 - iWeekdayParam), 7);
+	return FloorDiv(DayOf(stLocal) + (4 - iWeekday), 7);
 }
 
-int64_t WeekOf(const tm& stLocalParam)
+int64_t WeekOf(const tm& stLocal)
 {
-	return WeekStarting(stLocalParam, WeekdayMonday);
+	return WeekStarting(stLocal, WeekdayMonday);
 }
 
-bool KnownWeekday(int iWeekdayParam)
+bool KnownWeekday(int iWeekday)
 {
-	return iWeekdayParam >= WeekdaySunday && iWeekdayParam <= WeekdaySaturday;
+	return iWeekday >= WeekdaySunday && iWeekday <= WeekdaySaturday;
 }
 
-bool WeekdaySlot(time_t iTimestampParam, int iWeekdayParam, int64_t iOffsetSecondsParam, int64_t* pOutputParam)
+bool WeekdaySlot(time_t iTimestamp, int iWeekday, int64_t iOffsetSecondsLocal, int64_t* pOutput)
 {
 	tm stLocal;
-	if (!KnownWeekday(iWeekdayParam) || !ToLocal(iTimestampParam, iOffsetSecondsParam, &stLocal))
+	if (!KnownWeekday(iWeekday) || !ToLocal(iTimestamp, iOffsetSecondsLocal, &stLocal))
 	{
 		return false;
 	}
-	*pOutputParam = WeekStarting(stLocal, iWeekdayParam);
+	*pOutput = WeekStarting(stLocal, iWeekday);
 	return true;
 }
 
-int64_t MonthOf(const tm& stLocalParam)
+int64_t MonthOf(const tm& stLocal)
 {
-	return (int64_t)stLocalParam.tm_year * 12 + stLocalParam.tm_mon;
+	return (int64_t)stLocal.tm_year * 12 + stLocal.tm_mon;
 }
 
-int64_t YearOf(const tm& stLocalParam)
+int64_t YearOf(const tm& stLocal)
 {
-	return stLocalParam.tm_year;
+	return stLocal.tm_year;
 }
 
 typedef int64_t (*SlotOf)(const tm&);
 
-bool Slot(time_t iTimestampParam, int64_t iOffsetSecondsParam, SlotOf fnSlotOfParam, int64_t* pOutputParam)
+bool Slot(time_t iTimestamp, int64_t iOffsetSecondsLocal, SlotOf fnSlotOf, int64_t* pOutput)
 {
 	tm stLocal;
-	if (!ToLocal(iTimestampParam, iOffsetSecondsParam, &stLocal))
+	if (!ToLocal(iTimestamp, iOffsetSecondsLocal, &stLocal))
 	{
 		return false;
 	}
-	*pOutputParam = fnSlotOfParam(stLocal);
+	*pOutput = fnSlotOf(stLocal);
 	return true;
 }
 
-int64_t PeriodOf(time_t iTimestampParam, int64_t iOffsetSecondsParam, SlotOf fnSlotOfParam)
+int64_t PeriodOf(time_t iTimestamp, int64_t iOffsetSecondsLocal, SlotOf fnSlotOf)
 {
 	int64_t iSlot = 0;
-	if (!Slot(iTimestampParam, iOffsetSecondsParam, fnSlotOfParam, &iSlot))
+	if (!Slot(iTimestamp, iOffsetSecondsLocal, fnSlotOf, &iSlot))
 	{
 		return 0;
 	}
 	return iSlot;
 }
 
-bool SameOf(time_t iFirstParam, time_t iSecondParam, int64_t iOffsetSecondsParam, SlotOf fnSlotOfParam)
+bool SameOf(time_t iFirst, time_t iSecond, int64_t iOffsetSecondsLocal, SlotOf fnSlotOf)
 {
 	int64_t iLeft = 0;
 	int64_t iRight = 0;
-	if (!Slot(iFirstParam, iOffsetSecondsParam, fnSlotOfParam, &iLeft) || !Slot(iSecondParam, iOffsetSecondsParam, fnSlotOfParam, &iRight))
+	if (!Slot(iFirst, iOffsetSecondsLocal, fnSlotOf, &iLeft) || !Slot(iSecond, iOffsetSecondsLocal, fnSlotOf, &iRight))
 	{
 		return false;
 	}
 	return iLeft == iRight;
 }
 
-bool CrossOf(time_t iOldTimestampParam, time_t iNowTimestampParam, int64_t iOffsetSecondsParam, SlotOf fnSlotOfParam)
+bool CrossOf(time_t iOldTimestamp, time_t iNowTimestamp, int64_t iOffsetSecondsLocal, SlotOf fnSlotOf)
 {
 	int64_t iOldSlot = 0;
 	int64_t iNowSlot = 0;
-	if (!Slot(iOldTimestampParam, iOffsetSecondsParam, fnSlotOfParam, &iOldSlot) || !Slot(iNowTimestampParam, iOffsetSecondsParam, fnSlotOfParam, &iNowSlot))
+	if (!Slot(iOldTimestamp, iOffsetSecondsLocal, fnSlotOf, &iOldSlot) || !Slot(iNowTimestamp, iOffsetSecondsLocal, fnSlotOf, &iNowSlot))
 	{
 		return false;
 	}
@@ -147,134 +147,134 @@ timeval GetCurTickTime()
 	return BaseTimerManager::GetInstance().GetCurTickTime();
 }
 
-time_t Shift(time_t iTimestampParam, int64_t iOffsetSecondsParam)
+time_t Shift(time_t iTimestamp, int64_t iOffsetSecondsLocal)
 {
-	return (time_t)((int64_t)iTimestampParam + iOffsetSecondsParam);
+	return (time_t)((int64_t)iTimestamp + iOffsetSecondsLocal);
 }
 
-TimeMark Capture(int64_t iOffsetSecondsParam)
+TimeMark Capture(int64_t iOffsetSecondsLocal)
 {
 	TimeMark stMark;
 	stMark.iTimestamp = GetTime();
-	stMark.iOffsetSeconds = iOffsetSecondsParam;
+	stMark.iOffsetSeconds = iOffsetSecondsLocal;
 	return stMark;
 }
 
-int64_t DayPeriod(time_t iTimestampParam, int64_t iOffsetSecondsParam)
+int64_t DayPeriod(time_t iTimestamp, int64_t iOffsetSecondsLocal)
 {
-	return PeriodOf(iTimestampParam, iOffsetSecondsParam, DayOf);
+	return PeriodOf(iTimestamp, iOffsetSecondsLocal, DayOf);
 }
 
-int64_t WeekPeriod(time_t iTimestampParam, int64_t iOffsetSecondsParam)
+int64_t WeekPeriod(time_t iTimestamp, int64_t iOffsetSecondsLocal)
 {
-	return PeriodOf(iTimestampParam, iOffsetSecondsParam, WeekOf);
+	return PeriodOf(iTimestamp, iOffsetSecondsLocal, WeekOf);
 }
 
-int64_t WeekdayPeriod(time_t iTimestampParam, int iWeekdayParam, int64_t iOffsetSecondsParam)
+int64_t WeekdayPeriod(time_t iTimestamp, int iWeekday, int64_t iOffsetSecondsLocal)
 {
 	int64_t iSlot = 0;
-	if (!WeekdaySlot(iTimestampParam, iWeekdayParam, iOffsetSecondsParam, &iSlot))
+	if (!WeekdaySlot(iTimestamp, iWeekday, iOffsetSecondsLocal, &iSlot))
 	{
 		return 0;
 	}
 	return iSlot;
 }
 
-int64_t MonthPeriod(time_t iTimestampParam, int64_t iOffsetSecondsParam)
+int64_t MonthPeriod(time_t iTimestamp, int64_t iOffsetSecondsLocal)
 {
-	return PeriodOf(iTimestampParam, iOffsetSecondsParam, MonthOf);
+	return PeriodOf(iTimestamp, iOffsetSecondsLocal, MonthOf);
 }
 
-int64_t YearPeriod(time_t iTimestampParam, int64_t iOffsetSecondsParam)
+int64_t YearPeriod(time_t iTimestamp, int64_t iOffsetSecondsLocal)
 {
-	return PeriodOf(iTimestampParam, iOffsetSecondsParam, YearOf);
+	return PeriodOf(iTimestamp, iOffsetSecondsLocal, YearOf);
 }
 
-bool SameDay(time_t iFirstParam, time_t iSecondParam, int64_t iOffsetSecondsParam)
+bool SameDay(time_t iFirst, time_t iSecond, int64_t iOffsetSecondsLocal)
 {
-	return SameOf(iFirstParam, iSecondParam, iOffsetSecondsParam, DayOf);
+	return SameOf(iFirst, iSecond, iOffsetSecondsLocal, DayOf);
 }
 
-bool SameWeek(time_t iFirstParam, time_t iSecondParam, int64_t iOffsetSecondsParam)
+bool SameWeek(time_t iFirst, time_t iSecond, int64_t iOffsetSecondsLocal)
 {
-	return SameOf(iFirstParam, iSecondParam, iOffsetSecondsParam, WeekOf);
+	return SameOf(iFirst, iSecond, iOffsetSecondsLocal, WeekOf);
 }
 
-bool SameWeekday(time_t iFirstParam, time_t iSecondParam, int iWeekdayParam, int64_t iOffsetSecondsParam)
+bool SameWeekday(time_t iFirst, time_t iSecond, int iWeekday, int64_t iOffsetSecondsLocal)
 {
 	int64_t iLeft = 0;
 	int64_t iRight = 0;
-	if (!WeekdaySlot(iFirstParam, iWeekdayParam, iOffsetSecondsParam, &iLeft) || !WeekdaySlot(iSecondParam, iWeekdayParam, iOffsetSecondsParam, &iRight))
+	if (!WeekdaySlot(iFirst, iWeekday, iOffsetSecondsLocal, &iLeft) || !WeekdaySlot(iSecond, iWeekday, iOffsetSecondsLocal, &iRight))
 	{
 		return false;
 	}
 	return iLeft == iRight;
 }
 
-bool SameMonth(time_t iFirstParam, time_t iSecondParam, int64_t iOffsetSecondsParam)
+bool SameMonth(time_t iFirst, time_t iSecond, int64_t iOffsetSecondsLocal)
 {
-	return SameOf(iFirstParam, iSecondParam, iOffsetSecondsParam, MonthOf);
+	return SameOf(iFirst, iSecond, iOffsetSecondsLocal, MonthOf);
 }
 
-bool SameYear(time_t iFirstParam, time_t iSecondParam, int64_t iOffsetSecondsParam)
+bool SameYear(time_t iFirst, time_t iSecond, int64_t iOffsetSecondsLocal)
 {
-	return SameOf(iFirstParam, iSecondParam, iOffsetSecondsParam, YearOf);
+	return SameOf(iFirst, iSecond, iOffsetSecondsLocal, YearOf);
 }
 
-bool CrossDay(time_t iOldTimestampParam, time_t iNowTimestampParam, int64_t iOffsetSecondsParam)
+bool CrossDay(time_t iOldTimestamp, time_t iNowTimestamp, int64_t iOffsetSecondsLocal)
 {
-	return CrossOf(iOldTimestampParam, iNowTimestampParam, iOffsetSecondsParam, DayOf);
+	return CrossOf(iOldTimestamp, iNowTimestamp, iOffsetSecondsLocal, DayOf);
 }
 
-bool CrossWeek(time_t iOldTimestampParam, time_t iNowTimestampParam, int64_t iOffsetSecondsParam)
+bool CrossWeek(time_t iOldTimestamp, time_t iNowTimestamp, int64_t iOffsetSecondsLocal)
 {
-	return CrossOf(iOldTimestampParam, iNowTimestampParam, iOffsetSecondsParam, WeekOf);
+	return CrossOf(iOldTimestamp, iNowTimestamp, iOffsetSecondsLocal, WeekOf);
 }
 
-bool CrossWeekday(time_t iOldTimestampParam, time_t iNowTimestampParam, int iWeekdayParam, int64_t iOffsetSecondsParam)
+bool CrossWeekday(time_t iOldTimestamp, time_t iNowTimestamp, int iWeekday, int64_t iOffsetSecondsLocal)
 {
 	int64_t iOldSlot = 0;
 	int64_t iNowSlot = 0;
-	if (!WeekdaySlot(iOldTimestampParam, iWeekdayParam, iOffsetSecondsParam, &iOldSlot) || !WeekdaySlot(iNowTimestampParam, iWeekdayParam, iOffsetSecondsParam, &iNowSlot))
+	if (!WeekdaySlot(iOldTimestamp, iWeekday, iOffsetSecondsLocal, &iOldSlot) || !WeekdaySlot(iNowTimestamp, iWeekday, iOffsetSecondsLocal, &iNowSlot))
 	{
 		return false;
 	}
 	return iNowSlot > iOldSlot;
 }
 
-bool CrossMonth(time_t iOldTimestampParam, time_t iNowTimestampParam, int64_t iOffsetSecondsParam)
+bool CrossMonth(time_t iOldTimestamp, time_t iNowTimestamp, int64_t iOffsetSecondsLocal)
 {
-	return CrossOf(iOldTimestampParam, iNowTimestampParam, iOffsetSecondsParam, MonthOf);
+	return CrossOf(iOldTimestamp, iNowTimestamp, iOffsetSecondsLocal, MonthOf);
 }
 
-bool CrossYear(time_t iOldTimestampParam, time_t iNowTimestampParam, int64_t iOffsetSecondsParam)
+bool CrossYear(time_t iOldTimestamp, time_t iNowTimestamp, int64_t iOffsetSecondsLocal)
 {
-	return CrossOf(iOldTimestampParam, iNowTimestampParam, iOffsetSecondsParam, YearOf);
+	return CrossOf(iOldTimestamp, iNowTimestamp, iOffsetSecondsLocal, YearOf);
 }
 
-bool CrossDay(const TimeMark& stSavedParam, time_t iNowTimestampParam)
+bool CrossDay(const TimeMark& stSaved, time_t iNowTimestamp)
 {
-	return CrossDay(stSavedParam.iTimestamp, iNowTimestampParam, stSavedParam.iOffsetSeconds);
+	return CrossDay(stSaved.iTimestamp, iNowTimestamp, stSaved.iOffsetSeconds);
 }
 
-bool CrossWeek(const TimeMark& stSavedParam, time_t iNowTimestampParam)
+bool CrossWeek(const TimeMark& stSaved, time_t iNowTimestamp)
 {
-	return CrossWeek(stSavedParam.iTimestamp, iNowTimestampParam, stSavedParam.iOffsetSeconds);
+	return CrossWeek(stSaved.iTimestamp, iNowTimestamp, stSaved.iOffsetSeconds);
 }
 
-bool CrossWeekday(const TimeMark& stSavedParam, time_t iNowTimestampParam, int iWeekdayParam)
+bool CrossWeekday(const TimeMark& stSaved, time_t iNowTimestamp, int iWeekday)
 {
-	return CrossWeekday(stSavedParam.iTimestamp, iNowTimestampParam, iWeekdayParam, stSavedParam.iOffsetSeconds);
+	return CrossWeekday(stSaved.iTimestamp, iNowTimestamp, iWeekday, stSaved.iOffsetSeconds);
 }
 
-bool CrossMonth(const TimeMark& stSavedParam, time_t iNowTimestampParam)
+bool CrossMonth(const TimeMark& stSaved, time_t iNowTimestamp)
 {
-	return CrossMonth(stSavedParam.iTimestamp, iNowTimestampParam, stSavedParam.iOffsetSeconds);
+	return CrossMonth(stSaved.iTimestamp, iNowTimestamp, stSaved.iOffsetSeconds);
 }
 
-bool CrossYear(const TimeMark& stSavedParam, time_t iNowTimestampParam)
+bool CrossYear(const TimeMark& stSaved, time_t iNowTimestamp)
 {
-	return CrossYear(stSavedParam.iTimestamp, iNowTimestampParam, stSavedParam.iOffsetSeconds);
+	return CrossYear(stSaved.iTimestamp, iNowTimestamp, stSaved.iOffsetSeconds);
 }
 }
 }

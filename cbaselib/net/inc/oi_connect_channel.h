@@ -13,7 +13,7 @@ class ConnectChannel : public Channel
 	SessionManager* m_pSessionManager;
 
   public:
-	ConnectChannel(NetSocket stTextParam, SessionManager* pMgrParam, uint64_t iGenerationParam);
+	ConnectChannel(NetSocket stText, SessionManager* pMgr, uint64_t iGeneration);
 	virtual void DataIn();
 	virtual void DataOut();
 	virtual bool TryClose();
@@ -30,10 +30,10 @@ class ConnectChannel : public Channel
 	bool CheckTcpConnect();
 
   public:
-	static bool StartConnect(SessionManager* pMgrParam, bool bAsyncParam);
+	static bool StartConnect(SessionManager* pMgr, bool bAsync);
 
   private:
-	static bool StartTcpConnect(SessionManager* pMgrParam, bool bAsyncParam);
+	static bool StartTcpConnect(SessionManager* pMgr, bool bAsync);
 };
 }
 }

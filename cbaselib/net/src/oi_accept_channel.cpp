@@ -44,41 +44,41 @@ bool AcceptChannel::TryClose()
 	return false;
 }
 
-bool AcceptChannel::StartAccept(SessionManager* pMgrParam, bool bAsyncParam)
+bool AcceptChannel::StartAccept(SessionManager* pMgr, bool bAsync)
 {
-	int iSessionTypeLocal = pMgrParam->GetSessionType();
+	int iSessionTypeLocal = pMgr->GetSessionType();
 	switch (iSessionTypeLocal)
 	{
 	case SESSION_TYPE_TCP:
-		return StartTcpAccept(pMgrParam, bAsyncParam);
+		return StartTcpAccept(pMgr, bAsync);
 	default:
 		printf("SessionManager::StartServer not support session_type=%d\n", iSessionTypeLocal);
 		return false;
 	}
 }
 
-bool AcceptChannel::StartTcpAccept(SessionManager* pMgrParam, bool bAsyncParam)
+bool AcceptChannel::StartTcpAccept(SessionManager* pMgr, bool bAsync)
 {
 	// 只支持异步监听。同步 accept 会把调用线程永久堵住。
-	if (!bAsyncParam)
+	if (!bAsync)
 	{
-		LOG_ERROR("AcceptChannel::StartTcpAccept sync accept not supported id=%s", pMgrParam->GetIDString().c_str());
+		LOG_ERROR("AcceptChannel::StartTcpAccept sync accept not supported id=%s", pMgr->GetIDString().c_str());
 		return false;
 	}
 	NetSocket stText;
-	if (!stText.CreateSocket(pMgrParam, bAsyncParam))
+	if (!stText.CreateSocket(pMgr, bAsync))
 	{
 		return false;
 	}
 
-	if (!stText.SocketListenAndBind(pMgrParam))
+	if (!stText.SocketListenAndBind(pMgr))
 	{
 		NetOs_Close(stText.GetSocket());
 		stText.Detach();
 		return false;
 	}
 
-	AcceptChannel* pChannelLocal = new AcceptChannel(stText, pMgrParam);
+	AcceptChannel* pChannelLocal = new AcceptChannel(stText, pMgr);
 	Poll::GetInstance().IOEventRegister(pChannelLocal, true, true);
 	return true;
 }

@@ -6,8 +6,8 @@ namespace OI
 namespace Net
 {
 
-NetChannel::NetChannel(NetSocket stTextParam, Session* pSessionParam)
-    : Channel(stTextParam, pSessionParam)
+NetChannel::NetChannel(NetSocket stText, Session* pSession)
+    : Channel(stText, pSession)
 {
 	NetOs_SetNonblock(stSocket.GetSocket());
 	NetOs_SetNoDelay(stSocket.GetSocket());

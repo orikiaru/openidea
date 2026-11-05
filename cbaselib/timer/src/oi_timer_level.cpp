@@ -6,7 +6,7 @@ namespace OI
 namespace Timer
 {
 
-void TimerLevel::RunTick(BaseTimerManager* pMgrParam, TimerList* pDueParam)
+void TimerLevel::RunTick(BaseTimerManager* pMgr, TimerList* pDue)
 {
 	assert(m_iOffset >= 0 && m_iOffset < m_iMaxTick);
 	TimerList vCurrentList;
@@ -24,14 +24,14 @@ void TimerLevel::RunTick(BaseTimerManager* pMgrParam, TimerList* pDueParam)
 	}
 
 	// 第一层到点的交给调用方在锁外执行，上层的按剩余 tick 重新挂到下层。
-	if (pDueParam)
+	if (pDue)
 	{
-		pDueParam->splice(pDueParam->end(), vCurrentList);
+		pDue->splice(pDue->end(), vCurrentList);
 		return;
 	}
 	for (const auto& pTimer : vCurrentList)
 	{
-		pMgrParam->add_timer(pTimer);
+		pMgr->add_timer(pTimer);
 	}
 }
 }

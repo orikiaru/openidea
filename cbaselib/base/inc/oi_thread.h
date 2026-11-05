@@ -22,8 +22,8 @@ namespace Thread
 {
 // 普通任务异常在调度入口隔离；处理器不得抛异常，nullptr 恢复 stderr 报告。
 using TaskErrorHandler = void (*)(std::exception_ptr);
-void SetTaskErrorHandler(TaskErrorHandler fnHandlerParam);
-void ReportTaskError(std::exception_ptr stErrorParam) noexcept;
+void SetTaskErrorHandler(TaskErrorHandler fnHandler);
+void ReportTaskError(std::exception_ptr stError) noexcept;
 
 class ThreadPool
 {
@@ -63,26 +63,26 @@ class ThreadPool
   public:
 	bool Init();
 	// 多线程把协程句柄放进运行队列并叫醒一个工人。不分配 CoroTask。
-	void PostCoroutine(std::coroutine_handle<> stHandleParam);
+	void PostCoroutine(std::coroutine_handle<> stHandle);
 	template <typename F>
 	typename std::enable_if<!std::is_base_of<Task, typename std::remove_pointer<typename std::decay<F>::type>::type>::value, bool>::type
-	AddTask(F&& fnFunctionParam, PRIO_ENUM iPriorityParam = PRIO_NORMAL)
+	AddTask(F&& fnFunction, PRIO_ENUM iPriority = PRIO_NORMAL)
 	{
 		typedef typename std::decay<F>::type Fn;
-		return AddTask(new FnTask<Fn>(std::forward<F>(fnFunctionParam), iPriorityParam));
+		return AddTask(new FnTask<Fn>(std::forward<F>(fnFunction), iPriority));
 	}
 	void StartWork();
 	// 单线程主循环及同步适配器共用：普通任务、协程、IO 都必须推进。
 	void PumpOnce();
 	// 初始化时注册；停止开始后拒绝注册。回调在 poll 上执行且不可阻塞。
-	bool AddStopHandler(void (*fnHandlerParam)());
+	bool AddStopHandler(void (*fnHandler)());
 	bool StopRequested() const
 	{
 		return m_bStopRequested.load();
 	}
 	// 先关闭入口并执行停止回调，再置 Stopping 并通知工人，join 完最后停止 poll。
 	// SIGINT、SIGTERM、SIGQUIT 也走这里，退出码为 0；重复请求不重复执行回调。
-	void RequestStop(int iCodeParam);
+	void RequestStop(int iCode);
 	bool Stopping() const
 	{
 		return bStop.load();
@@ -91,19 +91,19 @@ class ThreadPool
 	{
 		return iExitCode;
 	}
-	void SetDrain(bool (*fnFunctionParam)());
+	void SetDrain(bool (*fnFunction)());
 	// 单线程这一轮没跑到、但已经挂进协程队列的。yield(0) 靠它留到下一轮。
-	void SetPending(bool (*fnFunctionParam)());
+	void SetPending(bool (*fnFunction)());
 	// 工人通过它 resume 协程。协程运行时借此标记“正在跑协程”并释放跑完的根协程，不在 base 里直接依赖 proto。
-	void SetResume(void (*fnFunctionParam)(std::coroutine_handle<>));
+	void SetResume(void (*fnFunction)(std::coroutine_handle<>));
 
 	// 线程交给 out，由调用方在退出时 join。
-	static bool CreateSpecThread(std::thread& stOutputParam, void* (*fnThreadHandleParam)(void*), void* pArgumentParam);
+	static bool CreateSpecThread(std::thread& stOutput, void* (*fnThreadHandle)(void*), void* pArgument);
 	static void InitIgnoreSig();
-	static void InitUnIgnoreSig(int iSigParam);
+	static void InitUnIgnoreSig(int iSig);
 
   private:
-	bool AddTask(Task* pTaskParam);
+	bool AddTask(Task* pTask);
 	void SingleThreadStartWork();
 	void MultiThreadStartWork();
 };

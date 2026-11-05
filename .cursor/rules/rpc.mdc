@@ -11,4 +11,4 @@ alwaysApply: false
 
 按服务名用 `CallAny`、`Call`、`CallAll`、`CallMany`，见 `docs/registry.md`。`CallAll` 和 `CallMany` 先 `Submit` 再等。
 
-服务端注册用 `OI_RPC_BIND`，见 `modules/ipcserver/src/ipcserver.cpp` 的 `AllEcho`。要推迟回包用同文件的 `Hold`：`co_await coro::yield(stRequest.iDelayMilliseconds)` 再写 `stResponse`。
+服务端注册用 `OI_RPC_BIND`，见 `modules/ipcserver/src/ipcserver.cpp` 的 `AllEcho`。要推迟回包用同文件的 `Hold`：`co_await OI::Coro::yield(stRequest.iDelayMilliseconds)` 再写 `stResponse`。

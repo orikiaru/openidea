@@ -8,14 +8,14 @@ namespace Net
 class NetSession : public Session
 {
   protected:
-	virtual void Close(int iErrorParam); //内部调用关闭,必然由IO线程调用,无锁
+	virtual void Close(int iError); //内部调用关闭,必然由IO线程调用,无锁
   public:
-	NetSession(SessionManager* pMgrParam)
-	    : Session(pMgrParam)
+	NetSession(SessionManager* pMgr)
+	    : Session(pMgr)
 	{
 	}
 	virtual void ActiveClose();                 //主动close,由SessionManager触发或者IO线程触发
-	virtual void PassiveClose(int iErrorParam); //IO线程被动关闭调用,会回调Mgr->CloseSession
+	virtual void PassiveClose(int iError); //IO线程被动关闭调用,会回调Mgr->CloseSession
 	virtual void OnClose();
 };
 }

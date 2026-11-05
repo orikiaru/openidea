@@ -48,7 +48,7 @@ class BaseTimer
 
 	friend class BaseTimerManager;
 	TimerData m_stData; //标记定时器所在定时器管理器的位置,只由TimerManager控制,外部不可操作
-	void InitData(BaseTimerManager* pMgrParam, int iMillsecParam, int64_t iTicksParam);
+	void InitData(BaseTimerManager* pMgr, int iMillsec, int64_t iTicks);
 	TimerLevel* GetTimerLevel()
 	{
 		return m_stData.m_pCurrentLevel;

@@ -14,7 +14,7 @@ class NetAddr
 
   public:
 	NetAddr();
-	bool Init(SessionManager* pMgrParam);
+	bool Init(SessionManager* pMgr);
 	bool IsValidAttr() const;
 	sockaddr* NetAttrPtr();
 	socklen_t NetAttrLen();
@@ -31,7 +31,7 @@ class NetSocket
 	virtual ~NetSocket()
 	{
 	}
-	bool Init(net_socket_t iSessionIdParam, SessionManager* pMgrParam);
+	bool Init(net_socket_t iSessionId, SessionManager* pMgr);
 
 	bool IsBind();
 	void SetBind();
@@ -46,26 +46,26 @@ class NetSocket
 	void SetAccept();
 
 	bool IsAsync();
-	void SetAsync(bool bAsyncParam);
+	void SetAsync(bool bAsync);
 
   public:
-	bool CreateSocket(SessionManager* pMgrParam, bool bAsyncParam);
-	bool SocketBind(SessionManager* pMgrParam);
-	bool SocketListen(SessionManager* pMgrParam);
-	bool SocketListenAndBind(SessionManager* pMgrParam);
-	bool SocketConnect(SessionManager* pMgrParam);
+	bool CreateSocket(SessionManager* pMgr, bool bAsync);
+	bool SocketBind(SessionManager* pMgr);
+	bool SocketListen(SessionManager* pMgr);
+	bool SocketListenAndBind(SessionManager* pMgr);
+	bool SocketConnect(SessionManager* pMgr);
 	//accept一个套接字,返回-1失败,返回0说明没有可接受的了
-	int SocketAcceptOne(SessionManager* pMgrParam);
-	NetAddr GetNetAddr(SessionManager* pMgrParam);
+	int SocketAcceptOne(SessionManager* pMgr);
+	NetAddr GetNetAddr(SessionManager* pMgr);
 
   public:
 	net_socket_t GetSocket() const
 	{
 		return m_iSocketDescriptor;
 	}
-	void Attach(net_socket_t iSessionIdParam)
+	void Attach(net_socket_t iSessionId)
 	{
-		m_iSocketDescriptor = iSessionIdParam;
+		m_iSocketDescriptor = iSessionId;
 	}
 	void Detach()
 	{

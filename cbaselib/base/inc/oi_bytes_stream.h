@@ -51,12 +51,12 @@ class BytesStream : public Bytes
 	    : m_iCurrentPosition(0), m_iSnapshotPosition(0)
 	{
 	}
-	BytesStream(const Bytes& stBytesParam)
-	    : Bytes(stBytesParam), m_iCurrentPosition(0), m_iSnapshotPosition(0)
+	BytesStream(const Bytes& stBytes)
+	    : Bytes(stBytes), m_iCurrentPosition(0), m_iSnapshotPosition(0)
 	{
 	}
-	BytesStream(const char* pDataParam, size_t iDataLengthParam)
-	    : Bytes(pDataParam, iDataLengthParam), m_iCurrentPosition(0), m_iSnapshotPosition(0)
+	BytesStream(const char* pData, size_t iDataLength)
+	    : Bytes(pData, iDataLength), m_iCurrentPosition(0), m_iSnapshotPosition(0)
 	{
 	}
 	void Clear()
@@ -77,9 +77,9 @@ class BytesStream : public Bytes
 	{
 		return m_iCurrentPosition;
 	}
-	void AddCurPos(size_t iOffsetParam)
+	void AddCurPos(size_t iOffset)
 	{
-		m_iCurrentPosition += iOffsetParam;
+		m_iCurrentPosition += iOffset;
 	}
 	char* GetCurPtr()
 	{
@@ -101,14 +101,14 @@ class BytesStream : public Bytes
 
 	template <typename T>
 	typename std::enable_if<PbFixedTrait<T>::bValue, BytesStream&>::type
-	operator<<(const T& stValueParam)
+	operator<<(const T& stValueLocal)
 	{
-		Append(&stValueParam, sizeof(T));
+		Append(&stValueLocal, sizeof(T));
 		return *this;
 	}
 	template <typename T>
 	typename std::enable_if<PbFixedTrait<T>::bValue, BytesStream&>::type
-	operator>>(T& stValueParam)
+	operator>>(T& stValueLocal)
 	{
 		if (RemainSize() < sizeof(T))
 		{
@@ -121,29 +121,29 @@ class BytesStream : public Bytes
 			{
 				throw ParserException();
 			}
-			stValueParam = iValue != 0;
+			stValueLocal = iValue != 0;
 		}
 		else
 		{
-			memcpy(&stValueParam, GetCurPtr(), sizeof(T));
+			memcpy(&stValueLocal, GetCurPtr(), sizeof(T));
 		}
 		m_iCurrentPosition += sizeof(T);
 		return *this;
 	}
 
-	BytesStream& operator<<(const std::string& sFirstParam);
-	BytesStream& operator<<(const Bytes& stFirstParam);
-	BytesStream& operator<<(const BytesStream& stFirstParam); //全量写入，内容本身已经是序列化结果
+	BytesStream& operator<<(const std::string& sFirst);
+	BytesStream& operator<<(const Bytes& stFirst);
+	BytesStream& operator<<(const BytesStream& stFirst); //全量写入，内容本身已经是序列化结果
 
-	BytesStream& operator<<(const ::OI::Rpc::Serialize& stFirstParam);
+	BytesStream& operator<<(const ::OI::Rpc::Serialize& stFirst);
 
-	BytesStream& operator>>(std::string& sFirstParam);
-	BytesStream& operator>>(Bytes& stFirstParam);
+	BytesStream& operator>>(std::string& sFirst);
+	BytesStream& operator>>(Bytes& stFirst);
 
-	BytesStream& operator>>(::OI::Rpc::Serialize& stFirstParam);
+	BytesStream& operator>>(::OI::Rpc::Serialize& stFirst);
 
 	template <typename T>
-	BytesStream& operator>>(std::vector<T>& stValueParam)
+	BytesStream& operator>>(std::vector<T>& stValueLocal)
 	{
 		uint32_t iSize;
 		(*this) >> iSize;
@@ -153,19 +153,19 @@ class BytesStream : public Bytes
 		{
 			throw ParserException();
 		}
-		stValueParam.resize(iSize);
+		stValueLocal.resize(iSize);
 		for (uint32_t iIndexLocal = 0; iIndexLocal < iSize; ++iIndexLocal)
 		{
-			(*this) >> stValueParam[iIndexLocal];
+			(*this) >> stValueLocal[iIndexLocal];
 		}
 		return *this;
 	}
 	template <typename T>
-	BytesStream& operator<<(const std::vector<T>& stValueParam)
+	BytesStream& operator<<(const std::vector<T>& stValueLocal)
 	{
-		uint32_t iSize = stValueParam.size();
+		uint32_t iSize = stValueLocal.size();
 		(*this) << iSize;
-		for (const auto& stValue : stValueParam)
+		for (const auto& stValue : stValueLocal)
 		{
 			(*this) << stValue;
 		}
@@ -177,35 +177,35 @@ class BytesStream : public Bytes
 	// seqid 从 0 起，按字段声明顺序对应；允许缺号、乱序。
 	// 没出现的 seqid 保持字段原值，不认识的 seqid 按 size 跳过。
 	// vector 的每个元素单独一条，seqid 相同。均为 uint32 小端。
-	BytesStream& WritePbRaw(uint32_t iSequenceParam, const void* pDataParam, uint32_t iSizeParam);
-	PbHeaderState PreparePbHeader(uint32_t& iSequenceParam, uint32_t& iSizeParam);
-	void ReadPbHeader(uint32_t& iSequenceParam, uint32_t& iSizeParam);
-	void SkipPb(uint32_t iSizeParam);
+	BytesStream& WritePbRaw(uint32_t iSequence, const void* pData, uint32_t iSize);
+	PbHeaderState PreparePbHeader(uint32_t& iSequence, uint32_t& iSize);
+	void ReadPbHeader(uint32_t& iSequence, uint32_t& iSize);
+	void SkipPb(uint32_t iSize);
 
 	template <typename T>
 	typename std::enable_if<PbFixedTrait<T>::bValue, BytesStream&>::type
-	WritePb(uint32_t iSequenceParam, const T& stValueParam)
+	WritePb(uint32_t iSequence, const T& stValueLocal)
 	{
-		return WritePbRaw(iSequenceParam, &stValueParam, (uint32_t)sizeof(T));
+		return WritePbRaw(iSequence, &stValueLocal, (uint32_t)sizeof(T));
 	}
-	BytesStream& WritePb(uint32_t iSequenceParam, const std::string& sValueParam);
-	BytesStream& WritePb(uint32_t iSequenceParam, const Bytes& stValueParam);
-	BytesStream& WritePb(uint32_t iSequenceParam, const ::OI::Rpc::Serialize& stValueParam);
+	BytesStream& WritePb(uint32_t iSequence, const std::string& sValue);
+	BytesStream& WritePb(uint32_t iSequence, const Bytes& stValueLocal);
+	BytesStream& WritePb(uint32_t iSequence, const ::OI::Rpc::Serialize& stValueLocal);
 	template <typename T>
-	BytesStream& WritePb(uint32_t iSequenceParam, const std::vector<T>& stValueParam)
+	BytesStream& WritePb(uint32_t iSequence, const std::vector<T>& stValueLocal)
 	{
-		for (const auto& stValue : stValueParam)
+		for (const auto& stValue : stValueLocal)
 		{
-			WritePb(iSequenceParam, stValue);
+			WritePb(iSequence, stValue);
 		}
 		return *this;
 	}
 
 	template <typename T>
 	typename std::enable_if<PbFixedTrait<T>::bValue, void>::type
-	ReadPb(uint32_t iSizeParam, T& stValueParam)
+	ReadPb(uint32_t iSize, T& stValueLocal)
 	{
-		if (iSizeParam != (uint32_t)sizeof(T) || RemainSize() < iSizeParam)
+		if (iSize != (uint32_t)sizeof(T) || RemainSize() < iSize)
 		{
 			throw ParserException();
 		}
@@ -216,29 +216,29 @@ class BytesStream : public Bytes
 			{
 				throw ParserException();
 			}
-			stValueParam = iValue != 0;
+			stValueLocal = iValue != 0;
 		}
 		else
 		{
-			memcpy(&stValueParam, GetCurPtr(), sizeof(T));
+			memcpy(&stValueLocal, GetCurPtr(), sizeof(T));
 		}
-		m_iCurrentPosition += iSizeParam;
+		m_iCurrentPosition += iSize;
 	}
-	void ReadPb(uint32_t iSizeParam, std::string& sValueParam);
-	void ReadPb(uint32_t iSizeParam, Bytes& stValueParam);
-	void ReadPb(uint32_t iSizeParam, ::OI::Rpc::Serialize& stValueParam);
+	void ReadPb(uint32_t iSize, std::string& sValue);
+	void ReadPb(uint32_t iSize, Bytes& stValueLocal);
+	void ReadPb(uint32_t iSize, ::OI::Rpc::Serialize& stValueLocal);
 	template <typename T>
-	void ReadPb(uint32_t iSizeParam, std::vector<T>& stValueParam)
+	void ReadPb(uint32_t iSize, std::vector<T>& stValueLocal)
 	{
 		T stElem{};
-		ReadPb(iSizeParam, stElem);
-		stValueParam.push_back(std::move(stElem));
+		ReadPb(iSize, stElem);
+		stValueLocal.push_back(std::move(stElem));
 	}
 	template <typename K, typename V>
-	BytesStream& WritePb(uint32_t iSequenceParam, const std::map<K, V>& stValueParam)
+	BytesStream& WritePb(uint32_t iSequence, const std::map<K, V>& stValueLocal)
 	{
 		BytesStream stAll;
-		for (const auto& [stKey, stValue] : stValueParam)
+		for (const auto& [stKey, stValue] : stValueLocal)
 		{
 			BytesStream stPair;
 			stPair.WritePb(0, stKey);
@@ -247,22 +247,22 @@ class BytesStream : public Bytes
 			stAll.WritePbRaw(0, iPairSize ? stPair.Begin() : NULL, iPairSize);
 		}
 		uint32_t iSize = (uint32_t)stAll.Size();
-		return WritePbRaw(iSequenceParam, iSize ? stAll.Begin() : NULL, iSize);
+		return WritePbRaw(iSequence, iSize ? stAll.Begin() : NULL, iSize);
 	}
 	template <typename K, typename V>
-	void ReadPb(uint32_t iSizeParam, std::map<K, V>& stValueParam)
+	void ReadPb(uint32_t iSize, std::map<K, V>& stValueLocal)
 	{
-		if (RemainSize() < iSizeParam)
+		if (RemainSize() < iSize)
 		{
 			throw ParserException();
 		}
 		BytesStream stAll;
-		if (iSizeParam > 0)
+		if (iSize > 0)
 		{
-			stAll.Append(GetCurPtr(), iSizeParam);
+			stAll.Append(GetCurPtr(), iSize);
 		}
-		m_iCurrentPosition += iSizeParam;
-		stValueParam.clear();
+		m_iCurrentPosition += iSize;
+		stValueLocal.clear();
 		while (stAll.RemainSize() > 0)
 		{
 			uint32_t iPairSequence = 0;
@@ -302,7 +302,7 @@ class BytesStream : public Bytes
 			{
 				throw ParserException();
 			}
-			stValueParam.insert(std::make_pair(stKey, stVal));
+			stValueLocal.insert(std::make_pair(stKey, stVal));
 		}
 	}
 };

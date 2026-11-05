@@ -19,7 +19,7 @@ namespace Log
 class DiagnosticText
 {
   public:
-	explicit DiagnosticText(std::string_view sTextParam) noexcept;
+	explicit DiagnosticText(std::string_view sText) noexcept;
 	const char* GetText() const noexcept
 	{
 		return m_vText;
@@ -36,9 +36,9 @@ class DiagnosticText
 
 bool Init();
 // 日志服自己用：不连日志服，整行日志交给 sink 写本地。传 NULL 摘掉，之后只打 stdout。
-typedef bool (*LocalSink)(LOG_LEVEL iLevelParam, const char* pTextParam, size_t iLengthParam);
-void InitLocal(LocalSink fnSinkParam);
-bool Log(LOG_LEVEL iLevelParam, const char* pFormatParam, ...) __attribute__((format(printf, 2, 3)));
+typedef bool (*LocalSink)(LOG_LEVEL iLevel, const char* pText, size_t iLength);
+void InitLocal(LocalSink fnSink);
+bool Log(LOG_LEVEL iLevel, const char* pFormat, ...) __attribute__((format(printf, 2, 3)));
 }
 }
 

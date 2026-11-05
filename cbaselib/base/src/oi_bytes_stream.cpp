@@ -10,96 +10,96 @@ namespace Base
 //暂不处理大小端问题，默认小端
 
 // 长度前缀是 4 字节，最高位为 1 的长度对端按非法处理。
-static void WriteLenPrefixed(BytesStream& stOutputStreamParam, const void* pDataParam, size_t iSizeParam)
+static void WriteLenPrefixed(BytesStream& stOutputStream, const void* pData, size_t iSize)
 {
-	if (iSizeParam > (size_t)0x7FFFFFFF)
+	if (iSize > (size_t)0x7FFFFFFF)
 	{
 		throw ParserException();
 	}
-	stOutputStreamParam << (int32_t)iSizeParam;
-	if (iSizeParam > 0)
+	stOutputStream << (int32_t)iSize;
+	if (iSize > 0)
 	{
-		stOutputStreamParam.Append(pDataParam, iSizeParam);
+		stOutputStream.Append(pData, iSize);
 	}
 }
 
-static size_t ReadLenPrefix(BytesStream& stOutputStreamParam)
+static size_t ReadLenPrefix(BytesStream& stOutputStream)
 {
 	int32_t iSize;
-	stOutputStreamParam >> iSize;
-	if (iSize < 0 || stOutputStreamParam.RemainSize() < (size_t)iSize)
+	stOutputStream >> iSize;
+	if (iSize < 0 || stOutputStream.RemainSize() < (size_t)iSize)
 	{
 		throw ParserException();
 	}
 	return (size_t)iSize;
 }
 
-BytesStream& BytesStream::operator<<(const std::string& sFirstParam)
+BytesStream& BytesStream::operator<<(const std::string& sFirst)
 {
-	WriteLenPrefixed(*this, sFirstParam.data(), sFirstParam.size());
+	WriteLenPrefixed(*this, sFirst.data(), sFirst.size());
 	return *this;
 }
-BytesStream& BytesStream::operator>>(std::string& sFirstParam)
+BytesStream& BytesStream::operator>>(std::string& sFirst)
 {
 	size_t iSize = ReadLenPrefix(*this);
-	sFirstParam.assign(GetCurPtr(), iSize);
+	sFirst.assign(GetCurPtr(), iSize);
 	m_iCurrentPosition += iSize;
 	return *this;
 }
 
-BytesStream& BytesStream::operator<<(const Bytes& stFirstParam)
+BytesStream& BytesStream::operator<<(const Bytes& stFirst)
 {
-	WriteLenPrefixed(*this, stFirstParam.Data(), stFirstParam.Size());
+	WriteLenPrefixed(*this, stFirst.Data(), stFirst.Size());
 	return *this;
 }
 // 覆盖 a 原有内容，和 ReadPb 一致。
-BytesStream& BytesStream::operator>>(Bytes& stFirstParam)
+BytesStream& BytesStream::operator>>(Bytes& stFirst)
 {
 	size_t iSize = ReadLenPrefix(*this);
-	stFirstParam.Clear();
-	stFirstParam.Append(GetCurPtr(), iSize);
+	stFirst.Clear();
+	stFirst.Append(GetCurPtr(), iSize);
 	m_iCurrentPosition += iSize;
 	return *this;
 }
 
-BytesStream& BytesStream::operator<<(const BytesStream& stFirstParam)
+BytesStream& BytesStream::operator<<(const BytesStream& stFirst)
 {
-	Append(stFirstParam);
+	Append(stFirst);
 	return *this;
 }
 
-BytesStream& BytesStream::operator<<(const ::OI::Rpc::Serialize& stFirstParam)
+BytesStream& BytesStream::operator<<(const ::OI::Rpc::Serialize& stFirst)
 {
-	stFirstParam.serialize(*this);
+	stFirst.serialize(*this);
 	return *this;
 }
 
-BytesStream& BytesStream::operator>>(::OI::Rpc::Serialize& stFirstParam)
+BytesStream& BytesStream::operator>>(::OI::Rpc::Serialize& stFirst)
 {
-	stFirstParam.deserialize(*this);
+	stFirst.deserialize(*this);
 	return *this;
 }
 
-BytesStream& BytesStream::WritePbRaw(uint32_t iSequenceParam, const void* pDataParam, uint32_t iSizeParam)
+BytesStream& BytesStream::WritePbRaw(uint32_t iSequence, const void* pData, uint32_t iSize)
 {
-	if ((int32_t)iSequenceParam < 0 || (int32_t)iSizeParam < 0)
+	if ((int32_t)iSequence < 0 || (int32_t)iSize < 0)
 	{
 		throw ParserException();
 	}
-	Append(&iSequenceParam, sizeof(iSequenceParam));
-	Append(&iSizeParam, sizeof(iSizeParam));
-	if (iSizeParam > 0)
+	Append(&iSequence, sizeof(iSequence));
+	Append(&iSize, sizeof(iSize));
+	if (iSize > 0)
 	{
-		if (!pDataParam)
+		if (!pData)
 		{
 			throw ParserException();
 		}
-		Append(pDataParam, iSizeParam);
+		Append(pData, iSize);
 	}
 	return *this;
 }
 
-PbHeaderState BytesStream::PreparePbHeader(uint32_t& iSequenceParam, uint32_t& iSizeParam)
+PbHeaderState BytesStream::PreparePbHeader(uint32_t& iSequence, uint32_t& iSize)
 {
 	if (RemainSize() < sizeof(uint32_t) * 2)
 	{
@@ -118,53 +118,53 @@ PbHeaderState BytesStream::PreparePbHeader(uint32_t& iSequenceParam, uint32_t& i
 		return PB_HEADER_NEED_MORE;
 	}
 	m_iCurrentPosition += sizeof(uint32_t) * 2;
-	iSequenceParam = iSequenceValue;
-	iSizeParam = iSizeValue;
+	iSequence = iSequenceValue;
+	iSize = iSizeValue;
 	return PB_HEADER_OK;
 }
 
-void BytesStream::ReadPbHeader(uint32_t& iSequenceParam, uint32_t& iSizeParam)
+void BytesStream::ReadPbHeader(uint32_t& iSequence, uint32_t& iSize)
 {
-	if (PreparePbHeader(iSequenceParam, iSizeParam) != PB_HEADER_OK)
+	if (PreparePbHeader(iSequence, iSize) != PB_HEADER_OK)
 	{
 		throw ParserException();
 	}
 }
 
-void BytesStream::SkipPb(uint32_t iSizeParam)
+void BytesStream::SkipPb(uint32_t iSize)
 {
-	if (RemainSize() < iSizeParam)
+	if (RemainSize() < iSize)
 	{
 		throw ParserException();
 	}
-	m_iCurrentPosition += iSizeParam;
+	m_iCurrentPosition += iSize;
 }
 
-BytesStream& BytesStream::WritePb(uint32_t iSequenceParam, const std::string& sValueParam)
+BytesStream& BytesStream::WritePb(uint32_t iSequence, const std::string& sValue)
 {
-	if (sValueParam.size() > (size_t)0x7FFFFFFF)
+	if (sValue.size() > (size_t)0x7FFFFFFF)
 	{
 		throw ParserException();
 	}
-	const void* pData = sValueParam.empty() ? NULL : sValueParam.data();
-	return WritePbRaw(iSequenceParam, pData, (uint32_t)sValueParam.size());
+	const void* pData = sValue.empty() ? NULL : sValue.data();
+	return WritePbRaw(iSequence, pData, (uint32_t)sValue.size());
 }
 
-BytesStream& BytesStream::WritePb(uint32_t iSequenceParam, const Bytes& stValueParam)
+BytesStream& BytesStream::WritePb(uint32_t iSequence, const Bytes& stValue)
 {
-	if (stValueParam.Size() > (size_t)0x7FFFFFFF)
+	if (stValue.Size() > (size_t)0x7FFFFFFF)
 	{
 		throw ParserException();
 	}
-	uint32_t iSize = (uint32_t)stValueParam.Size();
-	const void* pData = iSize ? stValueParam.Data() : NULL;
-	return WritePbRaw(iSequenceParam, pData, iSize);
+	uint32_t iSize = (uint32_t)stValue.Size();
+	const void* pData = iSize ? stValue.Data() : NULL;
+	return WritePbRaw(iSequence, pData, iSize);
 }
 
-BytesStream& BytesStream::WritePb(uint32_t iSequenceParam, const ::OI::Rpc::Serialize& stValueParam)
+BytesStream& BytesStream::WritePb(uint32_t iSequence, const ::OI::Rpc::Serialize& stValue)
 {
 	BytesStream stInner;
-	stValueParam.serialize(stInner);
+	stValue.serialize(stInner);
 	if (stInner.Size() > (size_t)0x7FFFFFFF)
 	{
 		throw ParserException();
@@ -175,57 +175,57 @@ BytesStream& BytesStream::WritePb(uint32_t iSequenceParam, const ::OI::Rpc::Seri
 	{
 		pData = stInner.Begin();
 	}
-	return WritePbRaw(iSequenceParam, pData, iSize);
+	return WritePbRaw(iSequence, pData, iSize);
 }
 
-void BytesStream::ReadPb(uint32_t iSizeParam, std::string& sValueParam)
+void BytesStream::ReadPb(uint32_t iSize, std::string& sValue)
 {
-	if (RemainSize() < iSizeParam)
+	if (RemainSize() < iSize)
 	{
 		throw ParserException();
 	}
-	if (iSizeParam == 0)
+	if (iSize == 0)
 	{
-		sValueParam.clear();
+		sValue.clear();
 	}
 	else
 	{
-		sValueParam.assign(GetCurPtr(), iSizeParam);
+		sValue.assign(GetCurPtr(), iSize);
 	}
-	m_iCurrentPosition += iSizeParam;
+	m_iCurrentPosition += iSize;
 }
 
-void BytesStream::ReadPb(uint32_t iSizeParam, Bytes& stValueParam)
+void BytesStream::ReadPb(uint32_t iSize, Bytes& stValue)
 {
-	if (RemainSize() < iSizeParam)
+	if (RemainSize() < iSize)
 	{
 		throw ParserException();
 	}
-	stValueParam.Clear();
-	if (iSizeParam > 0)
+	stValue.Clear();
+	if (iSize > 0)
 	{
-		stValueParam.Append(GetCurPtr(), iSizeParam);
+		stValue.Append(GetCurPtr(), iSize);
 	}
-	m_iCurrentPosition += iSizeParam;
+	m_iCurrentPosition += iSize;
 }
 
-void BytesStream::ReadPb(uint32_t iSizeParam, ::OI::Rpc::Serialize& stValueParam)
+void BytesStream::ReadPb(uint32_t iSize, ::OI::Rpc::Serialize& stValue)
 {
-	if (RemainSize() < iSizeParam)
+	if (RemainSize() < iSize)
 	{
 		throw ParserException();
 	}
 	BytesStream stSub;
-	if (iSizeParam > 0)
+	if (iSize > 0)
 	{
-		stSub.Append(GetCurPtr(), iSizeParam);
+		stSub.Append(GetCurPtr(), iSize);
 	}
-	stValueParam.deserialize(stSub);
+	stValue.deserialize(stSub);
 	if (stSub.RemainSize() != 0)
 	{
 		throw ParserException();
 	}
-	m_iCurrentPosition += iSizeParam;
+	m_iCurrentPosition += iSize;
 }
 }
 }

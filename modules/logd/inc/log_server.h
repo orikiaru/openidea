@@ -18,8 +18,8 @@ class LogServer : public ::OI::Rpc::ProtoSessionManager
 	}
 
   private:
-	virtual void OnAddSession(::OI::Net::Session* pSessionParam);
-	virtual void OnDelSession(const ::OI::Net::Session* pSessionParam);
+	virtual void OnAddSession(::OI::Net::Session* pSession);
+	virtual void OnDelSession(const ::OI::Net::Session* pSession);
 	virtual ::OI::Net::Session* CloneSession()
 	{
 		return new LogServerSession(this);

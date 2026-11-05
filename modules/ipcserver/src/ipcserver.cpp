@@ -38,7 +38,7 @@ static OI_RPC_HANDLER(Hold, HandleHold)
 	}
 	if (stRequest.iDelayMilliseconds > 0)
 	{
-		co_await coro::yield(stRequest.iDelayMilliseconds);
+		co_await OI::Coro::yield(stRequest.iDelayMilliseconds);
 	}
 	stResponse.iMark = stRequest.iMark;
 	co_return 0;
@@ -49,28 +49,28 @@ struct EncodingFailureResponse : OI::RpcData::HoldRes
 {
 	bool bThrow = false;
 	bool bMalformed = false;
-	OI::Base::BytesStream& serialize(OI::Base::BytesStream& stOutputParam) const override
+	OI::Base::BytesStream& serialize(OI::Base::BytesStream& stOutput) const override
 	{
 		if (bMalformed)
 		{
 			// 外层 RPC 回执合法，但字段头声明四字节，实际只有一个字节。
-			stOutputParam << uint32_t(0) << uint32_t(4) << uint8_t(1);
-			return stOutputParam;
+			stOutput << uint32_t(0) << uint32_t(4) << uint8_t(1);
+			return stOutput;
 		}
 		if (bThrow)
 		{
-			stOutputParam << int32_t(123);
+			stOutput << int32_t(123);
 			throw std::runtime_error("injected server response encoding failure");
 		}
-		return HoldRes::serialize(stOutputParam);
+		return HoldRes::serialize(stOutput);
 	}
 };
-static OI::Rpc::RpcTask HandleEncodingRegression(const OI::Rpc::RpcContext& stContextParam, const OI::RpcData::HoldReq& stRequestParam, EncodingFailureResponse& stResponseParam)
+static OI::Rpc::RpcTask HandleEncodingRegression(const OI::Rpc::RpcContext& stContext, const OI::RpcData::HoldReq& stRequest, EncodingFailureResponse& stResponse)
 {
-	if (stRequestParam.iMark == -2147483598)
+	if (stRequest.iMark == -2147483598)
 	{
 		// 先回原请求，让客户端释放出站租约；反向 RPC 独立挂起。
-		coro::StartTask([pManager = &stContextParam.stManager, iSessionId = stContextParam.iSessionId](coro::Token) -> coro::Task
+		OI::Coro::StartTask([pManager = &stContext.stManager, iSessionId = stContext.iSessionId](OI::Coro::Token) -> OI::Coro::Task
 		{
 			OI::RpcData::HoldReq stReverse;
 			stReverse.iMark = -2147483598;
@@ -81,13 +81,13 @@ static OI::Rpc::RpcTask HandleEncodingRegression(const OI::Rpc::RpcContext& stCo
 			fflush(stdout);
 		});
 	}
-	if (stRequestParam.iMark == -2147483599)
+	if (stRequest.iMark == -2147483599)
 	{
 		throw std::runtime_error("injected server handler failure");
 	}
-	int32_t iResult = co_await HandleHold(stRequestParam, stResponseParam);
-	stResponseParam.bThrow = stRequestParam.iMark == -2147483600;
-	stResponseParam.bMalformed = stRequestParam.iMark == -2147483597;
+	int32_t iResult = co_await HandleHold(stRequest, stResponse);
+	stResponse.bThrow = stRequest.iMark == -2147483600;
+	stResponse.bMalformed = stRequest.iMark == -2147483597;
 	co_return iResult;
 }
 
@@ -100,39 +100,39 @@ bool IpcServer::Init()
 	if (bEncodingRegression)
 	{
 		OI::Rpc::BindRpcHandler(OI::Rpc::RpcProtoId<OI::RpcData::HoldReq>::iValue,
-		    [](coro::Token iTokenParam, OI::Net::SessionManager* pManagerParam, sid_t iSessionIdParam, OI::Base::BytesStream stBodyParam)
+		    [](OI::Coro::Token iToken, OI::Net::SessionManager* pManager, sid_t iSessionId, OI::Base::BytesStream stBody)
 		{
 			return OI::Rpc::RunHandledRpc<OI::RpcData::HoldReq, EncodingFailureResponse>(HandleEncodingRegression,
-			    OI::Rpc::RpcProtoId<OI::RpcData::HoldRes>::iValue, iTokenParam, pManagerParam, iSessionIdParam, std::move(stBodyParam));
+			    OI::Rpc::RpcProtoId<OI::RpcData::HoldRes>::iValue, iToken, pManager, iSessionId, std::move(stBody));
 		});
 	}
 	return ::OI::Rpc::ProtoSessionManager::Init();
 }
 
-static std::string HtmlTitle(const std::string& sHtmlParam)
+static std::string HtmlTitle(const std::string& sHtml)
 {
-	size_t iOpen = sHtmlParam.find("<title>");
+	size_t iOpen = sHtml.find("<title>");
 	if (iOpen == std::string::npos)
 	{
 		return "";
 	}
 	iOpen += 7;
-	size_t iClose = sHtmlParam.find("</title>", iOpen);
+	size_t iClose = sHtml.find("</title>", iOpen);
 	if (iClose == std::string::npos)
 	{
 		return "";
 	}
-	return sHtmlParam.substr(iOpen, iClose - iOpen);
+	return sHtml.substr(iOpen, iClose - iOpen);
 }
 
-static coro::Task HttpProbe(std::string sHostParam, int32_t iPortParam, std::string sPathParam, int32_t iTimeoutMillisecondsParam)
+static OI::Coro::Task HttpProbe(std::string sHost, int32_t iPort, std::string sPath, int32_t iTimeoutMilliseconds)
 {
-	::OI::Http::Client stCli(sHostParam, iPortParam, iTimeoutMillisecondsParam);
+	::OI::Http::Client stCli(sHost, iPort, iTimeoutMilliseconds);
 	std::chrono::steady_clock::time_point stBegin = std::chrono::steady_clock::now();
-	::OI::Http::Response stResponseLocal = co_await stCli.Get(sPathParam, {});
+	::OI::Http::Response stResponseLocal = co_await stCli.Get(sPath, {});
 	long long iMillisecondsLocal = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - stBegin).count();
 	printf("http probe host=%s port=%d path=%s status=%d bytes=%zu ms=%lld fail=%d err=%s title=%s\n",
-	    sHostParam.c_str(), iPortParam, sPathParam.c_str(), stResponseLocal.iStatus, stResponseLocal.sBody.size(), iMillisecondsLocal, stResponseLocal.bFail ? 1 : 0,
+	    sHost.c_str(), iPort, sPath.c_str(), stResponseLocal.iStatus, stResponseLocal.sBody.size(), iMillisecondsLocal, stResponseLocal.bFail ? 1 : 0,
 	    stResponseLocal.sError.c_str(), HtmlTitle(stResponseLocal.sBody).c_str());
 	fflush(stdout);
 }
@@ -151,19 +151,19 @@ void IpcServer::StartHttpProbe()
 	{
 		return;
 	}
-	coro::StartTask([sHostLocal, iPortLocal, sPath, iTimeoutMillisecondsLocal](coro::Token)
+	OI::Coro::StartTask([sHostLocal, iPortLocal, sPath, iTimeoutMillisecondsLocal](OI::Coro::Token)
 	{
 		return HttpProbe(sHostLocal, iPortLocal, sPath, iTimeoutMillisecondsLocal);
 	});
 }
 
-void IpcServer::OnAddSession(::OI::Net::Session* pSessionParam)
+void IpcServer::OnAddSession(::OI::Net::Session* pSession)
 {
-	printf("ipc server session %d\n", pSessionParam->GetSessionID());
+	printf("ipc server session %d\n", pSession->GetSessionID());
 	fflush(stdout);
 }
 
-void IpcServer::OnDelSession(const ::OI::Net::Session* pSessionParam)
+void IpcServer::OnDelSession(const ::OI::Net::Session* pSession)
 {
-	(void)pSessionParam;
+	(void)pSession;
 }

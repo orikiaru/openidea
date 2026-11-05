@@ -43,7 +43,7 @@ class Session
 	std::atomic<int32_t> iReferences;
 
   public:
-	Session(SessionManager* pMgrParam);
+	Session(SessionManager* pMgr);
 	virtual ~Session();
 	virtual std::shared_ptr<void> HoldTask()
 	{
@@ -56,22 +56,22 @@ class Session
 	void Release();
 
   public: //提供给Channel的调用
-	void SetChannel(Channel* pChannelParam)
+	void SetChannel(Channel* pChannelLocal)
 	{
-		pChannel = pChannelParam;
+		pChannel = pChannelLocal;
 	}
 	// 通道销毁前调用。之后 Send 只追加缓冲，不再碰通道。
 	void DetachChannel();
 	//从Channel的inBuff提取数据到_ibuff
-	virtual void SwapInBuff(::OI::Base::Bytes& stInputBufferParam);
+	virtual void SwapInBuff(::OI::Base::Bytes& stInputBuffer);
 	//将会话输出数据处理后追加到outBuff
-	virtual void SwapOutBuff(::OI::Base::Bytes& stOutputBufferParam);
+	virtual void SwapOutBuff(::OI::Base::Bytes& stOutputBuffer);
 	//Channel写空了。会话这边也没有待发数据才关写事件
 	void SendDrained();
 	//会话是否已经失效关闭
 	virtual bool IsClosed();
 	//IO线程被动关闭调用,会回调Mgr->CloseSession
-	virtual void PassiveClose(int iErrorParam) = 0;
+	virtual void PassiveClose(int iError) = 0;
 
   public:
 	//Session自实现
@@ -84,37 +84,37 @@ class Session
 	{
 		return iErrorCode.load(std::memory_order_acquire);
 	}
-	inline void SetSessionID(int iSessionIdParam)
+	inline void SetSessionID(int iSessionIdLocal)
 	{
-		iSessionId = iSessionIdParam;
+		iSessionId = iSessionIdLocal;
 	}
 	inline int GetSessionID() const
 	{
 		return iSessionId;
 	}
-	void SetEndpoint(const std::string& sEndpointParam)
+	void SetEndpoint(const std::string& sEndpointLocal)
 	{
-		sEndpoint = sEndpointParam;
+		sEndpoint = sEndpointLocal;
 	}
 	const std::string& GetEndpoint() const
 	{
 		return sEndpoint;
 	}
 
-	bool Send(const ::OI::Base::Bytes& stBytesParam);
-	int32_t SendResult(const ::OI::Base::Bytes& stBytesParam);
-	void SetSendQueueLimit(size_t iBytesParam);
+	bool Send(const ::OI::Base::Bytes& stBytes);
+	int32_t SendResult(const ::OI::Base::Bytes& stBytes);
+	void SetSendQueueLimit(size_t iBytes);
 	// 接收缓冲仅 poll 线程访问；会话发布前设置限制。
-	void SetReceiveQueueLimit(size_t iBytesParam)
+	void SetReceiveQueueLimit(size_t iBytes)
 	{
-		iMaxReceiveBufferBytes = iBytesParam;
+		iMaxReceiveBufferBytes = iBytes;
 	}
 	size_t ReceiveAllowance() const
 	{
 		return stInputBuffer.Size() < iMaxReceiveBufferBytes ? iMaxReceiveBufferBytes - stInputBuffer.Size() : 0;
 	}
 	size_t PendingSendBytes();
-	void OnBytesSent(size_t iBytesParam);
+	void OnBytesSent(size_t iBytes);
 	virtual void ActiveClose() = 0; //外部Mgr主动关闭调用,有锁,不会回调Mgr->CloseSession
 
   protected:
@@ -122,7 +122,7 @@ class Session
 	void ForbidSend();
 	void AllowRead();
 	void ForbidRead();
-	virtual void Close(int iErrorParam) = 0;
+	virtual void Close(int iError) = 0;
 	virtual void OnClose()
 	{
 	}

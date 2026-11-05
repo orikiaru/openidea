@@ -11,8 +11,8 @@ struct Milliseconds
 {
 	int64_t iMilliseconds;
 
-	constexpr explicit Milliseconds(int64_t iMillisecondsParam)
-	    : iMilliseconds(iMillisecondsParam)
+	constexpr explicit Milliseconds(int64_t iMilliseconds)
+	    : iMilliseconds(iMilliseconds)
 	{
 	}
 };
@@ -21,8 +21,8 @@ struct Seconds
 {
 	int64_t iSeconds;
 
-	constexpr explicit Seconds(int64_t iSecondsParam)
-	    : iSeconds(iSecondsParam)
+	constexpr explicit Seconds(int64_t iSeconds)
+	    : iSeconds(iSeconds)
 	{
 	}
 };
@@ -31,8 +31,8 @@ struct Minutes
 {
 	int64_t iMinutes;
 
-	constexpr explicit Minutes(int64_t iMinutesParam)
-	    : iMinutes(iMinutesParam)
+	constexpr explicit Minutes(int64_t iMinutes)
+	    : iMinutes(iMinutes)
 	{
 	}
 };
@@ -41,8 +41,8 @@ struct Hours
 {
 	int64_t iHours;
 
-	constexpr explicit Hours(int64_t iHoursParam)
-	    : iHours(iHoursParam)
+	constexpr explicit Hours(int64_t iHours)
+	    : iHours(iHours)
 	{
 	}
 };
@@ -51,8 +51,8 @@ struct Days
 {
 	int64_t iDays;
 
-	constexpr explicit Days(int64_t iDaysParam)
-	    : iDays(iDaysParam)
+	constexpr explicit Days(int64_t iDays)
+	    : iDays(iDays)
 	{
 	}
 };
@@ -66,8 +66,8 @@ struct MS
 	{
 	}
 
-	constexpr explicit MS(int64_t iMillisecondsParam)
-	    : iMilliseconds(iMillisecondsParam)
+	constexpr explicit MS(int64_t iMilliseconds)
+	    : iMilliseconds(iMilliseconds)
 	{
 	}
 

@@ -34,43 +34,43 @@ class TimerLevel
 	TimerLevel& operator=(const TimerLevel&) = delete;
 
   private:
-	void Init(uint32_t iMaxTickParam, uint32_t iLevelOffsetTickParam)
+	void Init(uint32_t iMaxTick, uint32_t iLevelOffsetTick)
 	{
-		assert(iLevelOffsetTickParam > 0);
-		m_iLevelOffsetTick = iLevelOffsetTickParam;
+		assert(iLevelOffsetTick > 0);
+		m_iLevelOffsetTick = iLevelOffsetTick;
 
-		assert(iMaxTickParam > 0);
-		m_iMaxTick = iMaxTickParam;
-		for (uint32_t iIndexLocal = 0; iIndexLocal < iMaxTickParam; ++iIndexLocal)
+		assert(iMaxTick > 0);
+		m_iMaxTick = iMaxTick;
+		for (uint32_t iIndexLocal = 0; iIndexLocal < iMaxTick; ++iIndexLocal)
 		{
 			m_vTimerTickDatas.push_back(TimerList()); //初始化定时器队列
 		}
 	}
 
 	// due 不为空时把这一格移进 due，否则逐个重新挂到下层。
-	void RunTick(BaseTimerManager* pMgrParam, TimerList* pDueParam);
+	void RunTick(BaseTimerManager* pMgr, TimerList* pDue);
 
-	void AddTimer(BaseTimerManager* pManagerParam, BaseTimer* pTimerParam, uint32_t iLevelOffsetParam)
+	void AddTimer(BaseTimerManager* pManager, BaseTimer* pTimer, uint32_t iLevelOffset)
 	{
-		assert(iLevelOffsetParam >= 0 && iLevelOffsetParam < m_iMaxTick);
+		assert(iLevelOffset >= 0 && iLevelOffset < m_iMaxTick);
 
 		::OI::Thread::MutexGuard stLock(m_stLocker);
 		//在此定时器层级,则进入适当索引的定时器列表中
-		int iOffset = (iLevelOffsetParam + m_iOffset) % m_iMaxTick;
-		m_vTimerTickDatas[iOffset].push_back(pTimerParam);
-		pTimerParam->m_stData.m_pCurrentLevel = this;
-		pTimerParam->m_stData.m_iLevelTick = iOffset;
+		int iOffset = (iLevelOffset + m_iOffset) % m_iMaxTick;
+		m_vTimerTickDatas[iOffset].push_back(pTimer);
+		pTimer->m_stData.m_pCurrentLevel = this;
+		pTimer->m_stData.m_iLevelTick = iOffset;
 	}
 
 	//通常情况下, timer移除建议在OnTimer返回false移除
 	//在多线程情况下,可能会存在移除过程中, timer被触发的情况, 此时移除将是失败的操作
-	bool RemoveTimer(BaseTimerManager* pManagerParam, BaseTimer* pTimerParam)
+	bool RemoveTimer(BaseTimerManager* pManager, BaseTimer* pTimer)
 	{
-		assert(pTimerParam->GetLevelOffset() >= 0 && pTimerParam->GetLevelOffset() < m_iMaxTick);
+		assert(pTimer->GetLevelOffset() >= 0 && pTimer->GetLevelOffset() < m_iMaxTick);
 
 		::OI::Thread::MutexGuard stLock(m_stLocker);
-		TimerList& vTimerList = m_vTimerTickDatas[pTimerParam->GetLevelOffset()];
-		auto stIterator = std::find(vTimerList.begin(), vTimerList.end(), pTimerParam);
+		TimerList& vTimerList = m_vTimerTickDatas[pTimer->GetLevelOffset()];
+		auto stIterator = std::find(vTimerList.begin(), vTimerList.end(), pTimer);
 		if (stIterator != vTimerList.end())
 		{
 			vTimerList.erase(stIterator);

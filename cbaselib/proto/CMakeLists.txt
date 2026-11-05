@@ -10,7 +10,6 @@ set(LIBSRC
 	src/oi_parser.cpp
 	src/oi_rpc_session.cpp
 	src/oi_rpc_session_manager.cpp
-	src/oi_rpc_coro.cpp
 	)
 
 add_library(${LIBRARY} STATIC ${LIBSRC})

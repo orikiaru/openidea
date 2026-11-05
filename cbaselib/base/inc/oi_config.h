@@ -21,31 +21,31 @@ class Config
 	std::shared_ptr<cpptoml::table> m_pTomlConfig;
 
   public:
-	bool Parse(const std::string& sConfFileNameParam);
+	bool Parse(const std::string& sConfFileName);
 
 	template <class T>
-	bool GetAs(const std::string& sKeyParam, T& stValueParam) const
+	bool GetAs(const std::string& sKey, T& stValueLocal) const
 	{
 		cpptoml::option<T> stValue;
-		stValue = m_pTomlConfig->get_qualified_as<T>(sKeyParam);
+		stValue = m_pTomlConfig->get_qualified_as<T>(sKey);
 		if (!stValue)
 		{
 			return false;
 		}
-		stValueParam = *stValue;
+		stValueLocal = *stValue;
 		return true;
 	}
 
 	template <class T>
-	bool GetArrayAs(const std::string& sKeyParam, typename std::vector<T>& stValueParam) const
+	bool GetArrayAs(const std::string& sKey, typename std::vector<T>& stValueLocal) const
 	{
 		typename cpptoml::option<typename std::vector<T>> stValue;
-		stValue = m_pTomlConfig->get_qualified_array_of<T>(sKeyParam);
+		stValue = m_pTomlConfig->get_qualified_array_of<T>(sKey);
 		if (!stValue)
 		{
 			return false;
 		}
-		stValueParam = *stValue;
+		stValueLocal = *stValue;
 		return true;
 	}
 

@@ -14,32 +14,32 @@ namespace OI
 namespace Net
 {
 
-bool Session::Send(const ::OI::Base::Bytes& stBytesParam)
+bool Session::Send(const ::OI::Base::Bytes& stBytes)
 {
-	return SendResult(stBytesParam) == OI_OK;
+	return SendResult(stBytes) == OI_OK;
 }
 
-int32_t Session::SendResult(const ::OI::Base::Bytes& stBytesParam)
+int32_t Session::SendResult(const ::OI::Base::Bytes& stBytes)
 {
 	::OI::Thread::MutexGuard stLock(stLocker);
 	if (IsClosed())
 	{
 		return OI_ERR_CONNECT;
 	}
-	if (iQueuedBytes > iMaxSendQueueBytes || stBytesParam.Size() > iMaxSendQueueBytes - iQueuedBytes)
+	if (iQueuedBytes > iMaxSendQueueBytes || stBytes.Size() > iMaxSendQueueBytes - iQueuedBytes)
 	{
 		return OI_ERR_BUSY;
 	}
-	stOutputBuffer.Append(stBytesParam);
-	iQueuedBytes += stBytesParam.Size();
+	stOutputBuffer.Append(stBytes);
+	iQueuedBytes += stBytes.Size();
 	AllowSend();
 	return OI_OK;
 }
 
-void Session::SetSendQueueLimit(size_t iBytesParam)
+void Session::SetSendQueueLimit(size_t iBytes)
 {
 	::OI::Thread::MutexGuard stLock(stLocker);
-	iMaxSendQueueBytes = iBytesParam;
+	iMaxSendQueueBytes = iBytes;
 }
 
 size_t Session::PendingSendBytes()
@@ -48,45 +48,45 @@ size_t Session::PendingSendBytes()
 	return iQueuedBytes;
 }
 
-void Session::OnBytesSent(size_t iBytesParam)
+void Session::OnBytesSent(size_t iBytes)
 {
 	::OI::Thread::MutexGuard stLock(stLocker);
-	assert(iBytesParam <= iQueuedBytes);
-	iQueuedBytes -= iBytesParam;
+	assert(iBytes <= iQueuedBytes);
+	iQueuedBytes -= iBytes;
 }
 
-void Session::SwapInBuff(::OI::Base::Bytes& stInputBufferParam)
+void Session::SwapInBuff(::OI::Base::Bytes& stInputBufferLocal)
 {
-	if (stInputBufferParam.Size() > ReceiveAllowance())
+	if (stInputBufferLocal.Size() > ReceiveAllowance())
 	{
-		stInputBufferParam.Clear();
+		stInputBufferLocal.Clear();
 		PassiveClose(ENOBUFS);
 		return;
 	}
 	//ibuff处理在io线程,无需加锁.
 	if (stInputBuffer.Size() == 0)
 	{
-		stInputBuffer.Swap(stInputBufferParam);
+		stInputBuffer.Swap(stInputBufferLocal);
 	}
 	else
 	{
-		stInputBuffer.Append(stInputBufferParam);
+		stInputBuffer.Append(stInputBufferLocal);
 	}
-	stInputBufferParam.Clear();
+	stInputBufferLocal.Clear();
 	OnDataIn();
 }
 
-void Session::SwapOutBuff(::OI::Base::Bytes& stOutputBufferParam)
+void Session::SwapOutBuff(::OI::Base::Bytes& stOutputBufferLocal)
 {
 	::OI::Thread::MutexGuard stLock(stLocker);
 	OnDataOut();
-	if (stOutputBufferParam.Size() == 0)
+	if (stOutputBufferLocal.Size() == 0)
 	{
-		stOutputBufferParam.Swap(stOutputBuffer);
+		stOutputBufferLocal.Swap(stOutputBuffer);
 	}
 	else
 	{
-		stOutputBufferParam.Append(stOutputBuffer);
+		stOutputBufferLocal.Append(stOutputBuffer);
 	}
 	stOutputBuffer.Clear();
 }
@@ -139,8 +139,8 @@ void Session::ForbidRead()
 	}
 }
 
-Session::Session(SessionManager* pMgrParam)
-    : iStatus(IO_ST_CONNECTED), iErrorCode(0), iSessionId(0), pChannel(NULL), pSessionManager(pMgrParam), iReferences(1)
+Session::Session(SessionManager* pMgr)
+    : iStatus(IO_ST_CONNECTED), iErrorCode(0), iSessionId(0), pChannel(NULL), pSessionManager(pMgr), iReferences(1)
 {
 }
 

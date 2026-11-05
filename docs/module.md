@@ -52,7 +52,7 @@ endforeach()
 
 服务端在组件 `Init` 里 `HandleRpc`，客户端在连上之后 `co_await RpcCall`。写法见 [协程](coroutine.md)。
 
-现成例子是 `AllEcho`：`ipcserver` 用 `OI_RPC_SYNC_HANDLER` 把 `stData` 抄进回复并写 `iCode = 1`，`ipcclient` 连上后用 `CallAny` 按条发出去并核对回复。`Hold` 用来看超时和回包同时到：服务端 `co_await coro::yield(stRequest.iDelayMilliseconds)` 再回，客户端按调用号认这一次。按服务名打一台或一批见 [服务注册](registry.md)。
+现成例子是 `AllEcho`：`ipcserver` 用 `OI_RPC_SYNC_HANDLER` 把 `stData` 抄进回复并写 `iCode = 1`，`ipcclient` 连上后用 `CallAny` 按条发出去并核对回复。`Hold` 用来看超时和回包同时到：服务端 `co_await OI::Coro::yield(stRequest.iDelayMilliseconds)` 再回，客户端按调用号认这一次。按服务名打一台或一批见 [服务注册](registry.md)。
 
 ## ipcclient 的测试开关
 

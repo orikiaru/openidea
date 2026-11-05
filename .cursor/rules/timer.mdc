@@ -7,8 +7,8 @@ alwaysApply: false
 
 先读 `docs/timer.md`。业务用 `AddTimer(fn, millisecond)` 或传入 `BaseTimer`。`OnTimer` 返回 true 会按原间隔再挂，返回 false 前要销毁或先摘掉。
 
-时间轮只能在 poll 线程上改。`coro::yield` 接受毫秒整数或 `OI::Timer::MS`。大于 0 时经 `Poll::CallOnLoop` 再 `AddTimer`；小于等于 0 不进时间轮。
+时间轮只能在 poll 线程上改。`OI::Coro::yield` 接受毫秒整数或 `OI::Timer::MS`。大于 0 时经 `Poll::CallOnLoop` 再 `AddTimer`；小于等于 0 不进时间轮。
 
 RPC 和 Redis 的超时不走这条轮。它们各用一个 200 毫秒的周期定时器扫等待队列。RPC 时长是 `OI::Timer::MS`，按毫秒分桶；超时统一使用带单位的时长类型，不接受裸整数秒。
 
-标准用例是 `modules/ipcserver/src/ipcserver.cpp` 里 `Hold` 的 `co_await coro::yield(stRequest.iDelayMilliseconds)`。
+标准用例是 `modules/ipcserver/src/ipcserver.cpp` 里 `Hold` 的 `co_await OI::Coro::yield(stRequest.iDelayMilliseconds)`。
