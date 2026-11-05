@@ -646,7 +646,8 @@ void HandleRpc(F fnFunctionParam)
 }
 
 // 返回调用号。回包、超时或 WakeRpcCall 三者只有一个会触发 decode/resume。
-uint64_t BindRpcCall(::OI::Net::SessionManager* pManagerParam, sid_t iSessionIdParam, proto_type_t iResponseIdParam, std::coroutine_handle<> stHandleParam, int32_t* pResultParam, int64_t iTimeoutMillisecondsParam, std::function<bool(::OI::Base::BytesStream&)> fnDecodeParam, std::function<void()> fnResumeParam, std::shared_ptr<std::atomic<int32_t>> pGuardParam = {}, RpcSender* pSenderParam = nullptr);
+// 回包回调携带实际匹配的 sid，日志不得用可能已重连的当前会话替代来源。
+uint64_t BindRpcCall(::OI::Net::SessionManager* pManagerParam, sid_t iSessionIdParam, proto_type_t iResponseIdParam, std::coroutine_handle<> stHandleParam, int32_t* pResultParam, int64_t iTimeoutMillisecondsParam, std::function<bool(::OI::Base::BytesStream&, sid_t)> fnDecodeParam, std::function<void()> fnResumeParam, std::shared_ptr<std::atomic<int32_t>> pGuardParam = {}, RpcSender* pSenderParam = nullptr);
 void FailRpcCalls(::OI::Net::SessionManager* pManagerParam, sid_t iSessionIdParam);
 // 取走等待项且不调用完成回调。已经在回调里的，等 WaitRpcGuard 归零。
 void AbandonRpcCall(uint64_t iCallIdParam);
@@ -672,6 +673,8 @@ struct [[nodiscard]] RpcCallAwaiter
 	// 回包原样留到 await_resume 再解，解包跑在工人上，不占 IO 线程。
 	::OI::Base::BytesStream stReply;
 	bool bReplied;
+	sid_t iReplySessionId = INVALID_SID;
+	coro::Token iAwaitToken = 0;
 	std::exception_ptr stSubmissionError;
 	uint64_t iCallId = 0;
 	std::shared_ptr<std::atomic<int32_t>> pGuard;
@@ -741,8 +744,9 @@ struct [[nodiscard]] RpcCallAwaiter
 		iGate.store(0, std::memory_order_relaxed);
 		iCallId = 0;
 		pGuard = std::make_shared<std::atomic<int32_t>>(0);
-		uint64_t iCallIdLocal = BindRpcCall(pManager, iSessionId, RpcProtoId<Res>::iValue, stHandle, &iResult, iTimeoutMilliseconds, [this](::OI::Base::BytesStream& stInputParam)
+		uint64_t iCallIdLocal = BindRpcCall(pManager, iSessionId, RpcProtoId<Res>::iValue, stHandle, &iResult, iTimeoutMilliseconds, [this](::OI::Base::BytesStream& stInputParam, sid_t iSourceSessionParam)
 		{
+			iReplySessionId = iSourceSessionParam;
 			stReply = std::move(stInputParam);
 			bReplied = true;
 			return true;
@@ -765,9 +769,13 @@ struct [[nodiscard]] RpcCallAwaiter
 			{
 				pClient->SubmitCall(iCallIdLocal, stFrame.GetMutableBuff());
 			}
-			else if (!pManager->SendBytes(iSessionId, stFrame.GetMutableBuff()))
+			else
 			{
-				WakeRpcCall(iCallIdLocal, pManager->UnavailableCode(), NULL);
+				const int32_t iRet = pManager->SendBytesResult(iSessionId, stFrame.GetMutableBuff());
+				if (iRet != OI_OK)
+				{
+					WakeRpcCall(iCallIdLocal, iRet, NULL);
+				}
 			}
 		}
 		catch (...)
@@ -778,8 +786,14 @@ struct [[nodiscard]] RpcCallAwaiter
 			WakeRpcCall(iCallIdLocal, OI_ERR_FAIL, nullptr);
 		}
 	}
-	bool Arm(std::coroutine_handle<> stHandleParam)
+	template <typename Promise>
+	bool Arm(std::coroutine_handle<Promise> stHandleParam)
 	{
+		if constexpr (std::is_base_of_v<coro::TaskState, Promise>)
+		{
+			OI::Thread::MutexGuard stLock(stHandleParam.promise().stMutex);
+			iAwaitToken = stHandleParam.promise().iTaskId;
+		}
 		stHandle = stHandleParam;
 		int iPrevious = iGate.exchange(2, std::memory_order_acq_rel);
 		return iPrevious != 1;
@@ -811,6 +825,7 @@ struct [[nodiscard]] RpcCallAwaiter
 			catch (::OI::Base::ParserException&)
 			{
 				iResult = OI_ERR_FAIL;
+				ReportRpcError(iAwaitToken, iCallId, iReplySessionId, RpcProtoId<Res>::iValue, "decode_response", std::current_exception());
 			}
 		}
 		return iResult;

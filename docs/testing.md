@@ -279,3 +279,34 @@ Terra 执行 Windows 原生 MSVC、WSL GCC13 单/多线程矩阵，最终每路 
 Linux 首轮使用了错误的 `/usr/bin/redis-server` 路径，失败记录保留；原有 Redis 实际仍在 `/tmp/redis-7.4.12`，没有被删除。本轮直接复制已有安装到 `/home/jxy/opt/redis-7.4.12`，建立 `/usr/local/bin/redis-server` 和 `redis-cli` 入口，无需重新下载；原副本保留，两份服务端二进制 SHA256 一致。后续复测使用持久入口，清理仅停止本次进程及移除临时日志/数据，保留第三方安装。
 
 主目录 Windows/Linux MT 生产构建均成功，测试钩子关闭；最终全局清理和 dry-run 核查均退出 0，无残留报告。两端 Redis 持久安装保留，测试临时大日志由用例清理。主目录构建日志在 `final/main-windows`、`final/main-linux`，最终清理证据在 `final/cleanup.json`。
+
+
+## 18. 直连背压、客户端解包与 Redis 上游断连回归
+
+普通 Redis 用例另启用临时 `Regression.redis_send_budget=true`，只将该客户端的 `max_send_queue_bytes` 设为 1MiB。循环 8 次在先发小请求之后分别通过原生回执、类型化输出接口拒绝 2MiB 请求，再发送小请求；检查 16 次拒绝均为 BUSY、失败不覆盖输出、16 次小响应内容正确、连接未重建、等待项清零。通过标记为 `redis send budget rejected=16 recovered=16 pending=0 bad=0`，并检查 `stage=send` 的容量错误原因已由日志服落盘。
+
+`redis-shutdown` 临时配置的请求超时为 10 秒，避免 Windows 启动控制台通知辅助进程时先触发原来的 300ms 请求超时；仍要求停服唤醒为 Disconnected、停止后新调用立即失败、等待项清零，并保留通知后的 3 秒退出时限。短超时正确性由独立 `redis-queue-timeout` 用例验证，不把 Timeout 当作停服成功。
+
+- Hold 新增 `hold direct backpressure queued=... direct=... pinned=... closed=... bad=0`：常驻测试管理器使用 256 字节真实会话发送预算，超过预算的请求分别在建连前排队、已连接直发和显式 sid 路径返回 BUSY，输出保持原值；小请求正常完成，关闭后的显式 sid 调用返回 CONNECT。
+- `Regression.encoding_failure` 的现有服务端注入同时支持合法外层回执中的损坏字段体。Hold 检查客户端返回 FAIL、输出不被半包覆盖、后续正常请求成功，并输出 `hold client malformed response sid=... bad=0`。驱动核对日志服 error 文件中的 `decode_response`、实际来源 sid、调用号、协议号和原始 ParserException。
+- 普通 Redis 用例的临时配置启用 `Regression.redis_upstream_disconnect`。RedisMgr 启动阻塞请求并通知既有驱动，驱动仅通过自己持有的进程句柄终止本次 Redis，然后复用持久可执行文件重启；不按进程名或端口杀服务、不删除安装。等待请求失败且输出不变，代理自动重连后 PING 返回 PONG，输出 `redis upstream disconnect recovery bad=0`。驱动还核对日志服落盘记录的上游地址、非零错误状态和原始 hiredis 原因。
+
+全部纳入现有 `--case all` 的 Hold / Redis，用已有模块及开关复测，不新增独立客户端。Windows/Linux 单、多线程各跑完整矩阵；故障注入只影响本次独立 Redis，不操作用户 6379 服务。
+
+### 2026-11-05 三项修复验证结果
+
+Terra 执行 Windows 原生 MSVC、WSL GCC13 单/多线程完整矩阵，每路 18 项全部通过，共 72 项。四路直接发送/建连排队背压、损坏响应、Redis 上游断连恢复及对应原始错误落盘检查均通过；测试副本均恢复 MT 并关闭测试钩子。本轮 8 个变更源码/脚本文件在主目录与四份测试副本逐字节一致。
+
+证据根目录为 `C:/Users/Admin/openidea-test-results/three-review-fixes-20261105`，最终结果位于 `final-fixed/par-<平台>-<模式>`，汇总核验为 `final-fixed/verified.json`。首轮失败保留在 `final`：旧 Hold 断言仍期待通用 FAIL，而修复后无效显式 sid 正确返回 CONNECT；Redis 故障注入已终止的旧进程仍被驱动存活检查误判。已同步错误码断言，并在确认旧进程退出后将其移出存活检查，再运行完整四路，没有忽略失败或降低新实例检查。
+
+主目录 Windows/Linux MT 生产构建均退出 0，测试钩子关闭，日志在 `final-fixed/main-windows`、`final-fixed/main-linux`。最终全局清理与 dry-run 均退出 0，无残留报告，记录在 `final-fixed/cleanup.json`；持久 Redis 安装保留。
+
+### 2026-11-05 Redis 客户端发送错误码补充验证
+
+证据根目录为 `C:/Users/Admin/openidea-test-results/redis-send-budget-20261105`。最终 Windows MT、Linux MT/ST 使用 `verified/par-<平台>-<模式>`；Windows ST 使用同源码独立复测的 `isolated/par-windows-st`。每路 18 项通过，共 72 项；四路发送预算拒绝、失败输出保持、后续响应配对、等待项清零及发送失败原始原因落盘均通过。逐项汇总为 `verified/verified.json`，主目录与四份测试副本的 9 个变更源码/脚本文件 SHA256 一致。
+
+首轮 GCC13 在新增测试的协程临时参数表达式上发生内部编译错误；将参数拆为具名 vector 后，两路 GCC13 完整编译回归通过。Windows ST 首轮停服用例先触发 300ms 请求超时，已按上文调整测试时限，仍严格要求 Disconnected。上述失败记录保留。
+
+Windows ST 的 `verified` 轮另有两项在日志服务监听就绪检查中超时，服务输出为空，控制台通知辅助进程退出 120；不能据此断定根因。同代码独立完整复测 18 项通过，未复现，旧失败报告仍保留，不把该轮改写为成功。
+
+两端主目录 MT Release 生产构建均退出 0、测试钩子关闭，日志在 `verified/main-windows`、`verified/main-linux`。最终全局清理和 dry-run 均退出 0、无残留报告，记录在 `verified/cleanup.json`；Windows/WSL 的持久 Redis 安装保留。

@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include "test_board.h"
 #include <cstring>
+#include <fstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -1911,6 +1912,99 @@ static coro::TaskResult<int> CheckDeniedCommands()
 	co_return iBad;
 }
 
+// 由既有测试驱动仅重启本轮拥有的 Redis；模块继续连接 redisserver。
+static coro::TaskResult<int> CheckUpstreamDisconnect()
+{
+	std::vector<std::string> vOutput{"unchanged"};
+	auto stPending = OI::Redis::CallRedis({"BLPOP", "oi:disconnect:empty", "0"}, vOutput);
+	{
+		std::ofstream stRequest("../redis-disconnect.request");
+		stRequest << "restart";
+	}
+	const int32_t iRet = co_await stPending;
+	int iBad = iRet != OI_ERR_REDIS || vOutput != std::vector<std::string>{"unchanged"} ? 1 : 0;
+	const int64_t iDeadline = OI::Timer::SteadyMilliseconds() + 10000;
+	bool bAcknowledged = false;
+	while (OI::Timer::SteadyMilliseconds() < iDeadline)
+	{
+		std::ifstream stAck("../redis-disconnect.ack");
+		if (stAck.good())
+		{
+			bAcknowledged = true;
+			break;
+		}
+		co_await coro::yield(OI::Timer::Milliseconds(20));
+	}
+	bool bRecovered = false;
+	while (bAcknowledged && OI::Timer::SteadyMilliseconds() < iDeadline)
+	{
+		std::string sPong;
+		const int32_t iPingRet = co_await OI::Redis::CallRedis({"PING"}, sPong);
+		if (iPingRet == OI_OK && sPong == "PONG")
+		{
+			bRecovered = true;
+			break;
+		}
+		co_await coro::yield(OI::Timer::Milliseconds(100));
+	}
+	if (!bRecovered)
+	{
+		++iBad;
+	}
+	LOG_TRACE("redis upstream disconnect recovery bad=%d", iBad);
+	co_return iBad;
+}
+
+// 临时配置限定客户端发送预算为 1MiB；真实发送拒绝后，后续回执仍应准确配对。
+static coro::TaskResult<int> CheckSendBudget()
+{
+	int iBad = 0;
+	int iRejected = 0;
+	int iRecovered = 0;
+	auto& stClient = OI::Redis::RedisClient::GetInstance();
+	const sid_t iSid = stClient.ConnectedSid();
+	const std::string sLarge(2 * 1024 * 1024, 'x');
+	for (int iIndex = 0; iIndex < 8; ++iIndex)
+	{
+		const std::string sBefore = "before-" + std::to_string(iIndex);
+		const std::string sAfter = "after-" + std::to_string(iIndex);
+		// 保留一个先发请求，再拒绝大请求并发送小请求，检查 FIFO 回滚不串位。
+		std::vector<std::string> vBefore{"ECHO", sBefore};
+		std::vector<std::string> vLarge{"ECHO", sLarge};
+		std::vector<std::string> vAfter{"ECHO", sAfter};
+		auto stBefore = AwaitRedis(std::move(vBefore));
+		const auto stRejected = co_await OI::Redis::CallRedis(vLarge);
+		if (stRejected.GetRet() == OI_ERR_BUSY && stRejected.iStatus == OI::Redis::RedisStatus::Busy && !stRejected.bTimeout && !stRejected.pReply)
+		{
+			++iRejected;
+		}
+		std::string sOutput = "unchanged";
+		const int32_t iRet = co_await OI::Redis::CallRedis(std::move(vLarge), sOutput);
+		if (iRet == OI_ERR_BUSY && sOutput == "unchanged")
+		{
+			++iRejected;
+		}
+		const int32_t iAfterRet = co_await OI::Redis::CallRedis(std::move(vAfter), sOutput);
+		if (iAfterRet == OI_OK && sOutput == sAfter)
+		{
+			++iRecovered;
+		}
+		const auto stFirst = co_await stBefore;
+		if (stFirst && stFirst.pReply->type == REDIS_REPLY_STRING && stFirst.pReply->str &&
+		    std::string(stFirst.pReply->str, stFirst.pReply->len) == sBefore)
+		{
+			++iRecovered;
+		}
+	}
+	const size_t iPending = stClient.PendingCount();
+	if (iRejected != 16 || iRecovered != 16 || iPending != 0 || iSid == INVALID_SID || stClient.ConnectedSid() != iSid)
+	{
+		++iBad;
+	}
+	LOG_TRACE("redis send budget rejected=%d recovered=%d pending=%zu bad=%d", iRejected, iRecovered, iPending, iBad);
+	co_return iBad;
+}
+
 coro::Task RedisMgr::Check()
 {
 	int32_t iPendingLimit = 65536;
@@ -1930,6 +2024,18 @@ coro::Task RedisMgr::Check()
 	m_iFailed += co_await CheckExpiry();
 	m_iFailed += co_await CheckScriptIsolation();
 	m_iFailed += co_await CheckDeniedCommands();
+	bool bSendBudget = false;
+	TryGetConfig("Regression.redis_send_budget", bSendBudget);
+	if (bSendBudget)
+	{
+		m_iFailed += co_await CheckSendBudget();
+	}
+	bool bDisconnectRegression = false;
+	TryGetConfig("Regression.redis_upstream_disconnect", bDisconnectRegression);
+	if (bDisconnectRegression)
+	{
+		m_iFailed += co_await CheckUpstreamDisconnect();
+	}
 }
 
 void RedisMgr::Report()

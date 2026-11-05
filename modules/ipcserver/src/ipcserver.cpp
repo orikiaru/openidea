@@ -47,8 +47,15 @@ static OI_RPC_HANDLER(Hold, HandleHold)
 struct EncodingFailureResponse : OI::RpcData::HoldRes
 {
 	bool bThrow = false;
+	bool bMalformed = false;
 	OI::Base::BytesStream& serialize(OI::Base::BytesStream& stOutputParam) const override
 	{
+		if (bMalformed)
+		{
+			// 外层 RPC 回执合法，但字段头声明四字节，实际只有一个字节。
+			stOutputParam << uint32_t(0) << uint32_t(4) << uint8_t(1);
+			return stOutputParam;
+		}
 		if (bThrow)
 		{
 			stOutputParam << int32_t(123);
@@ -79,6 +86,7 @@ static OI::Rpc::RpcTask HandleEncodingRegression(const OI::Rpc::RpcContext& stCo
 	}
 	int32_t iResult = co_await HandleHold(stRequestParam, stResponseParam);
 	stResponseParam.bThrow = stRequestParam.iMark == -2147483600;
+	stResponseParam.bMalformed = stRequestParam.iMark == -2147483597;
 	co_return iResult;
 }
 

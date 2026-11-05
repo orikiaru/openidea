@@ -276,6 +276,7 @@ def run(case, args):
     registry_resume_at = None
     pause_at = None
     shutdown_sent = False
+    redis_restarted = False
     procs = []
     handles = []
     http_fixture = None
@@ -317,6 +318,9 @@ def run(case, args):
                 text = replace(text, "max_pending_commands", str(maximum_count))
                 if fairness: text = replace(text, "offset_ms", "1000")
             if name == "ipcclient":
+                if case == "redis":
+                    text = text.replace("[RedisClient]", "[RedisClient]\nmax_send_queue_bytes = 1048576", 1)
+                    text += "\n[Regression]\nredis_upstream_disconnect = true\nredis_send_budget = true\n"
                 if case == "redis-queue-timeout":
                     text = replace(text, "timeout_ms", "100")
                     text += "\n[Regression]\nredis_queue_timeout = true\n"
@@ -324,7 +328,9 @@ def run(case, args):
                     # 错误的直连后备端口，只有通过注册发现才能完成回声。
                     text = text.replace('port = "%d"' % IPC_PORT, 'port = "%d"' % IPC_FALLBACK_PORT)
                 if case == "redis-shutdown":
-                    text = replace(text, "timeout_ms", "300")
+                    # 停服测试必须由关闭唤醒，不能与 Windows 控制台通知启动耗时竞争。
+                    # 独立 redis-queue-timeout 用例仍验证短超时；停服后的退出时限仍为 3 秒。
+                    text = replace(text, "timeout_ms", "10000")
                     text += "\n[Regression]\nredis_shutdown = true\n"
                 if fairness:
                     text += "\n[Regression]\nredis_fairness = true\n"
@@ -476,6 +482,17 @@ def run(case, args):
             # 正常通过时 hold 约 50 秒，其余不超过 35 秒；留三四倍余量，失败时不用干等。
             deadline = started + (20 if pressure or case == "redis-shutdown" else CLIENT_SECONDS.get(mode, 60))
             while client.poll() is None:
+                if case == "redis" and not redis_restarted and (root / "redis-disconnect.request").exists():
+                    # 故障注入仅终止本次持有的 Redis 进程句柄，不按端口/进程名杀服务。
+                    assert db.poll() is None, "owned Redis exited before injection"
+                    db.kill()
+                    db.wait(timeout=5)
+                    # 已确认退出的故障注入目标不再参与存活检查；新实例仍照常检查和清理。
+                    procs.remove(db)
+                    db, dbpath = start("redis", [str(args.redis_binary), str(redis_conf) if args.redis_wsl else "../redis.conf"])
+                    ready(db, dbpath, "Ready to accept connections")
+                    redis_restarted = True
+                    (root / "redis-disconnect.ack").write_text("restarted", encoding="utf-8")
                 if mode == "hold":
                     request_path = root / "registry-fault.request"
                     command = request_path.read_text(encoding="utf-8").strip() if request_path.exists() else ""
@@ -563,6 +580,8 @@ def run(case, args):
                 if case == "redis-limit":
                     assert "redis pending limit bad=0" in text
                 else:
+                    assert redis_restarted and "redis upstream disconnect recovery bad=0" in text
+                    assert "redis send budget rejected=16 recovered=16 pending=0 bad=0" in text
                     assert "redis millisecond expiry bad=0" in text
                     assert "redis typed commands string rpcdata zset bad=0" in text
                     assert "redis typed collections string rpcdata bad=0" in text
@@ -587,7 +606,7 @@ def run(case, args):
                 for waiter_count in (2, 8, 64, 256):
                     for shared_mode in range(3):
                         assert f"hold started task mode={shared_mode} waiters={waiter_count} runs=1 awakened={waiter_count} bad=0" in text
-                assert "hold deferred rpc value=0 output=0 pinned=-1 bad=0" in text
+                assert "hold deferred rpc value=0 output=0 pinned=-3 bad=0" in text
                 assert "hold await ownership shared=32 bad=0" in text
                 assert "hold output rpc shared waiters=16 submissions=1 bad=0" in text
                 assert "hold output rpc direct pinned error late bad=0" in text
@@ -617,6 +636,8 @@ def run(case, args):
                 assert "hold json validation bad=0" in text
                 assert "hold task exceptions bad=0" in text
                 assert "hold server encoding bad=0" in text
+                assert re.search(r"hold direct backpressure queued=-?\d+ direct=-?\d+ pinned=-?\d+ closed=-?\d+ bad=0", text)
+                assert re.search(r"hold client malformed response sid=[1-9]\d* bad=0", text)
                 assert "hold http framing bad=0" in text
                 assert "hold rpc standardized reply bad=0" in text
                 assert "hold done bad=0" in text
@@ -658,12 +679,17 @@ def run(case, args):
                 assert logd.returncode == 0
                 diagnostics = "\n".join(path.read_text(encoding="utf-8", errors="replace") for path in logs.rglob("error") if path.is_file())
                 if case == "redis":
+                    assert re.search(r"redis failure stage=send request=[1-9]\d* sid=[1-9]\d* command=ECHO reason=ret=-5 bytes=\d+ cause=send queue capacity exceeded", diagnostics), "Redis send budget failure missing from logd disk"
                     assert re.search(r"redis failure stage=server_reply request=[1-9]\d* sid=\d+ command=EVAL reason=.*test error", diagnostics), "Lua error missing from logd disk"
+                    assert re.search(r"redis upstream disconnect index=0 host=127\.0\.0\.1 port=" + str(REDIS_PORT) + r" status=-1 error=[1-9]\d* reason=.+ truncated=0", diagnostics), "original hiredis disconnect error missing from logd disk"
                 elif case == "rpc-ingress":
                     assert re.search(r"rpc failure stage=decode_request token=[1-9]\d* call=424242 sid=\d+ proto=3002 ret=-?\d+ reason=ParserException", diagnostics), "RPC parse context missing from logd disk"
                 else:
                     for stage, reason in (("handler", "injected server handler failure"), ("encode_response", "injected server response encoding failure")):
                         assert re.search(r"rpc failure stage=" + stage + r" token=[1-9]\d* call=[1-9]\d* sid=\d+ proto=3002 ret=-?\d+ reason=" + reason, diagnostics), "RPC exception context missing from logd disk: " + stage
+                    source = re.search(r"hold client malformed response sid=([1-9]\d*) bad=0", text)
+                    assert source
+                    assert re.search(r"rpc failure stage=decode_response token=\d+ call=[1-9]\d* sid=" + source.group(1) + r" proto=3002 ret=-?\d+ reason=ParserException", diagnostics), "client reply decode source missing from logd disk"
                 print("diagnostic original errors persisted", case, "PASS", flush=True)
             print(case, "PASS seconds=", round(time.monotonic() - started, 2), flush=True)
         except BaseException:

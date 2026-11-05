@@ -991,6 +991,64 @@ class DeferredRpcProbe : public OI::Rpc::ProtoClientManager
 	}
 };
 
+// 常驻测试管理器，使用真实会话及固定发送额度，不绕过底层发送判定。
+class DirectBudgetProbe : public DeferredRpcProbe
+{
+  public:
+	DirectBudgetProbe()
+	{
+		iMaxSendQueueBytes = 256;
+		SetPendingCallLimits(16, 4096);
+	}
+
+  protected:
+	bool AutoReconnect() const override
+	{
+		return false;
+	}
+};
+
+static coro::TaskResult<int> CheckDirectBackpressure()
+{
+	static DirectBudgetProbe stClient;
+	int iBad = 0;
+	OI::RpcData::AllEchoReq stLarge;
+	stLarge.stData.sMessage.assign(512, 'B');
+	OI::RpcData::AllEchoRes stOutput;
+	stOutput.stData.sMessage = "unchanged";
+	// 当前任务内调用立即启动，连接尚未开始，稳定进入建连前排队路径。
+	auto stQueued = OI::Rpc::RpcCall(stClient, stLarge, stOutput, OI::Timer::Seconds(3));
+	const bool bConnected = co_await stClient.StartClient();
+	const int32_t iQueuedRet = co_await stQueued;
+	if (!bConnected || iQueuedRet != OI_ERR_BUSY || stOutput.stData.sMessage != "unchanged")
+	{
+		++iBad;
+	}
+	const sid_t iSid = stClient.ConnectedSid();
+	const int32_t iDirectRet = co_await OI::Rpc::RpcCall(stClient, stLarge, stOutput, OI::Timer::Seconds(3));
+	const int32_t iPinnedRet = co_await OI::Rpc::RpcCall(stClient, iSid, stLarge, stOutput, OI::Timer::Seconds(3));
+	if (iDirectRet != OI_ERR_BUSY || iPinnedRet != OI_ERR_BUSY || stOutput.stData.sMessage != "unchanged" || stClient.ConnectedSid() != iSid)
+	{
+		++iBad;
+	}
+	OI::RpcData::HoldReq stSmall;
+	OI::RpcData::HoldRes stSmallOutput;
+	stSmall.iMark = 975;
+	const int32_t iRecoveryRet = co_await OI::Rpc::RpcCall(stClient, stSmall, stSmallOutput, OI::Timer::Seconds(3));
+	if (iRecoveryRet != OI_OK || stSmallOutput.iMark != 975)
+	{
+		++iBad;
+	}
+	stClient.CloseAllSessions();
+	const int32_t iClosedRet = co_await OI::Rpc::RpcCall(stClient, iSid, stSmall, stSmallOutput, OI::Timer::Seconds(3));
+	if (iClosedRet != OI_ERR_CONNECT)
+	{
+		++iBad;
+	}
+	printf("hold direct backpressure queued=%d direct=%d pinned=%d closed=%d bad=%d\n", iQueuedRet, iDirectRet, iPinnedRet, iClosedRet, iBad);
+	co_return iBad;
+}
+
 // 只统计提交，仍走真实连接、序列化、服务端 Hold 和回包。
 class OutputRpcProbe : public DeferredRpcProbe
 {
@@ -1454,7 +1512,7 @@ static coro::TaskResult<int> CheckDeferredRpcSession()
 		}
 		auto stPinned = co_await OI::Rpc::RpcCall(stClient, INVALID_SID, stRequest, OI::Timer::Seconds(3));
 		iPinnedCode = stPinned.GetRet();
-		if (iPinnedCode != OI_ERR_FAIL)
+		if (iPinnedCode != OI_ERR_CONNECT)
 		{
 			++iBad;
 		}
@@ -2594,6 +2652,14 @@ static coro::TaskResult<int> CheckServerEncoding()
 	{
 		++iBadLocal;
 	}
+	stRequest.iMark = -2147483597;
+	stResponse.iMark = 91;
+	iResult = co_await OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequest, stResponse, OI::Timer::Seconds(2));
+	if (iResult != OI_ERR_FAIL || stResponse.iMark != 91)
+	{
+		++iBadLocal;
+	}
+	printf("hold client malformed response sid=%llu bad=%d\n", (unsigned long long)IpcClient::GetInstance().ConnectedSid(), iBadLocal);
 	stRequest.iMark = 92;
 	auto stRecovered = co_await IpcClient::GetInstance().CallAny<OI::RpcData::HoldRes>(stRequest, OI::Timer::Seconds(2));
 	if (stRecovered.GetRet() != 0 || stRecovered.GetRes().iMark != 92)
@@ -3239,9 +3305,9 @@ static int CheckRpcSource(sid_t iSessionIdParam)
 	auto& stManagerLocal = IpcClient::GetInstance();
 	const auto iResponseIdLocal = ::OI::Rpc::RpcProtoId<::OI::RpcData::HoldRes>::iValue;
 	int iDecoded = 0, iResumed = 0, iResultLocal = -99;
-	uint64_t iCall = ::OI::Rpc::BindRpcCall(&stManagerLocal, iSessionIdParam, iResponseIdLocal, {}, &iResultLocal, 0, [&](::OI::Base::BytesStream&)
+	uint64_t iCall = ::OI::Rpc::BindRpcCall(&stManagerLocal, iSessionIdParam, iResponseIdLocal, {}, &iResultLocal, 0, [pDecoded = &iDecoded](::OI::Base::BytesStream&, sid_t)
 	{
-		++iDecoded;
+		++*pDecoded;
 		return true;
 	}, [&]()
 	{
@@ -3572,6 +3638,7 @@ coro::Task HoldMgr::Pump()
 	iBad += co_await CheckAwaitOwnership();
 	iBad += CheckBinaryBool();
 	iBad += co_await CheckClientConnect();
+	iBad += co_await CheckDirectBackpressure();
 	iBad += co_await CheckConnectionIsolation();
 	bool bRegistryChecks = false;
 	TryGetConfig("Regression.registry_checks", bRegistryChecks);

@@ -254,9 +254,23 @@ void OnConnect(redisAsyncContext* pCharacterParam, int iStatusParam)
 
 void OnDisconnect(const redisAsyncContext* pCharacterParam, int iStatusParam)
 {
-	(void)iStatusParam;
 	RedisLink* pLink = (RedisLink*)pCharacterParam->data;
-	LOG_TRACE("RedisServer hiredis down index=%d", pLink->iIndex);
+	// 在 hiredis 释放 context 前保留原始原因；日志失败不能阻止重连。
+	const OI::Log::DiagnosticText stReason(pCharacterParam->c.errstr);
+	const OI::Log::DiagnosticText stHost(pCharacterParam->c.tcp.host ? pCharacterParam->c.tcp.host : "unknown");
+	try
+	{
+		LOG_ERROR("redis upstream disconnect index=%d host=%s port=%d status=%d error=%d reason=%s truncated=%d",
+		    pLink->iIndex, stHost.GetText(), pCharacterParam->c.tcp.port, iStatusParam, pCharacterParam->c.err,
+		    stReason.GetText(), stReason.IsTruncated() ? 1 : 0);
+		fflush(stdout);
+	}
+	catch (...)
+	{
+		fprintf(stderr, "redis upstream disconnect index=%d host=%s port=%d status=%d error=%d reason=%s truncated=%d logger_failed=1\n",
+		    pLink->iIndex, stHost.GetText(), pCharacterParam->c.tcp.port, iStatusParam, pCharacterParam->c.err,
+		    stReason.GetText(), stReason.IsTruncated() ? 1 : 0);
+	}
 	pLink->pAsyncContext = NULL;
 	RedisServer::GetInstance().ArmReconnect(pLink);
 }

@@ -233,3 +233,10 @@ if (!(co_await client.StartClient())) co_return; // 等建连成功，再处理�
 超限立即回标准 `OI_ERR_BUSY`，不创建业务协程；错误回执无法发送时关闭会话。额度由原有根协程闭包中的可移动 RAII 对象持有，额度凭证不新增包装协程或单独堆分配；正常完成、业务异常、响应编码失败都自动归还。断连不提前释放仍在执行的业务额度，避免借助重连绕过进程限额。业务端收到 Busy 后自行决定退避，框架不自动重放写请求。
 
 `HoldMgr` 保留共享建连、请求重复/并发/移后使用、首次连接前固定 sid 的回归。`python3 tools/run_regressions.py --case rpc-admission-count` 和 `rpc-admission-bytes` 用临时限额验证多连接过载、标准 Busy 回执、额度恢复与错误路径；均已纳入 `--case all`。
+
+
+### 直连发送错误与回包诊断
+
+直连客户端、显式 sid 调用及首次连接后的待发请求补发，均保留底层发送错误码：发送预算不足返回 `OI_ERR_BUSY`，会话不存在或已关闭返回 `OI_ERR_CONNECT`，不再用通用 FAIL 覆盖。BUSY 不关闭健康连接；应用可自行限流，框架不自动重放写请求。
+
+客户端回包解码失败保持原输出，返回 `OI_ERR_FAIL`，并记录 `rpc failure stage=decode_response`、调用号、协议号和原始解析异常。sid 来自该回包实际匹配的等待项，不重新查询可能已经重连的管理器；协程 token 在挂起时读取（框架任务按其状态锁读取，其他协程类型记为 0）。内部 BindRpcCall 回包回调现接收 `(BytesStream&, sid_t)`，应用层 RpcCall 接口不变。

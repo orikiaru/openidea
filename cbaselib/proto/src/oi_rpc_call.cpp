@@ -142,7 +142,7 @@ struct RpcCoroSlot
 	sid_t iSessionId;
 	std::coroutine_handle<> stHandle;
 	int32_t* pResult;
-	std::function<bool(::OI::Base::BytesStream&)> fnDecode;
+	std::function<bool(::OI::Base::BytesStream&, sid_t)> fnDecode;
 	std::function<void()> fnResume;
 	proto_type_t iResponseId;
 	uint64_t iCallId;
@@ -277,7 +277,7 @@ void FinishRpcSlot(RpcCoroSlot& stSlotParam, int32_t iCodeParam, ::OI::Base::Byt
 	{
 		if (stSlotParam.fnDecode)
 		{
-			stSlotParam.fnDecode(*pBodyParam);
+			stSlotParam.fnDecode(*pBodyParam, stSlotParam.iSessionId);
 		}
 	}
 	else if (stSlotParam.pResult)
@@ -465,7 +465,7 @@ bool ClaimRpcSend(uint64_t iCallIdParam, sid_t iSessionIdParam)
 	return true;
 }
 
-uint64_t BindRpcCall(::OI::Net::SessionManager* pManagerParam, sid_t iSessionIdParam, proto_type_t iResponseIdParam, std::coroutine_handle<> stHandleParam, int32_t* pResultParam, int64_t iTimeoutMillisecondsParam, std::function<bool(::OI::Base::BytesStream&)> fnDecodeParam, std::function<void()> fnResumeParam, std::shared_ptr<std::atomic<int32_t>> pGuardParam, RpcSender* pSenderParam)
+uint64_t BindRpcCall(::OI::Net::SessionManager* pManagerParam, sid_t iSessionIdParam, proto_type_t iResponseIdParam, std::coroutine_handle<> stHandleParam, int32_t* pResultParam, int64_t iTimeoutMillisecondsParam, std::function<bool(::OI::Base::BytesStream&, sid_t)> fnDecodeParam, std::function<void()> fnResumeParam, std::shared_ptr<std::atomic<int32_t>> pGuardParam, RpcSender* pSenderParam)
 {
 	std::call_once(g_sweep_once, []()
 	{

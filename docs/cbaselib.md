@@ -144,3 +144,8 @@ RPC 服务端解包、handler、响应序列化及发送异常通过现有日志
 Redis 收到错误回执时记录 `redis failure stage=server_reply`，包含进程内唯一 `request`、`sid`、命令名 `command` 和 Redis 原始错误 `reason`。迟到的错误仍记录并标记 `late=1`，不重复唤醒任务；hiredis 解析失败则记录 `reader_feed` / `reader_reply` 及原始 `errstr`，随后执行原有失败清理。
 
 错误正文最多输出 4096 字节（转义后的长度），截断标记为 `truncated=1`；换行、NUL、其他控制字符及反斜杠按 `\xHH` 转义，保留可辨识的原始内容。命令名最多取 64 字节，不附加 key、value、Lua 脚本或请求正文。原始错误文本本身可能含业务内容，业务异常消息不要包含凭据或敏感值；这里不声称能自动识别任意错误文本中的秘密。日志正常走 stdout 和 logd，写日志抛异常时退回 stderr，不能把这条兜底误认为日志服已经落盘。
+
+
+Redis 上游连接断开时，代理在 hiredis 释放上下文前记录 `redis upstream disconnect`：连接索引、host、port、回调 status、hiredis error 及原始 reason。沿用诊断文本的控制字符转义、截断标记及本地刷新；写日志异常不阻止原有自动重连。正常主动断开可能没有错误文本，异常断开保留 hiredis 的具体原因，不只输出通用 `redis down`。
+
+Redis 客户端发送预算不足（包括单条命令超过预算）返回 `OI_ERR_BUSY`，发送时会话已关闭返回 `OI_ERR_CONNECT`，其他发送失败才返回通用失败。被拒绝的请求从等待队列中回滚，不占用后续回执的位置；失败不覆盖输出、不自动重试。发送诊断使用 `stage=send`，记录请求号、会话、命令名、底层错误码和请求字节数，不输出 key/value。

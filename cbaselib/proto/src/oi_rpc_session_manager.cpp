@@ -117,11 +117,11 @@ void ProtoClientManager::SubmitCall(uint64_t iCallIdParam, const ::OI::Base::Byt
 	}
 	if (iSessionIdLocal != INVALID_SID)
 	{
-		if (SendBytes(iSessionIdLocal, stDataParam))
+		iFailure = SendBytesResult(iSessionIdLocal, stDataParam);
+		if (iFailure == OI_OK)
 		{
 			return;
 		}
-		iFailure = UnavailableCode();
 	}
 	// 完成可能反过来删除待发项，不能持客户端锁唤醒。
 	WakeRpcCall(iCallIdParam, iFailure, nullptr);
@@ -155,9 +155,10 @@ void ProtoClientManager::FlushHeldCalls(sid_t iSessionIdParam)
 		{
 			continue;
 		}
-		if (!SendBytes(iSessionIdParam, stCall.stData))
+		const int32_t iRet = SendBytesResult(iSessionIdParam, stCall.stData);
+		if (iRet != OI_OK)
 		{
-			WakeRpcCall(stCall.iCallId, OI_ERR_FAIL, NULL);
+			WakeRpcCall(stCall.iCallId, iRet, NULL);
 		}
 	}
 }
