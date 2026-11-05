@@ -110,7 +110,7 @@ Redis 超时扫描直接运行在 poll 的 200ms 周期计时器上，工人上�
 
 连接已关闭或容量不足时 `SendBytes` 返回 false，不追加半条消息。客户端 RPC 按发送失败结束等待；日志调用方可让出后重试，框架不自动重放写请求。服务端 RPC、Redis 和注册服务若无法排入回复，会关闭该连接，避免无声丢回复或 RESP 配对错位。会话关闭状态通过原子变量发布，缓冲仍由框架 Mutex 保护，单线程下该锁为空操作。
 
-`CallRedisSync`、`RegistryClient::Lookup`、`PullSync`、`Publish` 不能在 poll 回调（含定时器回调）里调，适合在启动阶段调用，运行期用 `co_await` 版本。`CallRedisSync` 在 poll 回调里两种线程模式都抛 `logic_error`。在协程里直接调这些同步接口：多线程会占住一个工人；单线程的 `CallRedisSync` 先扫一次超时，再在当前协程里转 `PumpOnce`，等待期间会跑其他协程和 IO。注册表这几个在单线程里只转 `PollWait(1)`，不跑协程队列。只建议测试或特殊场景使用。
+`CallRedisSync`、`RegistryClient::Lookup`、`PullSync`、`Publish` 不能在 poll 回调（含定时器回调）里调，适合在启动阶段调用。Redis 运行期用 `co_await` 版本。`Lookup`、`PullSync`、`Publish` 在 poll 回调里且需要真正等待（已配置 `[Registry]`）时会抛 `logic_error`，协程里用 `PullAsync`。`CallRedisSync` 在 poll 回调里两种线程模式都抛 `logic_error`。在协程里直接调这些同步接口：多线程会占住一个工人；单线程的 `CallRedisSync` 先扫一次超时，再在当前协程里转 `PumpOnce`，等待期间会跑其他协程和 IO。注册表这几个在单线程里只转 `PollWait(1)`，不跑协程队列。只建议测试或特殊场景使用。
 
 HTTP 客户端忽略临时 1xx 响应并继续读最终响应（最多 16 个，101 升级不支持）；204/304 在头部完成后结束，不等待 EOF。长度字段必须是完整十进制数；冲突 Content-Length、同时出现 Transfer-Encoding 和 Content-Length、未支持的传输编码、损坏的 chunk 长度及数据分隔符均按协议失败处理。chunked 支持扩展和 trailer。
 

@@ -25,7 +25,7 @@
 
 libuv 到点调用 `OnSignal`，`OnSignal` 在 poll 线程上直接执行 `Update`，不交给工人。单线程和多线程都一样，时间轮只在 poll 线程上转。
 
-`Update` 每一跳先在锁里把到期的定时器摘下来，放锁后再逐个调 `OnTimer`。`OnTimer` 里可以 `AddTimer`，不会挡住别的线程挂定时器。返回 true 的定时器再加锁挂回去。回调跑在 poll 线程上，耗时期间网络收发停住；不能调 `CallRedisSync`、`Lookup`、`PullSync`、`Publish`。`CallRedisSync` 在这里会抛 `logic_error`。要等结果就 `StartTask` 拉一个协程去做。
+`Update` 每一跳先在锁里把到期的定时器摘下来，放锁后再逐个调 `OnTimer`。`OnTimer` 里可以 `AddTimer`，不会挡住别的线程挂定时器。返回 true 的定时器再加锁挂回去。回调跑在 poll 线程上，耗时期间网络收发停住；不能调 `CallRedisSync`、`Lookup`、`PullSync`、`Publish`。`CallRedisSync` 在这里会抛 `logic_error`。注册表的 `Lookup`、`PullSync`、`Publish` 在需要真正等待时同样抛 `logic_error`，协程里用 `PullAsync`。要等结果就 `StartTask` 拉一个协程去做。
 
 单个回调抛异常时记录到任务错误处理器，并继续执行本批其他回调；`OnSignal` 另外兜住 `Update` 自身的异常，不让它穿出 libuv 回调，不能因异常让整套时间轮停转。lambda 定时器仍自动释放自身。自定义 BaseTimer 的异常路径须由其实现管理对象寿命，管理器不会猜测回调是否已经自行销毁对象，也不会在异常后自动续期。
 

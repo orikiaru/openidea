@@ -171,7 +171,7 @@ auto& res = result.GetRes(); // 自动配对的响应类型
 
 不带输出的直连接口在实际 await 提交时选择当前会话，并在同一客户端临界区决定排队或绑定回包来源；构造等待对象不会截取会话号，首次连接前仍按原规则排队。可以先创建等待对象，等连接成功后再 await。需要固定会话时使用 `RpcCall(manager, sid, req, duration)`，此接口不会自动改发到新连接。自带结果的显式响应模板接口保留；输出引用的直接 co_await 写法兼容，但返回类型已改为 TaskResult<int32_t>，需要操作底层等待器的框架代码改用 MakeRpcCallAwaiter。新接口只接受明确的时长类型。创建等待对象时复制请求，调用方可用 `std::move(req)` 交出大请求以避免复制。未使用的任务或 RPC 等待对象会产生 nodiscard 编译诊断。
 
-`CallRedisSync`、`RegistryClient::Lookup`、`PullSync`、`Publish` 不能在 poll 回调（含定时器回调）里调。适合在启动阶段调用，运行期用 `co_await` 版本。在协程里直接调这些同步接口：多线程会占住一个工人；单线程的 `CallRedisSync` 在当前协程里转 `PumpOnce`，注册表这几个在单线程里转 `PollWait`。只建议测试或特殊场景使用。
+`CallRedisSync`、`RegistryClient::Lookup`、`PullSync`、`Publish` 不能在 poll 回调（含定时器回调）里调。适合在启动阶段调用，运行期用 `co_await` 版本。注册表的 `Lookup`、`PullSync`、`Publish` 在 poll 回调里需要真正等待时会抛 `logic_error`，协程里用 `PullAsync`。在协程里直接调这些同步接口：多线程会占住一个工人；单线程的 `CallRedisSync` 在当前协程里转 `PumpOnce`，注册表这几个在单线程里转 `PollWait`。只建议测试或特殊场景使用。
 
 ## 标准 RPC 回执
 

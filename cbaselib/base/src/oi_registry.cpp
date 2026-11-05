@@ -37,6 +37,15 @@ namespace
 {
 const int kWaitMs = 1000;
 
+// 同步等待要靠 poll 收回包：多线程在 poll 线程上只会空等到超时，单线程会重入 uv_run。
+void RejectPollCallback(const char* pOperation)
+{
+	if (::OI::Net::Poll::GetInstance().InPollCallback())
+	{
+		throw std::logic_error(std::string("RegistryClient::") + pOperation + " cannot run in a poll callback");
+	}
+}
+
 class RegistryClientSession : public ::OI::Net::NetSession
 {
   public:
@@ -871,6 +880,7 @@ bool RegistryClient::PullSync(const std::string& sNameLocal, int32_t& iCodeLocal
 	{
 		return false;
 	}
+	RejectPollCallback("PullSync");
 	if (!Ensure())
 	{
 		LOG_TRACE("registry lookup %s connect failed", sNameLocal.c_str());
@@ -1115,6 +1125,7 @@ bool RegistryClient::Publish(const std::string& sSection, const std::string& sIp
 		}
 		return true;
 	}
+	RejectPollCallback("Publish");
 	sServiceName = sNameLocal;
 	iServiceId = iIdLocal;
 	sServiceIp = sAdvertiseIp;

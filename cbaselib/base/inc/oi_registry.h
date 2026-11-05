@@ -91,6 +91,7 @@ class RegistryClient : public ::OI::Net::SessionManager
 	// 没配 [Registry] 或查不到时返回 false，调用方继续用配置里的 ip/port。
 	bool Lookup(const std::string& sName, std::string& sIp, std::string& sPort);
 	// 同步拉这个名字下的全部分区。会占住调用线程。协程里用 PullAsync。
+	// Lookup、PullSync、Publish 要真正等待时，在 poll 回调里（含定时器回调）调用会抛 logic_error。
 	bool PullSync(const std::string& sName, int32_t& iCode, std::vector<ServiceInstance>& vList);
 	// 超时毫秒必须为正；默认 1000ms，超时返回 OI_ERR_TIMEOUT，积压满返回 OI_ERR_BUSY。
 	// 发出拉取后立刻返回。回包、连不上或超时时调用 fnDone，只调用一次，可能在 poll 线程或定时器线程上。fnDone 里不能再等注册表。
