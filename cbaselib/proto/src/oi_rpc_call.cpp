@@ -21,6 +21,7 @@
 #include <unordered_map>
 #include <vector>
 #include <tuple>
+#include <type_traits>
 #include <uv.h>
 namespace OI
 {
@@ -155,6 +156,7 @@ struct RpcCoroSlot
 	RpcExpireBuckets::iterator stExpiryBucket;
 	std::list<RpcExpire>::iterator stExpiry;
 };
+static_assert(std::is_nothrow_move_assignable_v<RpcCoroSlot>, "FailRpcCalls moves slots into a fixed array under the shard lock");
 
 // 按绝对截止时间所在刻度分桶；槽持索引，完成时 O(1) 摘除节点。
 struct RpcCallShard
