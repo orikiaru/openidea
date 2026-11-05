@@ -223,41 +223,48 @@ class RawHttpRegression(socketserver.BaseRequestHandler):
     # 原始 TCP 回包夹具：库级 HTTP 服务通常不会生成这些畸形报文。
     def handle(self):
         self.request.settimeout(3)
+        # 正常响应留着这条连接，让客户端按 keep-alive 接着发。畸形包和必须靠 EOF 结束的包写完就关。
+        reuse = {b"good", b"large", b"interim", b"204", b"304", b"chunk-good", b"fragmented"}
         try:
-            request = b""
-            while b"\r\n\r\n" not in request and len(request) < 8192:
-                part = self.request.recv(8192)
-                if not part: return
-                request += part
-            path = request.split(b" ")[1].strip(b"/")
-            ok = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"
-            chunk = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
-            wires = {
-                b"good": ok,
-                b"large": b"HTTP/1.1 200 OK\r\nContent-Length: 1048576\r\n\r\n" + b"x" * 1048576,
-                b"interim": b"HTTP/1.1 100 Continue\r\n\r\n" + ok,
-                b"204": b"HTTP/1.1 204 No Content\r\n\r\n",
-                b"304": b"HTTP/1.1 304 Not Modified\r\nContent-Length: 123\r\n\r\n",
-                b"chunk-good": chunk + b"2;name=value\r\nok\r\n0\r\nX-Test: done\r\n\r\n",
-                b"length-junk": b"HTTP/1.1 200 OK\r\nContent-Length: 1x\r\n\r\na",
-                b"length-overflow": b"HTTP/1.1 200 OK\r\nContent-Length: 18446744073709551616\r\n\r\n",
-                b"length-conflict": b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\nok",
-                b"te-cl": b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n",
-                b"chunk-separator": chunk + b"1\r\naXX0\r\n\r\n",
-                b"chunk-junk": chunk + b"1x\r\na\r\n0\r\n\r\n",
-                b"truncated": b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\na",
-                b"only-interim": b"HTTP/1.1 100 Continue\r\n\r\n",
-            }
-            if path == b"fragmented":
-                self.request.sendall(b"HTTP/1.1 103 Early Hints\r\nLink: </test>\r\n\r\nHTTP/1.1 200")
-                self.request.settimeout(0.02)
-                try: self.request.recv(1)
-                except socket.timeout: pass
-                self.request.sendall(b" OK\r\nContent-Length: 2\r\n\r\nok")
-            else:
-                self.request.sendall(wires[path])
-            if path in (b"204", b"304"):
-                self.request.recv(1)  # 客户端必须在无正文响应完成后主动关闭，不依赖服务端 EOF。
+            while True:
+                request = b""
+                while b"\r\n\r\n" not in request and len(request) < 8192:
+                    part = self.request.recv(8192)
+                    if not part:
+                        return
+                    request += part
+                path = request.split(b" ")[1].split(b"?")[0].strip(b"/")
+                ok = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"
+                chunk = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+                wires = {
+                    b"good": ok,
+                    b"large": b"HTTP/1.1 200 OK\r\nContent-Length: 1048576\r\n\r\n" + b"x" * 1048576,
+                    b"interim": b"HTTP/1.1 100 Continue\r\n\r\n" + ok,
+                    b"204": b"HTTP/1.1 204 No Content\r\n\r\n",
+                    b"304": b"HTTP/1.1 304 Not Modified\r\nContent-Length: 123\r\n\r\n",
+                    b"chunk-good": chunk + b"2;name=value\r\nok\r\n0\r\nX-Test: done\r\n\r\n",
+                    b"length-junk": b"HTTP/1.1 200 OK\r\nContent-Length: 1x\r\n\r\na",
+                    b"length-overflow": b"HTTP/1.1 200 OK\r\nContent-Length: 18446744073709551616\r\n\r\n",
+                    b"length-conflict": b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\nok",
+                    b"te-cl": b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n",
+                    b"chunk-separator": chunk + b"1\r\naXX0\r\n\r\n",
+                    b"chunk-junk": chunk + b"1x\r\na\r\n0\r\n\r\n",
+                    b"truncated": b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\na",
+                    b"only-interim": b"HTTP/1.1 100 Continue\r\n\r\n",
+                }
+                if path == b"fragmented":
+                    self.request.sendall(b"HTTP/1.1 103 Early Hints\r\nLink: </test>\r\n\r\nHTTP/1.1 200")
+                    self.request.settimeout(0.02)
+                    try:
+                        self.request.recv(1)
+                    except socket.timeout:
+                        pass
+                    self.request.settimeout(3)
+                    self.request.sendall(b" OK\r\nContent-Length: 2\r\n\r\nok")
+                else:
+                    self.request.sendall(wires[path])
+                if path not in reuse:
+                    return
         except (OSError, IndexError, KeyError):
             return
 

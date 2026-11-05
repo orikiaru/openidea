@@ -1,6 +1,7 @@
 #pragma once
 #include <coroutine>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -23,26 +24,21 @@ struct Response
 	}
 };
 
-class HttpChannel;
-
 // 一次请求。co_await 挂起，poll 线程上收完再 Schedule 回来，不在回调里 resume。
+// 同一个 Client 上的请求串行走 SessionManager 的一条连接，发完不主动拆。
 class Call
 {
 	friend class Client;
-	friend class HttpChannel;
-	struct State;
-	State* m_pState;
-	explicit Call(State* pStateParam)
-	    : m_pState(pStateParam)
-	{
-	}
 
   public:
-	Call(Call&& stOtherParam) noexcept
-	    : m_pState(stOtherParam.m_pState)
-	{
-		stOtherParam.m_pState = nullptr;
-	}
+	struct Request;
+
+  private:
+	std::shared_ptr<Request> m_pRequest;
+	explicit Call(std::shared_ptr<Request> pRequestParam);
+
+  public:
+	Call(Call&& stOtherParam) noexcept;
 	Call(const Call&) = delete;
 	Call& operator=(const Call&) = delete;
 	~Call();
@@ -50,20 +46,28 @@ class Call
 	{
 		return false;
 	}
-	void await_suspend(std::coroutine_handle<> stHandleParam);
+	// 返回 false 表示结果已经写好，调用方不挂起。完成方只在门已经是挂起时 Schedule。
+	bool await_suspend(std::coroutine_handle<> stHandleParam);
 	Response await_resume();
 };
 
 // 连一个 HTTP/1.1 服务。host 可以是 IPv4 或域名，域名在 libuv 线程池里解析。
 // 查询参数按百分号编码，body 按字节发送。响应支持 Content-Length、chunked 和读到断开。
+// 外层只排队。连接、收发和复用都在内部的 SessionManager 上，同一时间线上只有一个请求。
 class Client
 {
-	std::string m_sHost;
-	int32_t m_iPort;
-	int32_t m_iTimeoutMilliseconds;
+  public:
+	struct Impl;
+
+  private:
+	std::shared_ptr<Impl> m_pImpl;
 
   public:
 	Client(const std::string& sHostParam, int32_t iPortParam, int32_t iTimeoutMillisecondsParam = 5000);
+	~Client();
+	Client(const Client&) = delete;
+	Client& operator=(const Client&) = delete;
+
 	Call Get(const std::string& sPathParam, const std::vector<std::pair<std::string, std::string>>& vQueryParam);
 	Call Post(const std::string& sPathParam, const std::string& sBodyParam, const std::string& sContentTypeParam);
 };

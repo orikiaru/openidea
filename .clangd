@@ -1,6 +1,8 @@
 CompileFlags:
-  CompilationDatabase: build-win
+  CompilationDatabase: build-clangd
   Add:
     - -std=c++20
-    - -IF:/openidea/cbaselib/3rd/cpp-httplib
-    - -IF:/openidea/cbaselib/3rd/nlohmann
+    - -Icbaselib/3rd/cpp-httplib
+    - -ferror-limit=0
+Index:
+  Background: Build

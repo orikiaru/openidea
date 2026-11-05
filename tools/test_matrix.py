@@ -98,10 +98,12 @@ def main():
         return code
 
     metadata = {"platform": platform.platform(), "python": sys.version, "root": str(ROOT)}
-    metadata["head"] = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
-    diff = subprocess.check_output(["git", "-c", "core.safecrlf=false", "diff", "HEAD"], cwd=ROOT)
+    # 拷到 /root 下的树所有权对不上时，git 会拒绝读。只对这一次命令放行，不写 git 配置。
+    safe = ["-c", "safe.directory=" + str(ROOT)]
+    metadata["head"] = subprocess.check_output(["git", *safe, "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    diff = subprocess.check_output(["git", *safe, "-c", "core.safecrlf=false", "diff", "HEAD"], cwd=ROOT)
     metadata["diff_sha256"] = hashlib.sha256(diff).hexdigest()
-    metadata["status"] = subprocess.check_output(["git", "status", "--short"], cwd=ROOT, text=True)
+    metadata["status"] = subprocess.check_output(["git", *safe, "status", "--short"], cwd=ROOT, text=True)
     (output / "environment.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     failed = False
     configured = False

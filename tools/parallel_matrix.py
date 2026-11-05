@@ -41,6 +41,8 @@ def sync_linux(user, destination):
         command += ["--exclude", name if name.startswith("*") else "/" + name]
     wsl(user, ["mkdir", "-p", destination], check=True)
     wsl(user, command + [linux_path(user, ROOT) + "/", destination + "/"], check=True)
+    # 从 Windows 盘拷过去会留下原用户属主。这里的 git 2.25.1 不认 safe.directory，属主对不上就拒绝读。
+    wsl(user, ["chown", "-R", user + ":" + user, destination], check=True)
 
 
 def main():

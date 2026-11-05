@@ -113,24 +113,24 @@ bool ArmRedisSweep()
 
 struct RedisCall::State
 {
-	uint64_t iRequestId = coro::AllocTaskUid();
-	std::vector<std::string> vArguments;
-	std::shared_ptr<redisReply> pReply;
-	RedisStatus iStatus;
-	bool bReady;
-	bool bSynchronous;
-	RedisResult* pOutput;
-	std::coroutine_handle<> stHandle;
-	int64_t iDeadlineMilliseconds;
-	std::atomic<int32_t> iGate;
-	std::atomic<int32_t> iWon;
-	std::atomic<int32_t> iReferences;
-	std::atomic<bool> bAwaitStarted{false};
-	sid_t iSessionId;
+	uint64_t iRequestId = coro::AllocTaskUid(); // 这一次调用的配对号。旧会话的回包对不上就丢掉。
+	std::vector<std::string> vArguments;        // 命令和参数。
+	std::shared_ptr<redisReply> pReply;         // 回包。exchange(Ready) 之前写完。
+	RedisStatus iStatus;                        // 结果状态。和 pReply 一起在认领成功后写。
+	bool bReady;                                // 同步等待看它。协程等待看 iGate。
+	bool bSynchronous;                          // 真则用条件变量，不进完成门。
+	RedisResult* pOutput;                       // 调用方给出的输出。resume 时再填。
+	std::coroutine_handle<> stHandle;           // 调用方句柄。门已经是 Waiting 才 Schedule。
+	int64_t iDeadlineMilliseconds;              // 绝对截止。
+	std::atomic<coro::Gate> iGate;              // 完成门。Idle 还没人认领，Ready 结果已写好，Waiting 调用方已挂起。
+	std::atomic<int32_t> iWon;                  // 回包、超时、断连只有一个能写下结果。
+	std::atomic<int32_t> iReferences;           // 调用方和超时扫描各持一份。
+	std::atomic<bool> bAwaitStarted{false};     // 一次性闩。第二次 await 或移走后再等直接抛。
+	sid_t iSessionId;                           // 发出时绑定的会话。
 	::OI::Thread::Mutex stMutex;
 	::OI::Thread::MutexCond stConditionVariable;
 	State()
-	    : iStatus(RedisStatus::Disconnected), bReady(false), bSynchronous(false), pOutput(NULL), iDeadlineMilliseconds(0), iGate(0), iWon(0), iReferences(1), iSessionId(INVALID_SID)
+	    : iStatus(RedisStatus::Disconnected), bReady(false), bSynchronous(false), pOutput(NULL), iDeadlineMilliseconds(0), iGate(coro::Gate::Idle), iWon(0), iReferences(1), iSessionId(INVALID_SID)
 	{
 	}
 };
@@ -268,8 +268,8 @@ bool RedisCall::Suspend(std::coroutine_handle<> stHandleParam)
 	}
 	m_pState->stHandle = stHandleParam;
 	::OI::Net::Poll::GetInstance().CallOnLoop(RedisClient::Submit, m_pState);
-	int iPrevious = m_pState->iGate.exchange(2, std::memory_order_acq_rel);
-	return iPrevious != 1;
+	coro::Gate iPrevious = m_pState->iGate.exchange(coro::Gate::Waiting, std::memory_order_acq_rel);
+	return iPrevious != coro::Gate::Ready;
 }
 
 RedisCall RedisClient::Call(std::vector<std::string> vArgumentsParam, RedisResult* pOutputParam)
@@ -381,8 +381,8 @@ void RedisClient::Settle(RedisCall::State* pStParam, std::shared_ptr<redisReply>
 	{
 		return;
 	}
-	int iPrevious = pStParam->iGate.exchange(1, std::memory_order_acq_rel);
-	if (iPrevious == 2 && pStParam->stHandle)
+	coro::Gate iPrevious = pStParam->iGate.exchange(coro::Gate::Ready, std::memory_order_acq_rel);
+	if (iPrevious == coro::Gate::Waiting && pStParam->stHandle)
 	{
 		coro::Schedule(pStParam->stHandle);
 	}

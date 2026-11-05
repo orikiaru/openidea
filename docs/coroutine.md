@@ -28,6 +28,8 @@ TaskResult 每次等待返回一份结果副本，不移走共享结果。大对
 
 挂起只把句柄放回队列，不在回调里直接 `resume`。RPC 回包和超时也是 `Schedule`。
 
+单次等待走 `coro::Gate`。`Idle` 还没人认领，`Ready` 是结果已经写好，`Waiting` 是调用方已经挂起。完成方先把结果写进状态，再 `exchange(Ready)`，只有看见 `Waiting` 才 `Schedule`。等待方先记下句柄并提交，再 `exchange(Waiting)`，看见 `Ready` 就不挂起，当场 `await_resume`。时序见 [单线程](sequence-diagram/single-thread/gate.md) 和 [多线程](sequence-diagram/multi-thread/gate.md)。`Task` 的多个等待者仍是完成列表，不走这道门。
+
 时间轮只能在 poll 线程上改。`yield` 经 `OI::Net::Poll::CallOnLoop` 到 poll 线程再 `AddTimer`，到点把句柄放回队列。
 
 ## 单线程和多线程

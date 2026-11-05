@@ -9,7 +9,7 @@ alwaysApply: false
 
 JSON 只用 JsonCpp。`rpcdata` 的 body 用它自己的 `FromJson` / `ToJson`。
 
-服务端仍是 `cpp-httplib` 的阻塞 listen，不进协程。客户端用基础库 `OI::Http::Client`，`co_await` 后由 poll 线程收完再 `Schedule`，不要在回调里 `resume`，也不要 `sleep`。单线程链 `http_static`，多线程链 `http_m_static`。查询参数的百分号编码跟 `cpp-httplib` 的 `encode_query_param` 同一套字符。
+服务端仍是 `cpp-httplib` 的阻塞 listen，不进协程。客户端用基础库 `OI::Http::Client`，内部是一条 `SessionManager` 上的 keep-alive 连接，请求串行复用。`co_await` 后由 poll 线程收完再 `Schedule`，不要在回调里 `resume`，也不要 `sleep`，也不要再自己 `recv` / `send`。单线程链 `http_static`，多线程链 `http_m_static`。查询参数的百分号编码跟 `cpp-httplib` 的 `encode_query_param` 同一套字符。
 
 - `GET /query`：百分号编码，服务端 `get_param_value` 解码后放进 JSON
 - `POST /json`：JsonCpp 解析，改完再写回

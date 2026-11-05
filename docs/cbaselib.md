@@ -79,7 +79,7 @@ if (iRangeRet != OI_OK)
 
 共享上游连接不支持改变连接状态的命令（切库、认证、事务、订阅、CLIENT 等）。代理收到这类命令会记录错误并关闭该下游连接，避免本地错误回包与在途回包错位。阻塞命令仍会阻塞共用该上游的其他会话，生产环境应单独部署这类调用。多线程版同步 Redis 调用禁止在 poll 线程执行，会抛出 `std::logic_error`；该线程应使用协程接口。
 
-`http` 是 HTTP/1.1 客户端，在 `OI::Http`。套接字是一条 `OI::Net::Channel`，可读走 `DataIn`，可写走 `DataOut`。`co_await` 之后由 poll 线程收完，再 `Schedule` 把协程句柄交回去，不在回调里 `resume`，也不睡线程。查询参数按百分号编码，和 `cpp-httplib` 的 `encode_query_param` 同一套字符。body 按 `Content-Length` 原样发送。单线程模块链 `http_static`，多线程模块链 `http_m_static`。服务端不在这个库里。
+`http` 是 HTTP/1.1 客户端，在 `OI::Http`。外层是 `Client` 的 `Get` / `Post`。连接坐在 `SessionManager` 上：`TCP_Channel` 只管字节，`HttpSession::OnDataIn` 拆 HTTP。同一个 `Client` 串行复用一条 keep-alive 连接，不对每个请求 `Connection: close`。对端要求关闭、半包断开或解析失败时关掉会话，下一个请求再连。`co_await` 之后由 poll 线程收完，再 `Schedule` 把协程句柄交回去，不在回调里 `resume`，也不睡线程。查询参数按百分号编码，和 `cpp-httplib` 的 `encode_query_param` 同一套字符。body 按 `Content-Length` 原样发送。单线程模块链 `http_static`，多线程模块链 `http_m_static`。服务端不在这个库里。
 
 `port` 是套接字的平台差异。`port/win` 给 MSVC 补头文件。
 
