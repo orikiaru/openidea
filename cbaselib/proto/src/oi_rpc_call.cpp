@@ -17,6 +17,8 @@
 #include <set>
 #include <unordered_map>
 #include <vector>
+#include <tuple>
+#include <uv.h>
 namespace OI
 {
 namespace Rpc
@@ -696,14 +698,59 @@ bool ParseTarget(const std::string& sTargetParam, ParsedTarget& stTargetParam)
 	return ValidServiceToken(stTargetParam.sName) && ValidServiceToken(stTargetParam.sZone);
 }
 
-class RoutedClient : public ProtoClientManager
+struct RoutePolicy
+{
+	size_t iSendBytes = 64 * 1024 * 1024;
+	size_t iReceiveBytes = 64 * 1024 * 1024 + 8;
+	size_t iFrameBytes = 64 * 1024 * 1024;
+	uint64_t iIncompleteMilliseconds = 10000;
+	size_t iHeldCount = 65536;
+	size_t iHeldBytes = 64 * 1024 * 1024;
+
+	explicit RoutePolicy(::OI::Net::SessionManager* pManagerParam)
+	{
+		if (pManagerParam)
+		{
+			iSendBytes = pManagerParam->MaxSendQueueBytes();
+			iReceiveBytes = pManagerParam->MaxReceiveBufferBytes();
+			iFrameBytes = pManagerParam->MaxFrameBytes();
+			iIncompleteMilliseconds = pManagerParam->IncompleteFrameTimeoutMilliseconds();
+			if (auto* pClient = dynamic_cast<ProtoClientManager*>(pManagerParam))
+			{
+				std::tie(iHeldCount, iHeldBytes) = pClient->PendingCallLimits();
+			}
+		}
+	}
+	bool operator<(const RoutePolicy& stOtherParam) const
+	{
+		return std::tie(iSendBytes, iReceiveBytes, iFrameBytes, iIncompleteMilliseconds, iHeldCount, iHeldBytes) <
+		       std::tie(stOtherParam.iSendBytes, stOtherParam.iReceiveBytes, stOtherParam.iFrameBytes, stOtherParam.iIncompleteMilliseconds, stOtherParam.iHeldCount, stOtherParam.iHeldBytes);
+	}
+};
+
+class RoutedClient : public ProtoClientManager, public std::enable_shared_from_this<RoutedClient>
 {
 	std::string m_sLabel;
 
+  protected:
+	bool AutoReconnect() const override
+	{
+		return false;
+	}
+
   public:
-	explicit RoutedClient(std::string sLabelParam)
+	RoutedClient(std::string sLabelParam, const RoutePolicy& stPolicyParam)
 	    : m_sLabel(std::move(sLabelParam))
 	{
+		iMaxSendQueueBytes = stPolicyParam.iSendBytes;
+		iMaxReceiveBufferBytes = stPolicyParam.iReceiveBytes;
+		iMaxFrameBytes = stPolicyParam.iFrameBytes;
+		iIncompleteFrameTimeoutMilliseconds = stPolicyParam.iIncompleteMilliseconds;
+		SetPendingCallLimits(stPolicyParam.iHeldCount, stPolicyParam.iHeldBytes);
+	}
+	std::shared_ptr<::OI::Net::SessionManager> KeepAlive() override
+	{
+		return shared_from_this();
 	}
 	const std::string GetIDString()
 	{
@@ -723,39 +770,210 @@ class RoutedClient : public ProtoClientManager
 	}
 };
 
-ProtoClientManager* ClientFor(const std::string& sIpParam, const std::string& sPortParam)
+struct RoutePool
 {
-	struct Pool
+	struct Entry
 	{
-		::OI::Thread::Mutex stMutex;
-		std::map<std::string, std::unique_ptr<RoutedClient>> mClients;
+		std::shared_ptr<RoutedClient> pClient;
+		std::weak_ptr<ProtoClientManager> pLease;
+		int64_t iIdleSinceMilliseconds = 0;
 	};
-	static Pool stPool;
-	std::string sKey = sIpParam + ":" + sPortParam;
-	RoutedClient* pClient = NULL;
-	bool bNew = false;
+	::OI::Thread::Mutex stMutex;
+	std::map<std::tuple<std::string, std::string, RoutePolicy>, Entry> mClients;
+	size_t iMaxClients = 1024;
+	size_t iEvicted = 0;
+	int64_t iIdleMilliseconds = 60000;
+	uv_timer_t stTimer{};
+	bool bTimerInitialized = false;
+	bool bStopped = false;
+	std::once_flag stArmOnce;
+
+	RoutePool()
+	{
+		RpcAdmission::ReadLimit("RpcRoute.max_clients", iMaxClients);
+		TryGetConfig("RpcRoute.idle_ms", iIdleMilliseconds);
+		if (iIdleMilliseconds <= 0)
+		{
+			throw std::invalid_argument("RpcRoute.idle_ms");
+		}
+	}
+};
+
+RoutePool& RoutedPool()
+{
+	static RoutePool stPool;
+	return stPool;
+}
+
+void SweepRoutePool(bool bStopParam)
+{
+	assert(::OI::Net::Poll::GetInstance().InLoopThread());
+	auto& stPool = RoutedPool();
+	std::vector<std::shared_ptr<RoutedClient>> vRetired;
+	const int64_t iNow = NowMs();
 	{
 		::OI::Thread::MutexGuard stLock(stPool.stMutex);
-		auto stIterator = stPool.mClients.find(sKey);
-		if (stIterator == stPool.mClients.end())
+		vRetired.reserve(stPool.mClients.size());
+		if (bStopParam)
 		{
-			std::unique_ptr<RoutedClient> pNew(new RoutedClient(sKey));
-			pNew->Open(sIpParam, sPortParam);
-			pClient = pNew.get();
-			stPool.mClients.emplace(sKey, std::move(pNew));
-			bNew = true;
+			stPool.bStopped = true;
 		}
-		else
+		for (auto it = stPool.mClients.begin(); it != stPool.mClients.end();)
 		{
-			pClient = stIterator->second.get();
+			auto& stEntry = it->second;
+			if (!bStopParam && !stEntry.pLease.expired())
+			{
+				stEntry.iIdleSinceMilliseconds = 0;
+				++it;
+				continue;
+			}
+			if (stEntry.iIdleSinceMilliseconds == 0)
+			{
+				stEntry.iIdleSinceMilliseconds = iNow;
+			}
+			if (!bStopParam && iNow - stEntry.iIdleSinceMilliseconds < stPool.iIdleMilliseconds)
+			{
+				++it;
+				continue;
+			}
+			vRetired.push_back(stEntry.pClient);
+			it = stPool.mClients.erase(it);
+			++stPool.iEvicted;
 		}
 	}
-	if (bNew)
+	// 不在池锁内结束等待：恢复的协程可能马上再次选路。
+	for (const auto& pClient : vRetired)
 	{
-		pClient->StartClient();
+		pClient->RetireClient();
 	}
-	return pClient;
 }
+
+void StopRoutePool()
+{
+	auto& stPool = RoutedPool();
+	if (stPool.bTimerInitialized)
+	{
+		uv_timer_stop(&stPool.stTimer);
+	}
+	SweepRoutePool(true);
+}
+
+void ArmRoutePool(void*)
+{
+	auto& stPool = RoutedPool();
+	if (::OI::Thread::ThreadPool::GetInstance().StopRequested())
+	{
+		StopRoutePool();
+		return;
+	}
+	if (uv_timer_init(::OI::Net::Poll::GetInstance().Loop(), &stPool.stTimer) != 0)
+	{
+		StopRoutePool();
+		return;
+	}
+	stPool.bTimerInitialized = true;
+	const uint64_t iIntervalMilliseconds = static_cast<uint64_t>((std::min)(stPool.iIdleMilliseconds, int64_t{1000}));
+	if (uv_timer_start(&stPool.stTimer, [](uv_timer_t*)
+	{
+		try
+		{
+			SweepRoutePool(false);
+		}
+		catch (...)
+		{
+			::OI::Thread::ReportTaskError(std::current_exception());
+		}
+	}, iIntervalMilliseconds, iIntervalMilliseconds) != 0)
+	{
+		StopRoutePool();
+	}
+}
+
+std::shared_ptr<ProtoClientManager> ClientFor(const std::string& sIpParam, const std::string& sPortParam, ::OI::Net::SessionManager* pManagerParam)
+{
+	auto& stPool = RoutedPool();
+	std::call_once(stPool.stArmOnce, []()
+	{
+		if (::OI::Thread::ThreadPool::GetInstance().AddStopHandler(StopRoutePool))
+		{
+			::OI::Net::Poll::GetInstance().CallOnLoop(ArmRoutePool, nullptr);
+		}
+	});
+	const auto stKey = std::make_tuple(sIpParam, sPortParam, RoutePolicy(pManagerParam));
+	std::shared_ptr<ProtoClientManager> pLease;
+	{
+		::OI::Thread::MutexGuard stLock(stPool.stMutex);
+		if (stPool.bStopped || ::OI::Thread::ThreadPool::GetInstance().StopRequested())
+		{
+			return {};
+		}
+		auto it = stPool.mClients.find(stKey);
+		if (it == stPool.mClients.end())
+		{
+			if (stPool.mClients.size() >= stPool.iMaxClients)
+			{
+				return {};
+			}
+			auto pClient = std::make_shared<RoutedClient>(sIpParam + ":" + sPortParam, std::get<2>(stKey));
+			pClient->Open(sIpParam, sPortParam);
+			it = stPool.mClients.emplace(stKey, RoutePool::Entry{std::move(pClient), {}, 0}).first;
+		}
+		auto& stEntry = it->second;
+		pLease = stEntry.pLease.lock();
+		if (!pLease)
+		{
+			// 独立控制块只计算业务租约，网络 KeepAlive 不会让闲置连接永久留池。
+			struct Lease
+			{
+				std::shared_ptr<RoutedClient> pClient;
+			};
+			auto pOwner = std::make_shared<Lease>(Lease{stEntry.pClient});
+			pLease = std::shared_ptr<ProtoClientManager>(pOwner, stEntry.pClient.get());
+			stEntry.pLease = pLease;
+		}
+		stEntry.iIdleSinceMilliseconds = 0;
+	}
+	// 每次获取允许重连；StartClient 自行合并同代建连，不挂裸 this 重连定时器。
+	if (!pLease->IsConnect())
+	{
+		pLease->StartClient();
+	}
+	return pLease;
+}
+
+bool AddRouteClient(ServiceRoute& stRouteParam, const std::string& sIpParam, const std::string& sPortParam, ::OI::Net::SessionManager* pManagerParam)
+{
+	auto pOwner = ClientFor(sIpParam, sPortParam, pManagerParam);
+	if (!pOwner)
+	{
+		stRouteParam.vClients.clear();
+		stRouteParam.vOwners.clear();
+		stRouteParam.iStatus = ServiceRouteStatus::Busy;
+		return false;
+	}
+	stRouteParam.vClients.push_back(pOwner.get());
+	stRouteParam.vOwners.push_back(std::move(pOwner));
+	return true;
+}
+}
+
+RoutePoolStats GetRoutePoolStats()
+{
+	auto& stPool = RoutedPool();
+	::OI::Thread::MutexGuard stLock(stPool.stMutex);
+	RoutePoolStats stStats;
+	stStats.iClients = stPool.mClients.size();
+	stStats.iMaxClients = stPool.iMaxClients;
+	stStats.iIdleMilliseconds = stPool.iIdleMilliseconds;
+	stStats.iEvicted = stPool.iEvicted;
+	for (const auto& [stKey, stEntry] : stPool.mClients)
+	{
+		if (!stEntry.pLease.expired())
+		{
+			++stStats.iLeasedClients;
+		}
+	}
+	return stStats;
 }
 
 bool PrepareRoute(::OI::Net::SessionManager* pManagerParam, const std::string& sNameParam, ServicePick iPickParam, const std::string& sZoneParam, ServiceRoute& stRouteParam)
@@ -779,6 +997,7 @@ bool PrepareRoute(::OI::Net::SessionManager* pManagerParam, const std::string& s
 			{
 				stRouteParam.iStatus = ServiceRouteStatus::Ok;
 				stRouteParam.vClients.push_back(pClient);
+				stRouteParam.vOwners.push_back(std::dynamic_pointer_cast<ProtoClientManager>(pClient->KeepAlive()));
 				return true;
 			}
 		}
@@ -786,9 +1005,9 @@ bool PrepareRoute(::OI::Net::SessionManager* pManagerParam, const std::string& s
 	return false;
 }
 
-void PullRoute(const std::string& sNameParam, std::function<void(int32_t, const std::vector<::OI::Base::ServiceInstance>&)> fnDoneParam)
+void PullRoute(const std::string& sNameParam, std::function<void(int32_t, const std::vector<::OI::Base::ServiceInstance>&)> fnDoneParam, int64_t iTimeoutMillisecondsParam)
 {
-	::OI::Base::RegistryClient::GetInstance().PullAsync(sNameParam, std::move(fnDoneParam));
+	::OI::Base::RegistryClient::GetInstance().PullAsync(sNameParam, std::move(fnDoneParam), iTimeoutMillisecondsParam);
 }
 
 bool PrepareTarget(const std::string& sTargetParam, bool bBatchParam, ServiceRoute& stRouteParam, std::string& sNameParam, ServicePick& iPickParam, std::string& sZoneParam)
@@ -836,7 +1055,7 @@ bool PrepareZones(::OI::Net::SessionManager* pManagerParam, const std::string& s
 	return false;
 }
 
-ServiceRoute FinishRoute(const std::string& sNameParam, ServicePick iPickParam, const std::string& sZoneParam, int32_t iCodeParam, const std::vector<::OI::Base::ServiceInstance>& vListParam)
+ServiceRoute FinishRoute(const std::string& sNameParam, ServicePick iPickParam, const std::string& sZoneParam, int32_t iCodeParam, const std::vector<::OI::Base::ServiceInstance>& vListParam, ::OI::Net::SessionManager* pManagerParam)
 {
 	ServiceRoute stRoute;
 	if (iCodeParam != OI_OK)
@@ -896,7 +1115,10 @@ ServiceRoute FinishRoute(const std::string& sNameParam, ServicePick iPickParam, 
 	{
 		for (const auto& stInst : vMatched)
 		{
-			stRoute.vClients.push_back(ClientFor(stInst.sIp, stInst.sPort));
+			if (!AddRouteClient(stRoute, stInst.sIp, stInst.sPort, pManagerParam))
+			{
+				return stRoute;
+			}
 		}
 	}
 	else
@@ -909,13 +1131,16 @@ ServiceRoute FinishRoute(const std::string& sNameParam, ServicePick iPickParam, 
 		}
 		const ::OI::Base::ServiceInstance& stInst = vMatched[iPick];
 		// 名单已选定地址，使用固定地址的连接；订阅管理器可能在提交前改连其他分区。
-		stRoute.vClients.push_back(ClientFor(stInst.sIp, stInst.sPort));
+		if (!AddRouteClient(stRoute, stInst.sIp, stInst.sPort, pManagerParam))
+		{
+			return stRoute;
+		}
 	}
 	stRoute.iStatus = ServiceRouteStatus::Ok;
 	return stRoute;
 }
 
-ServiceRoute FinishZones(const std::string& sNameParam, const std::vector<std::string>& vZonesParam, int32_t iCodeParam, const std::vector<::OI::Base::ServiceInstance>& vListParam)
+ServiceRoute FinishZones(const std::string& sNameParam, const std::vector<std::string>& vZonesParam, int32_t iCodeParam, const std::vector<::OI::Base::ServiceInstance>& vListParam, ::OI::Net::SessionManager* pManagerParam)
 {
 	ServiceRoute stRoute;
 	if (iCodeParam != OI_OK)
@@ -957,10 +1182,14 @@ ServiceRoute FinishZones(const std::string& sNameParam, const std::vector<std::s
 		if (!pBest)
 		{
 			stRoute.vClients.push_back(nullptr);
+			stRoute.vOwners.push_back(nullptr);
 			continue;
 		}
 		// 每个槽位固定到本次名单中的地址，不能随调用方管理器的服务切换而漂移。
-		stRoute.vClients.push_back(ClientFor(pBest->sIp, pBest->sPort));
+		if (!AddRouteClient(stRoute, pBest->sIp, pBest->sPort, pManagerParam))
+		{
+			return stRoute;
+		}
 	}
 	stRoute.iStatus = ServiceRouteStatus::Ok;
 	return stRoute;

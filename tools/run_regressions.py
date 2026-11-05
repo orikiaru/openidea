@@ -60,7 +60,8 @@ def regression_directory(**kwargs):
 
 
 def cleanup_owned(procs, handles, root, args, case, *, db=None, db_paused=False,
-                  monitor=None, http_fixture=None, http_thread=None, primary=None):
+                  monitor=None, http_fixture=None, http_thread=None, primary=None,
+                  registry=None, registry_paused=False):
     """Attempt every owned cleanup action, without masking the original test error."""
     errors = []
 
@@ -74,6 +75,8 @@ def cleanup_owned(procs, handles, root, args, case, *, db=None, db_paused=False,
 
     if db_paused:
         attempt("resume Redis", lambda: pause(db, False) if db.poll() is None else None)
+    if registry_paused:
+        attempt("resume registry", lambda: pause(registry, False) if registry.poll() is None else None)
     for proc in reversed(procs):
         def graceful(proc=proc):
             if proc.poll() is not None:
@@ -259,6 +262,10 @@ def run(case, args):
     pressure = case.startswith("redis-backpressure-") or fairness
     db = None
     db_paused = False
+    registry = None
+    registry_paused = False
+    registry_fault_command = ""
+    registry_resume_at = None
     pause_at = None
     shutdown_sent = False
     procs = []
@@ -323,6 +330,10 @@ def run(case, args):
                     text = replace(text, flag, "true" if mode == flag else "false")
                 if mode == "hold":
                     text = replace(text, "max_task_count", "1")
+                    text = replace(text, "max_pending_pulls", "16")
+                    text = replace(text, "pull_ms", "60000")
+                    text = replace(text, "max_clients", "8")
+                    text = replace(text, "idle_ms", "200")
                     # Hold 的 Redis 迟到回包比超时晚 1 秒；后续 PING 的预算必须覆盖这段排队。
                     text = replace(text, "timeout_ms", "2000")
                 if mode == "log":
@@ -374,6 +385,8 @@ def run(case, args):
                 for name in ("ipcclient", "ipcserver"):
                     with (cfg / (name + ".toml")).open("a", encoding="utf-8") as config:
                         config.write("\n[Regression]\nencoding_failure = true\nregistry_checks = true\nhttp_port = %d\n" % http_fixture.server_address[1])
+                        if name == "ipcclient":
+                            config.write('registry_fault_path = "%s"\n' % (root / "registry-fault").as_posix())
             if case.startswith("rpc-admission-"):
                 with (cfg / "ipcclient.toml").open("a") as config:
                     config.write("rpc_admission = true\nrpc_admission_bytes = %s\n" % ("true" if case.endswith("bytes") else "false"))
@@ -455,6 +468,24 @@ def run(case, args):
             # 正常通过时 hold 约 50 秒，其余不超过 35 秒；留三四倍余量，失败时不用干等。
             deadline = started + (20 if pressure or case == "redis-shutdown" else CLIENT_SECONDS.get(mode, 60))
             while client.poll() is None:
+                if mode == "hold":
+                    request_path = root / "registry-fault.request"
+                    command = request_path.read_text(encoding="utf-8").strip() if request_path.exists() else ""
+                    if command in ("pause", "resume", "budget") and command != registry_fault_command:
+                        if command in ("pause", "budget"):
+                            registry_paused = True  # finally also resumes if suspension partly fails.
+                            pause(registry, True)
+                            registry_resume_at = time.monotonic() + 0.6 if command == "budget" else None
+                        else:
+                            pause(registry, False)
+                            registry_paused = False
+                            registry_resume_at = None
+                        registry_fault_command = command
+                        (root / "registry-fault.ack").write_text(command, encoding="utf-8")
+                    if registry_paused and registry_resume_at is not None and time.monotonic() >= registry_resume_at:
+                        pause(registry, False)
+                        registry_paused = False
+                        registry_resume_at = None
                 if case == "redis-shutdown" and not shutdown_sent and "redis shutdown pending" in clientpath.read_text(encoding="utf-8", errors="replace"):
                     stop(client)
                     shutdown_sent = True
@@ -545,6 +576,12 @@ def run(case, args):
                 assert "hold output rpc shared waiters=16 submissions=1 bad=0" in text
                 assert "hold output rpc direct pinned error late bad=0" in text
                 assert "hold output rpc named any zone shared=8 bad=0" in text
+                assert "hold completed rpc requests retained=20 destroyed=20 bad=0" in text
+                assert "hold route policy isolation idle reconnect bad=0" in text
+                assert "hold route pool capacity busy=1 bad=0" in text
+                assert re.search(r"hold registry bounded recovery busy=[1-9]\d* timeout=[1-9]\d* bad=0", text)
+                budget = re.search(r"hold named rpc end to end budget elapsed_ms=(\d+) bad=0", text)
+                assert budget and int(budget.group(1)) < 1450, budget.group(0) if budget else "missing budget marker"
                 assert "hold binary bool bad=0" in text
                 assert "hold connection isolation bad=0" in text
                 assert "hold coroutine connect bad=0" in text
@@ -599,7 +636,7 @@ def run(case, args):
         finally:
             cleanup_owned(procs, handles, root, args, case, db=db, db_paused=db_paused,
                           monitor=monitor, http_fixture=http_fixture, http_thread=http_thread,
-                          primary=sys.exc_info()[1])
+                          primary=sys.exc_info()[1], registry=registry, registry_paused=registry_paused)
 
 
 def run_web(args):

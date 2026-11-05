@@ -478,6 +478,20 @@ class RegressionCleanupTests(unittest.TestCase):
         self.first.kill.assert_called_once_with()
         self.handles[1].close.assert_called_once_with()
 
+    def test_registry_resume_failure_cleans_other_processes_and_reports_error(self):
+        # The paused registry is an owned child, not an unrelated process.
+        output = io.StringIO()
+        with patch.object(self.runner, "pause", side_effect=OSError("registry resume denied")) as resume, \
+             contextlib.redirect_stderr(output):
+            with self.assertRaisesRegex(RuntimeError, "resume registry.*registry resume denied") as caught:
+                self.cleanup(registry=self.first, registry_paused=True)
+        resume.assert_called_once_with(self.first, False)
+        self.assertIn("graceful shutdown", str(caught.exception))
+        self.assertIn("resume registry", output.getvalue())
+        self.assertIn("registry resume denied", output.getvalue())
+        self.first.wait.assert_called_once_with(timeout=3)
+        self.assert_all_attempted()
+
     def test_normal_finally_calls_resilient_cleanup(self):
         # Execute the actual finally AST, as in the review reproduction, with
         # two owned processes and no application launch or network activity.
@@ -489,7 +503,8 @@ class RegressionCleanupTests(unittest.TestCase):
                          for statement in node.finalbody for n in ast.walk(statement)))
         scope = dict(self.runner.__dict__, procs=[self.old, self.first], handles=self.handles,
                      root=self.root, args=self.args, case="echo", db=None, db_paused=False,
-                     monitor=None, http_fixture=None, http_thread=None)
+                     monitor=None, http_fixture=None, http_thread=None,
+                     registry=None, registry_paused=False)
         with self.assertRaisesRegex(RuntimeError, "graceful shutdown"):
             exec(compile(ast.Module(body=final, type_ignores=[]), "normal-finally", "exec"), scope)
         self.assert_all_attempted()

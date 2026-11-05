@@ -155,8 +155,9 @@ void SessionManager::BeginConnect(const std::shared_ptr<ConnectWait>& pWaitParam
 	{
 		SessionManager* pManager;
 		std::shared_ptr<ConnectWait> pWait;
+		std::shared_ptr<SessionManager> pOwner;
 	};
-	auto pRequest = std::make_unique<ConnectRequest>(ConnectRequest{this, pWaitParam});
+	auto pRequest = std::make_unique<ConnectRequest>(ConnectRequest{this, pWaitParam, KeepAlive()});
 	Poll::GetInstance().CallOnLoop([](void* pArgumentParam)
 	{
 		std::unique_ptr<ConnectRequest> pHeld(static_cast<ConnectRequest*>(pArgumentParam));
@@ -248,6 +249,22 @@ void SessionManager::CloseAllSessions()
 	}
 }
 
+void SessionManager::RetireClient()
+{
+	assert(Poll::GetInstance().InLoopThread());
+	auto pOwner = KeepAlive();
+	bServiceDown = true;
+	++iConnectGeneration;
+	bConnectPending = false;
+	FinishConnectWaiters(false);
+	while (!m_vConnectChannels.empty())
+	{
+		(*m_vConnectChannels.begin())->Cancel();
+	}
+	CloseAllSessions();
+	OnServiceDown();
+}
+
 void SessionManager::ApplyService(const std::string& sIpParam, const std::string& sPortParam, bool bOnlineParam)
 {
 	if (!Poll::GetInstance().InLoopThread())
@@ -258,8 +275,9 @@ void SessionManager::ApplyService(const std::string& sIpParam, const std::string
 			std::string sIp;
 			std::string sPort;
 			bool bOnline;
+			std::shared_ptr<SessionManager> pOwner;
 		};
-		auto pChange = std::make_unique<ServiceChange>(ServiceChange{this, sIpParam, sPortParam, bOnlineParam});
+		auto pChange = std::make_unique<ServiceChange>(ServiceChange{this, sIpParam, sPortParam, bOnlineParam, KeepAlive()});
 		Poll::GetInstance().CallOnLoop([](void* pArgumentParam)
 		{
 			std::unique_ptr<ServiceChange> pHeld(static_cast<ServiceChange*>(pArgumentParam));

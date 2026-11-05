@@ -131,7 +131,7 @@ void Session::ForbidRead()
 }
 
 Session::Session(SessionManager* pMgrParam)
-    : iStatus(IO_ST_CONNECTED), iErrorCode(0), iSessionId(0), pChannel(NULL), pSessionManager(pMgrParam), iReferences(1)
+    : m_pManagerOwner(pMgrParam ? pMgrParam->KeepAlive() : nullptr), iStatus(IO_ST_CONNECTED), iErrorCode(0), iSessionId(0), pChannel(NULL), pSessionManager(pMgrParam), iReferences(1)
 {
 }
 

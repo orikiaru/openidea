@@ -80,6 +80,12 @@ class ProtoClientManager : public ProtoSessionManager
 	::OI::Thread::SpinLock m_stClientLocker;
 	bool HoldCallLocked(uint64_t iCallIdParam, const ::OI::Base::Bytes& stDataParam);
 
+  protected:
+	virtual bool AutoReconnect() const
+	{
+		return true;
+	}
+
   public:
 	ProtoClientManager()
 	    : m_iSessionId(INVALID_SID), m_bConnected(false), m_iConnectMode(CLIENT_CONNECT_DIRECT), m_iPendingBytes(0), m_bEverConnected(false)
@@ -132,7 +138,7 @@ class ProtoClientManager : public ProtoSessionManager
 	}
 	virtual void OnConnectFailed()
 	{
-		if (bServiceDown || sEndpoint.empty())
+		if (!AutoReconnect() || bServiceDown || sEndpoint.empty())
 		{
 			FailHeldCalls();
 			return;
@@ -153,6 +159,11 @@ class ProtoClientManager : public ProtoSessionManager
 		m_iHeldMaxCount = iCountParam;
 		m_iHeldMaxBytes = iBytesParam;
 	}
+	std::pair<size_t, size_t> PendingCallLimits()
+	{
+		::OI::Thread::SpinLockGuard stLock(m_stClientLocker);
+		return {m_iHeldMaxCount, m_iHeldMaxBytes};
+	}
 	bool TryPendCall(uint64_t iCallIdParam, const ::OI::Base::Bytes& stDataParam) override;
 	// 提交时在客户端锁内决定排队或绑定当前 sid，随后发送，避免构造等待对象时截取旧 sid。
 	virtual void SubmitCall(uint64_t iCallIdParam, const ::OI::Base::Bytes& stDataParam);
@@ -168,7 +179,7 @@ class ProtoClientManager : public ProtoSessionManager
 			{
 				m_iSessionId = INVALID_SID;
 				m_bConnected = false;
-				bReconnect = !bServiceDown && !sEndpoint.empty() && pSessionParam->GetEndpoint() == sEndpoint;
+				bReconnect = AutoReconnect() && !bServiceDown && !sEndpoint.empty() && pSessionParam->GetEndpoint() == sEndpoint;
 			}
 		}
 		OnClientDisconnect(pSessionParam);

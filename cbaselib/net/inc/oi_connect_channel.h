@@ -1,5 +1,6 @@
 #pragma once
 #include "oi_channel.h"
+#include <memory>
 namespace OI
 {
 namespace Net
@@ -10,12 +11,13 @@ class ConnectChannel : public Channel
 	bool m_bClose;
 	uint64_t m_iGeneration;
 	SessionManager* m_pSessionManager;
+	std::shared_ptr<SessionManager> m_pManagerOwner;
 
   public:
-	ConnectChannel(NetSocket stTextParam, SessionManager* pMgrParam, uint64_t iGenerationParam)
-	    : Channel(stTextParam, 0), m_bClose(false), m_iGeneration(iGenerationParam), m_pSessionManager(pMgrParam)
-	{
-	}
+	ConnectChannel(NetSocket stTextParam, SessionManager* pMgrParam, uint64_t iGenerationParam);
+	~ConnectChannel() override;
+	// 只在 poll 线程、且不在本通道回调栈上调用。
+	void Cancel();
 	virtual void DataIn();
 	virtual void DataOut();
 	virtual bool TryClose();

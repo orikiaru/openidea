@@ -12,6 +12,26 @@ namespace OI
 namespace Net
 {
 
+ConnectChannel::ConnectChannel(NetSocket stTextParam, SessionManager* pMgrParam, uint64_t iGenerationParam)
+    : Channel(stTextParam, 0), m_bClose(false), m_iGeneration(iGenerationParam), m_pSessionManager(pMgrParam), m_pManagerOwner(pMgrParam->KeepAlive())
+{
+	// StartConnect 已切到 poll；随后 IOEventRegister 同步完成，不留下 POLL_PENDING。
+	assert(Poll::GetInstance().InLoopThread());
+	m_pSessionManager->m_vConnectChannels.insert(this);
+}
+
+ConnectChannel::~ConnectChannel()
+{
+	m_pSessionManager->m_vConnectChannels.erase(this);
+}
+
+void ConnectChannel::Cancel()
+{
+	assert(Poll::GetInstance().InLoopThread());
+	Close();
+	TryClose();
+}
+
 void ConnectChannel::DataIn()
 {
 	// libuv 遇到 POLLERR 只回调 status<0，不再报可写，监听也停了。连接被拒只能在这里收。

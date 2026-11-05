@@ -71,6 +71,15 @@ class ServiceTable
 
 struct RegPullState;
 
+struct RegistryPullStats
+{
+	size_t iSentCount;
+	size_t iDeferredCount;
+	size_t iLiveCount;
+	int64_t iMaxPendingPulls;
+	uint64_t iResetCount;
+};
+
 // 连 registry 的客户端。登记、心跳、拉取都在这里，应用层只在配置里写 service。
 class RegistryClient : public ::OI::Net::SessionManager
 {
@@ -83,8 +92,14 @@ class RegistryClient : public ::OI::Net::SessionManager
 	bool Lookup(const std::string& sNameParam, std::string& sIpParam, std::string& sPortParam);
 	// 同步拉这个名字下的全部分区。会占住调用线程。协程里用 PullAsync。
 	bool PullSync(const std::string& sNameParam, int32_t& iCodeParam, std::vector<ServiceInstance>& vListParam);
+	// 超时毫秒必须为正；默认 1000ms，超时返回 OI_ERR_TIMEOUT，积压满返回 OI_ERR_BUSY。
 	// 发出拉取后立刻返回。回包、连不上或超时时调用 fnDone，只调用一次，可能在 poll 线程或定时器线程上。fnDone 里不能再等注册表。
-	void PullAsync(const std::string& sNameParam, std::function<void(int32_t, const std::vector<ServiceInstance>&)> fnDoneParam);
+	void PullAsync(const std::string& sNameParam, std::function<void(int32_t, const std::vector<ServiceInstance>&)> fnDoneParam, int64_t iTimeoutMillisecondsParam = 1000);
+	// 未发送和已发送查询的合计占位数，不包含已完成的回调。
+	size_t GetPendingPullCount();
+	RegistryPullStats GetPullStats();
+	// 统一周期扫描；已发送查询过期时失效整条连接，防止 FIFO 回包错配。
+	void ExpirePulls();
 	// StartServer 成功后登记本进程。返回 false 表示不能起：id 不对，或同名同 id 已经在线。
 	bool Publish(const std::string& sSectionParam, const std::string& sIpParam, const std::string& sPortParam);
 	void Watch(::OI::Net::SessionManager* pManagerParam, const std::string& sNameParam);
@@ -135,11 +150,16 @@ class RegistryClient : public ::OI::Net::SessionManager
 	struct PendingPull
 	{
 		bool bSynchronous;
+		int64_t iDeadlineMilliseconds = 0;
 		std::vector<std::string> vNames;
 		std::shared_ptr<RegPullState> pState;
 	};
 	// 调用方持有 stPendingMutex，且已经连上。发送失败时不留在队列里。
 	bool EnqueueSentPull(const PendingPull& stPendingParam);
+	bool CanEnqueuePull();
+	void ArmPullTimeout();
+	bool bPullTimeoutArmed = false;
+	uint64_t iPullResetCount = 0;
 	::OI::Thread::Mutex stPendingMutex;
 	::OI::Thread::Mutex stSyncMutex;
 	std::deque<PendingPull> vPendingPulls;

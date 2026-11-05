@@ -1,5 +1,6 @@
 #pragma once
 #include <atomic>
+#include <memory>
 #include "oi_lock.h"
 #include "oi_bytes.h"
 #include <errno.h>
@@ -20,6 +21,7 @@ class SessionManager;
 
 class Session
 {
+	std::shared_ptr<SessionManager> m_pManagerOwner;
 	friend class Poll;
 	friend class NetChannel;
 

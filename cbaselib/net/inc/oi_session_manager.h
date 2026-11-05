@@ -9,6 +9,7 @@
 #include <memory>
 #include <vector>
 #include <coroutine>
+#include <set>
 namespace coro
 {
 void Schedule(std::coroutine_handle<> stHandleParam);
@@ -31,11 +32,13 @@ enum SESSION_TYPE
 	*/
 };
 class SessionManager;
+class ConnectChannel;
 
 class SessionManager
 {
 	struct ConnectWait;
 	std::vector<std::weak_ptr<ConnectWait>> m_vConnectWaiters;
+	std::set<ConnectChannel*> m_vConnectChannels;
 	void FinishConnectWaiters(bool bResultParam);
 	void StartConnect(const std::shared_ptr<ConnectWait>& pWaitParam);
 	void BeginConnect(const std::shared_ptr<ConnectWait>& pWaitParam);
@@ -86,6 +89,21 @@ class SessionManager
 	{
 	}
 	virtual ~SessionManager();
+	// 动态管理器由网络操作保活；常驻管理器沿用外部生命周期。
+	virtual std::shared_ptr<SessionManager> KeepAlive()
+	{
+		return {};
+	}
+	size_t MaxSendQueueBytes() const
+	{
+		return iMaxSendQueueBytes;
+	}
+	size_t MaxReceiveBufferBytes() const
+	{
+		return iMaxReceiveBufferBytes;
+	}
+	// 仅 poll 线程调用，永久停止本管理器并取消尚未完成的建连。
+	void RetireClient();
 	void DefaultInit(const std::string& sSipParam, const std::string& sPortParam, SESSION_TYPE iSessionTypeParam = SESSION_TYPE_TCP)
 	{
 		sIpAddress = sSipParam;

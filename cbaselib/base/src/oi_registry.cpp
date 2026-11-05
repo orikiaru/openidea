@@ -13,6 +13,10 @@
 #include "oi_poll.h"
 #include "oi_thread.h"
 #include "oi_timer_manager.h"
+#include "oi_duration.h"
+#include <limits>
+#include <algorithm>
+#include <stdexcept>
 #include <chrono>
 #include <cstdio>
 #include <memory>
@@ -73,40 +77,47 @@ class PullTimer : public ::OI::Timer::BaseTimer
 	}
 };
 
+void InvokePullCallback(std::function<void(int32_t, const std::vector<ServiceInstance>&)> fnDoneParam, int32_t iCodeParam, const std::vector<ServiceInstance>& vListParam)
+{
+	if (fnDoneParam)
+	{
+		try
+		{
+			fnDoneParam(iCodeParam, vListParam);
+		}
+		catch (...)
+		{
+			::OI::Thread::ReportTaskError(std::current_exception());
+		}
+	}
+}
+
 void FinishPull(const std::shared_ptr<RegPullState>& pStateParam, int32_t iCodeParam, const std::vector<ServiceInstance>& vListParam)
 {
-	if (!pStateParam)
+	if (!pStateParam || pStateParam->iOnce.exchange(1, std::memory_order_acq_rel) != 0)
 	{
 		return;
 	}
-	if (pStateParam->iOnce.exchange(1, std::memory_order_acq_rel) != 0)
-	{
-		return;
-	}
-	auto fnDone = std::move(pStateParam->fnDone);
-	if (fnDone)
-	{
-		fnDone(iCodeParam, vListParam);
-	}
+	InvokePullCallback(std::move(pStateParam->fnDone), iCodeParam, vListParam);
 }
 
 class PullTimeoutTimer : public ::OI::Timer::BaseTimer
 {
   public:
-	std::shared_ptr<RegPullState> pState;
 	bool OnTimer()
 	{
-		std::vector<ServiceInstance> vEmpty;
-		FinishPull(pState, OI_ERR_CONNECT, vEmpty);
-		delete this;
-		return false;
+		try
+		{
+			RegistryClient::GetInstance().ExpirePulls();
+		}
+		catch (...)
+		{
+			::OI::Thread::ReportTaskError(std::current_exception());
+		}
+		return true;
 	}
 };
 
-void ArmPullTimeout(void* pArgumentParam)
-{
-	::OI::Timer::BaseTimerManager::GetInstance().AddTimer(static_cast<PullTimeoutTimer*>(pArgumentParam), kWaitMs);
-}
 }
 
 ::OI::Base::Bytes EncodeRegFrame(uint32_t iIdParam, const ::OI::Rpc::Serialize& stMessageParam)
@@ -418,7 +429,12 @@ bool RegistryClient::Send(uint32_t iIdParam, const ::OI::Rpc::Serialize& stMessa
 
 bool RegistryClient::EnqueueSentPull(const PendingPull& stPendingParam)
 {
+	ArmPullTimeout();
 	vPendingPulls.push_back(stPendingParam);
+	if (vPendingPulls.back().iDeadlineMilliseconds == 0)
+	{
+		vPendingPulls.back().iDeadlineMilliseconds = ::OI::Timer::SteadyMilliseconds() + kWaitMs;
+	}
 	try
 	{
 		::OI::RpcData::RegPull stRequestLocal(stPendingParam.vNames);
@@ -436,46 +452,195 @@ bool RegistryClient::EnqueueSentPull(const PendingPull& stPendingParam)
 	return true;
 }
 
-void RegistryClient::PullAsync(const std::string& sNameParam, std::function<void(int32_t, const std::vector<ServiceInstance>&)> fnDoneParam)
+size_t RegistryClient::GetPendingPullCount()
 {
-	auto pState = std::make_shared<RegPullState>();
-	pState->fnDone = std::move(fnDoneParam);
-	std::vector<ServiceInstance> vEmpty;
-	if (sNameParam.empty() || !Configured())
+	::OI::Thread::MutexGuard stLock(stPendingMutex);
+	return vPendingPulls.size() + vDeferredPulls.size();
+}
+
+namespace
+{
+int64_t ReadMaxPendingPulls()
+{
+	int64_t iMaximumPendingPulls = 4096;
+	if (!TryGetConfig("Registry.max_pending_pulls", iMaximumPendingPulls))
 	{
-		FinishPull(pState, OI_ERR_FAIL, vEmpty);
-		return;
+		std::string sInvalid;
+		double dInvalid = 0;
+		bool bInvalid = false;
+		if (TryGetConfig("Registry.max_pending_pulls", sInvalid) || TryGetConfig("Registry.max_pending_pulls", dInvalid) || TryGetConfig("Registry.max_pending_pulls", bInvalid))
+		{
+			throw std::invalid_argument("Registry.max_pending_pulls must be a positive integer");
+		}
 	}
-	if (!Connect())
+	if (iMaximumPendingPulls <= 0)
 	{
-		FinishPull(pState, OI_ERR_CONNECT, vEmpty);
-		return;
+		throw std::invalid_argument("Registry.max_pending_pulls must be a positive integer");
 	}
-	PendingPull stPending;
-	stPending.bSynchronous = false;
-	stPending.vNames.push_back(sNameParam);
-	stPending.pState = pState;
-	bool bAccepted = false;
+	return iMaximumPendingPulls;
+}
+}
+
+RegistryPullStats RegistryClient::GetPullStats()
+{
+	::OI::Thread::MutexGuard stLock(stPendingMutex);
+	return {vPendingPulls.size(), vDeferredPulls.size(), vPendingPulls.size() + vDeferredPulls.size(), ReadMaxPendingPulls(), iPullResetCount};
+}
+
+bool RegistryClient::CanEnqueuePull()
+{
+	return vPendingPulls.size() + vDeferredPulls.size() < static_cast<uint64_t>(ReadMaxPendingPulls());
+}
+
+void RegistryClient::ArmPullTimeout()
+{
+	// 调用方持有 stPendingMutex；时间轮的 AddTimer 自带轮锁。
+	if (!bPullTimeoutArmed)
+	{
+		auto pTimer = std::make_unique<PullTimeoutTimer>();
+		// 实际到期受 Timer.offset_ms 向上对齐及调度延迟影响。
+		::OI::Timer::BaseTimerManager::GetInstance().AddTimer(pTimer.get(), 10);
+		pTimer.release();
+		bPullTimeoutArmed = true;
+	}
+}
+
+void RegistryClient::ExpirePulls()
+{
+	const int64_t iNowMilliseconds = ::OI::Timer::SteadyMilliseconds();
+	std::deque<PendingPull> vExpired;
+	std::deque<PendingPull> vInvalidated;
+	sid_t iExpiredSessionId = INVALID_SID;
 	{
 		::OI::Thread::MutexGuard stLock(stPendingMutex);
-		if (bConnected.load())
+		for (auto it = vDeferredPulls.begin(); it != vDeferredPulls.end();)
 		{
-			bAccepted = EnqueueSentPull(stPending);
+			if (it->iDeadlineMilliseconds <= iNowMilliseconds)
+			{
+				vExpired.push_back(std::move(*it));
+				it = vDeferredPulls.erase(it);
+			}
+			else
+			{
+				++it;
+			}
 		}
-		else if (bConnecting.load())
+		for (const auto& stPending : vPendingPulls)
 		{
-			vDeferredPulls.push_back(stPending);
-			bAccepted = true;
+			if (stPending.iDeadlineMilliseconds <= iNowMilliseconds)
+			{
+				// 协议没有调用号：不能仅删除中间占位。先失效 SID，再释放全部占位。
+				iExpiredSessionId = iSessionId.exchange(INVALID_SID);
+				++iPullResetCount;
+				// 与 Connect 共用锁；先摘掉旧 endpoint，不能让新连接误认旧会话已连接。
+				if (iExpiredSessionId != INVALID_SID)
+				{
+					try
+					{
+						CloseSession(iExpiredSessionId);
+					}
+					catch (...)
+					{
+						::OI::Thread::ReportTaskError(std::current_exception());
+					}
+				}
+				bConnected = false;
+				bRegistered = false;
+				bFailed = true;
+				vInvalidated.swap(vPendingPulls);
+				for (const auto& stInvalidated : vInvalidated)
+				{
+					if (stInvalidated.bSynchronous)
+					{
+						iCode = stInvalidated.iDeadlineMilliseconds <= iNowMilliseconds ? OI_ERR_TIMEOUT : OI_ERR_CONNECT;
+						bGot = true;
+					}
+				}
+				break;
+			}
 		}
 	}
-	if (!bAccepted)
+	if (iExpiredSessionId != INVALID_SID)
 	{
-		FinishPull(pState, OI_ERR_CONNECT, vEmpty);
+		Notify();
+	}
+	const std::vector<ServiceInstance> vEmpty;
+	for (const auto& stPending : vExpired)
+	{
+		FinishPull(stPending.pState, OI_ERR_TIMEOUT, vEmpty);
+	}
+	for (const auto& stPending : vInvalidated)
+	{
+		FinishPull(stPending.pState, stPending.iDeadlineMilliseconds <= iNowMilliseconds ? OI_ERR_TIMEOUT : OI_ERR_CONNECT, vEmpty);
+	}
+}
+
+void RegistryClient::PullAsync(const std::string& sNameParam, std::function<void(int32_t, const std::vector<ServiceInstance>&)> fnDoneParam, int64_t iTimeoutMillisecondsParam)
+{
+	const int64_t iStartedMilliseconds = ::OI::Timer::SteadyMilliseconds();
+	std::shared_ptr<RegPullState> pState;
+	const std::vector<ServiceInstance> vEmpty;
+	try
+	{
+		pState = std::make_shared<RegPullState>();
+		pState->fnDone = std::move(fnDoneParam);
+	}
+	catch (...)
+	{
+		::OI::Thread::ReportTaskError(std::current_exception());
+		InvokePullCallback(std::move(fnDoneParam), OI_ERR_FAIL, vEmpty);
 		return;
 	}
-	PullTimeoutTimer* pTimer = new PullTimeoutTimer();
-	pTimer->pState = pState;
-	::OI::Net::Poll::GetInstance().CallOnLoop(ArmPullTimeout, pTimer);
+	if (iTimeoutMillisecondsParam <= 0)
+	{
+		FinishPull(pState, OI_ERR_TIMEOUT, vEmpty);
+		return;
+	}
+	int32_t iResult = OI_ERR_CONNECT;
+	try
+	{
+		if (sNameParam.empty() || !Configured())
+		{
+			FinishPull(pState, OI_ERR_FAIL, vEmpty);
+			return;
+		}
+		PendingPull stPending;
+		stPending.bSynchronous = false;
+		stPending.vNames.push_back(sNameParam);
+		stPending.pState = pState;
+		stPending.iDeadlineMilliseconds = iStartedMilliseconds + (std::min)(iTimeoutMillisecondsParam, (std::numeric_limits<int64_t>::max)() - iStartedMilliseconds);
+		::OI::Thread::MutexGuard stLock(stPendingMutex);
+		if (!CanEnqueuePull())
+		{
+			iResult = OI_ERR_BUSY;
+		}
+		else if (Connect())
+		{
+			ArmPullTimeout();
+			if (stPending.iDeadlineMilliseconds <= ::OI::Timer::SteadyMilliseconds())
+			{
+				iResult = OI_ERR_TIMEOUT;
+			}
+			else if (bConnected.load())
+			{
+				if (EnqueueSentPull(stPending))
+				{
+					return;
+				}
+			}
+			else if (bConnecting.load())
+			{
+				vDeferredPulls.push_back(std::move(stPending));
+				return;
+			}
+		}
+	}
+	catch (...)
+	{
+		::OI::Thread::ReportTaskError(std::current_exception());
+		iResult = OI_ERR_FAIL;
+	}
+	FinishPull(pState, iResult, vEmpty);
 }
 
 void RegistryClient::SendRegister()
@@ -486,18 +651,11 @@ void RegistryClient::SendRegister()
 
 void RegistryClient::OnAddSession(::OI::Net::Session* pSessionParam)
 {
-	std::vector<std::shared_ptr<RegPullState>> vFailed;
+	std::deque<PendingPull> vFailed;
 	std::deque<PendingPull> vSend;
 	{
 		::OI::Thread::MutexGuard stPendingLock(stPendingMutex);
-		for (const auto& stPending : vPendingPulls)
-		{
-			if (stPending.pState)
-			{
-				vFailed.push_back(stPending.pState);
-			}
-		}
-		vPendingPulls.clear();
+		vFailed.swap(vPendingPulls);
 		vSend.swap(vDeferredPulls);
 		iSessionId = pSessionParam->GetSessionID();
 		bFailed = false;
@@ -506,63 +664,71 @@ void RegistryClient::OnAddSession(::OI::Net::Session* pSessionParam)
 		Notify();
 		if (bPublished.load() && !bLost.load())
 		{
-			SendRegister();
+			try
+			{
+				SendRegister();
+			}
+			catch (...)
+			{
+				::OI::Thread::ReportTaskError(std::current_exception());
+			}
 		}
-		for (const auto& stPending : vSend)
+		for (auto& stPending : vSend)
 		{
-			if (stPending.pState && stPending.pState->iOnce.load(std::memory_order_acquire) != 0)
+			if (stPending.iDeadlineMilliseconds <= ::OI::Timer::SteadyMilliseconds())
 			{
 				continue;
 			}
-			if (!EnqueueSentPull(stPending))
+			try
 			{
-				vFailed.push_back(stPending.pState);
+				if (EnqueueSentPull(stPending))
+				{
+					stPending.pState.reset();
+				}
+			}
+			catch (...)
+			{
+				::OI::Thread::ReportTaskError(std::current_exception());
 			}
 		}
 	}
-	std::vector<ServiceInstance> vEmpty;
-	for (const auto& pState : vFailed)
+	const std::vector<ServiceInstance> vEmpty;
+	for (const auto& stPending : vFailed)
 	{
-		FinishPull(pState, OI_ERR_CONNECT, vEmpty);
+		FinishPull(stPending.pState, OI_ERR_CONNECT, vEmpty);
+	}
+	for (const auto& stPending : vSend)
+	{
+		FinishPull(stPending.pState, stPending.iDeadlineMilliseconds <= ::OI::Timer::SteadyMilliseconds() ? OI_ERR_TIMEOUT : OI_ERR_CONNECT, vEmpty);
 	}
 	LOG_INFO("RegistryClient::OnAddSession sid=%d", pSessionParam->GetSessionID());
 }
 
 void RegistryClient::OnDelSession(const ::OI::Net::Session* pSessionParam)
 {
-	::OI::Thread::MutexGuard stPendingLock(stPendingMutex);
-	if (iSessionId.load() != pSessionParam->GetSessionID())
+	std::deque<PendingPull> vFailed;
+	std::deque<PendingPull> vDeferred;
 	{
-		return;
-	}
-	iSessionId = INVALID_SID;
-	bConnected = false;
-	bRegistered = false;
-	bFailed = true;
-	std::vector<std::shared_ptr<RegPullState>> vFailed;
-	{
-		::OI::Thread::MutexGuard stLock(stPendingMutex);
-		for (const auto& stPending : vPendingPulls)
+		::OI::Thread::MutexGuard stPendingLock(stPendingMutex);
+		if (iSessionId.load() != pSessionParam->GetSessionID())
 		{
-			if (stPending.pState)
-			{
-				vFailed.push_back(stPending.pState);
-			}
+			return;
 		}
-		for (const auto& stPending : vDeferredPulls)
-		{
-			if (stPending.pState)
-			{
-				vFailed.push_back(stPending.pState);
-			}
-		}
-		vPendingPulls.clear();
-		vDeferredPulls.clear();
+		iSessionId = INVALID_SID;
+		bConnected = false;
+		bRegistered = false;
+		bFailed = true;
+		vFailed.swap(vPendingPulls);
+		vDeferred.swap(vDeferredPulls);
 	}
-	std::vector<ServiceInstance> vEmpty;
-	for (const auto& pState : vFailed)
+	const std::vector<ServiceInstance> vEmpty;
+	for (const auto& stPending : vFailed)
 	{
-		FinishPull(pState, OI_ERR_CONNECT, vEmpty);
+		FinishPull(stPending.pState, stPending.iDeadlineMilliseconds <= ::OI::Timer::SteadyMilliseconds() ? OI_ERR_TIMEOUT : OI_ERR_CONNECT, vEmpty);
+	}
+	for (const auto& stPending : vDeferred)
+	{
+		FinishPull(stPending.pState, stPending.iDeadlineMilliseconds <= ::OI::Timer::SteadyMilliseconds() ? OI_ERR_TIMEOUT : OI_ERR_CONNECT, vEmpty);
 	}
 	Notify();
 	LOG_INFO("RegistryClient::OnDelSession sid=%d", pSessionParam->GetSessionID());
@@ -570,24 +736,17 @@ void RegistryClient::OnDelSession(const ::OI::Net::Session* pSessionParam)
 
 void RegistryClient::OnConnectFailed()
 {
-	std::vector<std::shared_ptr<RegPullState>> vFailed;
+	std::deque<PendingPull> vFailed;
 	{
 		::OI::Thread::MutexGuard stPendingLock(stPendingMutex);
 		bConnecting = false;
 		bFailed = true;
-		for (const auto& stPending : vDeferredPulls)
-		{
-			if (stPending.pState)
-			{
-				vFailed.push_back(stPending.pState);
-			}
-		}
-		vDeferredPulls.clear();
+		vFailed.swap(vDeferredPulls);
 	}
-	std::vector<ServiceInstance> vEmpty;
-	for (const auto& pState : vFailed)
+	const std::vector<ServiceInstance> vEmpty;
+	for (const auto& stPending : vFailed)
 	{
-		FinishPull(pState, OI_ERR_CONNECT, vEmpty);
+		FinishPull(stPending.pState, stPending.iDeadlineMilliseconds <= ::OI::Timer::SteadyMilliseconds() ? OI_ERR_TIMEOUT : OI_ERR_CONNECT, vEmpty);
 	}
 	Notify();
 	LOG_TRACE("RegistryClient::OnConnectFailed");
@@ -659,7 +818,6 @@ void RegistryClient::OnFrame(sid_t iSessionIdParam, uint32_t iIdParam, ::OI::Bas
 				return;
 			}
 			stPending = vPendingPulls.front();
-			vPendingPulls.pop_front();
 		}
 		std::vector<ServiceInstance> vList;
 		for (size_t iIndexLocal = 0; iIndexLocal < stResponseLocal.vList.size(); ++iIndexLocal)
@@ -671,6 +829,13 @@ void RegistryClient::OnFrame(sid_t iSessionIdParam, uint32_t iIdParam, ::OI::Bas
 			stInst.sPort = stResponseLocal.vList[iIndexLocal].sPort;
 			stInst.sZone = stResponseLocal.vList[iIndexLocal].sZone;
 			vList.push_back(stInst);
+		}
+		vPendingPulls.pop_front();
+		// 已消费该 FIFO 回包，可以安全释放这一项；过期结果不能再发布成功。
+		if (stPending.iDeadlineMilliseconds <= ::OI::Timer::SteadyMilliseconds())
+		{
+			stResponseLocal.iCode = OI_ERR_TIMEOUT;
+			vList.clear();
 		}
 		if (stPending.pState)
 		{
@@ -711,45 +876,44 @@ bool RegistryClient::PullSync(const std::string& sNameParam, int32_t& iCodeParam
 	PendingPull stPending;
 	stPending.bSynchronous = true;
 	stPending.vNames.push_back(sNameParam);
-	::OI::RpcData::RegPull stRequestLocal(stPending.vNames);
 	bool bSent = false;
 	{
-		// 排队顺序必须等于线上的发送顺序，不能在两步之间释放锁。
 		::OI::Thread::MutexGuard stLock(stPendingMutex);
+		if (!CanEnqueuePull())
+		{
+			iCodeParam = OI_ERR_BUSY;
+			return false;
+		}
 		bGot = false;
 		iCode = OI_ERR_FAIL;
-		vPendingPulls.push_back(stPending);
-		try
-		{
-			bSent = Send(PROTO_REG_PULL, stRequestLocal);
-		}
-		catch (...)
-		{
-			vPendingPulls.pop_back();
-			throw;
-		}
-		if (!bSent)
-		{
-			vPendingPulls.pop_back();
-		}
+		bSent = EnqueueSentPull(stPending);
 	}
 	if (!bSent || !WaitFlag(bGot))
 	{
-		// 同步调用已串行化。发送失败已回滚；超时仅取消等待，保留配对占位。
-		::OI::Thread::MutexGuard stLock(stPendingMutex);
-		for (auto stIterator = vPendingPulls.begin(); stIterator != vPendingPulls.end(); ++stIterator)
 		{
-			if (stIterator->bSynchronous)
+			::OI::Thread::MutexGuard stLock(stPendingMutex);
+			// 连接失败/停止也会提前结束等待，先取消本次全局同步结果的写入资格。
+			for (auto& stPendingLocal : vPendingPulls)
 			{
-				stIterator->bSynchronous = false;
-				break;
+				if (stPendingLocal.bSynchronous)
+				{
+					stPendingLocal.bSynchronous = false;
+					break;
+				}
 			}
 		}
+		// 未到期的占位只用于 FIFO 配对；统一扫描到期后失效整代并回收。
+		ExpirePulls();
+		iCodeParam = bSent ? OI_ERR_TIMEOUT : OI_ERR_CONNECT;
 		LOG_TRACE("registry lookup %s %s", sNameParam.c_str(), bSent ? "timeout" : "send failed");
 		return false;
 	}
 	::OI::Thread::MutexGuard stResultLock(stPendingMutex);
 	iCodeParam = iCode;
+	if (iCodeParam == OI_ERR_TIMEOUT || iCodeParam == OI_ERR_CONNECT)
+	{
+		return false;
+	}
 	vListParam = vResponseList;
 	return true;
 }
@@ -829,25 +993,12 @@ void RegistryClient::Pull()
 	PendingPull stPending;
 	stPending.bSynchronous = false;
 	stPending.vNames = vNamesLocal;
-	::OI::RpcData::RegPull stRequestLocal(vNamesLocal);
 	::OI::Thread::MutexGuard stLock(stPendingMutex);
-	if (!bConnected.load())
+	if (!bConnected.load() || !CanEnqueuePull())
 	{
 		return;
 	}
-	vPendingPulls.push_back(stPending);
-	try
-	{
-		if (!Send(PROTO_REG_PULL, stRequestLocal))
-		{
-			vPendingPulls.pop_back();
-		}
-	}
-	catch (...)
-	{
-		vPendingPulls.pop_back();
-		throw;
-	}
+	EnqueueSentPull(stPending);
 }
 
 void RegistryClient::Touch()

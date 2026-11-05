@@ -13,6 +13,8 @@
 
 输出引用 RPC 的日常压力由 EchoMgr 使用 `Call(req, res)` 覆盖。HoldMgr 同时验证输出任务的请求保活、16 个等待者只提交一次、重复等待不重写响应、固定会话、业务错误保留原响应、超时后迟到回包不覆盖新响应，以及命名/分区调用。正常 Hold 必须输出 `hold output rpc shared waiters=16 submissions=1 bad=0`、`hold output rpc direct pinned error late bad=0`、`hold output rpc named any zone shared=8 bad=0`；它们已纳入脚本断言。底层单次等待器的重复等待和异常注入用例仍保留，与输出 Task 可重复等待的语义分开验证。
 
+五项路由与请求生命周期回归也集成在正常 Hold 中：容量策略隔离与真实大包收发、持有租约时不回收/释放后管理器销毁及重新获取、注册查询限流和超时清空后的恢复、查询与回包共用端到端预算，以及保留已完成任务时请求资源仍被销毁。脚本只在临时配置缩短池空闲时限、降低查询容量；通过暂停本次启动的 registry 进程制造有连接无回包和慢查询，finally 中恢复暂停状态再清理。应用请求仍从 ipcclient 发出，不新增测试客户端。
+
 ## 2. 环境预检
 
 仓库路径可以包含空格。以下示例在仓库根目录执行，示例中的用户、构建目录和 Redis 路径按实际环境传参。
@@ -142,7 +144,7 @@ git diff --check
 
 换机器时，清理和矩阵必须使用相同的 `--windows-root`、`--linux-root`、`--wsl-user`；清理旧的无标记实例时，先人工核实归属，不能退回按端口杀进程。脚本安全回归为 `python tools/test_test_safety.py`，矩阵会自动运行。
 
-先由主对话做一次全局清理 `python tools/kill_test_procs.py`，然后问用户选模型，四个 subagent 同时在后台派发，每个一路，按下表替换范本里的占位符。
+先由主对话做一次全局清理 `python tools/kill_test_procs.py`，按用户已确认的偏好使用 Terra 执行编译和回归，不使用 Astra、不重复询问；Terra 不可用或用户要求更换时再确认。四个 subagent 同时在后台派发，每个一路，按下表替换范本里的占位符。
 
 | `<LANE>` | `<OFFSET>` | `<OTHERS>` | `<MODE_NOTE>` |
 | --- | --- | --- | --- |
@@ -208,3 +210,12 @@ python tools/parallel_matrix.py --lane <LANE> --jobs 4 --windows-redis-binary <W
 - 每路 Python 工具检查 58 项通过、1 项跳过：未设置 `OI_SAFETY_REDIS_BINARY`，本轮没有执行可选的真实 Redis 端口冲突探针。应用层 Redis 收发用例已全部通过，不能将该工具探针记为通过。
 - 主工作目录 Windows / Linux 构建成功，格式检查 136 个文件通过；主目录及四路副本均恢复 MT、关闭测试注入。最终全局清理返回 0，无残留报告。
 - 本机证据根目录为 `~/openidea-test-results/rpc-output-20261105`，四路在 `par-<平台>-<模式>`，主目录验证在 `preflight` 和 `main-windows`，汇总为 `verified.json`。临时日志数据已清理，仅保留诊断证据。
+
+## 12. 2026-11-05 五项修复验证
+
+- 编译与测试全部交给 Terra。Windows 原生 MSVC 与 WSL GCC13，MT/ST 各 18 项通过，共 72 项；四路均完成百万次 Echo，`mismatch=0`、`rpc_fail=0`。
+- 新增 Hold 检查覆盖：已完成输出任务释放请求资源、路由配置隔离及空闲回收后重连、路由池容量保护、注册查询限流和超时恢复、命名 RPC 端到端超时预算。五项标记及 `hold done bad=0` 均通过，保留完成任务重复等待时 20 份请求资源全部释放。
+- 每路测试清理安全检查 41 项通过、无跳过，包含指定本平台 Redis 可执行文件后的真实端口占用检查。测试日志数据由用例清理，单例最大落盘约 1.07GB，未达到 2GiB 停止阈值。
+- 首轮发现会话构造新增的管理器保活逻辑解引用空指针，已恢复空管理器兼容；原测试保留，修复后四路全部重跑。旧失败目录保留，不计入通过结果。
+- 主工作目录 Windows/Linux 构建成功，格式检查 136 个文件、命名基础测试 5 项通过；本轮未运行 libclang 全量命名扫描。主目录及四路副本均恢复 MT、关闭测试注入。最终全局清理退出 0，无残留报告。
+- 本机证据根目录为 `C:/Users/Admin/openidea-test-results/five-fixes-20261105`，最终四路位于 `par-<平台>-<模式>-fixed`，主目录构建证据在 `main-final`，逐例汇总为 `verified.json`。该汇总只使用修复后四路结果。
