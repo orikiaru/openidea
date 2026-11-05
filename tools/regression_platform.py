@@ -27,8 +27,14 @@ def stop(proc):
     if isinstance(proc, WslRedis):
         proc.terminate()
     elif WINDOWS:
-        subprocess.run([sys.executable, str(Path(__file__).resolve()), "--interrupt", str(proc.pid)],
-                       check=True, creationflags=subprocess.CREATE_NO_WINDOW, timeout=5)
+        try:
+            subprocess.run([sys.executable, str(Path(__file__).resolve()), "--interrupt", str(proc.pid)],
+                           check=True, creationflags=subprocess.CREATE_NO_WINDOW, timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            # AttachConsole can lose a race with normal exit. Never hide a live
+            # process's helper failure or treat a forced kill as graceful exit.
+            if proc.poll() is None:
+                raise
     else:
         proc.terminate()
 

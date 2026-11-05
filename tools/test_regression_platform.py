@@ -71,5 +71,36 @@ class ProcessFixtureTests(unittest.TestCase):
                     owned.control("TERM")
 
 
+class StopHelperTests(unittest.TestCase):
+    def test_helper_failures_remain_failures_for_live_process(self):
+        for error in (subprocess.CalledProcessError(1, "helper"),
+                      subprocess.TimeoutExpired("helper", 5), OSError("launch failed")):
+            with self.subTest(error=type(error).__name__):
+                proc = mock.Mock(pid=123)
+                proc.poll.return_value = None
+                with mock.patch("regression_platform.WINDOWS", True), \
+                     mock.patch("subprocess.CREATE_NO_WINDOW", 0, create=True), \
+                     mock.patch("regression_platform.subprocess.run", side_effect=error):
+                    with self.assertRaises(type(error)):
+                        stop(proc)
+                proc.kill.assert_not_called()
+
+    def test_exit_between_poll_and_attach_is_benign(self):
+        proc = mock.Mock(pid=123)
+        proc.poll.side_effect = [None, 0]
+        with mock.patch("regression_platform.WINDOWS", True), \
+             mock.patch("subprocess.CREATE_NO_WINDOW", 0, create=True), \
+             mock.patch("regression_platform.subprocess.run", side_effect=subprocess.CalledProcessError(1, "helper")):
+            stop(proc)
+        proc.kill.assert_not_called()
+
+    def test_already_exited_never_sends_control(self):
+        proc = mock.Mock()
+        proc.poll.return_value = 0
+        with mock.patch("regression_platform.subprocess.run") as helper:
+            stop(proc)
+        helper.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

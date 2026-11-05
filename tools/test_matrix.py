@@ -48,6 +48,12 @@ def main():
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     output = (args.artifacts or Path.home() / "openidea-test-results" / stamp).resolve()
     output.mkdir(parents=True, exist_ok=True)
+    # Invalidate an earlier successful run before any fallible setup.
+    summary = {"passed": False, "artifacts": str(output)}
+    summary_path = output / "summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    (output / "matrix.json").write_text("[]", encoding="utf-8")
+    (output / "error.txt").unlink(missing_ok=True)
     if args.platform == "both":
         if not WINDOWS:
             parser.error("--platform both is launched on the Windows host")
@@ -73,6 +79,8 @@ def main():
             linux.append("--clock-faults")
         codes = [subprocess.run(command, cwd=ROOT).returncode for command in (native, linux)]
         (output / "platforms.json").write_text(json.dumps(dict(zip(("windows", "linux"), codes)), indent=2))
+        summary["passed"] = not any(codes)
+        summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
         return int(any(codes))
 
     records = []
@@ -94,6 +102,9 @@ def main():
     (output / "environment.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     failed = False
     configured = False
+    completed = False
+    restored = False
+    pending = None
     try:
         cmake = find_cmake(args.cmake)
         build = (args.build_dir or (ROOT / "build-win" if WINDOWS else Path(args.linux_build_dir))).resolve()
@@ -113,6 +124,8 @@ def main():
         if run("process-fixtures", [sys.executable, ROOT / "tools/test_regression_platform.py"]):
             failed = True
         if run("test-safety", [sys.executable, ROOT / "tools/test_test_safety.py"]):
+            failed = True
+        if run("matrix-outcomes", [sys.executable, ROOT / "tools/test_matrix_outcomes.py"]):
             failed = True
         for mode in (("mt", "st") if args.mode == "all" else (args.mode,)):
             configured = True
@@ -140,18 +153,32 @@ def main():
                         failed |= bool(run(mode + "-" + case, fault))
         if args.asan and not WINDOWS:
             failed |= bool(run("asan", [sys.executable, ROOT / "tools/check_coro_runtime.py", "--build-dir", build, "--asan"]))
-    except Exception as error:
+        completed = not failed
+    except BaseException as error:
         failed = True
-        (output / "error.txt").write_text(str(error), encoding="utf-8")
-        print("ERROR", error, flush=True)
+        pending = error
+        print("ERROR", repr(error), flush=True)
     finally:
-        if configured:
-            code = run("restore-configure", configure + ["-DOI_IPC_SINGLE_THREAD=OFF", "-DOI_ENABLE_TEST_HOOKS=OFF"])
-            failed |= bool(code)
-            if not code:
-                failed |= bool(run("restore-build", build_command))
-        (output / "summary.json").write_text(json.dumps({"passed": not failed, "artifacts": str(output)}, indent=2))
-    return int(failed)
+        try:
+            if configured:
+                code = run("restore-configure", configure + ["-DOI_IPC_SINGLE_THREAD=OFF", "-DOI_ENABLE_TEST_HOOKS=OFF"])
+                if not code:
+                    restored = run("restore-build", build_command) == 0
+        except BaseException as error:
+            print("RESTORE ERROR", repr(error), flush=True)
+            summary["restore_error"] = repr(error)
+            if pending is None:
+                pending = error
+        finally:
+            summary.update(passed=completed and restored, completed=completed, restored=restored)
+            if pending is not None:
+                summary["error"] = repr(pending)
+            summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    if pending is not None:
+        (output / "error.txt").write_text(repr(pending), encoding="utf-8")
+        if not isinstance(pending, Exception):
+            raise pending
+    return int(not summary["passed"])
 
 
 if __name__ == "__main__":

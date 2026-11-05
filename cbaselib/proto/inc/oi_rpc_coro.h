@@ -967,9 +967,10 @@ bool PrepareZones(::OI::Net::SessionManager* pManagerParam, const std::string& s
 bool PrepareTarget(const std::string& sTargetParam, bool bBatchParam, ServiceRoute& stRouteParam, std::string& sNameParam, ServicePick& iPickParam, std::string& sZoneParam);
 // 拉取不占线程。fnDone 只调用一次，里面不能再等注册表。
 void PullRoute(const std::string& sNameParam, std::function<void(int32_t, const std::vector<::OI::Base::ServiceInstance>&)> fnDoneParam);
-ServiceRoute FinishRoute(::OI::Net::SessionManager* pManagerParam, const std::string& sNameParam, ServicePick iPickParam, const std::string& sZoneParam, int32_t iCodeParam, const std::vector<::OI::Base::ServiceInstance>& vListParam);
+// 名单完成后的路由只引用固定地址的池连接；不读取或复用可能切换地址的订阅管理器。
+ServiceRoute FinishRoute(const std::string& sNameParam, ServicePick iPickParam, const std::string& sZoneParam, int32_t iCodeParam, const std::vector<::OI::Base::ServiceInstance>& vListParam);
 // vClients 与分区号等长，空指针表示这个分区当前没登记。
-ServiceRoute FinishZones(::OI::Net::SessionManager* pManagerParam, const std::string& sNameParam, const std::vector<std::string>& vZonesParam, int32_t iCodeParam, const std::vector<::OI::Base::ServiceInstance>& vListParam);
+ServiceRoute FinishZones(const std::string& sNameParam, const std::vector<std::string>& vZonesParam, int32_t iCodeParam, const std::vector<::OI::Base::ServiceInstance>& vListParam);
 
 // 挂起等注册表，不在调用线程里同步等。快路径（名字非法、自己已经连着）不挂起。
 struct RouteAwaiter
@@ -1044,9 +1045,9 @@ struct RouteAwaiter
 		}
 		if (iKind == Kind::Zones)
 		{
-			return FinishZones(pManager, sName, vZoneNames, iCode, vList);
+			return FinishZones(sName, vZoneNames, iCode, vList);
 		}
-		return FinishRoute(pManager, sName, iPick, sZone, iCode, vList);
+		return FinishRoute(sName, iPick, sZone, iCode, vList);
 	}
 };
 

@@ -5,6 +5,8 @@
 """
 from test_process_owner import write_owner, record_process
 import argparse
+import contextlib
+import sys
 import datetime
 import os
 from pathlib import Path
@@ -40,6 +42,88 @@ GAME_PORTS = (17992, 17993)
 BASE_PORTS = (REDIS_PORT, LOGD_PORT, IPC_PORT, IPC_FALLBACK_PORT, REDIS_SERVER_PORT, REGISTRY_PORT) + GAME_PORTS
 PORT_OFFSET = 0
 CLIENT_SECONDS = {"hold": 120}
+
+
+@contextlib.contextmanager
+def regression_directory(**kwargs):
+    directory = tempfile.TemporaryDirectory(**kwargs)
+    try:
+        yield directory.name
+    finally:
+        primary = sys.exc_info()[1]
+        try:
+            directory.cleanup()
+        except BaseException as error:
+            if primary is None:
+                raise
+            print("temporary directory cleanup failed:", repr(error), file=sys.stderr, flush=True)
+
+
+def cleanup_owned(procs, handles, root, args, case, *, db=None, db_paused=False,
+                  monitor=None, http_fixture=None, http_thread=None, primary=None):
+    """Attempt every owned cleanup action, without masking the original test error."""
+    errors = []
+
+    def attempt(label, action):
+        try:
+            action()
+            return True
+        except BaseException as error:
+            errors.append((label, error))
+            return False
+
+    if db_paused:
+        attempt("resume Redis", lambda: pause(db, False) if db.poll() is None else None)
+    for proc in reversed(procs):
+        def graceful(proc=proc):
+            if proc.poll() is not None:
+                return
+            if proc is db and WINDOWS and not args.redis_wsl:
+                # Only the owned native Redis fixture uses protocol shutdown.
+                try:
+                    with socket.create_connection(("127.0.0.1", REDIS_PORT), timeout=2) as conn:
+                        conn.sendall(b"*2\r\n$8\r\nSHUTDOWN\r\n$6\r\nNOSAVE\r\n")
+                        conn.recv(64)
+                except OSError:
+                    pass
+            else:
+                stop(proc)
+            proc.wait(timeout=3)
+
+        if not attempt("graceful shutdown " + str(proc.args), graceful):
+            # Windows Popen.kill uses the held process handle, not a fresh PID lookup.
+            def force(proc=proc):
+                if proc.poll() is None:
+                    proc.kill()
+            attempt("force shutdown " + str(proc.args), force)
+            attempt("reap " + str(proc.args), lambda proc=proc: proc.wait(timeout=3))
+    if monitor is not None:
+        attempt("monitor close", monitor.close)
+    if http_fixture is not None:
+        attempt("HTTP shutdown", http_fixture.shutdown)
+        attempt("HTTP close", http_fixture.server_close)
+        def join_http():
+            http_thread.join(timeout=3)
+            if http_thread.is_alive():
+                raise RuntimeError("HTTP fixture thread did not exit")
+        attempt("HTTP join", join_http)
+    for handle in handles:
+        attempt("output close", handle.close)
+    if args.artifacts:
+        destination = args.artifacts / case
+        attempt("artifact directory", lambda: destination.mkdir(parents=True, exist_ok=True))
+        def copy_outputs():
+            for output in root.glob("*.out"):
+                attempt("artifact " + output.name, lambda output=output: shutil.copy2(output, destination / output.name))
+        attempt("artifact enumeration", copy_outputs)
+    if errors:
+        message = "cleanup failed: " + "; ".join(label + ": " + repr(error) for label, error in errors)
+        print(message, file=sys.stderr, flush=True)
+        if primary is None:
+            for _, error in errors:
+                if not isinstance(error, Exception):
+                    raise error
+            raise RuntimeError(message) from errors[0][1]
 
 
 def apply_port_offset(offset):
@@ -185,7 +269,7 @@ def run(case, args):
     if resource is not None:
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     # 前缀带偏移，并行时每路只按自己的临时目录清理进程。
-    with tempfile.TemporaryDirectory(prefix="oi-regression-p%d-" % PORT_OFFSET) as tmp:
+    with regression_directory(prefix="oi-regression-p%d-" % PORT_OFFSET) as tmp:
         root = Path(tmp)
         write_owner(root, REPO, PORT_OFFSET)
         work, cfg, logs = root / "bin", root / "config", root / "logs"
@@ -463,6 +547,7 @@ def run(case, args):
                 assert "hold coroutine connect bad=0" in text
                 assert "hold reentrant connect first=1 retry=0 connections=1 bad=0" in text
                 assert "hold registry pairing bad=0" in text
+                assert "hold route target stability bad=0" in text
                 assert re.search(r"hold service rpc global=1 any=1 zone=1 batch=2 many=2 slot=1 elapsed_ms=\d+ wrong=1 miss=1 bad=0", text)
                 assert "hold named rpc ownership success=8 rejected=0 bad=0" in text
                 assert re.search(r"hold http release before=\d+ after=\d+ bad=0", text)
@@ -502,50 +587,21 @@ def run(case, args):
                     print(backlog.group(0), flush=True)
             print(case, "PASS seconds=", round(time.monotonic() - started, 2), flush=True)
         except BaseException:
-            for output in root.glob("*.out"):
-                print(output.name, output.read_text(encoding="utf-8", errors="replace")[-6000:], flush=True)
+            try:
+                for output in root.glob("*.out"):
+                    print(output.name, output.read_text(encoding="utf-8", errors="replace")[-6000:], flush=True)
+            except BaseException as error:
+                print("failure output unavailable:", repr(error), file=sys.stderr, flush=True)
             raise
         finally:
-            if db_paused and db.poll() is None:
-                pause(db, False)
-            stuck = []
-            for proc in reversed(procs):
-                if proc.poll() is None:
-                    if proc is db and WINDOWS and not args.redis_wsl:
-                        # msys2 版 redis-server.exe 收不到控制台 Ctrl+C，夹具 Redis 用 SHUTDOWN 正常退出。
-                        try:
-                            with socket.create_connection(("127.0.0.1", REDIS_PORT), timeout=2) as conn:
-                                conn.sendall(b"*2\r\n$8\r\nSHUTDOWN\r\n$6\r\nNOSAVE\r\n")
-                                conn.recv(64)
-                        except OSError:
-                            pass
-                    else:
-                        stop(proc)
-                    try:
-                        proc.wait(timeout=3)
-                    except subprocess.TimeoutExpired:
-                        stuck.append(str(proc.args))
-                        proc.kill()
-                        proc.wait()
-            if monitor is not None: monitor.close()
-            if http_fixture is not None:
-                http_fixture.shutdown()
-                http_fixture.server_close()
-                http_thread.join()
-            for handle in handles:
-                handle.close()
-            if args.artifacts:
-                destination = args.artifacts / case
-                destination.mkdir(parents=True, exist_ok=True)
-                for output in root.glob("*.out"):
-                    shutil.copy2(output, destination / output.name)
-            if stuck:
-                raise RuntimeError("graceful shutdown timed out: " + ", ".join(stuck))
+            cleanup_owned(procs, handles, root, args, case, db=db, db_paused=db_paused,
+                          monitor=monitor, http_fixture=http_fixture, http_thread=http_thread,
+                          primary=sys.exc_info()[1])
 
 
 def run_web(args):
     # 仍使用模块自带的 WebClient 用例，验证字段改名后的 HTTP/JSON/二进制收发。
-    with tempfile.TemporaryDirectory(prefix="oi-regression-web-p%d-" % PORT_OFFSET) as tmp:
+    with regression_directory(prefix="oi-regression-web-p%d-" % PORT_OFFSET) as tmp:
         root = Path(tmp)
         write_owner(root, REPO, PORT_OFFSET)
         work, cfg = root / "bin", root / "config"
@@ -576,13 +632,7 @@ def run_web(args):
                 assert client.returncode == 0 and "rpc=1 bin=1 bad=0" in client.stdout, client.stderr
                 print("web PASS", flush=True)
             finally:
-                if server.poll() is None:
-                    stop(server)
-                    try: server.wait(timeout=3)
-                    except subprocess.TimeoutExpired:
-                        server.kill()
-                        server.wait()
-                        raise RuntimeError("webserver shutdown timed out")
+                cleanup_owned([server], [output], root, args, "web", primary=sys.exc_info()[1])
 
 
 if __name__ == "__main__":

@@ -386,5 +386,174 @@ class RealProbeSafetyTests(unittest.TestCase):
                 listener.accept()
 
 
+class RegressionCleanupTests(unittest.TestCase):
+    def setUp(self):
+        import run_regressions
+        self.runner = run_regressions
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.args = SimpleNamespace(artifacts=self.root / "saved", redis_wsl=False)
+        self.old = Mock(args=["old-owned"])
+        self.first = Mock(args=["first-owned"])
+        for proc in (self.old, self.first):
+            proc.poll.return_value = None
+        self.handles = [Mock(), Mock()]
+        (self.root / "process.out").write_text("test evidence")
+        self.stop = patch.object(self.runner, "stop", side_effect=[subprocess.CalledProcessError(1, "helper"), None])
+        self.stopped = self.stop.start()
+        self.addCleanup(self.stop.stop)
+        self.stderr = contextlib.redirect_stderr(io.StringIO())
+        self.stderr.__enter__()
+        self.addCleanup(self.stderr.__exit__, None, None, None)
+
+    def cleanup(self, **kwargs):
+        self.runner.cleanup_owned([self.old, self.first], self.handles, self.root, self.args, "echo", **kwargs)
+
+    def assert_all_attempted(self):
+        self.assertEqual([self.first, self.old], [c.args[0] for c in self.stopped.call_args_list])
+        self.first.kill.assert_called_once_with()
+        self.old.wait.assert_called_once_with(timeout=3)
+        self.old.kill.assert_not_called()
+        for handle in self.handles:
+            handle.close.assert_called_once_with()
+        self.assertEqual("test evidence", (self.args.artifacts / "echo/process.out").read_text())
+
+    def test_review_first_helper_failure_cleans_remaining_processes(self):
+        with self.assertRaisesRegex(RuntimeError, "graceful shutdown"):
+            self.cleanup()
+        self.assert_all_attempted()
+
+    def test_kill_failure_still_reaps_and_cleans_resources(self):
+        self.first.kill.side_effect = OSError("kill denied")
+        with self.assertRaisesRegex(RuntimeError, "kill denied"):
+            self.cleanup()
+        self.first.wait.assert_called_once_with(timeout=3)
+        self.assert_all_attempted()
+
+    def test_interrupt_is_reraised_after_remaining_cleanup(self):
+        self.stopped.side_effect = [KeyboardInterrupt(), None]
+        with self.assertRaises(KeyboardInterrupt):
+            self.cleanup()
+        self.assert_all_attempted()
+
+    def test_timeout_force_kill_is_not_graceful_success(self):
+        self.stopped.side_effect = None
+        self.first.wait.side_effect = [subprocess.TimeoutExpired("owned", 3), 0]
+        with self.assertRaisesRegex(RuntimeError, "TimeoutExpired"):
+            self.cleanup()
+        self.assert_all_attempted()
+
+    def test_all_resource_errors_are_attempted_and_original_is_preserved(self):
+        monitor, fixture, thread = Mock(), Mock(), Mock()
+        monitor.close.side_effect = OSError("monitor")
+        fixture.shutdown.side_effect = OSError("HTTP shutdown")
+        fixture.server_close.side_effect = OSError("HTTP close")
+        thread.is_alive.return_value = False
+        self.handles[0].close.side_effect = OSError("handle")
+        primary = ValueError("original test error")
+        with self.assertRaises(ValueError) as caught:
+            try:
+                raise primary
+            finally:
+                self.cleanup(monitor=monitor, http_fixture=fixture, http_thread=thread, primary=sys.exc_info()[1])
+        self.assertIs(primary, caught.exception)
+        fixture.server_close.assert_called_once_with()
+        thread.join.assert_called_once_with(timeout=3)
+        self.assert_all_attempted()
+
+    def test_artifact_copy_failure_does_not_skip_other_outputs(self):
+        (self.root / "second.out").write_text("second")
+        self.stopped.side_effect = None
+        with patch.object(self.runner.shutil, "copy2", side_effect=[OSError("copy denied"), None]) as copy:
+            with self.assertRaisesRegex(RuntimeError, "copy denied"):
+                self.cleanup()
+        self.assertEqual(2, copy.call_count)
+
+    def test_resume_failure_does_not_skip_processes(self):
+        with patch.object(self.runner, "pause", side_effect=OSError("resume failed")):
+            with self.assertRaisesRegex(RuntimeError, "resume failed"):
+                self.cleanup(db=Mock(poll=Mock(return_value=None)), db_paused=True)
+        # Exercise the ordinary stop branch for the fixture on either host.
+        self.first.kill.assert_called_once_with()
+        self.handles[1].close.assert_called_once_with()
+
+    def test_normal_finally_calls_resilient_cleanup(self):
+        # Execute the actual finally AST, as in the review reproduction, with
+        # two owned processes and no application launch or network activity.
+        import ast
+        import inspect
+        tree = ast.parse(inspect.getsource(self.runner.run))
+        final = next(node.finalbody for node in ast.walk(tree) if isinstance(node, ast.Try) and
+                     any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "cleanup_owned"
+                         for statement in node.finalbody for n in ast.walk(statement)))
+        scope = dict(self.runner.__dict__, procs=[self.old, self.first], handles=self.handles,
+                     root=self.root, args=self.args, case="echo", db=None, db_paused=False,
+                     monitor=None, http_fixture=None, http_thread=None)
+        with self.assertRaisesRegex(RuntimeError, "graceful shutdown"):
+            exec(compile(ast.Module(body=final, type_ignores=[]), "normal-finally", "exec"), scope)
+        self.assert_all_attempted()
+
+    def test_web_helper_failure_preserves_client_error_and_artifacts(self):
+        self.args.bin_dir = self.root
+        self.stopped.side_effect = subprocess.CalledProcessError(1, "helper")
+        server = self.first
+        original_copy = self.runner.shutil.copy2
+        def copy(source, destination):
+            if Path(source).suffix == ".out":
+                return original_copy(source, destination)
+        client = subprocess.CompletedProcess([], 1, "bad=1", "original client failure")
+        with patch.object(self.runner.shutil, "copy2", side_effect=copy), \
+             patch.object(self.runner, "launch", return_value=server), \
+             patch.object(self.runner, "record_process"), \
+             patch.object(self.runner.socket, "create_connection"), \
+             patch.object(self.runner.subprocess, "run", return_value=client), \
+             contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(AssertionError, "original client failure"):
+                self.runner.run_web(self.args)
+        server.kill.assert_called_once_with()
+        self.assertTrue((self.args.artifacts / "web/server.out").exists())
+
+    def test_web_success_still_fails_if_stop_helper_fails(self):
+        self.args.bin_dir = self.root
+        self.stopped.side_effect = subprocess.TimeoutExpired("helper", 5)
+        client = subprocess.CompletedProcess([], 0, "rpc=1 bin=1 bad=0", "")
+        with patch.object(self.runner.shutil, "copy2"), \
+             patch.object(self.runner, "launch", return_value=self.first), \
+             patch.object(self.runner, "record_process"), \
+             patch.object(self.runner.socket, "create_connection"), \
+             patch.object(self.runner.subprocess, "run", return_value=client), \
+             contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(RuntimeError, "TimeoutExpired"):
+                self.runner.run_web(self.args)
+        self.first.kill.assert_called_once_with()
+        self.first.wait.assert_called_once_with(timeout=3)
+
+    def test_failure_diagnostic_read_does_not_mask_original(self):
+        import ast
+        import inspect
+        tree = ast.parse(inspect.getsource(self.runner.run))
+        handler = next(node for node in ast.walk(tree) if isinstance(node, ast.ExceptHandler) and
+                       isinstance(node.type, ast.Name) and node.type.id == "BaseException")
+        scope = dict(self.runner.__dict__, root=self.root)
+        original = ValueError("original failure")
+        with patch.object(Path, "read_text", side_effect=OSError("cannot read output")):
+            with self.assertRaises(ValueError) as caught:
+                try:
+                    raise original
+                except ValueError:
+                    exec(compile(ast.Module(body=handler.body, type_ignores=[]), "failure-output", "exec"), scope)
+        self.assertIs(original, caught.exception)
+
+    def test_temporary_directory_failure_preserves_original(self):
+        directory = Mock(name="directory")
+        directory.cleanup.side_effect = OSError("directory busy")
+        with patch.object(self.runner.tempfile, "TemporaryDirectory", return_value=directory):
+            with self.assertRaisesRegex(ValueError, "test failure"):
+                with self.runner.regression_directory():
+                    raise ValueError("test failure")
+        directory.cleanup.assert_called_once_with()
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

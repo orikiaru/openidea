@@ -1365,6 +1365,115 @@ enum class NamedOutcome
 	Rejected,
 };
 
+static coro::TaskResult<bool> MoveRouteProbe(ZoneService* pManagerParam, std::string sIpParam, std::string sPortParam)
+{
+	struct ServiceMove
+	{
+		ZoneService* pManager;
+		std::string sIp;
+		std::string sPort;
+		std::exception_ptr stError;
+		std::atomic<bool> bDone{false};
+	};
+	auto pMove = std::make_shared<ServiceMove>();
+	pMove->pManager = pManagerParam;
+	pMove->sIp = std::move(sIpParam);
+	pMove->sPort = std::move(sPortParam);
+	// 帧保活状态直到 poll 发布完成；模拟注册更新，地址只在 poll 线程修改。
+	OI::Net::Poll::GetInstance().CallOnLoop([](void* pArgumentParam)
+	{
+		auto* pMoveLocal = static_cast<ServiceMove*>(pArgumentParam);
+		try
+		{
+			pMoveLocal->pManager->ApplyService(pMoveLocal->sIp, pMoveLocal->sPort, true);
+		}
+		catch (...)
+		{
+			pMoveLocal->stError = std::current_exception();
+		}
+		pMoveLocal->bDone.store(true, std::memory_order_release);
+	}, pMove.get());
+	while (!pMove->bDone.load(std::memory_order_acquire))
+	{
+		co_await coro::yield(1);
+	}
+	if (pMove->stError)
+	{
+		std::rethrow_exception(pMove->stError);
+	}
+	co_return co_await pManagerParam->StartClient();
+}
+
+static coro::TaskResult<int> CheckRouteTargetStability()
+{
+	OI::Rpc::RouteAwaiter stPoolWait;
+	stPoolWait.iKind = OI::Rpc::RouteAwaiter::Kind::Zones;
+	stPoolWait.sName = "gameserver";
+	stPoolWait.vZones = {1001, 1002};
+	auto stPool = co_await stPoolWait;
+	if (stPool.iStatus != OI::Rpc::ServiceRouteStatus::Ok || stPool.vClients.size() != 2 ||
+	    !stPool.vClients[0] || !stPool.vClients[1])
+	{
+		co_return 1;
+	}
+	static ZoneService stMoving("gameserver");
+	auto* pFirst = stPool.vClients[0];
+	auto* pSecond = stPool.vClients[1];
+	if (!(co_await MoveRouteProbe(&stMoving, pFirst->GetStrIP(), pFirst->GetStrPort())))
+	{
+		co_return 1;
+	}
+	OI::Rpc::RouteAwaiter stSingleWait;
+	stSingleWait.pManager = &stMoving;
+	stSingleWait.sName = "gameserver";
+	stSingleWait.iPick = OI::Rpc::ServicePick::Zone;
+	stSingleWait.sZone = "1001";
+	auto stSingle = co_await stSingleWait;
+	OI::Rpc::RouteAwaiter stManyWait;
+	stManyWait.pManager = &stMoving;
+	stManyWait.iKind = OI::Rpc::RouteAwaiter::Kind::Zones;
+	stManyWait.sName = "gameserver";
+	stManyWait.vZones = {1002, 1001};
+	auto stMany = co_await stManyWait;
+	// 刻意在选路和提交之间完成换区，稳定覆盖竞态窗口，不依赖压力碰运气。
+	if (!(co_await MoveRouteProbe(&stMoving, pSecond->GetStrIP(), pSecond->GetStrPort())))
+	{
+		co_return 1;
+	}
+	int iBad = 0;
+	if (stSingle.iStatus != OI::Rpc::ServiceRouteStatus::Ok || stSingle.vClients.size() != 1 ||
+	    stSingle.vClients[0] != pFirst || stMany.iStatus != OI::Rpc::ServiceRouteStatus::Ok ||
+	    stMany.vClients.size() != 2 || stMany.vClients[0] != pSecond || stMany.vClients[1] != pFirst)
+	{
+		++iBad;
+	}
+	OI::RpcData::HoldReq stRequest;
+	stRequest.iMark = 1001;
+	if (stSingle.vClients.size() == 1 && stSingle.vClients[0])
+	{
+		auto stReply = co_await OI::Rpc::RpcCall(*stSingle.vClients[0], stRequest, OI::Timer::Seconds(3));
+		if (stReply.GetRet() != 0 || stReply.GetRes().iMark != stRequest.iMark)
+		{
+			++iBad;
+		}
+	}
+	auto vReplies = co_await OI::Rpc::SendRouted<OI::RpcData::HoldRes>(std::move(stMany), stRequest, OI::Timer::Seconds(3));
+	if (vReplies.size() != 2)
+	{
+		++iBad;
+	}
+	for (const auto& stReply : vReplies)
+	{
+		if (stReply.GetRet() != 0 || stReply.GetRes().iMark != stRequest.iMark)
+		{
+			++iBad;
+		}
+	}
+	stMoving.CloseAllSessions();
+	printf("hold route target stability bad=%d\n", iBad);
+	co_return iBad;
+}
+
 template <typename T>
 static coro::TaskResult<NamedOutcome> AwaitNamedHold(T stCallParam)
 {
@@ -2527,6 +2636,7 @@ coro::Task HoldMgr::Pump()
 	{
 		iBad += co_await CheckRegistryPairing();
 		iBad += co_await CheckNamedServiceRpc();
+		iBad += co_await CheckRouteTargetStability();
 	}
 	iBad += CheckJsonDecoding();
 	iBad += co_await CheckTaskExceptions();

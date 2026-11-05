@@ -836,7 +836,7 @@ bool PrepareZones(::OI::Net::SessionManager* pManagerParam, const std::string& s
 	return false;
 }
 
-ServiceRoute FinishRoute(::OI::Net::SessionManager* pManagerParam, const std::string& sNameParam, ServicePick iPickParam, const std::string& sZoneParam, int32_t iCodeParam, const std::vector<::OI::Base::ServiceInstance>& vListParam)
+ServiceRoute FinishRoute(const std::string& sNameParam, ServicePick iPickParam, const std::string& sZoneParam, int32_t iCodeParam, const std::vector<::OI::Base::ServiceInstance>& vListParam)
 {
 	ServiceRoute stRoute;
 	if (iCodeParam != OI_OK)
@@ -908,21 +908,14 @@ ServiceRoute FinishRoute(::OI::Net::SessionManager* pManagerParam, const std::st
 			iPick = iCursor.fetch_add(1, std::memory_order_relaxed) % vMatched.size();
 		}
 		const ::OI::Base::ServiceInstance& stInst = vMatched[iPick];
-		ProtoClientManager* pSelf = dynamic_cast<ProtoClientManager*>(pManagerParam);
-		if (pSelf && pSelf->GetStrIP() == stInst.sIp && pSelf->GetStrPort() == stInst.sPort)
-		{
-			stRoute.vClients.push_back(pSelf);
-		}
-		else
-		{
-			stRoute.vClients.push_back(ClientFor(stInst.sIp, stInst.sPort));
-		}
+		// 名单已选定地址，使用固定地址的连接；订阅管理器可能在提交前改连其他分区。
+		stRoute.vClients.push_back(ClientFor(stInst.sIp, stInst.sPort));
 	}
 	stRoute.iStatus = ServiceRouteStatus::Ok;
 	return stRoute;
 }
 
-ServiceRoute FinishZones(::OI::Net::SessionManager* pManagerParam, const std::string& sNameParam, const std::vector<std::string>& vZonesParam, int32_t iCodeParam, const std::vector<::OI::Base::ServiceInstance>& vListParam)
+ServiceRoute FinishZones(const std::string& sNameParam, const std::vector<std::string>& vZonesParam, int32_t iCodeParam, const std::vector<::OI::Base::ServiceInstance>& vListParam)
 {
 	ServiceRoute stRoute;
 	if (iCodeParam != OI_OK)
@@ -966,15 +959,8 @@ ServiceRoute FinishZones(::OI::Net::SessionManager* pManagerParam, const std::st
 			stRoute.vClients.push_back(nullptr);
 			continue;
 		}
-		ProtoClientManager* pSelf = dynamic_cast<ProtoClientManager*>(pManagerParam);
-		if (pSelf && pSelf->GetStrIP() == pBest->sIp && pSelf->GetStrPort() == pBest->sPort)
-		{
-			stRoute.vClients.push_back(pSelf);
-		}
-		else
-		{
-			stRoute.vClients.push_back(ClientFor(pBest->sIp, pBest->sPort));
-		}
+		// 每个槽位固定到本次名单中的地址，不能随调用方管理器的服务切换而漂移。
+		stRoute.vClients.push_back(ClientFor(pBest->sIp, pBest->sPort));
 	}
 	stRoute.iStatus = ServiceRouteStatus::Ok;
 	return stRoute;

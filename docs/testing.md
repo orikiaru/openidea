@@ -128,6 +128,10 @@ git diff --check
 
 结果目录包含：environment.json（环境、HEAD、diff 摘要）、matrix.json（每一步命令和退出码）、每一步日志、每个用例的进程输出、results.json（逐例通过/失败）、summary.json（整体结果）。同时运行两端时还有 platforms.json。
 
+矩阵启动时先使旧汇总失效；只有本次所有步骤完成、恢复 MT 并关闭测试注入且重新构建成功，`summary.json` 才能标记 `passed: true`。中断、配置失败、恢复异常都算未通过，分别检查 `completed`、`restored` 和异常字段；不得把恢复构建成功当作测试通过。`tools/test_matrix_outcomes.py` 用模拟子进程覆盖这些异常分支，矩阵自动执行。
+
+进程收尾会逐一尝试正常退出；控制台通知失败或超时后，仅强制结束当前用例持有的进程，并继续回收其他进程、关闭输出和保留诊断日志。强制回收仍记为失败，不算正常退出；如果用例本身已有异常，保留原始异常，同时输出清理错误。正常 Hold 回归还会在选路后、发送前切换订阅管理器的分区，检查单次与批量目标不变，输出 `hold route target stability bad=0`。
+
 交给下一位 AI 时必须列出：实际测试的平台/编译器/线程模式、结果目录、失败或阻塞项、是否恢复 MT、是否关闭测试注入、是否清理临时数据。缺 SDK、缺 Redis、编译失败或操作被拦截，都只能记录为阻塞/失败；不能写“全量通过”。
 
 ## 7. 四路并行的 subagent 提示词范本
@@ -186,3 +190,11 @@ python tools/parallel_matrix.py --lane <LANE> --jobs 4 --windows-redis-binary <W
 - 四路完成后追加的 Python 清理边界修复，另在 Windows / WSL 各跑 28 项定向测试，全部通过，包含真实 Redis 端口占用、CIM 快照 PID 复用、Linux 无权检查、PID 文件写入失败收尾。清理属于纯 Python 进程管理逻辑，不依赖 C++ ST/MT；没有将这 28 项冒充追加修复后的四路全量回归。
 - 最新 Linux 进程身份登记逻辑另用现成 MT 产物跑 Hold，`hold done bad=0`；真实 Windows 子进程创建时间比对及同句柄终止通过。最终两端清理返回 0，无残留报告。
 - 本机证据根目录为 `~/openidea-test-results/review-2085438`：四路位于 `par-<平台>-<模式>`，追加脚本测试及主目录恢复状态位于 `final-tools`，Linux 补测位于 `final-tools-linux-hold`。大体积日志数据由用例清理，仅保留文本证据。
+
+## 10. 2026-11-05 路由与测试收尾修复验证
+
+- Windows 原生 MSVC 与 WSL GCC13，MT/ST 各 18 项运行用例通过，共 72 项；四路 Hold 均确认 `hold route target stability bad=0`、`hold done bad=0`。
+- 脚本定向测试每个平台 54 项通过：最初因未设置环境变量而跳过的真实 Redis 端口冲突探针，已分别指定原生 Redis 路径补跑通过。工具测试覆盖控制台通知失败后继续清理、保留原异常，以及中断/恢复失败不误报成功。
+- 本机证据根目录为 `~/openidea-test-results/fix-review-20261104`，最终四路在 `par-<平台>-<模式>-fixed`，脚本证据在 `tool-tests`，主目录构建与静态检查在 `main-restore`。首轮新增用例的模板参数编译错误已修正；原失败目录保留，不计为通过。
+- 格式检查 136 个文件通过，命名基础测试 5 项通过。libclang 命名扫描仍返回 1：现有 `hold_mgr.cpp` 的 `fnContend` lambda 被识别为 `auto` 而要求 `st` 前缀，按可调用对象应使用 `fn`，属于既有误报；没有将该扫描记为通过。
+- 主目录及四路副本均恢复 MT、关闭测试注入并构建成功；最终全局清理返回 0，无残留报告。临时日志数据已由测试清理，仅保留诊断输出。
