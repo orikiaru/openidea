@@ -57,8 +57,22 @@ struct EncodingFailureResponse : OI::RpcData::HoldRes
 		return HoldRes::serialize(stOutputParam);
 	}
 };
-static OI::Rpc::RpcTask HandleEncodingRegression(const OI::RpcData::HoldReq& stRequestParam, EncodingFailureResponse& stResponseParam)
+static OI::Rpc::RpcTask HandleEncodingRegression(const OI::Rpc::RpcContext& stContextParam, const OI::RpcData::HoldReq& stRequestParam, EncodingFailureResponse& stResponseParam)
 {
+	if (stRequestParam.iMark == -2147483598)
+	{
+		// 先回原请求，让客户端释放出站租约；反向 RPC 独立挂起。
+		coro::StartTask([pManager = &stContextParam.stManager, iSessionId = stContextParam.iSessionId](coro::Token) -> coro::Task
+		{
+			OI::RpcData::HoldReq stReverse;
+			stReverse.iMark = -2147483598;
+			stReverse.iDelayMilliseconds = 1000;
+			OI::RpcData::HoldRes stReply;
+			const int32_t iRet = co_await OI::Rpc::RpcCall(*pManager, iSessionId, stReverse, stReply, OI::Timer::Seconds(5));
+			printf("hold reverse reply bad=%d\n", iRet != 0 || stReply.iMark != stReverse.iMark ? 1 : 0);
+			fflush(stdout);
+		});
+	}
 	if (stRequestParam.iMark == -2147483599)
 	{
 		throw std::runtime_error("injected server handler failure");

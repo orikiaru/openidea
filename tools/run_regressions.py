@@ -578,6 +578,11 @@ def run(case, args):
                 assert "hold output rpc named any zone shared=8 bad=0" in text
                 assert "hold completed rpc requests retained=20 destroyed=20 bad=0" in text
                 assert "hold route policy isolation idle reconnect bad=0" in text
+                assert "hold pooled reconnect bad=0" in text
+                assert "hold inbound route lifetime bad=0" in text
+                assert "hold reverse reply bad=0" in (root / "gameserver-1001.out").read_text(encoding="utf-8", errors="replace")
+                assert "hold batch failure slots bad=0" in text
+                assert re.search(r"hold absolute deadline buckets calls=4096 buckets=\d+ fired=32 bad=0", text)
                 assert "hold route pool capacity busy=1 bad=0" in text
                 assert re.search(r"hold registry bounded recovery busy=[1-9]\d* timeout=[1-9]\d* bad=0", text)
                 budget = re.search(r"hold named rpc end to end budget elapsed_ms=(\d+) bad=0", text)

@@ -155,9 +155,8 @@ void SessionManager::BeginConnect(const std::shared_ptr<ConnectWait>& pWaitParam
 	{
 		SessionManager* pManager;
 		std::shared_ptr<ConnectWait> pWait;
-		std::shared_ptr<SessionManager> pOwner;
 	};
-	auto pRequest = std::make_unique<ConnectRequest>(ConnectRequest{this, pWaitParam, KeepAlive()});
+	auto pRequest = std::make_unique<ConnectRequest>(ConnectRequest{this, pWaitParam});
 	Poll::GetInstance().CallOnLoop([](void* pArgumentParam)
 	{
 		std::unique_ptr<ConnectRequest> pHeld(static_cast<ConnectRequest*>(pArgumentParam));
@@ -249,22 +248,6 @@ void SessionManager::CloseAllSessions()
 	}
 }
 
-void SessionManager::RetireClient()
-{
-	assert(Poll::GetInstance().InLoopThread());
-	auto pOwner = KeepAlive();
-	bServiceDown = true;
-	++iConnectGeneration;
-	bConnectPending = false;
-	FinishConnectWaiters(false);
-	while (!m_vConnectChannels.empty())
-	{
-		(*m_vConnectChannels.begin())->Cancel();
-	}
-	CloseAllSessions();
-	OnServiceDown();
-}
-
 void SessionManager::ApplyService(const std::string& sIpParam, const std::string& sPortParam, bool bOnlineParam)
 {
 	if (!Poll::GetInstance().InLoopThread())
@@ -275,9 +258,8 @@ void SessionManager::ApplyService(const std::string& sIpParam, const std::string
 			std::string sIp;
 			std::string sPort;
 			bool bOnline;
-			std::shared_ptr<SessionManager> pOwner;
 		};
-		auto pChange = std::make_unique<ServiceChange>(ServiceChange{this, sIpParam, sPortParam, bOnlineParam, KeepAlive()});
+		auto pChange = std::make_unique<ServiceChange>(ServiceChange{this, sIpParam, sPortParam, bOnlineParam});
 		Poll::GetInstance().CallOnLoop([](void* pArgumentParam)
 		{
 			std::unique_ptr<ServiceChange> pHeld(static_cast<ServiceChange*>(pArgumentParam));
@@ -369,6 +351,13 @@ const std::string SessionManager::GetIDString()
 	return "SessionManager";
 }
 
+std::shared_ptr<void> SessionManager::HoldSessionTask(sid_t iSessionIdParam)
+{
+	::OI::Thread::MutexGuard stLock(stLocker);
+	auto it = mSessionMap.find(iSessionIdParam);
+	return it == mSessionMap.end() ? nullptr : it->second->HoldTask();
+}
+
 bool SessionManager::SendBytes(sid_t iSessionIdParam, const ::OI::Base::Bytes& stDataParam)
 {
 	Session* pSessionLocal = NULL;
@@ -393,8 +382,14 @@ bool SessionManager::SendBytes(sid_t iSessionIdParam, const ::OI::Base::Bytes& s
 
 void SessionManager::AddSession(Session* pSessionParam)
 {
-	pSessionParam->SetSendQueueLimit(iMaxSendQueueBytes);
-	pSessionParam->SetReceiveQueueLimit(iMaxReceiveBufferBytes);
+	AddSession(pSessionParam, sIpAddress + ":" + sPort, iMaxSendQueueBytes, iMaxReceiveBufferBytes);
+}
+
+void SessionManager::AddSession(Session* pSessionParam, const std::string& sEndpointParam, size_t iSendBytesParam, size_t iReceiveBytesParam)
+{
+	pSessionParam->SetSendQueueLimit(iSendBytesParam);
+	pSessionParam->SetReceiveQueueLimit(iReceiveBytesParam);
+	pSessionParam->SetEndpoint(sEndpointParam);
 	int iSessionIdLocal = 0;
 	{
 		{
@@ -402,7 +397,6 @@ void SessionManager::AddSession(Session* pSessionParam)
 			iSessionIdLocal = ++iCurrentSessionId;
 			mSessionMap[iSessionIdLocal] = pSessionParam;
 			pSessionParam->SetSessionID(iSessionIdLocal);
-			pSessionParam->SetEndpoint(sIpAddress + ":" + sPort);
 		}
 		OnAddSession(pSessionParam);
 	}

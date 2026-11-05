@@ -38,7 +38,6 @@ class SessionManager
 {
 	struct ConnectWait;
 	std::vector<std::weak_ptr<ConnectWait>> m_vConnectWaiters;
-	std::set<ConnectChannel*> m_vConnectChannels;
 	void FinishConnectWaiters(bool bResultParam);
 	void StartConnect(const std::shared_ptr<ConnectWait>& pWaitParam);
 	void BeginConnect(const std::shared_ptr<ConnectWait>& pWaitParam);
@@ -89,11 +88,8 @@ class SessionManager
 	{
 	}
 	virtual ~SessionManager();
-	// 动态管理器由网络操作保活；常驻管理器沿用外部生命周期。
-	virtual std::shared_ptr<SessionManager> KeepAlive()
-	{
-		return {};
-	}
+	// 管理器常驻；入站任务仅持有连接的业务租约。
+	std::shared_ptr<void> HoldSessionTask(sid_t iSessionIdParam);
 	size_t MaxSendQueueBytes() const
 	{
 		return iMaxSendQueueBytes;
@@ -102,8 +98,6 @@ class SessionManager
 	{
 		return iMaxReceiveBufferBytes;
 	}
-	// 仅 poll 线程调用，永久停止本管理器并取消尚未完成的建连。
-	void RetireClient();
 	void DefaultInit(const std::string& sSipParam, const std::string& sPortParam, SESSION_TYPE iSessionTypeParam = SESSION_TYPE_TCP)
 	{
 		sIpAddress = sSipParam;
@@ -158,6 +152,7 @@ class SessionManager
 	//AcceptSession调用,必然由IO线程触发
 	void AddSession(net_socket_t iNewDescriptorParam);
 	void AddSession(Session* pSessionParam);
+	void AddSession(Session* pSessionParam, const std::string& sEndpointParam, size_t iSendBytesParam, size_t iReceiveBytesParam);
 	//ConnectSession调用,必然有IO线程触发
 	void AbortSession(uint64_t iGenerationParam);
 	void CompleteConnect(net_socket_t iDescriptorParam, uint64_t iGenerationParam);

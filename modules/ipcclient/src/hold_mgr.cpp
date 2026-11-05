@@ -75,6 +75,18 @@ struct RpcProtoId<ResourceHoldRequest> : RpcProtoId<OI::RpcData::HoldReq>
 }
 }
 
+static std::atomic<int> iReverseStarted{0};
+static std::atomic<int> iReverseFinished{0};
+
+static OI_RPC_HANDLER(Hold, HandleReverseHold)
+{
+	++iReverseStarted;
+	co_await coro::yield(stRequest.iDelayMilliseconds);
+	stResponse.iMark = stRequest.iMark;
+	++iReverseFinished;
+	co_return 0;
+}
+
 HoldMgr::HoldMgr()
     : m_bEnabled(false), m_iSessionId(0), m_iRedisTimeoutMilliseconds(25000)
 {
@@ -83,6 +95,10 @@ HoldMgr::HoldMgr()
 void HoldMgr::Load()
 {
 	TryGetConfig("Test.hold", m_bEnabled);
+	if (m_bEnabled)
+	{
+		OI_RPC_BIND(Hold, HandleReverseHold);
+	}
 	TryGetConfig("RedisClient.timeout_ms", m_iRedisTimeoutMilliseconds);
 }
 
@@ -1610,7 +1626,7 @@ static coro::TaskResult<int> CheckRouteTargetStability()
 	static ZoneService stMoving("gameserver");
 	auto* pFirst = stPool.vClients[0];
 	auto* pSecond = stPool.vClients[1];
-	if (!(co_await MoveRouteProbe(&stMoving, pFirst->GetStrIP(), pFirst->GetStrPort())))
+	if (!(co_await MoveRouteProbe(&stMoving, OI::Rpc::GetRouteConnectionInfo(*pFirst).sIp, OI::Rpc::GetRouteConnectionInfo(*pFirst).sPort)))
 	{
 		co_return 1;
 	}
@@ -1627,7 +1643,7 @@ static coro::TaskResult<int> CheckRouteTargetStability()
 	stManyWait.vZones = {1002, 1001};
 	auto stMany = co_await stManyWait;
 	// 刻意在选路和提交之间完成换区，稳定覆盖竞态窗口，不依赖压力碰运气。
-	if (!(co_await MoveRouteProbe(&stMoving, pSecond->GetStrIP(), pSecond->GetStrPort())))
+	if (!(co_await MoveRouteProbe(&stMoving, OI::Rpc::GetRouteConnectionInfo(*pSecond).sIp, OI::Rpc::GetRouteConnectionInfo(*pSecond).sPort)))
 	{
 		co_return 1;
 	}
@@ -1721,20 +1737,20 @@ static coro::TaskResult<int> CheckRoutePoolLifetime()
 	}
 	auto* pSmall = stSmallRoute.vClients[0];
 	auto* pLarge = stLargeRoute.vClients[0];
-	std::weak_ptr<OI::Net::SessionManager> pSmallOwner = pSmall->KeepAlive();
-	std::weak_ptr<OI::Net::SessionManager> pLargeOwner = pLarge->KeepAlive();
+	std::weak_ptr<void> pSmallOwner = OI::Rpc::GetRouteConnectionOwner(*pSmall);
+	std::weak_ptr<void> pLargeOwner = OI::Rpc::GetRouteConnectionOwner(*pLarge);
 	for (const auto& stPair : {std::make_pair(pSmall, &stSmall), std::make_pair(pLarge, &stLarge)})
 	{
-		if (stPair.first->MaxSendQueueBytes() != stPair.second->MaxSendQueueBytes() ||
-		    stPair.first->MaxReceiveBufferBytes() != stPair.second->MaxReceiveBufferBytes() ||
-		    stPair.first->MaxFrameBytes() != stPair.second->MaxFrameBytes() ||
-		    stPair.first->IncompleteFrameTimeoutMilliseconds() != stPair.second->IncompleteFrameTimeoutMilliseconds() ||
-		    stPair.first->PendingCallLimits() != stPair.second->PendingCallLimits())
+		if (OI::Rpc::GetRouteConnectionInfo(*stPair.first).iSendBytes != stPair.second->MaxSendQueueBytes() ||
+		    OI::Rpc::GetRouteConnectionInfo(*stPair.first).iReceiveBytes != stPair.second->MaxReceiveBufferBytes() ||
+		    OI::Rpc::GetRouteConnectionInfo(*stPair.first).iFrameBytes != stPair.second->MaxFrameBytes() ||
+		    OI::Rpc::GetRouteConnectionInfo(*stPair.first).iIncompleteMilliseconds != stPair.second->IncompleteFrameTimeoutMilliseconds() ||
+		    OI::Rpc::GetRouteConnectionInfo(*stPair.first).stPendingLimits != stPair.second->PendingCallLimits())
 		{
 			++iBad;
 		}
 	}
-	if (pSmall == pLarge)
+	if (pSmall == pLarge || &pSmall->Manager() != &pLarge->Manager())
 	{
 		++iBad;
 	}
@@ -1759,8 +1775,8 @@ static coro::TaskResult<int> CheckRoutePoolLifetime()
 		++iBad;
 	}
 	// 弱引用指向业务lease，不把它变成额外保活引用；释放路由后等待真实闲置扫描。
-	std::weak_ptr<OI::Rpc::ProtoClientManager> pSmallLease = stSmallRoute.vOwners[0];
-	std::weak_ptr<OI::Rpc::ProtoClientManager> pLargeLease = stLargeRoute.vOwners[0];
+	std::weak_ptr<OI::Rpc::RpcSender> pSmallLease = stSmallRoute.vOwners[0];
+	std::weak_ptr<OI::Rpc::RpcSender> pLargeLease = stLargeRoute.vOwners[0];
 	stSmallRoute = {};
 	stLargeRoute = {};
 	co_await coro::yield(OI::Timer::Milliseconds(600));
@@ -1782,6 +1798,73 @@ static coro::TaskResult<int> CheckRoutePoolLifetime()
 		++iBad;
 	}
 	printf("hold route policy isolation idle reconnect bad=%d\n", iBad);
+	fflush(stdout);
+	co_return iBad;
+}
+
+static coro::TaskResult<int> CheckRouteInboundAndReconnect()
+{
+	int iBad = 0;
+	static ZoneService stGames("gameserver");
+	OI::Rpc::RouteAwaiter stWait;
+	stWait.pManager = &stGames;
+	stWait.sName = "gameserver";
+	stWait.iPick = OI::Rpc::ServicePick::Zone;
+	stWait.sZone = "1001";
+	auto stRoute = co_await stWait;
+	if (stRoute.vClients.size() != 1)
+	{
+		co_return 1;
+	}
+	auto* pClient = stRoute.vClients[0];
+	OI::RpcData::HoldReq stRequest;
+	OI::RpcData::HoldRes stOutput;
+	stRequest.iMark = 845;
+	if (co_await OI::Rpc::RpcCall(*pClient, stRequest, stOutput, OI::Timer::Seconds(3)) != 0)
+	{
+		++iBad;
+	}
+	for (int iRound = 0; iRound < 4; ++iRound)
+	{
+		pClient->Manager().CloseSession(OI::Rpc::GetRouteConnectionInfo(*pClient).iSessionId);
+		const int64_t iDeadlineMilliseconds = OI::Timer::SteadyMilliseconds() + 3000;
+		while ((OI::Rpc::GetRouteConnectionInfo(*pClient).iSessionId != INVALID_SID) && OI::Timer::SteadyMilliseconds() < iDeadlineMilliseconds)
+		{
+			co_await coro::yield(10);
+		}
+		if ((OI::Rpc::GetRouteConnectionInfo(*pClient).iSessionId != INVALID_SID) || co_await stGames.Call(1001, stRequest, stOutput, OI::Timer::Seconds(3)) != 0 || stOutput.iMark != 845)
+		{
+			++iBad;
+		}
+	}
+	printf("hold pooled reconnect bad=%d\n", iBad);
+	std::weak_ptr<void> pWeakOwner = OI::Rpc::GetRouteConnectionOwner(*pClient);
+	stRequest.iMark = -2147483598;
+	if (co_await OI::Rpc::RpcCall(*pClient, stRequest, stOutput, OI::Timer::Seconds(3)) != 0)
+	{
+		++iBad;
+	}
+	const int64_t iStartDeadlineMilliseconds = OI::Timer::SteadyMilliseconds() + 3000;
+	while (iReverseStarted.load() == 0 && OI::Timer::SteadyMilliseconds() < iStartDeadlineMilliseconds)
+	{
+		co_await coro::yield(10);
+	}
+	stRoute = {}; // 唯一出站租约释放，反向处理仍应保活且阻止空闲关闭。
+	co_await coro::yield(600);
+	if (iReverseStarted.load() != 1 || iReverseFinished.load() != 0 || pWeakOwner.expired())
+	{
+		++iBad;
+	}
+	const int64_t iEndDeadlineMilliseconds = OI::Timer::SteadyMilliseconds() + 5000;
+	while (!pWeakOwner.expired() && OI::Timer::SteadyMilliseconds() < iEndDeadlineMilliseconds)
+	{
+		co_await coro::yield(20);
+	}
+	if (iReverseFinished.load() != 1 || !pWeakOwner.expired())
+	{
+		++iBad;
+	}
+	printf("hold inbound route lifetime bad=%d\n", iBad);
 	fflush(stdout);
 	co_return iBad;
 }
@@ -1896,6 +1979,15 @@ static coro::TaskResult<int> CheckRegistryBoundsAndBudget()
 		co_return 1;
 	}
 	int iBusy = 0, iTimeout = 0;
+	static ZoneService stManyProbe("gameserver");
+	OI::RpcData::HoldReq stManyRequest;
+	const std::vector<int32_t> vManyZones{1001, 1002, 1001};
+	const auto vTimedOut = co_await stManyProbe.CallMany<OI::RpcData::HoldRes>(vManyZones, stManyRequest, OI::Timer::Milliseconds(100));
+	int iManyBad = vTimedOut.size() == vManyZones.size() ? 0 : 1;
+	for (const auto& stResult : vTimedOut)
+	{
+		iManyBad += stResult.GetRet() != OI_ERR_TIMEOUT;
+	}
 	struct PullProbe
 	{
 		std::atomic<int> iCompleted{0};
@@ -1940,6 +2032,15 @@ static coro::TaskResult<int> CheckRegistryBoundsAndBudget()
 				++iBad;
 			}
 		}
+		if (iRound == 0)
+		{
+			const auto vBusy = co_await stManyProbe.CallMany<OI::RpcData::HoldRes>(vManyZones, stManyRequest, OI::Timer::Seconds(3));
+			iManyBad += vBusy.size() != vManyZones.size();
+			for (const auto& stResult : vBusy)
+			{
+				iManyBad += stResult.GetRet() != OI_ERR_BUSY;
+			}
+		}
 		const int64_t iDeadlineMilliseconds = OI::Timer::SteadyMilliseconds() + 3000;
 		while (pProbe->iCompleted.load() < 64 && OI::Timer::SteadyMilliseconds() < iDeadlineMilliseconds)
 		{
@@ -1979,6 +2080,14 @@ static coro::TaskResult<int> CheckRegistryBoundsAndBudget()
 			++iBad;
 		}
 	}
+	const auto vInvalid = co_await stManyProbe.CallMany<OI::RpcData::HoldRes>({1001, -1, 1002}, stManyRequest, OI::Timer::Seconds(3));
+	iManyBad += vInvalid.size() != 3;
+	for (const auto& stResult : vInvalid)
+	{
+		iManyBad += stResult.GetRet() != OI_ERR_FAIL;
+	}
+	iBad += iManyBad;
+	printf("hold batch failure slots bad=%d\n", iManyBad);
 	printf("hold registry bounded recovery busy=%d timeout=%d bad=%d\n", iBusy, iTimeout, iBad);
 	fflush(stdout);
 	if (!(co_await RegistryFaultHandshake(sFaultPath, "budget")))
@@ -2260,7 +2369,8 @@ static coro::TaskResult<int> CheckNamedServiceRpc()
 	int iSlot = vPartial.size() == 2 && vPartial[0].GetRet() == 0 && vPartial[0].GetRes().iCode == 1 && vPartial[1].GetRet() == OI_ERR_CONNECT ? 1 : 0;
 	auto vEmptyMany = co_await stGames.CallMany<::OI::RpcData::AllEchoRes>(std::vector<int32_t>{}, stRequest, ::OI::Timer::Seconds(3));
 	auto vGlobalMany = co_await stIpc.CallMany<::OI::RpcData::AllEchoRes>(vBothZones, stRequest, ::OI::Timer::Seconds(3));
-	if (iMany != 2 || iSlot != 1 || vEmptyMany.size() != 1 || vEmptyMany[0].GetRet() != OI_ERR_FAIL || vGlobalMany.size() != 1 || vGlobalMany[0].GetRet() != OI_ERR_FAIL)
+	if (iMany != 2 || iSlot != 1 || !vEmptyMany.empty() || vGlobalMany.size() != 2 ||
+	    vGlobalMany[0].GetRet() != OI_ERR_FAIL || vGlobalMany[1].GetRet() != OI_ERR_FAIL)
 	{
 		++iBad;
 	}
@@ -2290,7 +2400,7 @@ static coro::TaskResult<int> CheckNamedServiceRpc()
 	stFallbackWait.pManager = &stOfflineWatcher;
 	stFallbackWait.sName = "ipcserver";
 	auto stFallback = co_await stFallbackWait;
-	if (stFallback.iStatus != OI::Rpc::ServiceRouteStatus::Ok || stFallback.vClients.size() != 1 || stFallback.vClients[0] == &stOfflineWatcher)
+	if (stFallback.iStatus != OI::Rpc::ServiceRouteStatus::Ok || stFallback.vClients.size() != 1 || stFallback.vClients[0] == &stOfflineWatcher.Sender())
 	{
 		++iBad;
 	}
@@ -2995,6 +3105,71 @@ static int CheckRpcExpiry(PendingClient& stPendingParam)
 	return iBadLocal;
 }
 
+static coro::TaskResult<int> CheckDeadlineBuckets()
+{
+	int iBad = 0;
+	auto& stManager = IpcClient::GetInstance();
+	const auto stBefore = OI::Rpc::GetRpcWaitStats();
+	std::vector<uint64_t> vCalls;
+	const int64_t iTargetMilliseconds = OI::Timer::SteadyMilliseconds() + 60000;
+	for (int iIndex = 0; iIndex < 4096; ++iIndex)
+	{
+		// 不同剩余时长落到同一小段绝对截止时间，而不是产生4096个时长桶。
+		const int64_t iRemainingMilliseconds = iTargetMilliseconds + iIndex % 100 - OI::Timer::SteadyMilliseconds();
+		vCalls.push_back(OI::Rpc::BindRpcCall(&stManager, INVALID_SID, 0, {}, nullptr, iRemainingMilliseconds, {}, {}));
+	}
+	const auto stDuring = OI::Rpc::GetRpcWaitStats();
+	if (stDuring.iCalls != stBefore.iCalls + 4096 || stDuring.iBuckets > stBefore.iBuckets + 192)
+	{
+		++iBad;
+	}
+	vCalls.push_back(OI::Rpc::BindRpcCall(&stManager, INVALID_SID, 0, {}, nullptr, INT64_MAX, {}, {}));
+	for (const auto& iCall : vCalls)
+	{
+		OI::Rpc::AbandonRpcCall(iCall);
+	}
+	vCalls.clear();
+	struct Probe
+	{
+		std::atomic<int> iCompleted{0};
+		std::atomic<int> iBad{0};
+		std::vector<int32_t> vCodes = std::vector<int32_t>(32, 0);
+	};
+	auto pProbe = std::make_shared<Probe>();
+	auto pGuard = std::make_shared<std::atomic<int32_t>>(0);
+	for (int iIndex = 0; iIndex < 32; ++iIndex)
+	{
+		const int64_t iDelayMilliseconds = 50 + (31 - iIndex) * 23;
+		const int64_t iDeadlineMilliseconds = OI::Timer::SteadyMilliseconds() + iDelayMilliseconds;
+		vCalls.push_back(OI::Rpc::BindRpcCall(&stManager, INVALID_SID, 0, {}, &pProbe->vCodes[iIndex], iDelayMilliseconds, {},
+		    [pProbe, iIndex, iDeadlineMilliseconds]()
+		{
+			if (OI::Timer::SteadyMilliseconds() < iDeadlineMilliseconds || pProbe->vCodes[iIndex] != OI_ERR_TIMEOUT)
+			{
+				++pProbe->iBad;
+			}
+			++pProbe->iCompleted;
+		}, pGuard));
+	}
+	const int64_t iLimitMilliseconds = OI::Timer::SteadyMilliseconds() + 4000;
+	while (pProbe->iCompleted.load() != 32 && OI::Timer::SteadyMilliseconds() < iLimitMilliseconds)
+	{
+		co_await coro::yield(20);
+	}
+	for (const auto& iCall : vCalls)
+	{
+		OI::Rpc::AbandonRpcCall(iCall);
+	}
+	OI::Rpc::WaitRpcGuard(pGuard);
+	if (pProbe->iCompleted.load() != 32 || pProbe->iBad.load() != 0 || !SameWaitStats(stBefore))
+	{
+		++iBad;
+	}
+	printf("hold absolute deadline buckets calls=4096 buckets=%zu fired=%d bad=%d\n", stDuring.iBuckets - stBefore.iBuckets, pProbe->iCompleted.load(), iBad);
+	fflush(stdout);
+	co_return iBad;
+}
+
 // 只在内部配对入口注入错误来源，不构造另一套网络客户端。
 static int CheckRpcSource(sid_t iSessionIdParam)
 {
@@ -3345,6 +3520,7 @@ coro::Task HoldMgr::Pump()
 		iBad += co_await CheckNamedOutputRpcTask();
 		iBad += co_await CheckCompletedRpcRequests(m_iSessionId);
 		iBad += co_await CheckRoutePoolLifetime();
+		iBad += co_await CheckRouteInboundAndReconnect();
 		iBad += co_await CheckRoutePoolCapacity();
 		iBad += co_await CheckRegistryBoundsAndBudget();
 		iBad += co_await CheckRouteTargetStability();
@@ -3375,6 +3551,7 @@ coro::Task HoldMgr::Pump()
 	iBad += CheckRpcSessionIndex(stPending);
 	iBad += co_await CheckRpcExceptions(stPending);
 	iBad += CheckRpcExpiry(stPending);
+	iBad += co_await CheckDeadlineBuckets();
 	iBad += CheckRpcSource(m_iSessionId);
 	iBad += co_await CheckStandardizedReply();
 	iBad += co_await CheckRpcLateReply();

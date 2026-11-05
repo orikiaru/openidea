@@ -86,9 +86,12 @@ def main():
     records = []
     def run(name, command):
         print("START", name, flush=True)
+        env = os.environ.copy()
+        if name == "test-safety" and not args.redis_wsl:
+            env["OI_SAFETY_REDIS_BINARY"] = str(Path(args.redis_binary).resolve())
         with (output / (name + ".log")).open("w", encoding="utf-8") as log:
             code = subprocess.run([str(part) for part in command], cwd=ROOT, stdout=log,
-                                  stderr=subprocess.STDOUT).returncode
+                                  stderr=subprocess.STDOUT, env=env).returncode
         records.append({"step": name, "command": [str(part) for part in command], "exit_code": code})
         (output / "matrix.json").write_text(json.dumps(records, indent=2), encoding="utf-8")
         print("PASS" if code == 0 else "FAIL", name, "log=", output / (name + ".log"), flush=True)
@@ -120,6 +123,10 @@ def main():
         build_command = [cmake, "--build", build, "--config", "Release", "-j", args.jobs]
         binary = ROOT / "deploy/bin/Release" if WINDOWS else ROOT / "deploy/bin"
         if run("field-names", [sys.executable, ROOT / "tools/test_field_names.py"]):
+            failed = True
+        if run("inheritance-tests", [sys.executable, ROOT / "tools/test_inheritance.py"]):
+            failed = True
+        if run("inheritance", [sys.executable, ROOT / "tools/check_inheritance.py"]):
             failed = True
         if run("process-fixtures", [sys.executable, ROOT / "tools/test_regression_platform.py"]):
             failed = True

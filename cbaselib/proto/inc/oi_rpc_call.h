@@ -8,6 +8,27 @@ namespace OI
 namespace Rpc
 {
 
+// 请求的提交目标。应用客户端和路由连接共用发送/撤销逻辑，连接不再冒充管理器。
+struct RpcSender
+{
+	::OI::Net::SessionManager* pManager = nullptr;
+	void* pContext = nullptr;
+	void (*fnSubmit)(void*, uint64_t, const ::OI::Base::Bytes&) = nullptr;
+	void (*fnDrop)(void*, uint64_t) = nullptr;
+	::OI::Net::SessionManager& Manager() const
+	{
+		return *pManager;
+	}
+	void SubmitCall(uint64_t iCallIdParam, const ::OI::Base::Bytes& stDataParam)
+	{
+		fnSubmit(pContext, iCallIdParam, stDataParam);
+	}
+	void DropPendingCall(uint64_t iCallIdParam)
+	{
+		fnDrop(pContext, iCallIdParam);
+	}
+};
+
 // 分片逐个取快照，用于诊断；有并发请求时不保证全局同一时刻的一致性。
 struct RpcWaitStats
 {

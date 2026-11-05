@@ -61,6 +61,7 @@ class ProtoSessionManager : public ::OI::Net::SessionManager
 //如果需要连接池,需要建立多个client,自行设计吧
 class ProtoClientManager : public ProtoSessionManager
 {
+	RpcSender m_stSender;
 	sid_t m_iSessionId;
 	bool m_bConnected;
 	CLIENT_CONNECT_MODE m_iConnectMode;
@@ -90,6 +91,17 @@ class ProtoClientManager : public ProtoSessionManager
 	ProtoClientManager()
 	    : m_iSessionId(INVALID_SID), m_bConnected(false), m_iConnectMode(CLIENT_CONNECT_DIRECT), m_iPendingBytes(0), m_bEverConnected(false)
 	{
+		m_stSender = {this, this, [](void* pContextParam, uint64_t iCallIdParam, const ::OI::Base::Bytes& stDataParam)
+		{
+			static_cast<ProtoClientManager*>(pContextParam)->SubmitCall(iCallIdParam, stDataParam);
+		}, [](void* pContextParam, uint64_t iCallIdParam)
+		{
+			static_cast<ProtoClientManager*>(pContextParam)->DropPendingCall(iCallIdParam);
+		}};
+	}
+	RpcSender& Sender()
+	{
+		return m_stSender;
 	}
 	void SetConnectMode(CLIENT_CONNECT_MODE iModeParam)
 	{

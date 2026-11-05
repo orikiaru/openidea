@@ -8,6 +8,10 @@ namespace OI
 {
 namespace Rpc
 {
+ProtoSession::ProtoSession(::OI::Net::SessionManager* pMgrParam)
+    : NetSession(pMgrParam), m_iFrameBytes(pMgrParam->MaxFrameBytes()), m_iFrameTimeoutMilliseconds(pMgrParam->IncompleteFrameTimeoutMilliseconds())
+{
+}
 struct ProtoSession::PartialFrameTimer
 {
 	uv_timer_t stTimer;
@@ -59,7 +63,7 @@ void ProtoSession::ArmIncompleteTimer()
 		auto* pSessionLocal = static_cast<PartialFrameTimer*>(pHandleParam->data)->pSession;
 		pSessionLocal->CancelIncompleteTimer();
 		pSessionLocal->PassiveClose(ETIMEDOUT);
-	}, pSessionManager->IncompleteFrameTimeoutMilliseconds(), 0) != 0)
+	}, m_iFrameTimeoutMilliseconds, 0) != 0)
 	{
 		CancelIncompleteTimer();
 		PassiveClose(ENOBUFS);
@@ -84,7 +88,7 @@ void ProtoSession::OnDataIn()
 		{
 			uint32_t iDeclaredSize = 0;
 			memcpy(&iDeclaredSize, stOutputStream.GetCurPtr() + sizeof(uint32_t), sizeof(iDeclaredSize));
-			if (iDeclaredSize > pSessionManager->MaxFrameBytes())
+			if (iDeclaredSize > m_iFrameBytes)
 			{
 				PassiveClose(EMSGSIZE);
 				break;

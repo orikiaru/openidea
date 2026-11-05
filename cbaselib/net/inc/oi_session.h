@@ -21,7 +21,6 @@ class SessionManager;
 
 class Session
 {
-	std::shared_ptr<SessionManager> m_pManagerOwner;
 	friend class Poll;
 	friend class NetChannel;
 
@@ -46,6 +45,10 @@ class Session
   public:
 	Session(SessionManager* pMgrParam);
 	virtual ~Session();
+	virtual std::shared_ptr<void> HoldTask()
+	{
+		return {};
+	}
 	void AddRef()
 	{
 		iReferences.fetch_add(1, std::memory_order_relaxed);

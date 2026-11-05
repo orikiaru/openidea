@@ -85,7 +85,7 @@ class MatrixOutcomeTests(unittest.TestCase):
                         self.assertEqual(1, code)
 
     def test_nonzero_steps_cannot_pass(self):
-        for step in ("field-names", "process-fixtures", "test-safety", "matrix-outcomes",
+        for step in ("field-names", "inheritance-tests", "inheritance", "process-fixtures", "test-safety", "matrix-outcomes",
                      "mt-configure", "mt-build", "mt-tests", "st-tests", "restore-configure", "restore-build"):
             with self.subTest(step=step):
                 code, _, _ = self.exercise({step: 1})
