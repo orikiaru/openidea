@@ -225,6 +225,9 @@ class RawHttpRegression(socketserver.BaseRequestHandler):
         self.request.settimeout(3)
         # 正常响应留着这条连接，让客户端按 keep-alive 接着发。畸形包和必须靠 EOF 结束的包写完就关。
         reuse = {b"good", b"large", b"interim", b"204", b"304", b"chunk-good", b"fragmented"}
+        # 响应后面粘了下一条报文。客户端若丢掉尾部再复用，后续请求不再回包，用来抓住错位。
+        glued = {b"tail", b"chunk-tail", b"empty-tail"}
+        refused_reuse = False
         try:
             while True:
                 request = b""
@@ -233,6 +236,11 @@ class RawHttpRegression(socketserver.BaseRequestHandler):
                     if not part:
                         return
                     request += part
+                if refused_reuse:
+                    self.request.sendall(b"HTTP/1.1 500 Reused\r\nContent-Length: 6\r\nConnection: close\r\n\r\nreused")
+                    return
+                if b"\r\nConnection: close\r\n" in request:
+                    refused_reuse = True
                 path = request.split(b" ")[1].split(b"?")[0].strip(b"/")
                 ok = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"
                 chunk = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
@@ -243,6 +251,9 @@ class RawHttpRegression(socketserver.BaseRequestHandler):
                     b"204": b"HTTP/1.1 204 No Content\r\n\r\n",
                     b"304": b"HTTP/1.1 304 Not Modified\r\nContent-Length: 123\r\n\r\n",
                     b"chunk-good": chunk + b"2;name=value\r\nok\r\n0\r\nX-Test: done\r\n\r\n",
+                    b"tail": ok + b"HTTP/1.1 500 BAD\r\nContent-Length: 3\r\n\r\nbad",
+                    b"chunk-tail": chunk + b"2\r\nok\r\n0\r\n\r\n" + b"HTTP/1.1 500 BAD\r\nContent-Length: 3\r\n\r\nbad",
+                    b"empty-tail": b"HTTP/1.1 204 No Content\r\n\r\n" + b"HTTP/1.1 500 BAD\r\nContent-Length: 3\r\n\r\nbad",
                     b"length-junk": b"HTTP/1.1 200 OK\r\nContent-Length: 1x\r\n\r\na",
                     b"length-overflow": b"HTTP/1.1 200 OK\r\nContent-Length: 18446744073709551616\r\n\r\n",
                     b"length-conflict": b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\nok",
@@ -263,6 +274,14 @@ class RawHttpRegression(socketserver.BaseRequestHandler):
                     self.request.sendall(b" OK\r\nContent-Length: 2\r\n\r\nok")
                 else:
                     self.request.sendall(wires[path])
+                if path in glued:
+                    follow = b""
+                    while b"\r\n\r\n" not in follow and len(follow) < 8192:
+                        part = self.request.recv(8192)
+                        if not part:
+                            return
+                        follow += part
+                    return
                 if path not in reuse:
                     return
         except (OSError, IndexError, KeyError):

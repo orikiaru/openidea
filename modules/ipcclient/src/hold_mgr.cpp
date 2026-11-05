@@ -2682,7 +2682,7 @@ static coro::TaskResult<int> CheckHttpFraming(int32_t iHttpPortParam)
 		const char* pBody;
 	};
 	const std::vector<HttpCase> vCases{
-	    {"good", 200, false, "ok"}, {"interim", 200, false, "ok"}, {"fragmented", 200, false, "ok"}, {"204", 204, false, ""}, {"304", 304, false, ""}, {"chunk-good", 200, false, "ok"}, {"length-junk", 200, true, ""}, {"length-overflow", 200, true, ""}, {"length-conflict", 200, true, ""}, {"te-cl", 200, true, ""}, {"chunk-separator", 200, true, ""}, {"chunk-junk", 200, true, ""}, {"truncated", 200, true, ""}, {"only-interim", 100, true, ""}, {"good", 200, false, "ok"}};
+	    {"good", 200, false, "ok"}, {"interim", 200, false, "ok"}, {"fragmented", 200, false, "ok"}, {"204", 204, false, ""}, {"304", 304, false, ""}, {"chunk-good", 200, false, "ok"}, {"length-junk", 200, true, ""}, {"length-overflow", 200, true, ""}, {"length-conflict", 200, true, ""}, {"te-cl", 200, true, ""}, {"chunk-separator", 200, true, ""}, {"chunk-junk", 200, true, ""}, {"truncated", 200, true, ""}, {"only-interim", 100, true, ""}, {"tail", 200, false, "ok"}, {"good", 200, false, "ok"}, {"chunk-tail", 200, false, "ok"}, {"good", 200, false, "ok"}, {"empty-tail", 204, false, ""}, {"good", 200, false, "ok"}};
 	for (const auto& stCase : vCases)
 	{
 		auto stResult = co_await stHttp.Get(std::string("/") + stCase.pPath, {});
@@ -2693,6 +2693,24 @@ static coro::TaskResult<int> CheckHttpFraming(int32_t iHttpPortParam)
 		}
 	}
 	LOG_TRACE("hold http framing bad=%d", iBadLocal);
+	co_return iBadLocal;
+}
+
+// 不复用时每条请求都重新连。服务端看到同一条连接上的后续请求会回 reused。
+static coro::TaskResult<int> CheckHttpNoReuse(int32_t iHttpPortParam)
+{
+	int iBadLocal = 0;
+	OI::Http::Client stHttp("127.0.0.1", iHttpPortParam, 1000, false);
+	for (int iIndex = 0; iIndex < 2; ++iIndex)
+	{
+		auto stResult = co_await stHttp.Get("/good", {});
+		if (stResult.bFail || stResult.iStatus != 200 || stResult.sBody != "ok")
+		{
+			++iBadLocal;
+			LOG_TRACE("http no reuse index=%d status=%d fail=%d error=%s", iIndex, stResult.iStatus, stResult.bFail ? 1 : 0, stResult.sError.c_str());
+		}
+	}
+	LOG_TRACE("hold http no reuse bad=%d", iBadLocal);
 	co_return iBadLocal;
 }
 
@@ -3667,6 +3685,7 @@ coro::Task HoldMgr::Pump()
 	if (iHttpPort > 0)
 	{
 		iBad += co_await CheckHttpFraming(iHttpPort);
+		iBad += co_await CheckHttpNoReuse(iHttpPort);
 		iBad += co_await CheckHttpRelease(iHttpPort);
 	}
 	iBad += CheckSendBudget();

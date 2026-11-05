@@ -25,7 +25,8 @@ struct Response
 };
 
 // 一次请求。co_await 挂起，poll 线程上收完再 Schedule 回来，不在回调里 resume。
-// 同一个 Client 上的请求串行走 SessionManager 的一条连接，发完不主动拆。
+// 复用时，同一个 Client 上的请求串行走 SessionManager 的一条连接，发完不主动拆。
+// 不复用时每条请求带 Connection: close，收完就关，下一条重新连。
 class Call
 {
 	friend class Client;
@@ -53,7 +54,8 @@ class Call
 
 // 连一个 HTTP/1.1 服务。host 可以是 IPv4 或域名，域名在 libuv 线程池里解析。
 // 查询参数按百分号编码，body 按字节发送。响应支持 Content-Length、chunked 和读到断开。
-// 外层只排队。连接、收发和复用都在内部的 SessionManager 上，同一时间线上只有一个请求。
+// 外层只排队。连接和收发都在内部的 SessionManager 上，同一时间线上只有一个请求。
+// bReuseParam 为真时复用这条连接；为假时每条请求结束后主动关掉。
 class Client
 {
   public:
@@ -63,7 +65,7 @@ class Client
 	std::shared_ptr<Impl> m_pImpl;
 
   public:
-	Client(const std::string& sHostParam, int32_t iPortParam, int32_t iTimeoutMillisecondsParam = 5000);
+	Client(const std::string& sHostParam, int32_t iPortParam, int32_t iTimeoutMillisecondsParam = 5000, bool bReuseParam = true);
 	~Client();
 	Client(const Client&) = delete;
 	Client& operator=(const Client&) = delete;

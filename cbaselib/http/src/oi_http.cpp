@@ -188,6 +188,7 @@ struct Client::Impl : public ::OI::Net::SessionManager
 	bool m_bConnecting;
 	bool m_bDnsPending;
 	bool m_bClosed;
+	bool m_bReuse;
 
 	void Publish(const std::shared_ptr<Call::Request>& pRequestParam, bool bFailParam, const char* pWhyParam);
 	void EnqueueOnLoop(const std::shared_ptr<Call::Request>& pRequestParam);
@@ -199,12 +200,16 @@ struct Client::Impl : public ::OI::Net::SessionManager
 	static void OnDns(uv_getaddrinfo_t* pRequestParam, int iStatusParam, struct addrinfo* pResponseParam);
 
   public:
-	Impl(const std::string& sHostParam, int32_t iPortParam, int32_t iTimeoutMillisecondsParam);
+	Impl(const std::string& sHostParam, int32_t iPortParam, int32_t iTimeoutMillisecondsParam, bool bReuseParam);
 	~Impl() override;
 	const std::string GetIDString() override;
 	int32_t Timeout() const
 	{
 		return m_iTimeoutMilliseconds;
+	}
+	bool Reuse() const
+	{
+		return m_bReuse;
 	}
 	const std::string& Host() const
 	{
@@ -257,7 +262,7 @@ class HttpSession : public ::OI::Net::NetSession
 	bool ParseHeaders(size_t iHeaderEndParam);
 	bool ConsumeChunks();
 	bool Consume();
-	void Succeed();
+	void Succeed(size_t iConsumedParam);
 	void Fail(const char* pWhyParam);
 
   public:
@@ -484,7 +489,7 @@ bool HttpSession::ConsumeChunks()
 				}
 				if (iEnd == iPosition)
 				{
-					Succeed();
+					Succeed(iEnd + 2);
 					return true;
 				}
 				iPosition = iEnd + 2;
@@ -544,7 +549,7 @@ bool HttpSession::Consume()
 	}
 	if (m_iStatus == 204 || m_iStatus == 304)
 	{
-		Succeed();
+		Succeed(m_iHeaderBytes);
 		return true;
 	}
 	if (m_bChunked)
@@ -561,15 +566,20 @@ bool HttpSession::Consume()
 		return false;
 	}
 	m_sBody.assign(m_sIncoming, m_iHeaderBytes, (size_t)m_iContentLength);
-	Succeed();
+	Succeed(m_iHeaderBytes + (size_t)m_iContentLength);
 	return true;
 }
 
-void HttpSession::Succeed()
+void HttpSession::Succeed(size_t iConsumedParam)
 {
 	if (!m_bActive)
 	{
 		return;
+	}
+	// 同一段缓冲里还剩下一响没用到的字节。丢掉后续复用会让下一条请求从半截报文开始解析。
+	if (iConsumedParam < m_sIncoming.size())
+	{
+		m_bCloseAfter = true;
 	}
 	m_bActive = false;
 	int32_t iStatusLocal = m_iStatus;
@@ -608,7 +618,7 @@ void HttpSession::FinishEof()
 	}
 	m_sBody.assign(m_sIncoming, m_iHeaderBytes, std::string::npos);
 	m_bCloseAfter = true;
-	Succeed();
+	Succeed(m_sIncoming.size());
 }
 
 void HttpSession::OnDataIn()
@@ -651,8 +661,8 @@ void HttpSession::OnClose()
 	::OI::Net::NetSession::OnClose();
 }
 
-Client::Impl::Impl(const std::string& sHostParam, int32_t iPortParam, int32_t iTimeoutMillisecondsParam)
-    : m_sHost(sHostParam), m_iPort(iPortParam), m_iTimeoutMilliseconds(iTimeoutMillisecondsParam), m_pSession(NULL), m_iSessionId(INVALID_SID), m_bConnected(false), m_bConnecting(false), m_bDnsPending(false), m_bClosed(false)
+Client::Impl::Impl(const std::string& sHostParam, int32_t iPortParam, int32_t iTimeoutMillisecondsParam, bool bReuseParam)
+    : m_sHost(sHostParam), m_iPort(iPortParam), m_iTimeoutMilliseconds(iTimeoutMillisecondsParam), m_pSession(NULL), m_iSessionId(INVALID_SID), m_bConnected(false), m_bConnecting(false), m_bDnsPending(false), m_bClosed(false), m_bReuse(bReuseParam)
 {
 	std::memset(&m_stDns, 0, sizeof(m_stDns));
 	iMaxReceiveBufferBytes = kMaxHeader + kMaxBody;
@@ -718,7 +728,7 @@ void Client::Impl::OnHttpFinished(HttpSession* pSessionParam, bool bFailParam, c
 		}
 		Publish(pFlightLocal, bFailParam, pWhyParam);
 	}
-	bool bDropLocal = bFailParam || bCloseParam;
+	bool bDropLocal = bFailParam || bCloseParam || !m_bReuse;
 	if (bDropLocal && pSessionParam == m_pSession && pSessionParam && !pSessionParam->IsClosed())
 	{
 		pSessionParam->Abandon();
@@ -1064,8 +1074,8 @@ Response Call::await_resume()
 	return stOutput;
 }
 
-Client::Client(const std::string& sHostParam, int32_t iPortParam, int32_t iTimeoutMillisecondsParam)
-    : m_pImpl(std::make_shared<Impl>(sHostParam, iPortParam, iTimeoutMillisecondsParam))
+Client::Client(const std::string& sHostParam, int32_t iPortParam, int32_t iTimeoutMillisecondsParam, bool bReuseParam)
+    : m_pImpl(std::make_shared<Impl>(sHostParam, iPortParam, iTimeoutMillisecondsParam, bReuseParam))
 {
 	m_pImpl->Attach(m_pImpl);
 }
@@ -1101,7 +1111,7 @@ Call Client::Get(const std::string& sPathParam, const std::vector<std::pair<std:
 	pRequest->iTimeoutMilliseconds = m_pImpl->Timeout();
 	pRequest->sRequest = "GET " + sTarget + " HTTP/1.1\r\n";
 	pRequest->sRequest += HostHeader(m_pImpl->Host(), m_pImpl->Port());
-	pRequest->sRequest += "Connection: keep-alive\r\n\r\n";
+	pRequest->sRequest += m_pImpl->Reuse() ? "Connection: keep-alive\r\n\r\n" : "Connection: close\r\n\r\n";
 	return Call(pRequest);
 }
 
@@ -1115,7 +1125,7 @@ Call Client::Post(const std::string& sPathParam, const std::string& sBodyParam, 
 	pRequest->sRequest += HostHeader(m_pImpl->Host(), m_pImpl->Port());
 	pRequest->sRequest += "Content-Type: " + sContentTypeParam + "\r\n";
 	pRequest->sRequest += "Content-Length: " + std::to_string(sBodyParam.size()) + "\r\n";
-	pRequest->sRequest += "Connection: keep-alive\r\n\r\n";
+	pRequest->sRequest += m_pImpl->Reuse() ? "Connection: keep-alive\r\n\r\n" : "Connection: close\r\n\r\n";
 	pRequest->sRequest.append(sBodyParam.data(), sBodyParam.size());
 	return Call(pRequest);
 }
