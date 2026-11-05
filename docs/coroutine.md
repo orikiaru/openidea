@@ -22,6 +22,8 @@ Task 对象、每个等待器及运行中的帧各持一份引用。任务对象
 
 TaskResult 每次等待返回一份结果副本，不移走共享结果。大对象或不可复制对象使用 `TaskResult<std::shared_ptr<T>>`，多个等待者共享同一个对象；其业务数据的并发读写仍由应用同步。异常保留并在每次 await 时重抛。RPC 的输出引用接口本身返回 TaskResult<int32_t>，可以共享等待；不带输出的直连 RPC 等待对象及 Redis/HTTP 请求等待对象仍是单次请求，要共享可以封装到一个 TaskResult 中。
 
+输出引用调用建议独立成句：先 `const int32_t iRet = co_await Call(..., stOutput);`，再判断状态码和读取输出。当前 GCC13 的最小独立协程复现中，同一 `||` 条件内交替执行两次 await、读取并复用同一输出，会错误地判断中间结果；-O0 与 -O3 都能复现，拆成逐条等待后正常。因此不要用一个复杂条件串联依赖前一步输出的多个命令。此限制来自本机编译器验证，不是框架允许并发修改同一输出。Redis 的 0/1 数组使用 `vector<int64_t>`，不把 `vector<bool>` 的代理引用带入协程表达式。
+
 ## 挂起
 
 挂起只把句柄放回队列，不在回调里直接 `resume`。RPC 回包和超时也是 `Schedule`。
@@ -93,6 +95,8 @@ auto& res = result.GetRes();
 `TaskScope` 持有一组任务；`scope.Start(fn)` 的 fn 接收 `(coro::Token, coro::StopToken)`，循环检查 `StopRequested()`。`RequestStop()` 关闭入口并请求协作停止，`co_await scope.Join()` 等待所有任务完成后转交第一个异常。Join 本身也关闭入口。模块销毁前必须先完成 Join，再停止框架线程池。析构只请求停止，不能代替异步 Join。
 
 停止不强拆正在等待的 RPC、Redis 或定时器：它们正常完成或超时后任务检查停止标记；因此作用域任务需要设置有限超时，避免无限等待。捕获裸 this 的生命周期由模块 Join 保证。
+
+路由连接在逻辑断连时立即撤销旧会话；下一次调用可直接发起重连并排队，不需要应用轮询会话状态。路由已连接发送和建连后补发统一区分错误：发送预算不足返回 `OI_ERR_BUSY`，会话不存在或已关闭返回 `OI_ERR_CONNECT`。背压不会主动关闭连接。
 
 首次连接前的 RPC 默认最多等待 65536 条、64MiB；可通过 `SetPendingCallLimits(count, bytes)` 调整，0 表示不允许排队。达到任意限额返回 `OI_ERR_BUSY`，超时删除通过调用号索引完成。
 

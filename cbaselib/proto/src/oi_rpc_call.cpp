@@ -6,6 +6,7 @@
 #include "oi_config.h"
 #include "oi_registry.h"
 #include <algorithm>
+#include <array>
 #include <memory>
 #include <atomic>
 #include <thread>
@@ -247,17 +248,6 @@ RpcCallShard& ShardOf(uint64_t iCallIdParam)
 
 void FinishRpcSlot(RpcCoroSlot& stSlotParam, int32_t iCodeParam, ::OI::Base::BytesStream* pBodyParam)
 {
-	if (stSlotParam.bAwaitingConnect)
-	{
-		if (stSlotParam.pSender)
-		{
-			stSlotParam.pSender->DropPendingCall(stSlotParam.iCallId);
-		}
-		else
-		{
-			stSlotParam.pManager->DropPendingCall(stSlotParam.iCallId);
-		}
-	}
 	struct GuardRelease
 	{
 		std::shared_ptr<std::atomic<int32_t>> pGuard;
@@ -270,6 +260,17 @@ void FinishRpcSlot(RpcCoroSlot& stSlotParam, int32_t iCodeParam, ::OI::Base::Byt
 			}
 		}
 	} stRelease{stSlotParam.pGuard, stSlotParam.bGuardArmed};
+	if (stSlotParam.bAwaitingConnect)
+	{
+		if (stSlotParam.pSender)
+		{
+			stSlotParam.pSender->DropPendingCall(stSlotParam.iCallId);
+		}
+		else
+		{
+			stSlotParam.pManager->DropPendingCall(stSlotParam.iCallId);
+		}
+	}
 	if (pBodyParam)
 	{
 		if (stSlotParam.fnDecode)
@@ -578,31 +579,48 @@ void WaitRpcGuard(const std::shared_ptr<std::atomic<int32_t>>& pGuardParam)
 
 void FailRpcCalls(::OI::Net::SessionManager* pManagerParam, sid_t iSessionIdParam)
 {
-	std::vector<RpcCoroSlot> vFailed;
+	// 固定容量分批摘除，断连清理自身不分配内存。每批出锁后完成，异常不能遗失后续等待项。
+	std::array<RpcCoroSlot, 32> vFailed{};
 	for (auto& stShard : g_call_shards)
 	{
-		::OI::Thread::MutexGuard stLock(stShard.stMutex);
-		auto it = stShard.mSessions.find({pManagerParam, iSessionIdParam});
-		if (it == stShard.mSessions.end())
+		while (true)
 		{
-			continue;
+			size_t iCount = 0;
+			{
+				::OI::Thread::MutexGuard stLock(stShard.stMutex);
+				auto it = stShard.mSessions.find({pManagerParam, iSessionIdParam});
+				if (it == stShard.mSessions.end())
+				{
+					break;
+				}
+				while (!it->second.empty() && iCount < vFailed.size())
+				{
+					auto stSlot = stShard.mSlots.find(it->second.front());
+					RemoveRpcExpiry(stShard, stSlot->second);
+					stSlot->second.bIndexed = false;
+					ArmRpcGuard(stSlot->second);
+					vFailed[iCount++] = std::move(stSlot->second);
+					stShard.mSlots.erase(stSlot);
+					it->second.pop_front();
+				}
+				if (it->second.empty())
+				{
+					stShard.mSessions.erase(it);
+				}
+			}
+			for (size_t iIndex = 0; iIndex < iCount; ++iIndex)
+			{
+				try
+				{
+					FinishRpcSlot(vFailed[iIndex], OI_ERR_CONNECT, nullptr);
+				}
+				catch (...)
+				{
+					::OI::Thread::ReportTaskError(std::current_exception());
+				}
+				vFailed[iIndex] = {};
+			}
 		}
-		vFailed.reserve(vFailed.size() + it->second.size());
-		for (const auto& iId : it->second)
-		{
-			auto stSlot = stShard.mSlots.find(iId);
-			RemoveRpcExpiry(stShard, stSlot->second);
-			stSlot->second.bIndexed = false;
-			ArmRpcGuard(stSlot->second);
-			vFailed.push_back(std::move(stSlot->second));
-			stShard.mSlots.erase(stSlot);
-		}
-		stShard.mSessions.erase(it);
-	}
-	// 唤醒放在锁外，应用可以立即发起新的调用。
-	for (auto& stSlot : vFailed)
-	{
-		FinishRpcSlot(stSlot, OI_ERR_CONNECT, NULL);
 	}
 }
 

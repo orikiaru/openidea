@@ -11,6 +11,13 @@ enum OI_ERR
 	OI_ERR_CONNECT = -3, // 连接失败，或连接断开
 	OI_ERR_BUSY = -5,    // 等待队列达到容量上限
 	OI_ERR_EXIST = -4,   // 已被占用，例如同名同 id 的服务已经在线
+	OI_ERR_INVALID_ARGUMENT = -6,
+	OI_ERR_NOT_FOUND = -7,
+	OI_ERR_REDIS = -8,           // Redis 服务端返回错误，原生回执保留错误文本
+	OI_ERR_REDIS_WRONGTYPE = -9, // key 的 Redis 数据类型不匹配
+	OI_ERR_PROTOCOL = -10,       // 回执形状不符合命令约定
+	OI_ERR_DECODE = -11,         // 值不能反序列化为指定 rpcdata
+	OI_ERR_ENCODE = -12,
 };
 
 #define NET_PARSER_ERR_BEGIN (-10000)

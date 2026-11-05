@@ -230,3 +230,31 @@ python tools/parallel_matrix.py --lane <LANE> --jobs 4 --windows-redis-binary <W
 - 主目录与四路副本均恢复多线程并关闭测试注入。四路前后清理及最终全局清理均退出 0，无残留报告；临时日志数据已由用例清理，最大单例约 1.07GB，低于 2GiB 阈值。
 - 本机证据在 `C:/Users/Admin/openidea-test-results/route-review-20261105`，最终四路在 `final/par-<平台>-<模式>`，主目录检查在 `main-final`，汇总为 `verified.json`。旧动态管理器方案的预检失败保留在 `preflight`，不计为通过。
 - Linux 副本的 Git diff 哈希与 Windows 不同；收尾时对两个 Linux 副本与主目录逐字节核对，754 个路径均一致，证据在 `final/source-byte-comparison.json`。这是收尾内容核对，不代替测试开始时的独立快照证明。测试完成后仅追加本节文档。
+
+
+## 14. 断连与背压边界回归
+
+- Hold 的 `hold pooled reconnect bad=0` 必须在主动断开后不 yield、不等待清理，立即向同一连接发 RPC，验证重连排队。
+- `hold route backpressure status bad=0` 检查已连接发送及建连后的缓存补发均准确返回 BUSY，背压不换会话，随后的小请求仍可成功。发送预算专项同时检查满载返回 BUSY、关闭返回 CONNECT。
+- `hold disconnect drain calls=4096 bad=0` 跨 64 个分片及固定大小批次清理 4096 项，首个完成回调注入 bad_alloc，验证其他回调继续、结果全部为 CONNECT、保护计数归零、等待索引恢复基线。清理本身不动态扩容；该注入发生在完成回调，不是全局内存耗尽模拟。
+- 以上均由常规 `--case all` 的 Hold 触发，并由回归脚本断言。
+
+
+## 15. Redis 类型化单 key 命令回归
+
+常规 RedisMgr 完整性测试及压力测试使用标准命令接口，原生 CallRedis 保留给 PING、Lua 和协议/状态隔离探针。强制标记为 `redis typed commands string rpcdata zset bad=0`，覆盖二进制 key/value、空字符串/缺失值、WRONGTYPE、rpcdata 正常/损坏、集合中途解码失败不覆盖原输出、hash rpcdata、排序集合正反序/分数/更新计数、NaN 拒绝和共享 Task 重复等待。同步压力线程同时覆盖 string 与 rpcdata 存取。所有标准命令只使用一个 key，不以批量多 key 指令代替逐条调用。
+
+
+Redis 类型回归还必须确认 `redis typed collections string rpcdata bad=0`、`redis typed native ping lua scalar array rpcdata bad=0` 和两个 `redis typed sync id=0/1 bad=0` 标记。覆盖 string/hash/list/set/zset 常用读写/计数/删除，空值与错误类型，Lua 返回整数/布尔/字符串/数字字符串/数组/rpcdata、Lua 错误与 nil、整数溢出和结果形状不匹配；所有失败保持原输出。同步线程覆盖 PING、Lua、字符串、rpcdata、列表、hash、set、zset 与分数。Lua 脚本若需访问存储，只显式声明一个 key；不新增隐式多 key 用例。
+
+新增五类单 key 命令的 RedisMgr 回归要求 `redis expanded five types bad=0`，覆盖条件写、增减、批量与空参数、二进制字符串、rpcdata、带 nil 的 HMGET/ZMSCORE、正反范围及弹出删除。HSCAN、SSCAN、ZSCAN 累积到游标为零，不假定 COUNT 指定返回数量；同步压力线程也检查 optional 及三种扫描的 rpcdata 解码。
+
+Redis 断言按每条命令分别等待、检查返回值和输出，失败日志包含检查行号。GCC13 下复合多 await 条件复用输出曾造成 6 个集合断言失败，布尔位数组代理曾在读取时崩溃；不要通过减少断言或跳过 Linux 消除此类失败。成员批量判断使用 0/1 整数数组，原生类型化调用也拒绝 vector<bool>，布尔标量仍支持。
+
+## 16. 2026-11-05 Redis 五类命令最终验证
+
+- Terra 执行 Windows 原生 MSVC、WSL GCC13 的单/多线程全量矩阵，每路 18 项全部 passed，共 72 项，没有跳过或失败。随后仅调整过期测试的多 await 表达式，生产代码不变；四路同步最新源码、重新编译并各补跑 Redis 用例，全部通过。最新 Redis 结果以补跑为准，不把旧失败版本计入最终通过数。
+- 每路最新 Redis 日志同时核对 typed commands、collections、native PING/Lua、expanded five types、sync id 0/1、毫秒过期、integrity 和 stress；所有 bad 均为 0。全量 Hold 的立即重连、BUSY 背压回执和 4096 等待者断线排空也通过。
+- 主目录 Windows/Linux 全目标构建及格式检查通过；七个新 Redis 头分别独立包含的 Windows 编译通过。主目录和四个副本均恢复 MT、关闭测试钩子并重建；最终全局进程清理与残留核查均退出 0，用户 6379 Redis 未处理。临时大日志由用例清理。
+- 最后逐字节核对主目录与四个隔离副本的 202 个自有源码、头、CMake 与脚本文件，全部一致。文档、三方源码和构建产物不在该核对范围内；本节在测试后追加。
+- 本机证据根目录为 `C:/Users/Admin/openidea-test-results/redis-complete-20261105`：最终全量在 `final/par-<平台>-<模式>`，最终 Redis 补跑在 `final/expiry-par-<平台>-<模式>`，主目录最后构建在 `final/main-expiry-rebuild`，汇总为 `final/verified.json`，源码比较为 `final/source-byte-comparison.json`。段错误、六项旧集合断言失败和 GCC13 独立最小复现均保留在非 final 目录，不能视为通过证据。

@@ -137,6 +137,7 @@ class SessionManager
 	bool HasEndpoint(const std::string& sEndpointParam);
 
 	bool SendBytes(sid_t iSessionIdParam, const ::OI::Base::Bytes& stDataParam);
+	int32_t SendBytesResult(sid_t iSessionIdParam, const ::OI::Base::Bytes& stDataParam);
 
 	static SESSION_TYPE GetSessionTypeByString(const std::string& sTypeParam);
 

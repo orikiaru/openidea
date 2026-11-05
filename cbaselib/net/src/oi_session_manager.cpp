@@ -360,13 +360,18 @@ std::shared_ptr<void> SessionManager::HoldSessionTask(sid_t iSessionIdParam)
 
 bool SessionManager::SendBytes(sid_t iSessionIdParam, const ::OI::Base::Bytes& stDataParam)
 {
+	return SendBytesResult(iSessionIdParam, stDataParam) == OI_OK;
+}
+
+int32_t SessionManager::SendBytesResult(sid_t iSessionIdParam, const ::OI::Base::Bytes& stDataParam)
+{
 	Session* pSessionLocal = NULL;
 	{
 		::OI::Thread::MutexGuard stLock(stLocker);
 		auto stIterator = mSessionMap.find(iSessionIdParam);
 		if (stIterator == mSessionMap.end())
 		{
-			return false;
+			return OI_ERR_CONNECT;
 		}
 		// 还在表里说明 poll 线程没销毁它。持一份引用，拷贝放到管理器锁外，别的连接发送不用排队。
 		pSessionLocal = stIterator->second;
@@ -377,7 +382,7 @@ bool SessionManager::SendBytes(sid_t iSessionIdParam, const ::OI::Base::Bytes& s
 		pSessionParam->Release();
 	};
 	std::unique_ptr<Session, decltype(fnRelease)> pHeld(pSessionLocal, fnRelease);
-	return pSessionLocal->Send(stDataParam);
+	return pSessionLocal->SendResult(stDataParam);
 }
 
 void SessionManager::AddSession(Session* pSessionParam)

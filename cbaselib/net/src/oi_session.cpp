@@ -16,15 +16,24 @@ namespace Net
 
 bool Session::Send(const ::OI::Base::Bytes& stBytesParam)
 {
+	return SendResult(stBytesParam) == OI_OK;
+}
+
+int32_t Session::SendResult(const ::OI::Base::Bytes& stBytesParam)
+{
 	::OI::Thread::MutexGuard stLock(stLocker);
-	if (IsClosed() || iQueuedBytes > iMaxSendQueueBytes || stBytesParam.Size() > iMaxSendQueueBytes - iQueuedBytes)
+	if (IsClosed())
 	{
-		return false;
+		return OI_ERR_CONNECT;
+	}
+	if (iQueuedBytes > iMaxSendQueueBytes || stBytesParam.Size() > iMaxSendQueueBytes - iQueuedBytes)
+	{
+		return OI_ERR_BUSY;
 	}
 	stOutputBuffer.Append(stBytesParam);
 	iQueuedBytes += stBytesParam.Size();
 	AllowSend();
-	return true;
+	return OI_OK;
 }
 
 void Session::SetSendQueueLimit(size_t iBytesParam)

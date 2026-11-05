@@ -556,6 +556,12 @@ def run(case, args):
                     assert "redis pending limit bad=0" in text
                 else:
                     assert "redis millisecond expiry bad=0" in text
+                    assert "redis typed commands string rpcdata zset bad=0" in text
+                    assert "redis typed collections string rpcdata bad=0" in text
+                    assert "redis typed native ping lua scalar array rpcdata bad=0" in text
+                    assert "redis expanded five types bad=0" in text
+                    assert "redis typed sync id=0 bad=0" in text
+                    assert "redis typed sync id=1 bad=0" in text
                     assert "redis script isolation bad=0" in text
                     assert "redis single use bad=0" in text
                     assert re.search(r"redis stress .*bad=0", text)
@@ -579,6 +585,8 @@ def run(case, args):
                 assert "hold completed rpc requests retained=20 destroyed=20 bad=0" in text
                 assert "hold route policy isolation idle reconnect bad=0" in text
                 assert "hold pooled reconnect bad=0" in text
+                assert "hold route backpressure status bad=0" in text
+                assert "hold disconnect drain calls=4096 bad=0" in text
                 assert "hold inbound route lifetime bad=0" in text
                 assert "hold reverse reply bad=0" in (root / "gameserver-1001.out").read_text(encoding="utf-8", errors="replace")
                 assert "hold batch failure slots bad=0" in text

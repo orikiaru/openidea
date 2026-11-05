@@ -22,9 +22,60 @@ logd 的 `[Log] max_pending_bytes` 默认 64MiB，所有日志级别共享，包
 
 `redis` 是连 `redisserver` 的客户端，类型在 `OI::Redis`，字节是 RESP，不进 proto。一条连接上的命令按发送顺序对回包。超时后这条命令仍留在队列里，等它自己的回包来认领，避免后面的应答串位。回包如果再也没来，而连接还在，后面的命令会一直顶在它后面。超时单位是毫秒，来自 `RedisClient.timeout_ms`，由 200 毫秒的周期定时器扫描。先到的那个算数。`RedisResult.iStatus` 区分 Ok、Timeout、Disconnected、InvalidArgument、SendFailed、ServerError、ProtocolError、Busy；`bTimeout` 仅在真正超时时为真。错误回执仍保留在共享 `pReply` 中，`if (result)` 只对 Ok 成立。
 
-推荐 `auto result = co_await RedisGet("key")` 或 `co_await CallRedis({"GET", "key"})`；旧的输出引用接口仍保留。过期时间可用 `RedisExpire("key", OI::Timer::Seconds(60))`，列表范围支持整数下标。`RedisClient.max_pending` 默认 65536，包含已超时但尚未收到回执的配对项，满后返回 Busy，不自动重试或重放写操作。
+标准命令包含 `oi_redis_cmd.h`；只用原生客户端则包含 `oi_redis.h`，两个入口不循环包含。常用命令不再返回 hiredis 回执：`int32_t iRet = co_await RedisGet("key", stOutput)`，`co_await RedisSet("key", stValue)`。输出为 `std::string` 时直接接收二进制字符串，为 rpcdata 时按模板类型反序列化。写入 rpcdata 使用其现有二进制序列化，不增加额外包头；读写双方须约定同一数据类型，不能靠字节自动推断协议类型。key 和 hash field 均为 `std::string`，支持内嵌 NUL。返回非 0 状态码时不覆盖原输出，数组/字典整份解码成功才提交。内存分配失败或自定义 rpcdata 抛出的其他 C++ 异常仍可传播；自定义输出类型的最终移动赋值应保证不抛异常，不承诺对任意抛异常赋值做事务回滚。
 
-RedisCall 是单次请求对象，同一个对象只能 await 一次；重复等待、并发等待或等待已移走的对象会在提交前抛出 std::logic_error，不会再次发送写操作。需要再次请求时重新调用 RedisGet / CallRedis 创建对象；要复用已取得的响应，保存 RedisResult。
+错误码统一为 `int32_t`：0 成功；连接、超时、容量不足沿用 `OI_ERR_CONNECT / TIMEOUT / BUSY`；不存在的标量返回 `OI_ERR_NOT_FOUND`，空字符串和空集合仍然成功；错误 key 类型为 `OI_ERR_REDIS_WRONGTYPE`；其他服务端错误为 `OI_ERR_REDIS`；回执形状错误为 `OI_ERR_PROTOCOL`；rpcdata 内容损坏为 `OI_ERR_DECODE`，序列化失败为 `OI_ERR_ENCODE`。Redis 返回的计数、排名或分数通过输出参数取得，不把它们当错误码。读取 TTL 的 -1/-2 是成功返回的数据，含义沿用 Redis。
+
+命令按五类数据结构提供；统一包含 `oi_redis_cmd.h`，也可按需包含 `oi_redis_string.h`、`oi_redis_hash.h`、`oi_redis_list.h`、`oi_redis_set.h`、`oi_redis_zset.h`。下列名称均加 `Redis` 前缀，同步版本加 `Sync`，返回统一状态码，原生数据通过输出参数取得。
+
+- key/string：Get、Set（可带毫秒 TTL）、SetNx、GetSet、GetDel、GetEx、GetPersist、Append、StrLen、GetRange、SetRange、Incr、Decr、IncrBy、DecrBy、IncrByFloat；Del、Unlink、Exists、Type、Ttl、PTtl、Expire、ExpireAt、PExpireAt、Persist。
+- hash：HSet（单字段或 map）、HSetNx、HGet、HMGet、HGetAll、HDel（单字段或字段数组）、HExists、HLen、HStrLen、HKeys、HVals、HIncrBy、HIncrByFloat、HScan。
+- list：LPush、RPush、LPushX、RPushX（单元素或数组）、LPop、RPop（单元素或指定数量）、LRange、LIndex、LPos、LInsertBefore、LInsertAfter、LRem、LSet、LTrim、LLen。
+- set：SAdd、SRem（单成员或成员数组）、SIsMember、SMIsMember、SMembers、SCard、SPop、SRandMember（单成员或指定数量）、SScan。
+- zset：ZAdd（单成员或带分数数组）、ZAddNx、ZAddXx、ZAddChanged、ZRem（单成员或成员数组）、ZScore、ZMScore、ZIncrBy、ZRank、ZRevRank、ZCard、ZCount、ZLexCount；ZRange、ZRevRange、ZRangeByScore、ZRevRangeByScore 及其 WithScores 版本；ZRangeByLex、ZRevRangeByLex、ZRemRangeByRank、ZRemRangeByScore、ZRemRangeByLex、ZPopMin、ZPopMax、ZScan。
+
+范围查询保留 Redis 语义：下标可为负；分数边界传字符串（例如 `"-inf"`、`"+inf"`、`"(10"`），字典边界使用 `"-"`、`"+"`、`"[abc"`、`"(abc"`。反向分数/字典查询的参数顺序是最大值、最小值，正向相反。按字典查询要求参与比较的成员分数相同。分数/字典范围可传 offset、count（默认 0、-1，表示全部）；大量数据应分页。字符串局部修改只接收 string，不对 rpcdata 二进制内容做片段修改。
+
+列表和集合的普通结果为 `vector<string>` 或 `vector<rpcdata>`；hash 全量为 `map<string, T>`；带分数结果为 `vector<RedisScored<T>>`，成员为 `stMember`、分数为 `dScore`。SMIsMember 返回与原生整数回执一致的 `vector<int64_t>`（每项 0/1），不用带代理引用的 `vector<bool>`。HMGet 返回 `vector<optional<T>>`，ZMScore 返回 `vector<optional<double>>`，缺失元素是空 optional，保留请求位置，不把整批判成失败。单 key 多元素输入不能为空，空输入返回 `OI_ERR_INVALID_ARGUMENT`。
+
+HScan、SScan、ZScan 返回 `RedisScanPage<T>`：`iCursor` 是下次扫描游标，`stValues` 分别为 map、vector 或带分数 vector。从游标 0 开始，直到返回 0 才结束；中间空页不代表结束，COUNT 是提示而非页大小保证，可能重复返回元素。调用方按业务去重；并发修改时扫描不是快照。MATCH 用原始 Redis glob 匹配，rpcdata 二进制成员通常使用默认 `"*"`。
+
+ZAdd 更新已有成员返回成功，默认计数表示新成员数量，0 不是失败；ZAddChanged 对应 CH，计数包含分数实际变化的成员。SetNx/HSetNx 的 bool 输出表示是否写入。LInsert 未找到 pivot 时返回成功、输出 -1；LPushX/RPushX 对缺失列表输出 0。SPop 返回单元素时空集合为 NOT_FOUND，带数量版本为空数组；LPop/RPop 带数量时缺失 key 仍按 Redis nil 返回 NOT_FOUND。SRandMember 的负 count 允许重复采样。Expire 接收带单位时长，例如 `RedisExpire("key", OI::Timer::Seconds(60), iChanged)`；ExpireAt 是 Unix 秒，PExpireAt 是 Unix 毫秒。
+
+命令语义参照 Redis 官方 [HMGET](https://redis.io/docs/latest/commands/hmget/)、[HSCAN](https://redis.io/docs/latest/commands/hscan/)、[ZRANGEBYSCORE](https://redis.io/docs/latest/commands/zrangebyscore/)、[ZPOPMIN](https://redis.io/docs/latest/commands/zpopmin/)。新增 GetEx/GetDel/LPos/SMIsMember/ZMScore 等接口要求服务端支持对应命令，未知命令保留为服务端错误，不隐式降级或重放。
+
+标准接口严格只操作一个 key；HGetAll、SMembers、范围查询访问的是同一个 key 的多个元素。没有 MGET/MSET、批量 DEL 或隐式跨 key 合并。集群多 key 操作必须由调用方通过原生接口显式指定并处理同槽要求；当前 redisserver 仍是既有代理，不因此获得 Redis Cluster 的 MOVED/ASK 自动路由能力。
+
+PING、Lua 和特殊选项保留原生 `CallRedis({"PING"})` / `CallRedisSync(...)`，不带输出参数时返回共享 hiredis 回执 `RedisResult`，可用 `GetRet()` 取得统一错误码，并按需读取原始回执/错误文本。需要类型化结果时直接 `co_await CallRedis({"PING"}, sPong)`、`co_await CallRedis({"EVAL", "return 42", "0"}, iNumber)`；同步对应 `CallRedisSync(args, output)`。它们同样返回 int32_t，支持字符串、整数、布尔、double、数组、rpcdata 等输出；Lua 返回 rpcdata 的二进制字符串时直接按指定模板解码。Lua 的 false/nil 在 RESP 中是空值，返回 NOT_FOUND，不擅自转换成 bool false；bool 输出只接受整数 0/1。原生命令不会自动合并或改写 key 参数。
+
+依赖前一步结果的命令分条语句等待和检查，不把多个 `co_await` 与同一输出变量的读写塞进一个 `&&` / `||` 表达式。当前 GCC13 回归中，这种复合写法会产生错误的中间结果判断；分步写法保留每个返回码和结果检查，也便于定位哪条命令失败。
+
+应用层直接使用输出参数，不需要自己解析 hiredis 类型：
+
+```cpp
+OI::RpcData::RegInstance stInstance;
+const int32_t iRet = co_await OI::Redis::RedisGet("service:one", stInstance);
+if (iRet != OI_OK)
+{
+    co_return iRet;
+}
+// stInstance 已按其 rpcdata 类型反序列化，可以直接使用。
+
+std::vector<OI::Redis::RedisScored<std::string>> vTop;
+const int32_t iRangeRet = co_await OI::Redis::RedisZRevRangeWithScores("rank:one", 0, 9, vTop);
+if (iRangeRet != OI_OK)
+{
+    co_return iRangeRet;
+}
+// 每项 stMember 是成员，dScore 是分数；输出对象都属于当前协程帧。
+```
+
+原生 RedisCall 仍只允许 await 一次，重用在发送前抛 logic_error；标准命令返回 `TaskResult<int32_t>`，可共享等待，命令只执行一次。输入在调用返回前已拷贝/序列化；输出对象须活到任务完成。任务副本不代表输出对象所有权，不能在完成前销毁输出，也不能把同一输出用于同时执行的不同请求。
+
+`RedisClient.max_pending` 默认 65536，包含已超时但尚未收到回执的配对项，满后返回 Busy；不会自动重试或重放写操作。超时不等于命令未执行，应用不能无条件重试 INCR、LPUSH 等写操作。
+
+语义依据：[GET](https://redis.io/docs/latest/commands/get/)、[ZADD](https://redis.io/docs/latest/commands/zadd/)、[ZRANGE](https://redis.io/docs/latest/commands/zrange/)。
+
 
 共享上游连接不支持改变连接状态的命令（切库、认证、事务、订阅、CLIENT 等）。代理收到这类命令会记录错误并关闭该下游连接，避免本地错误回包与在途回包错位。阻塞命令仍会阻塞共用该上游的其他会话，生产环境应单独部署这类调用。多线程版同步 Redis 调用禁止在 poll 线程执行，会抛出 `std::logic_error`；该线程应使用协程接口。
 

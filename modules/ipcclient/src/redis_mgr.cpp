@@ -1,11 +1,13 @@
 #include "redis_mgr.h"
-#include "oi_redis.h"
+#include "oi_redis_cmd.h"
+#include "oi_rpcdata_reginstance.h"
 #include "oi_log.h"
 #include "oi_poll.h"
 #include "oi_config.h"
 #include "oi_net_session.h"
 #include <atomic>
 #include <memory>
+#include <set>
 #include <stdexcept>
 #include "test_board.h"
 #include <cstring>
@@ -64,7 +66,7 @@ static coro::Task RedisQueueTimeoutRegression()
 		const auto stStart = std::chrono::steady_clock::now();
 		auto stResult = OI::Redis::CallRedisSync({"BLPOP", "oi-queue-timeout-regression", "2"});
 		const auto iElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - stStart).count();
-		const bool bGood = stResult.iStatus == OI::Redis::RedisStatus::Timeout && iElapsed < 1000 && OI::Redis::RedisClient::GetInstance().PendingCount() == 1;
+		const bool bGood = stResult.iStatus == OI::Redis::RedisStatus::Timeout && stResult.GetRet() == OI_ERR_TIMEOUT && iElapsed < 1000 && OI::Redis::RedisClient::GetInstance().PendingCount() == 1;
 		LOG_TRACE("redis queue timeout elapsed=%lld bad=%d", static_cast<long long>(iElapsed), bGood ? 0 : 1);
 		fflush(stdout);
 		TestBoard::GetInstance().Done(bGood ? 0 : 1);
@@ -80,8 +82,8 @@ static coro::Task RedisShutdownRegression()
 	if (!OI::Thread::ThreadPool::GetInstance().AddTask([]()
 	{
 		auto stResult = OI::Redis::CallRedisSync({"BLPOP", "oi-shutdown-regression", "0"});
-		auto stLate = OI::Redis::RedisPingSync();
-		const bool bGood = stResult.iStatus == OI::Redis::RedisStatus::Disconnected && stLate.iStatus == OI::Redis::RedisStatus::Disconnected && OI::Redis::RedisClient::GetInstance().PendingCount() == 0;
+		auto stLate = OI::Redis::CallRedisSync({"PING"});
+		const bool bGood = stResult.iStatus == OI::Redis::RedisStatus::Disconnected && stLate.iStatus == OI::Redis::RedisStatus::Disconnected && stLate.GetRet() == OI_ERR_CONNECT && OI::Redis::RedisClient::GetInstance().PendingCount() == 0;
 		LOG_TRACE("redis shutdown result=%d late=%d bad=%d", static_cast<int>(stResult.iStatus), static_cast<int>(stLate.iStatus), bGood ? 0 : 1);
 		fflush(stdout);
 	}))
@@ -144,7 +146,7 @@ static coro::Task RedisPressureRegression(bool bOversizedParam)
 			co_await coro::yield(1);
 		}
 	}
-	if (!StatusIs(co_await OI::Redis::RedisPing(), "PONG"))
+	if (!StatusIs(co_await OI::Redis::CallRedis({"PING"}), "PONG"))
 	{
 		++iBad;
 	}
@@ -392,8 +394,8 @@ static coro::TaskResult<int> CheckPendingLimit()
 	{
 		co_await coro::yield(::OI::Timer::Milliseconds(10));
 	}
-	auto stBusy = co_await ::OI::Redis::RedisPing();
-	if (stBusy.iStatus != ::OI::Redis::RedisStatus::Busy || stBusy.bTimeout)
+	auto stBusy = co_await ::OI::Redis::CallRedis({"PING"});
+	if (stBusy.iStatus != ::OI::Redis::RedisStatus::Busy || stBusy.GetRet() != OI_ERR_BUSY || stBusy.bTimeout)
 	{
 		++iBad;
 	}
@@ -402,7 +404,7 @@ static coro::TaskResult<int> CheckPendingLimit()
 	{
 		++iBad;
 	}
-	if (!StatusIs(co_await ::OI::Redis::RedisPing(), "PONG"))
+	if (!StatusIs(co_await ::OI::Redis::CallRedis({"PING"}), "PONG"))
 	{
 		++iBad;
 	}
@@ -414,17 +416,17 @@ static coro::TaskResult<int> CheckReplyStatus()
 {
 	int iBad = 0;
 	auto stInvalid = co_await ::OI::Redis::CallRedis({});
-	if (stInvalid.iStatus != ::OI::Redis::RedisStatus::InvalidArgument || stInvalid.bTimeout)
+	if (stInvalid.iStatus != ::OI::Redis::RedisStatus::InvalidArgument || stInvalid.GetRet() != OI_ERR_INVALID_ARGUMENT || stInvalid.bTimeout)
 	{
 		++iBad;
 	}
-	auto stDirect = co_await ::OI::Redis::RedisPing();
+	auto stDirect = co_await ::OI::Redis::CallRedis({"PING"});
 	if (!stDirect || !StatusIs(stDirect, "PONG"))
 	{
 		++iBad;
 	}
 	auto stErrorLocal = co_await ::OI::Redis::CallRedis({"OI_UNKNOWN_COMMAND"});
-	if (stErrorLocal.iStatus != ::OI::Redis::RedisStatus::ServerError || !stErrorLocal.pReply || stErrorLocal.bTimeout)
+	if (stErrorLocal.iStatus != ::OI::Redis::RedisStatus::ServerError || stErrorLocal.GetRet() != OI_ERR_REDIS || !stErrorLocal.pReply || stErrorLocal.bTimeout)
 	{
 		++iBad;
 	}
@@ -446,7 +448,7 @@ static coro::TaskResult<int> CheckSyncOnLoop()
 			int32_t iChecked = -1;
 			try
 			{
-				OI::Redis::RedisPingSync();
+				OI::Redis::CallRedisSync({"PING"});
 			}
 			catch (const std::logic_error&)
 			{
@@ -467,7 +469,7 @@ static coro::TaskResult<int> CheckSyncOnLoop()
 	{
 		++iBad;
 	}
-	if (!StatusIs(::OI::Redis::RedisPingSync(), "PONG"))
+	if (!StatusIs(::OI::Redis::CallRedisSync({"PING"}), "PONG"))
 	{
 		++iBad;
 	}
@@ -498,7 +500,7 @@ static coro::TaskResult<int> CheckSingleUse()
 	{
 		++iBad;
 	}
-	auto stSingleUse = OI::Redis::RedisIncr("oi-single-use");
+	auto stSingleUse = OI::Redis::CallRedis({"INCR", "oi-single-use"});
 	if (!IntIs(co_await stSingleUse, 1))
 	{
 		++iBad;
@@ -511,11 +513,11 @@ static coro::TaskResult<int> CheckSingleUse()
 	catch (const std::logic_error&)
 	{
 	}
-	if (!BulkIs(co_await OI::Redis::RedisGet("oi-single-use"), "1", 1))
+	if (!BulkIs(co_await OI::Redis::CallRedis({"GET", "oi-single-use"}), "1", 1))
 	{
 		++iBad;
 	}
-	auto pSharedCall = std::make_shared<OI::Redis::RedisCall>(OI::Redis::RedisIncr("oi-concurrent-use"));
+	auto pSharedCall = std::make_shared<OI::Redis::RedisCall>(OI::Redis::CallRedis({"INCR", "oi-concurrent-use"}));
 	auto pReadyCount = std::make_shared<std::atomic<int>>(0);
 	auto fnContend = [pSharedCall, pReadyCount](coro::Token) -> coro::TaskResult<bool>
 	{
@@ -530,7 +532,7 @@ static coro::TaskResult<int> CheckSingleUse()
 	auto stFirst = coro::StartTask(fnContend);
 	auto stSecond = coro::StartTask(fnContend);
 	const int iAccepted = (co_await stFirst ? 1 : 0) + (co_await stSecond ? 1 : 0);
-	if (iAccepted != 1 || !BulkIs(co_await OI::Redis::RedisGet("oi-concurrent-use"), "1", 1))
+	if (iAccepted != 1 || !BulkIs(co_await OI::Redis::CallRedis({"GET", "oi-concurrent-use"}), "1", 1))
 	{
 		++iBad;
 	}
@@ -545,94 +547,1279 @@ static coro::TaskResult<int> CheckSingleUse()
 
 static coro::TaskResult<int> CheckCommands()
 {
+	using namespace OI::Redis;
 	int iBad = 0;
-	// 计数和新建字段的断言依赖空键。上一轮留下的值会让 HSET 返回 0、INCR 从中间开始。
-	auto stWiped = co_await ::OI::Redis::CallRedis({"DEL", "rk", "rbin", "rk-missing", "rk-exp", "rh", "rl", "rs", "rk-count"});
-	if (stWiped.bTimeout || !stWiped.pReply || stWiped.pReply->type != REDIS_REPLY_INTEGER)
+	const std::vector<std::string> vKeys{"rk", "rbin", "rk-missing", "rk-exp", "rh", "rl", "rs", "rk-count", "rz", "rproto", "rproto-list", "rproto-z", "rproto-h", "rproto-bad"};
+	for (const auto& sKey : vKeys)
 	{
-		++iBad;
-	}
-	if (!StatusIs(co_await ::OI::Redis::RedisSet("rk", "hello"), "OK"))
-	{
-		++iBad;
-	}
-	if (!BulkIs(co_await ::OI::Redis::RedisGet("rk"), "hello", 5))
-	{
-		++iBad;
-	}
-	const std::string sBin("a\0b", 3);
-	if (!StatusIs(co_await ::OI::Redis::RedisSet("rbin", sBin), "OK"))
-	{
-		++iBad;
-	}
-	if (!BulkIs(co_await ::OI::Redis::RedisGet("rbin"), sBin.data(), 3))
-	{
-		++iBad;
-	}
-	const auto stMiss = co_await ::OI::Redis::RedisGet("rk-missing");
-	if (stMiss.bTimeout || !stMiss.pReply || stMiss.pReply->type != REDIS_REPLY_NIL)
-	{
-		++iBad;
-	}
-	if (!IntIs(co_await ::OI::Redis::RedisDel("rk"), 1))
-	{
-		++iBad;
-	}
-	if (!IntIs(co_await ::OI::Redis::RedisHSet("rh", "f", "v"), 1))
-	{
-		++iBad;
-	}
-	if (!BulkIs(co_await ::OI::Redis::RedisHGet("rh", "f"), "v", 1))
-	{
-		++iBad;
-	}
-	co_await ::OI::Redis::RedisLPush("rl", "a");
-	co_await ::OI::Redis::RedisLPush("rl", "b");
-	const auto stLrange = co_await ::OI::Redis::RedisLRange("rl", 0, 1);
-	if (stLrange.bTimeout || !stLrange.pReply || stLrange.pReply->type != REDIS_REPLY_ARRAY || stLrange.pReply->elements != 2)
-	{
-		++iBad;
-	}
-	co_await ::OI::Redis::RedisSAdd("rs", "m");
-	if (!IntIs(co_await ::OI::Redis::RedisSIsMember("rs", "m"), 1))
-	{
-		++iBad;
-	}
-	// 输出引用接口仍对外保留，这里覆盖它。
-	for (int iIndexLocal = 1; iIndexLocal <= 20; ++iIndexLocal)
-	{
-		::OI::Redis::RedisResult stNumber;
-		::OI::Redis::RedisCall stCall = ::OI::Redis::RedisIncr("rk-count", stNumber);
-		co_await stCall;
-		if (!IntIs(stNumber, iIndexLocal))
+		if (co_await RedisDel(sKey) != OI_OK)
 		{
+			LOG_TRACE("redis command check failed line=%d", __LINE__);
+			++iBad;
+		}
+	}
+	std::string sValue;
+	const std::string sBinary("a\0b", 3);
+	const std::string sBinaryKey("r\0key", 5);
+	if (co_await RedisSet("rk", "hello") != OI_OK)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisGet("rk", sValue) != OI_OK || sValue != "hello")
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisSet(sBinaryKey, sBinary) != OI_OK)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisGet(sBinaryKey, sValue) != OI_OK || sValue != sBinary)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisDel(sBinaryKey) != OI_OK)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	sValue = "unchanged";
+	if (co_await RedisGet("rk-missing", sValue) != OI_ERR_NOT_FOUND || sValue != "unchanged")
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisSet("rbin", "") != OI_OK)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisGet("rbin", sValue) != OI_OK || !sValue.empty())
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	int64_t iCount = -1;
+	if (co_await RedisHSet("rh", "f", "v", iCount) != OI_OK || iCount != 1)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisHGet("rh", "f", sValue) != OI_OK || sValue != "v")
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	sValue = "unchanged";
+	if (co_await RedisGet("rh", sValue) != OI_ERR_REDIS_WRONGTYPE || sValue != "unchanged")
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisLPush("rl", "a") != OI_OK)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisRPush("rl", "b") != OI_OK)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	std::vector<std::string> vStrings;
+	if (co_await RedisLRange("rl", 0, -1, vStrings) != OI_OK || (vStrings.size() != 2 || vStrings[0] != "a" || vStrings[1] != "b"))
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	bool bMember = false;
+	if (co_await RedisSAdd("rs", "m") != OI_OK)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisSIsMember("rs", "m", bMember) != OI_OK || !bMember)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	for (int64_t iExpected = 1; iExpected <= 20; ++iExpected)
+	{
+		if (co_await RedisIncr("rk-count", iCount) != OI_OK || iCount != iExpected)
+		{
+			LOG_TRACE("redis command check failed line=%d", __LINE__);
+			++iBad;
+		}
+	}
+	OI::RpcData::RegInstance stRecord;
+	stRecord.sName = sBinary;
+	stRecord.iId = 123;
+	stRecord.sIp = "127.0.0.1";
+	OI::RpcData::RegInstance stRead;
+	if (co_await RedisSet("rproto", stRecord) != OI_OK)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisGet("rproto", stRead) != OI_OK || stRead.sName != sBinary || stRead.iId != 123)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	stRead.iId = 999;
+	if (co_await RedisSet("rproto-bad", std::string(1, '\xff')) != OI_OK)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisGet("rproto-bad", stRead) != OI_ERR_DECODE || stRead.iId != 999)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisHSet("rproto-h", "f", stRecord) != OI_OK)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	std::map<std::string, OI::RpcData::RegInstance> mRecords;
+	if (co_await RedisHGetAll("rproto-h", mRecords) != OI_OK || mRecords.size() != 1 || mRecords.at("f").iId != 123)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisRPush("rproto-list", stRecord) != OI_OK)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	std::vector<OI::RpcData::RegInstance> vRecords;
+	if (co_await RedisLRange("rproto-list", 0, -1, vRecords) != OI_OK || vRecords.size() != 1 || vRecords[0].iId != 123)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisRPush("rproto-list", std::string(1, '\xff')) != OI_OK)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisLRange("rproto-list", 0, -1, vRecords) != OI_ERR_DECODE || vRecords.size() != 1 || vRecords[0].iId != 123)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZAdd("rz", 1.25, "a", iCount) != OI_OK || iCount != 1)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZAdd("rz", 2.5, "b") != OI_OK)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZAdd("rz", 3.75, "a", iCount) != OI_OK || iCount != 0)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZRange("rz", 0, -1, vStrings) != OI_OK || (vStrings.size() != 2 || vStrings[0] != "b" || vStrings[1] != "a"))
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZRevRange("rz", 0, -1, vStrings) != OI_OK || (vStrings.size() != 2 || vStrings[0] != "a" || vStrings[1] != "b"))
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	std::vector<RedisScored<std::string>> vScores;
+	if (co_await RedisZRevRangeWithScores("rz", 0, -1, vScores) != OI_OK || vScores.size() != 2 || vScores[0].stMember != "a" || vScores[0].dScore != 3.75)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	double dScore = -1;
+	if (co_await RedisZScore("rz", "a", dScore) != OI_OK || dScore != 3.75)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZRank("rz", "a", iCount) != OI_OK || iCount != 1)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZScore("rz", "missing", dScore) != OI_ERR_NOT_FOUND || dScore != 3.75)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZAdd("rz", std::numeric_limits<double>::quiet_NaN(), "bad") != OI_ERR_INVALID_ARGUMENT)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZAdd("rproto-z", 9.5, stRecord) != OI_OK)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	std::vector<RedisScored<OI::RpcData::RegInstance>> vRecordScores;
+	if (co_await RedisZRangeWithScores("rproto-z", 0, -1, vRecordScores) != OI_OK || vRecordScores.size() != 1 || vRecordScores[0].stMember.iId != 123 || vRecordScores[0].dScore != 9.5)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	// 单 key 空集合是成功空结果；不存在的标量是 NOT_FOUND，二者不能混淆。
+	if (co_await RedisZRange("rk-missing", 0, -1, vStrings) != OI_OK || !vStrings.empty())
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	auto stSharedRead = RedisGet("rproto", stRead);
+	if (co_await stSharedRead != OI_OK)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await stSharedRead != OI_OK || stRead.iId != 123)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	LOG_TRACE("redis typed commands string rpcdata zset bad=%d", iBad);
+	co_return iBad;
+}
+
+static coro::TaskResult<int> CheckCollectionCommands()
+{
+	using namespace OI::Redis;
+	int iBad = 0;
+	int64_t iNumber = -99;
+	std::string sOutput;
+	if (co_await RedisExists("rk", iNumber) != OI_OK || iNumber != 1)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisExists("rk-missing", iNumber) != OI_OK || iNumber != 0)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisTtl("rk", iNumber) != OI_OK || iNumber != -1)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisPTtl("rk-missing", iNumber) != OI_OK || iNumber != -2)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisDecr("rk-count", iNumber) != OI_OK || iNumber != 19)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisHSet("rh", "f", "updated", iNumber) != OI_OK || iNumber != 0)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisHLen("rh", iNumber) != OI_OK || iNumber != 1)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisHExists("rh", "f", iNumber) != OI_OK || iNumber != 1)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisHDel("rh", "f", iNumber) != OI_OK || iNumber != 1)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	sOutput = "unchanged";
+	if (co_await RedisHGet("rh", "f", sOutput) != OI_ERR_NOT_FOUND || sOutput != "unchanged")
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisLSet("rl", -1, "c") != OI_OK)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisLLen("rl", iNumber) != OI_OK || iNumber != 2)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisLPop("rl", sOutput) != OI_OK || sOutput != "a")
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisRPop("rl", sOutput) != OI_OK || sOutput != "c")
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisLPop("rl", sOutput) != OI_ERR_NOT_FOUND || sOutput != "c")
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	std::vector<std::string> vStrings;
+	if (co_await RedisSAdd("rs", "m", iNumber) != OI_OK || iNumber != 0)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisSCard("rs", iNumber) != OI_OK || iNumber != 1)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisSMembers("rs", vStrings) != OI_OK || (vStrings.size() != 1 || vStrings[0] != "m"))
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	bool bMember = true;
+	if (co_await RedisSIsMember("rs", "absent", bMember) != OI_OK || bMember)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisSRem("rs", "m", iNumber) != OI_OK || iNumber != 1)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	OI::RpcData::RegInstance stRecord;
+	if (co_await RedisGet("rproto", stRecord) != OI_OK)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	const std::string sKey = "rproto-collections";
+	if (co_await RedisDel(sKey) != OI_OK)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisSAdd(sKey, stRecord) != OI_OK)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	std::vector<OI::RpcData::RegInstance> vRecords;
+	if (co_await RedisSMembers(sKey, vRecords) != OI_OK || vRecords.size() != 1 || vRecords[0].iId != 123)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisSIsMember(sKey, stRecord, bMember) != OI_OK || !bMember)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisSRem(sKey, stRecord) != OI_OK)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisLPush(sKey, stRecord, iNumber) != OI_OK || iNumber != 1)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisLSet(sKey, 0, stRecord) != OI_OK)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisLTrim(sKey, 0, 0) != OI_OK)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	OI::RpcData::RegInstance stOutput;
+	if (co_await RedisRPop(sKey, stOutput) != OI_OK || stOutput.iId != 123)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisHGet("rproto-h", "f", stOutput) != OI_OK || stOutput.iId != 123)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	std::map<std::string, std::string> mStrings;
+	if (co_await RedisHSet("rh", "f", "v") != OI_OK)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisHGetAll("rh", mStrings) != OI_OK || (mStrings.size() != 1 || mStrings.at("f") != "v"))
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZCard("rz", iNumber) != OI_OK || iNumber != 2)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZRevRank("rz", "a", iNumber) != OI_OK || iNumber != 0)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZRank("rz", "missing", iNumber) != OI_ERR_NOT_FOUND || iNumber != 0)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZRange("rproto-z", -1, -1, vRecords) != OI_OK || vRecords.size() != 1 || vRecords[0].iId != 123)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZRevRange("rproto-z", 0, -1, vRecords) != OI_OK || vRecords.size() != 1 || vRecords[0].iId != 123)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	std::vector<RedisScored<OI::RpcData::RegInstance>> vScores;
+	if (co_await RedisZRevRangeWithScores("rproto-z", 0, -1, vScores) != OI_OK || vScores.size() != 1 || vScores[0].dScore != 9.5)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZRem("rproto-z", stRecord, iNumber) != OI_OK || iNumber != 1)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZRem("rz", "a") != OI_OK)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisDel(sKey, iNumber) != OI_OK || iNumber != 0)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	LOG_TRACE("redis typed collections string rpcdata bad=%d", iBad);
+	co_return iBad;
+}
+
+static coro::TaskResult<int> CheckExpandedCommands()
+{
+	using namespace OI::Redis;
+	int iBad = 0;
+	int64_t iCount = 0;
+	double dValue = 0;
+	bool bValue = false;
+	std::string sValue;
+	const std::string sBinary("a\0b", 3);
+	const std::vector<std::string> vEmpty;
+	const std::vector<std::string> vPair{"a", "b"};
+	const std::vector<std::string> vMembers{"a", "missing", "b"};
+	const std::map<std::string, std::string> mEmpty;
+	const std::map<std::string, std::string> mFields{{"a", sBinary}, {"b", "value"}};
+	std::vector<std::string> vValues;
+	std::vector<std::optional<std::string>> vOptional;
+	std::vector<std::optional<double>> vOptionalScores;
+	std::vector<int64_t> vMembership;
+	std::vector<RedisScored<std::string>> vScores;
+	const std::vector<RedisScored<std::string>> vScored{{"a", 1.0}, {"b", 2.0}, {"c", 3.0}};
+	const std::vector<RedisScored<std::string>> vEmptyScored;
+	const std::vector<std::string> vKeys{"expand:string", "expand:count", "expand:float", "expand:hash", "expand:list", "expand:set", "expand:zset", "expand:lex", "expand:rpc"};
+	for (const auto& sKey : vKeys)
+	{
+		if (co_await RedisDel(sKey) != OI_OK)
+		{
+			LOG_TRACE("redis command check failed line=%d", __LINE__);
+			++iBad;
+		}
+	}
+	vValues = vPair;
+	if (co_await RedisLPop("expand:list", 2, vValues) != OI_ERR_NOT_FOUND || vValues.size() != 2 || vValues[0] != "a" || vValues[1] != "b")
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisRPop("expand:list", 2, vValues) != OI_ERR_NOT_FOUND || vValues.size() != 2 || vValues[0] != "a" || vValues[1] != "b")
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisSPop("expand:set", 2, vValues) != OI_OK || !vValues.empty())
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisLPush("expand:list", vEmpty) != OI_ERR_INVALID_ARGUMENT)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisRPush("expand:list", vEmpty) != OI_ERR_INVALID_ARGUMENT)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisLPushX("expand:list", vEmpty) != OI_ERR_INVALID_ARGUMENT)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisRPushX("expand:list", vEmpty) != OI_ERR_INVALID_ARGUMENT)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisSAdd("expand:set", vEmpty) != OI_ERR_INVALID_ARGUMENT)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisSRem("expand:set", vEmpty) != OI_ERR_INVALID_ARGUMENT)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZRem("expand:zset", vEmpty) != OI_ERR_INVALID_ARGUMENT)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisHDel("expand:hash", vEmpty) != OI_ERR_INVALID_ARGUMENT)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisSetNx("expand:string", sBinary, bValue) != OI_OK || !bValue)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisSetNx("expand:string", "x", bValue) != OI_OK || bValue)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisType("expand:string", sValue) != OI_OK || sValue != "string")
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisStrLen("expand:string", iCount) != OI_OK || iCount != 3)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisAppend("expand:string", "z", iCount) != OI_OK || iCount != 4)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisGetRange("expand:string", 0, 2, sValue) != OI_OK || sValue != sBinary)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisSetRange("expand:string", 3, "q", iCount) != OI_OK || iCount != 4)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisGetSet("expand:string", sBinary, sValue) != OI_OK || sValue != sBinary + "q")
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisGetEx("expand:string", OI::Timer::Seconds(60), sValue) != OI_OK || sValue != sBinary)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisPersist("expand:string", bValue) != OI_OK || !bValue)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisSet("expand:string", sBinary, OI::Timer::Seconds(60)) != OI_OK)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisGetPersist("expand:string", sValue) != OI_OK || sValue != sBinary)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisExpireAt("expand:string", 4102444800LL, bValue) != OI_OK || !bValue)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisPExpireAt("expand:string", 4102444800000LL, bValue) != OI_OK || !bValue)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisGetDel("expand:string", sValue) != OI_OK || sValue != sBinary)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	sValue = "unchanged";
+	if (co_await RedisGetDel("expand:string", sValue) != OI_ERR_NOT_FOUND || sValue != "unchanged")
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisUnlink("expand:string", iCount) != OI_OK || iCount != 0)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisIncrBy("expand:count", 5, iCount) != OI_OK || iCount != 5)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisDecrBy("expand:count", 2, iCount) != OI_OK || iCount != 3)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisIncrByFloat("expand:float", 1.25, dValue) != OI_OK || dValue != 1.25)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisHSet("expand:hash", mEmpty, iCount) != OI_ERR_INVALID_ARGUMENT)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisHSet("expand:hash", mFields, iCount) != OI_OK || iCount != 2)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisHSet("expand:hash", mFields) != OI_OK)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisHSetNx("expand:hash", "a", "x", bValue) != OI_OK || bValue)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisHSetNx("expand:hash", "new", "x", bValue) != OI_OK || !bValue)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisHKeys("expand:hash", vValues) != OI_OK || vValues.size() != 3)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisHVals("expand:hash", vValues) != OI_OK || vValues.size() != 3)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisHStrLen("expand:hash", "a", iCount) != OI_OK || iCount != 3)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisHIncrBy("expand:hash", "integer", 3, iCount) != OI_OK || iCount != 3)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisHIncrByFloat("expand:hash", "float", 1.5, dValue) != OI_OK || dValue != 1.5)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisHMGet("expand:hash", vMembers, vOptional) != OI_OK || vOptional.size() != 3 || !vOptional[0] || *vOptional[0] != sBinary || vOptional[1] || !vOptional[2] || *vOptional[2] != "value")
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisHMGet("expand:hash", vEmpty, vOptional) != OI_ERR_INVALID_ARGUMENT)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	RedisScanPage<std::map<std::string, std::string>> stHashPage;
+	std::map<std::string, std::string> mScanned;
+	uint64_t iCursor = 0;
+	do
+	{
+		if (co_await RedisHScan("expand:hash", iCursor, stHashPage, 1) != OI_OK)
+		{
+			LOG_TRACE("redis command check failed line=%d", __LINE__);
 			++iBad;
 			break;
 		}
+		mScanned.insert(stHashPage.stValues.begin(), stHashPage.stValues.end());
+		iCursor = stHashPage.iCursor;
+	} while (iCursor != 0);
+	if (mScanned.size() != 5 || mScanned["a"] != sBinary || mScanned["b"] != "value")
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
 	}
+	if (co_await RedisHScan("expand:hash", 0, stHashPage, 100, "no-match-*") != OI_OK || stHashPage.iCursor != 0 || !stHashPage.stValues.empty())
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisHDel("expand:hash", vEmpty, iCount) != OI_ERR_INVALID_ARGUMENT)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisHDel("expand:hash", vPair, iCount) != OI_OK || iCount != 2)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisLPush("expand:list", vEmpty, iCount) != OI_ERR_INVALID_ARGUMENT)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisRPush("expand:list", vEmpty, iCount) != OI_ERR_INVALID_ARGUMENT)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisLPushX("expand:list", vEmpty, iCount) != OI_ERR_INVALID_ARGUMENT)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisRPushX("expand:list", vEmpty, iCount) != OI_ERR_INVALID_ARGUMENT)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisLPushX("expand:list", "x", iCount) != OI_OK || iCount != 0)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisRPushX("expand:list", "x", iCount) != OI_OK || iCount != 0)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisRPush("expand:list", vPair, iCount) != OI_OK || iCount != 2)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisLPush("expand:list", vPair, iCount) != OI_OK || iCount != 4)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisLPushX("expand:list", vPair, iCount) != OI_OK || iCount != 6)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisRPushX("expand:list", vPair, iCount) != OI_OK || iCount != 8)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisLPushX("expand:list", "x", iCount) != OI_OK || iCount != 9)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisRPushX("expand:list", "y", iCount) != OI_OK || iCount != 10)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisLIndex("expand:list", 0, sValue) != OI_OK || sValue != "x")
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisLPos("expand:list", "x", iCount) != OI_OK || iCount != 0)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisLInsertBefore("expand:list", "x", "before", iCount) != OI_OK || iCount != 11)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisLInsertAfter("expand:list", "y", "after", iCount) != OI_OK || iCount != 12)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisLRem("expand:list", 0, "x", iCount) != OI_OK || iCount != 1)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisLPop("expand:list", 2, vValues) != OI_OK || vValues.size() != 2 || vValues[0] != "before")
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisRPop("expand:list", 2, vValues) != OI_OK || vValues.size() != 2 || vValues[0] != "after" || vValues[1] != "y")
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisSAdd("expand:set", vEmpty, iCount) != OI_ERR_INVALID_ARGUMENT)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisSRem("expand:set", vEmpty, iCount) != OI_ERR_INVALID_ARGUMENT)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisSMIsMember("expand:set", vEmpty, vMembership) != OI_ERR_INVALID_ARGUMENT)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisSAdd("expand:set", vPair, iCount) != OI_OK || iCount != 2)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisSMIsMember("expand:set", vMembers, vMembership) != OI_OK || vMembership.size() != 3 || !vMembership[0] || vMembership[1] || !vMembership[2])
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisSRandMember("expand:set", sValue) != OI_OK || (sValue != "a" && sValue != "b"))
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisSRandMember("expand:set", 2, vValues) != OI_OK || vValues.size() != 2)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	RedisScanPage<std::vector<std::string>> stSetPage;
+	std::set<std::string> vSetScanned;
+	iCursor = 0;
+	do
+	{
+		if (co_await RedisSScan("expand:set", iCursor, stSetPage, 1) != OI_OK)
+		{
+			LOG_TRACE("redis command check failed line=%d", __LINE__);
+			++iBad;
+			break;
+		}
+		vSetScanned.insert(stSetPage.stValues.begin(), stSetPage.stValues.end());
+		iCursor = stSetPage.iCursor;
+	} while (iCursor != 0);
+	if (vSetScanned.size() != 2 || vSetScanned.count("a") != 1 || vSetScanned.count("b") != 1)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisSScan("expand:set", 0, stSetPage, 100, "no-match-*") != OI_OK || stSetPage.iCursor != 0 || !stSetPage.stValues.empty())
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisSPop("expand:set", sValue) != OI_OK)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisSPop("expand:set", 2, vValues) != OI_OK || vValues.size() != 1)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisSAdd("expand:set", vPair, iCount) != OI_OK)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisSRem("expand:set", vPair, iCount) != OI_OK || iCount != 2)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZAdd("expand:zset", vEmptyScored, iCount) != OI_ERR_INVALID_ARGUMENT)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZAdd("expand:zset", vEmptyScored) != OI_ERR_INVALID_ARGUMENT)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZMScore("expand:zset", vEmpty, vOptionalScores) != OI_ERR_INVALID_ARGUMENT)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZAdd("expand:zset", vScored, iCount) != OI_OK || iCount != 3)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZAdd("expand:zset", vScored) != OI_OK)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZAddNx("expand:zset", 4, "a", iCount) != OI_OK || iCount != 0)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZAddXx("expand:zset", 4, "missing", iCount) != OI_OK || iCount != 0)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZAddChanged("expand:zset", 4, "c", iCount) != OI_OK || iCount != 1)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZIncrBy("expand:zset", 1, "b", dValue) != OI_OK || dValue != 3)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZMScore("expand:zset", vMembers, vOptionalScores) != OI_OK || vOptionalScores.size() != 3 || !vOptionalScores[0] || *vOptionalScores[0] != 1 || vOptionalScores[1] || !vOptionalScores[2] || *vOptionalScores[2] != 3)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZCount("expand:zset", "1", "3", iCount) != OI_OK || iCount != 2)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZRangeByScore("expand:zset", "-inf", "+inf", vValues) != OI_OK || vValues.size() != 3 || vValues[0] != "a" || vValues[2] != "c")
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZRevRangeByScore("expand:zset", "+inf", "-inf", vValues) != OI_OK || vValues.size() != 3 || vValues[0] != "c" || vValues[2] != "a")
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZRangeByScore("expand:zset", "(1", "4", vValues, 1, 1) != OI_OK || vValues.size() != 1 || vValues[0] != "c")
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZRevRangeByScore("expand:zset", "(4", "-inf", vValues, 0, 1) != OI_OK || vValues.size() != 1 || vValues[0] != "b")
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZRangeByScoreWithScores("expand:zset", "-inf", "+inf", vScores) != OI_OK || vScores.size() != 3 || vScores[0].dScore != 1)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZRevRangeByScoreWithScores("expand:zset", "+inf", "-inf", vScores) != OI_OK || vScores.size() != 3 || vScores[0].dScore != 4)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	RedisScanPage<std::vector<RedisScored<std::string>>> stZPage;
+	std::map<std::string, double> mScores;
+	iCursor = 0;
+	do
+	{
+		if (co_await RedisZScan("expand:zset", iCursor, stZPage, 1) != OI_OK)
+		{
+			LOG_TRACE("redis command check failed line=%d", __LINE__);
+			++iBad;
+			break;
+		}
+		for (const auto& stScore : stZPage.stValues)
+		{
+			mScores[stScore.stMember] = stScore.dScore;
+		}
+		iCursor = stZPage.iCursor;
+	} while (iCursor != 0);
+	if (mScores.size() != 3 || mScores["a"] != 1 || mScores["c"] != 4)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZScan("expand:zset", 0, stZPage, 100, "no-match-*") != OI_OK || stZPage.iCursor != 0 || !stZPage.stValues.empty())
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZPopMin("expand:zset", vScores) != OI_OK || vScores.size() != 1 || vScores[0].stMember != "a")
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZPopMax("expand:zset", vScores) != OI_OK || vScores.size() != 1 || vScores[0].stMember != "c")
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZRemRangeByScore("expand:zset", "-inf", "+inf", iCount) != OI_OK || iCount != 1)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZAdd("expand:zset", vScored, iCount) != OI_OK)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZRemRangeByRank("expand:zset", 0, 0, iCount) != OI_OK || iCount != 1)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZRem("expand:zset", vEmpty, iCount) != OI_ERR_INVALID_ARGUMENT)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZRem("expand:zset", vMembers, iCount) != OI_OK || iCount != 1)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZRem("expand:zset", vMembers, iCount) != OI_OK || iCount != 0)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZAdd("expand:lex", 0, "a") != OI_OK)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZAdd("expand:lex", 0, "b") != OI_OK)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZLexCount("expand:lex", "-", "+", iCount) != OI_OK || iCount != 2)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZRangeByLex("expand:lex", "-", "+", vValues) != OI_OK || vValues.size() != 2 || vValues[0] != "a")
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZRangeByLex("expand:lex", "(a", "+", vValues) != OI_OK || vValues.size() != 1 || vValues[0] != "b")
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZRevRangeByLex("expand:lex", "+", "-", vValues) != OI_OK || vValues.size() != 2 || vValues[0] != "b")
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisZRemRangeByLex("expand:lex", "-", "+", iCount) != OI_OK || iCount != 2)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	OI::RpcData::RegInstance stRecord;
+	stRecord.iId = 321;
+	stRecord.sName = sBinary;
+	const std::map<std::string, OI::RpcData::RegInstance> mRecords{{"record", stRecord}};
+	const std::vector<std::string> vRecordFields{"missing", "record"};
+	std::vector<std::optional<OI::RpcData::RegInstance>> vOptionalRecords;
+	if (co_await RedisHSet("expand:rpc", mRecords, iCount) != OI_OK)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await RedisHMGet("expand:rpc", vRecordFields, vOptionalRecords) != OI_OK || vOptionalRecords.size() != 2 || vOptionalRecords[0] || !vOptionalRecords[1] || vOptionalRecords[1]->iId != 321 || vOptionalRecords[1]->sName != sBinary)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	for (const auto& sKey : vKeys)
+	{
+		if (co_await RedisDel(sKey) != OI_OK)
+		{
+			LOG_TRACE("redis command check failed line=%d", __LINE__);
+			++iBad;
+		}
+	}
+	LOG_TRACE("redis expanded five types bad=%d", iBad);
+	co_return iBad;
+}
+
+static coro::TaskResult<int> CheckTypedNativeCommands()
+{
+	using namespace OI::Redis;
+	int iBad = 0;
+	std::string sOutput;
+	if (co_await CallRedis({"PING"}, sOutput) != OI_OK || sOutput != "PONG")
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	const std::string sBinary("lua\0binary", 10);
+	if (co_await CallRedis({"ECHO", sBinary}, sOutput) != OI_OK || sOutput != sBinary)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await CallRedis({"EVAL", "return ARGV[1]", "0", sBinary}, sOutput) != OI_OK || sOutput != sBinary)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	int64_t iNumber = -1;
+	if (co_await CallRedis({"EVAL", "return 42", "0"}, iNumber) != OI_OK || iNumber != 42)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	bool bValue = false;
+	if (co_await CallRedis({"EVAL", "return 1", "0"}, bValue) != OI_OK || !bValue)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await CallRedis({"EVAL", "return false", "0"}, bValue) != OI_ERR_NOT_FOUND || !bValue)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	double dValue = 0;
+	if (co_await CallRedis({"EVAL", "return '3.75'", "0"}, dValue) != OI_OK || dValue != 3.75)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	std::vector<int64_t> vNumbers;
+	if (co_await CallRedis({"EVAL", "return {1,2,3}", "0"}, vNumbers) != OI_OK || (vNumbers.size() != 3 || vNumbers[0] != 1 || vNumbers[1] != 2 || vNumbers[2] != 3))
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	std::vector<std::string> vStrings;
+	if (co_await CallRedis({"EVAL", "return {'a','b'}", "0"}, vStrings) != OI_OK || (vStrings.size() != 2 || vStrings[0] != "a" || vStrings[1] != "b"))
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await CallRedis({"EVAL", "return {'new',42}", "0"}, vStrings) != OI_ERR_PROTOCOL || (vStrings.size() != 2 || vStrings[0] != "a" || vStrings[1] != "b"))
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	OI::RpcData::RegInstance stOutput;
+	// Lua 显式声明且仅使用一个 key；返回的原始字节走同一 rpcdata 模板解码。
+	if (co_await CallRedis({"EVAL", "return redis.call('GET', KEYS[1])", "1", "rproto"}, stOutput) != OI_OK || stOutput.iId != 123)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	std::vector<OI::RpcData::RegInstance> vRecords;
+	if (co_await CallRedis({"EVAL", "local v=redis.call('GET', KEYS[1]); return {v,v}", "1", "rproto"}, vRecords) != OI_OK || vRecords.size() != 2 || vRecords[1].iId != 123)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	sOutput = "unchanged";
+	if (co_await CallRedis({"EVAL", "return redis.error_reply('test error')", "0"}, sOutput) != OI_ERR_REDIS || sOutput != "unchanged")
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await CallRedis({"EVAL", "return false", "0"}, sOutput) != OI_ERR_NOT_FOUND || sOutput != "unchanged")
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await CallRedis(std::vector<std::string>{}, sOutput) != OI_ERR_INVALID_ARGUMENT || sOutput != "unchanged")
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	uint8_t iSmall = 7;
+	if (co_await CallRedis({"EVAL", "return 256", "0"}, iSmall) != OI_ERR_PROTOCOL || iSmall != 7)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	if (co_await CallRedis({"PING"}, iNumber) != OI_ERR_PROTOCOL || iNumber != 42)
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	auto stRaw = co_await CallRedis({"PING"});
+	if (stRaw.GetRet() != OI_OK || !StatusIs(stRaw, "PONG"))
+	{
+		LOG_TRACE("redis command check failed line=%d", __LINE__);
+		++iBad;
+	}
+	LOG_TRACE("redis typed native ping lua scalar array rpcdata bad=%d", iBad);
 	co_return iBad;
 }
 
 static coro::TaskResult<int> CheckExpiry()
 {
-	int iBad = 0;
-	if (!StatusIs(co_await ::OI::Redis::RedisSet("rk-exp", "1"), "OK"))
-	{
-		++iBad;
-	}
-	if (!IntIs(co_await ::OI::Redis::RedisExpire("rk-exp", ::OI::Timer::Seconds(60)), 1))
-	{
-		++iBad;
-	}
-	auto stMilliseconds = co_await ::OI::Redis::RedisExpire("rk-exp", ::OI::Timer::Milliseconds(750));
-	auto stRemaining = co_await ::OI::Redis::CallRedis({"PTTL", "rk-exp"});
-	const bool bMillisecondExpiry = IntIs(stMilliseconds, 1) && stRemaining.pReply && stRemaining.pReply->type == REDIS_REPLY_INTEGER && stRemaining.pReply->integer > 0 && stRemaining.pReply->integer <= 750;
-	LOG_TRACE("redis millisecond expiry bad=%d", bMillisecondExpiry ? 0 : 1);
-	if (!bMillisecondExpiry)
-	{
-		++iBad;
-	}
-	co_return iBad;
+	int64_t iChanged = 0;
+	int64_t iRemaining = 0;
+	const int32_t iSetRet = co_await OI::Redis::RedisSet("rk-exp", "1");
+	const int32_t iSecondsRet = co_await OI::Redis::RedisExpire("rk-exp", OI::Timer::Seconds(60), iChanged);
+	const bool bSecondsChanged = iSecondsRet == OI_OK && iChanged == 1;
+	const int32_t iMillisecondsRet = co_await OI::Redis::RedisExpire("rk-exp", OI::Timer::Milliseconds(750), iChanged);
+	const bool bMillisecondsChanged = iMillisecondsRet == OI_OK && iChanged == 1;
+	const int32_t iTimeToLiveRet = co_await OI::Redis::RedisPTtl("rk-exp", iRemaining);
+	const bool bGood = iSetRet == OI_OK && bSecondsChanged && bMillisecondsChanged &&
+	                   iTimeToLiveRet == OI_OK && iRemaining > 0 && iRemaining <= 750;
+	LOG_TRACE("redis millisecond expiry bad=%d", bGood ? 0 : 1);
+	co_return bGood ? 0 : 1;
 }
 
 // runner 将普通 Redis 用例配置成单条上游，两条下游必须互不污染。
@@ -674,7 +1861,7 @@ static coro::TaskResult<int> CheckScriptIsolation()
 		{
 			++iBad;
 		}
-		if (!StatusIs(co_await OI::Redis::RedisPing(), "PONG"))
+		if (!StatusIs(co_await OI::Redis::CallRedis({"PING"}), "PONG"))
 		{
 			++iBad;
 		}
@@ -716,7 +1903,7 @@ static coro::TaskResult<int> CheckDeniedCommands()
 		{
 			co_await coro::yield(50);
 		}
-		if (!StatusIs(co_await ::OI::Redis::RedisPing(), "PONG"))
+		if (!StatusIs(co_await ::OI::Redis::CallRedis({"PING"}), "PONG"))
 		{
 			++iBad;
 		}
@@ -737,6 +1924,9 @@ coro::Task RedisMgr::Check()
 	m_iFailed += co_await CheckSyncOnLoop();
 	m_iFailed += co_await CheckSingleUse();
 	m_iFailed += co_await CheckCommands();
+	m_iFailed += co_await CheckCollectionCommands();
+	m_iFailed += co_await CheckTypedNativeCommands();
+	m_iFailed += co_await CheckExpandedCommands();
 	m_iFailed += co_await CheckExpiry();
 	m_iFailed += co_await CheckScriptIsolation();
 	m_iFailed += co_await CheckDeniedCommands();
@@ -760,13 +1950,180 @@ void RedisMgr::Report()
 
 void RedisMgr::SyncStress(int iIdParam)
 {
+	int iTypedBad = 0;
 	std::string sKey = "sync:" + std::to_string(iIdParam);
+	OI::RpcData::RegInstance stWritten;
+	stWritten.iId = iIdParam;
+	stWritten.sName = "sync-rpcdata";
+	OI::RpcData::RegInstance stRead;
+	const std::string sObjectKey = sKey + ":object";
+	if (OI::Redis::RedisSetSync(sObjectKey, stWritten) != OI_OK ||
+	    OI::Redis::RedisGetSync(sObjectKey, stRead) != OI_OK || stRead.iId != iIdParam || stRead.sName != stWritten.sName)
+	{
+		++iTypedBad;
+	}
+	std::string sPong;
+	int64_t iLuaValue = 0;
+	std::vector<int64_t> vLuaValues;
+	if (OI::Redis::CallRedisSync({"PING"}, sPong) != OI_OK || sPong != "PONG" ||
+	    OI::Redis::CallRedisSync({"EVAL", "return 42", "0"}, iLuaValue) != OI_OK || iLuaValue != 42 ||
+	    OI::Redis::CallRedisSync({"EVAL", "return {1,2}", "0"}, vLuaValues) != OI_OK || vLuaValues != std::vector<int64_t>{1, 2} ||
+	    OI::Redis::CallRedisSync({"EVAL", "return redis.call('GET', KEYS[1])", "1", sObjectKey}, stRead) != OI_OK || stRead.iId != iIdParam)
+	{
+		++iTypedBad;
+	}
+	const std::string sHashKey = sObjectKey + ":hash";
+	const std::string sListKey = sObjectKey + ":list";
+	const std::string sSetKey = sObjectKey + ":set";
+	const std::string sZsetKey = sObjectKey + ":zset";
+	for (const auto& sCleanKey : {sHashKey, sListKey, sSetKey, sZsetKey})
+	{
+		if (OI::Redis::RedisDelSync(sCleanKey) != OI_OK)
+		{
+			++iTypedBad;
+		}
+	}
+	std::map<std::string, OI::RpcData::RegInstance> mRecords;
+	std::vector<OI::RpcData::RegInstance> vRecords;
+	std::vector<OI::Redis::RedisScored<OI::RpcData::RegInstance>> vScores;
+	bool bMember = false;
+	double dScore = 0;
+	if (OI::Redis::RedisHSetSync(sHashKey, "f", stWritten) != OI_OK || OI::Redis::RedisHGetAllSync(sHashKey, mRecords) != OI_OK || mRecords.size() != 1 || mRecords.at("f").iId != iIdParam)
+	{
+		++iTypedBad;
+	}
+	if (OI::Redis::RedisRPushSync(sListKey, stWritten) != OI_OK || OI::Redis::RedisLRangeSync(sListKey, 0, -1, vRecords) != OI_OK || vRecords.size() != 1 || vRecords[0].iId != iIdParam)
+	{
+		++iTypedBad;
+	}
+	if (OI::Redis::RedisSAddSync(sSetKey, stWritten) != OI_OK || OI::Redis::RedisSIsMemberSync(sSetKey, stWritten, bMember) != OI_OK || !bMember || OI::Redis::RedisSMembersSync(sSetKey, vRecords) != OI_OK || vRecords.size() != 1 || vRecords[0].iId != iIdParam)
+	{
+		++iTypedBad;
+	}
+	if (OI::Redis::RedisZAddSync(sZsetKey, 1.25, stWritten) != OI_OK || OI::Redis::RedisZScoreSync(sZsetKey, stWritten, dScore) != OI_OK || dScore != 1.25 || OI::Redis::RedisZRevRangeWithScoresSync(sZsetKey, 0, -1, vScores) != OI_OK || vScores.size() != 1 || vScores[0].stMember.iId != iIdParam || vScores[0].dScore != 1.25)
+	{
+		++iTypedBad;
+	}
+	const std::vector<std::string> vFields{"missing", "f"};
+	std::vector<std::optional<OI::RpcData::RegInstance>> vOptionalRecords;
+	OI::RpcData::RegInstance stMissingRecord = stWritten;
+	stMissingRecord.iId = iIdParam + 100;
+	std::vector<OI::RpcData::RegInstance> vScoreMembers{stMissingRecord, stWritten};
+	std::vector<std::optional<double>> vOptionalScores;
+	if (OI::Redis::RedisHMGetSync(sHashKey, vFields, vOptionalRecords) != OI_OK || vOptionalRecords.size() != 2 || vOptionalRecords[0] || !vOptionalRecords[1] || vOptionalRecords[1]->iId != iIdParam)
+	{
+		++iTypedBad;
+	}
+	if (OI::Redis::RedisZMScoreSync(sZsetKey, vScoreMembers, vOptionalScores) != OI_OK || vOptionalScores.size() != 2 || vOptionalScores[0] || !vOptionalScores[1] || *vOptionalScores[1] != 1.25)
+	{
+		++iTypedBad;
+	}
+	OI::Redis::RedisScanPage<std::map<std::string, OI::RpcData::RegInstance>> stHashPage;
+	OI::Redis::RedisScanPage<std::vector<OI::RpcData::RegInstance>> stSetPage;
+	OI::Redis::RedisScanPage<std::vector<OI::Redis::RedisScored<OI::RpcData::RegInstance>>> stZPage;
+	uint64_t iCursor = 0;
+	bool bFound = false;
+	do
+	{
+		if (OI::Redis::RedisHScanSync(sHashKey, iCursor, stHashPage, 1) != OI_OK)
+		{
+			++iTypedBad;
+			break;
+		}
+		for (const auto& [sField, stValue] : stHashPage.stValues)
+		{
+			if (sField == "f" && stValue.iId == iIdParam)
+			{
+				bFound = true;
+			}
+		}
+		iCursor = stHashPage.iCursor;
+	} while (iCursor != 0);
+	if (!bFound)
+	{
+		++iTypedBad;
+	}
+	iCursor = 0;
+	bFound = false;
+	do
+	{
+		if (OI::Redis::RedisSScanSync(sSetKey, iCursor, stSetPage, 1) != OI_OK)
+		{
+			++iTypedBad;
+			break;
+		}
+		for (const auto& stValue : stSetPage.stValues)
+		{
+			if (stValue.iId == iIdParam)
+			{
+				bFound = true;
+			}
+		}
+		iCursor = stSetPage.iCursor;
+	} while (iCursor != 0);
+	if (!bFound)
+	{
+		++iTypedBad;
+	}
+	iCursor = 0;
+	bFound = false;
+	do
+	{
+		if (OI::Redis::RedisZScanSync(sZsetKey, iCursor, stZPage, 1) != OI_OK)
+		{
+			++iTypedBad;
+			break;
+		}
+		for (const auto& stValue : stZPage.stValues)
+		{
+			if (stValue.stMember.iId == iIdParam && stValue.dScore == 1.25)
+			{
+				bFound = true;
+			}
+		}
+		iCursor = stZPage.iCursor;
+	} while (iCursor != 0);
+	if (!bFound)
+	{
+		++iTypedBad;
+	}
+
+	const std::vector<OI::RpcData::RegInstance> vEmptyRecords;
+	int64_t iRemoved = -1;
+	const std::vector<std::string> vEmptyFields;
+	if (OI::Redis::RedisLPushSync(sListKey, vEmptyRecords) != OI_ERR_INVALID_ARGUMENT ||
+	    OI::Redis::RedisRPushSync(sListKey, vEmptyRecords) != OI_ERR_INVALID_ARGUMENT ||
+	    OI::Redis::RedisLPushXSync(sListKey, vEmptyRecords) != OI_ERR_INVALID_ARGUMENT ||
+	    OI::Redis::RedisRPushXSync(sListKey, vEmptyRecords) != OI_ERR_INVALID_ARGUMENT ||
+	    OI::Redis::RedisSAddSync(sSetKey, vEmptyRecords) != OI_ERR_INVALID_ARGUMENT ||
+	    OI::Redis::RedisSRemSync(sSetKey, vEmptyRecords) != OI_ERR_INVALID_ARGUMENT ||
+	    OI::Redis::RedisZRemSync(sZsetKey, vEmptyRecords) != OI_ERR_INVALID_ARGUMENT ||
+	    OI::Redis::RedisHDelSync(sHashKey, vEmptyFields) != OI_ERR_INVALID_ARGUMENT)
+	{
+		++iTypedBad;
+	}
+	if (OI::Redis::RedisZRemSync(sZsetKey, vEmptyRecords, iRemoved) != OI_ERR_INVALID_ARGUMENT ||
+	    OI::Redis::RedisZRemSync(sZsetKey, vScoreMembers, iRemoved) != OI_OK || iRemoved != 1 ||
+	    OI::Redis::RedisZRemSync(sZsetKey, vScoreMembers, iRemoved) != OI_OK || iRemoved != 0)
+	{
+		++iTypedBad;
+	}
+	for (const auto& sCleanKey : {sObjectKey, sHashKey, sListKey, sSetKey, sZsetKey})
+	{
+		if (OI::Redis::RedisDelSync(sCleanKey) != OI_OK)
+		{
+			++iTypedBad;
+		}
+	}
+	m_iBad.fetch_add(iTypedBad);
+	LOG_TRACE("redis typed sync id=%d bad=%d", iIdParam, iTypedBad);
 	auto stEnd = m_stStart + std::chrono::seconds(m_iSeconds);
 	while (std::chrono::steady_clock::now() < stEnd)
 	{
-		::OI::Redis::RedisResult stPut = ::OI::Redis::RedisSetSync(sKey, "s");
-		::OI::Redis::RedisResult stGot = ::OI::Redis::RedisGetSync(sKey);
-		if (!StatusIs(stPut, "OK") || !BulkIs(stGot, "s", 1))
+		std::string sOutput;
+		const int32_t iPut = OI::Redis::RedisSetSync(sKey, "s");
+		const int32_t iGot = OI::Redis::RedisGetSync(sKey, sOutput);
+		if (iPut != OI_OK || iGot != OI_OK || sOutput != "s")
 		{
 			m_iBad.fetch_add(1);
 		}
@@ -790,35 +2147,27 @@ coro::Task RedisMgr::Stress(int iIdParam)
 		std::string sKey = "k:" + std::to_string(iIdParam) + ":" + std::to_string(iSequence % 256);
 		std::string sMember = std::to_string(iSequence % 32);
 		++iSequence;
-		::OI::Redis::RedisResult stResultLocal;
+		int64_t iNumber = 0;
 		bool bOk = false;
 		if (iKind == 0)
 		{
-			stResultLocal = co_await ::OI::Redis::RedisSet(sKey, sValueLocal);
-			bOk = StatusIs(stResultLocal, "OK");
+			bOk = co_await OI::Redis::RedisSet(sKey, sValueLocal) == OI_OK;
 		}
 		else if (iKind == 1)
 		{
-			stResultLocal = co_await ::OI::Redis::RedisHSet(sHash, sMember, sValueLocal);
-			bOk = IntIs(stResultLocal, 0) || IntIs(stResultLocal, 1);
+			bOk = co_await OI::Redis::RedisHSet(sHash, sMember, sValueLocal, iNumber) == OI_OK && (iNumber == 0 || iNumber == 1);
 		}
 		else if (iKind == 2)
 		{
-			stResultLocal = co_await ::OI::Redis::RedisLPush(sList, sMember);
-			bOk = !stResultLocal.bTimeout && stResultLocal.pReply && stResultLocal.pReply->type == REDIS_REPLY_INTEGER;
-			if (bOk && (iSequence % 16) == 0)
+			bOk = co_await OI::Redis::RedisLPush(sList, sMember) == OI_OK;
+			if (bOk && iSequence % 16 == 0)
 			{
-				auto stTrim = co_await ::OI::Redis::RedisLTrim(sList, 0, 15);
-				if (!StatusIs(stTrim, "OK"))
-				{
-					bOk = false;
-				}
+				bOk = co_await OI::Redis::RedisLTrim(sList, 0, 15) == OI_OK;
 			}
 		}
 		else
 		{
-			stResultLocal = co_await ::OI::Redis::RedisIncr(sKey);
-			bOk = !stResultLocal.bTimeout && stResultLocal.pReply && stResultLocal.pReply->type == REDIS_REPLY_INTEGER;
+			bOk = co_await OI::Redis::RedisIncr(sKey, iNumber) == OI_OK;
 		}
 		if (!bOk)
 		{

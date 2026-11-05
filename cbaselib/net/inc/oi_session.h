@@ -102,6 +102,7 @@ class Session
 	}
 
 	bool Send(const ::OI::Base::Bytes& stBytesParam);
+	int32_t SendResult(const ::OI::Base::Bytes& stBytesParam);
 	void SetSendQueueLimit(size_t iBytesParam);
 	// 接收缓冲仅 poll 线程访问；会话发布前设置限制。
 	void SetReceiveQueueLimit(size_t iBytesParam)

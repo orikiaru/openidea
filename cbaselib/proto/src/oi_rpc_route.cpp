@@ -196,9 +196,13 @@ struct RouteConnection
 			{
 				WakeRpcCall(stCall.iCallId, OI_ERR_CONNECT, nullptr);
 			}
-			else if (ClaimRpcSend(stCall.iCallId, iSessionIdParam) && !RouteManager::Instance().SendBytes(iSessionIdParam, stCall.stData))
+			else if (ClaimRpcSend(stCall.iCallId, iSessionIdParam))
 			{
-				WakeRpcCall(stCall.iCallId, OI_ERR_FAIL, nullptr);
+				const int32_t iResult = RouteManager::Instance().SendBytesResult(iSessionIdParam, stCall.stData);
+				if (iResult != OI_OK)
+				{
+					WakeRpcCall(stCall.iCallId, iResult, nullptr);
+				}
 			}
 		}
 	}
@@ -268,9 +272,10 @@ struct RouteConnection
 		}
 		else if (iTarget != INVALID_SID)
 		{
-			if (!RouteManager::Instance().SendBytes(iTarget, stDataParam))
+			const int32_t iResult = RouteManager::Instance().SendBytesResult(iTarget, stDataParam);
+			if (iResult != OI_OK)
 			{
-				WakeRpcCall(iCallIdParam, OI_ERR_CONNECT, nullptr);
+				WakeRpcCall(iCallIdParam, iResult, nullptr);
 			}
 		}
 		else
@@ -293,6 +298,12 @@ class RouteSession final : public ProtoSession
 	std::shared_ptr<void> HoldTask() override
 	{
 		return m_pConnection->AcquireLease();
+	}
+	void ActiveClose() override
+	{
+		// 逻辑断连即撤销发送目标；不能等 poll 回收通道后才允许下次调用重连。
+		m_pConnection->Disconnected(GetSessionID());
+		ProtoSession::ActiveClose();
 	}
 	void OnClose() override
 	{

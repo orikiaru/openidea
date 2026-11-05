@@ -11,11 +11,40 @@
 #include <mutex>
 #include <stdexcept>
 #include <utility>
+#include <string_view>
 #include <uv.h>
 namespace OI
 {
 namespace Redis
 {
+
+int32_t RedisResult::GetRet() const noexcept
+{
+	switch (iStatus)
+	{
+	case RedisStatus::Ok:
+		return pReply ? OI_OK : OI_ERR_PROTOCOL;
+	case RedisStatus::Timeout:
+		return OI_ERR_TIMEOUT;
+	case RedisStatus::Disconnected:
+		return OI_ERR_CONNECT;
+	case RedisStatus::InvalidArgument:
+		return OI_ERR_INVALID_ARGUMENT;
+	case RedisStatus::SendFailed:
+		return OI_ERR_FAIL;
+	case RedisStatus::Busy:
+		return OI_ERR_BUSY;
+	case RedisStatus::ProtocolError:
+		return OI_ERR_PROTOCOL;
+	case RedisStatus::ServerError:
+		if (pReply && pReply->str && pReply->len >= 10 && std::string_view(pReply->str, 10) == "WRONGTYPE ")
+		{
+			return OI_ERR_REDIS_WRONGTYPE;
+		}
+		return OI_ERR_REDIS;
+	}
+	return OI_ERR_PROTOCOL;
+}
 
 namespace
 {

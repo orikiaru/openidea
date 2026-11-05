@@ -49,6 +49,14 @@ Redis 也单独测。开关是 `[Test] redis`。先起本机 Redis（`maxmemory 
 
 `HoldMgr` 的开关是 `[Test] hold`。要同时起 `ipcserver` 和 `redisserver`。看退出码，以及 `hold done bad=0`。
 
+# Redis 单 key 接口
+
+- 常用 Redis 命令提供明确的单 key 接口，key 使用 std::string；值支持 string 和 rpcdata，按模板序列化/反序列化，统一返回 int32_t 错误码。
+- 禁止隐式多 key 查询、自动合并成 MGET/MSET 或隐藏跨 key 操作。标准接口可以不提供多 key 能力；不得假设 Redis 集群的不同 key 位于同一槽。
+- PING、Lua 及确需多 key 的特殊命令保留原生 CallRedis，由调用方显式指定命令和参数并处理集群约束。
+
+- Redis/RPC 等输出引用接口按“单条语句 co_await、检查返回码、使用输出”顺序调用；依赖上一步输出时不要在一个 `&&` / `||` 表达式里串多个 co_await。Redis 整数标记数组用 `vector<int64_t>`，不用 `vector<bool>` 的代理引用。回归用例同样遵守，失败日志要能定位具体检查。
+
 # 严禁多继承
 
 - 全仓库自有 C++ 代码（基础库、模块、测试及生成器产物）严禁多继承，一个类或结构体最多只能有一个直接基类。

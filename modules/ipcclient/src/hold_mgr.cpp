@@ -1537,7 +1537,7 @@ static coro::TaskResult<int> CheckConnectionIsolation()
 	{
 		co_await coro::yield(1);
 	}
-	if (!Pong(co_await OI::Redis::RedisPing()))
+	if (!Pong(co_await OI::Redis::CallRedis({"PING"})))
 	{
 		++iBad;
 	}
@@ -1754,15 +1754,35 @@ static coro::TaskResult<int> CheckRoutePoolLifetime()
 	{
 		++iBad;
 	}
+	OI::RpcData::HoldReq stWarmRequest;
+	OI::RpcData::HoldRes stWarmResponse;
+	stWarmRequest.iMark = 912;
+	if (co_await OI::Rpc::RpcCall(*pSmall, stWarmRequest, stWarmResponse, OI::Timer::Seconds(3)) != OI_OK)
+	{
+		++iBad;
+	}
+	const auto iWarmSid = OI::Rpc::GetRouteConnectionInfo(*pSmall).iSessionId;
 	OI::RpcData::AllEchoReq stLargeRequest;
-	stLargeRequest.stData.sMessage.assign(1024, 'P');
+	stLargeRequest.stData.sMessage.assign(512, 'P');
 	OI::RpcData::AllEchoRes stOutput;
-	if (co_await OI::Rpc::RpcCall(*pSmall, stLargeRequest, stOutput, OI::Timer::Seconds(3)) == 0 ||
+	if (co_await OI::Rpc::RpcCall(*pSmall, stLargeRequest, stOutput, OI::Timer::Seconds(3)) != OI_ERR_BUSY ||
 	    co_await OI::Rpc::RpcCall(*pLarge, stLargeRequest, stOutput, OI::Timer::Seconds(3)) != 0 ||
 	    stOutput.stData.sMessage != stLargeRequest.stData.sMessage)
 	{
 		++iBad;
 	}
+	if (OI::Rpc::GetRouteConnectionInfo(*pSmall).iSessionId != iWarmSid)
+	{
+		++iBad;
+	}
+	// 连接前缓存能装下该包，但连接后的发送预算不足，也必须准确返回 BUSY。
+	pSmall->Manager().CloseSession(iWarmSid);
+	if (co_await OI::Rpc::RpcCall(*pSmall, stLargeRequest, stOutput, OI::Timer::Seconds(3)) != OI_ERR_BUSY ||
+	    co_await OI::Rpc::RpcCall(*pSmall, stWarmRequest, stWarmResponse, OI::Timer::Seconds(3)) != OI_OK || stWarmResponse.iMark != 912)
+	{
+		++iBad;
+	}
+	printf("hold route backpressure status bad=%d\n", iBad);
 	const auto stBefore = OI::Rpc::GetRoutePoolStats();
 	OI::RpcData::HoldReq stRequest;
 	stRequest.iDelayMilliseconds = 800;
@@ -1827,12 +1847,8 @@ static coro::TaskResult<int> CheckRouteInboundAndReconnect()
 	for (int iRound = 0; iRound < 4; ++iRound)
 	{
 		pClient->Manager().CloseSession(OI::Rpc::GetRouteConnectionInfo(*pClient).iSessionId);
-		const int64_t iDeadlineMilliseconds = OI::Timer::SteadyMilliseconds() + 3000;
-		while ((OI::Rpc::GetRouteConnectionInfo(*pClient).iSessionId != INVALID_SID) && OI::Timer::SteadyMilliseconds() < iDeadlineMilliseconds)
-		{
-			co_await coro::yield(10);
-		}
-		if ((OI::Rpc::GetRouteConnectionInfo(*pClient).iSessionId != INVALID_SID) || co_await stGames.Call(1001, stRequest, stOutput, OI::Timer::Seconds(3)) != 0 || stOutput.iMark != 845)
+		// 不让出、不等 poll 清理：直接向同一连接发送，必须排队重连。
+		if (co_await OI::Rpc::RpcCall(*pClient, stRequest, stOutput, OI::Timer::Seconds(3)) != 0 || stOutput.iMark != 845)
 		{
 			++iBad;
 		}
@@ -2654,7 +2670,7 @@ static int CheckSendBudget()
 	} stBuffered;
 	stBuffered.SetSendQueueLimit(8);
 	OI::Base::Bytes stPayload("12345678", 8), stStaged;
-	if (!stBuffered.Send(stPayload) || stBuffered.Send(stPayload))
+	if (stBuffered.SendResult(stPayload) != OI_OK || stBuffered.SendResult(stPayload) != OI_ERR_BUSY)
 	{
 		++iBadLocal;
 	}
@@ -2670,7 +2686,7 @@ static int CheckSendBudget()
 		++iBadLocal;
 	}
 	stBuffered.ActiveClose();
-	if (!stBuffered.IsClosed() || stBuffered.Send(stPayload))
+	if (!stBuffered.IsClosed() || stBuffered.SendResult(stPayload) != OI_ERR_CONNECT)
 	{
 		++iBadLocal;
 	}
@@ -2997,6 +3013,36 @@ static int CheckRpcSessionIndex(PendingClient& stPendingParam)
 	}
 	printf("hold rpc session index calls=4096 bad=%d\n", iBadLocal);
 	return iBadLocal;
+}
+
+// 跨分片、跨批次断连清理：回调抛异常也必须完成后续项并归还所有 guard。
+static int CheckRpcDisconnectDrain(PendingClient& stPendingParam)
+{
+	const auto stBaseline = OI::Rpc::GetRpcWaitStats();
+	std::vector<int32_t> vResults(4096, -99);
+	auto pGuard = std::make_shared<std::atomic<int32_t>>(0);
+	auto pCallbacks = std::make_shared<std::atomic<int32_t>>(0);
+	for (size_t iIndex = 0; iIndex < vResults.size(); ++iIndex)
+	{
+		OI::Rpc::BindRpcCall(&stPendingParam, 987654, 0, {}, &vResults[iIndex], 180000, {}, [pCallbacks]()
+		{
+			if (pCallbacks->fetch_add(1) == 0)
+			{
+				throw std::bad_alloc();
+			}
+		}, pGuard);
+	}
+	OI::Rpc::FailRpcCalls(&stPendingParam, 987654);
+	int iBad = pCallbacks->load() == 4096 && pGuard->load() == 0 && SameWaitStats(stBaseline) ? 0 : 1;
+	for (const auto& iResult : vResults)
+	{
+		if (iResult != OI_ERR_CONNECT)
+		{
+			++iBad;
+		}
+	}
+	printf("hold disconnect drain calls=4096 bad=%d\n", iBad);
+	return iBad;
 }
 
 // 登记后序列化异常，以及发送异常与完成回调竞争；恢复后不能留下悬空等待项。
@@ -3549,6 +3595,7 @@ coro::Task HoldMgr::Pump()
 	iBad += co_await CheckRpcContext(stPending);
 	iBad += CheckPendingLimits(stPending);
 	iBad += CheckRpcSessionIndex(stPending);
+	iBad += CheckRpcDisconnectDrain(stPending);
 	iBad += co_await CheckRpcExceptions(stPending);
 	iBad += CheckRpcExpiry(stPending);
 	iBad += co_await CheckDeadlineBuckets();

@@ -41,6 +41,7 @@ struct RedisResult
 	    : bTimeout(false), iStatus(RedisStatus::Disconnected)
 	{
 	}
+	int32_t GetRet() const noexcept;
 	explicit operator bool() const
 	{
 		return iStatus == RedisStatus::Ok;
@@ -142,4 +143,3 @@ inline RedisResult CallRedisSync(std::vector<std::string> vArgumentsParam)
 
 }
 }
-#include "oi_redis_cmd.h"
