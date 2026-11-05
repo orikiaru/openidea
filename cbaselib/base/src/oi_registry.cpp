@@ -334,9 +334,9 @@ void RegistryClient::Notify()
 {
 	// 等待方在 _mu 里查完标志才睡下。不拿这把锁就通知，可能落在查完和睡下之间，等待方要白等到超时。
 	{
-		std::lock_guard<std::mutex> stLock(stMutex);
+		::OI::Thread::MutexGuard stLock(stMutex);
 	}
-	stConditionVariable.notify_all();
+	stConditionVariable.Broadcast();
 }
 
 bool RegistryClient::WaitFlag(const std::atomic<bool>& bFlag)
@@ -349,11 +349,14 @@ bool RegistryClient::WaitFlag(const std::atomic<bool>& bFlag)
 	}
 	return bFlag.load();
 #else
-	std::unique_lock<std::mutex> stLock(stMutex);
-	stConditionVariable.wait_until(stLock, stDeadline, [&]()
+	::OI::Thread::MutexGuard stLock(stMutex);
+	while (!bFlag.load() && !bFailed.load())
 	{
-		return bFlag.load() || bFailed.load();
-	});
+		if (!stConditionVariable.WaitUntil(stMutex, stDeadline))
+		{
+			break;
+		}
+	}
 	return bFlag.load();
 #endif
 }

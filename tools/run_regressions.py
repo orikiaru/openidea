@@ -369,7 +369,6 @@ def run(case, args):
                 for flag in ("echo", "log", "redis", "hold"):
                     text = replace(text, flag, "true" if mode == flag else "false")
                 if mode == "hold":
-                    text = replace(text, "max_task_count", "1")
                     text = replace(text, "max_pending_pulls", "16")
                     text = replace(text, "pull_ms", "60000")
                     text = replace(text, "max_clients", "8")
@@ -660,7 +659,6 @@ def run(case, args):
                 assert "hold named rpc ownership success=8 rejected=0 bad=0" in text
                 assert re.search(r"hold http release before=\d+ after=\d+ bad=0", text)
                 assert "hold json validation bad=0" in text
-                assert "hold task exceptions bad=0" in text
                 assert "hold server encoding bad=0" in text
                 assert re.search(r"hold direct backpressure queued=-?\d+ direct=-?\d+ pinned=-?\d+ closed=-?\d+ bad=0", text)
                 assert re.search(r"hold client malformed response sid=[1-9]\d* bad=0", text)

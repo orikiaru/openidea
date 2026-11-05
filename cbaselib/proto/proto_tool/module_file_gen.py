@@ -265,10 +265,7 @@ timer_lv_count = 4	#定时器分割等级数,必须>=2
 timer_lvs = [128,128,128,1] #每级定时器对应的间隔,最后一级只能是1
 
 [ThreadPool]
-normal = 3 #标准线程池数
-urgent = 1 #加急线程池数
-queue = 1  #有序线程池数
-max_task_count = 100000
+normal = 3 #协程工人线程数
 '''
         file_data = self.DoReplace(file_data)
         self.WriteFile(file_data, file_path, False) #不覆写.可能会盖掉自定义编译内容和新加的tag

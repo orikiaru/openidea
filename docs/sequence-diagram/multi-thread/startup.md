@@ -2,7 +2,7 @@
 
 多线程里 poll 先单独转起来。`StartWork` 再拉工人，主线程自己不 poll，堵到 `RequestStop`。
 
-条数读 `ThreadPool.normal`、`ThreadPool.urgent`、`ThreadPool.queue`，三项都必须配。缺一项 `ThreadPool::Init` 就返回 false，进程起不来。`queue` 读到后强制改成 1 条，给显式投到 `PRIO_QUEUE` 的有序任务用；时间轮的 `Update` 在 poll 线程上跑，不走这条。
+条数只读 `ThreadPool.normal`，必须配，并且大于 0。缺了或不是正数，`ThreadPool::Init` 返回 false，进程起不来。旧配置里的 `urgent`、`queue`、`max_task_count` 不再读取，留着不报错。时间轮的 `Update` 在 poll 线程上跑。
 
 ```mermaid
 sequenceDiagram
@@ -36,8 +36,8 @@ sequenceDiagram
         Main->>App: StartClient
     end
     Main->>Pool: StartWork
-    Pool->>Worker: normal urgent queue 各拉起自己的条数
+    Pool->>Worker: 按 normal 拉起工人
     Main->>Main: 等到 RequestStop
 ```
 
-`ipcclient` 在 `StartClient` 之前，若开了 Redis 或 Hold，会先发起 `RedisClient` 建连。HTTP 探测在 `ipcserver` 听上之后用 `StartTask` 拉起。此时工人可能还没起来，句柄先留在 `normal` 队列里，工人起来后谓词里能看到。
+`ipcclient` 在 `StartClient` 之前，若开了 Redis 或 Hold，会先发起 `RedisClient` 建连。HTTP 探测在 `ipcserver` 听上之后用 `StartTask` 拉起。此时工人可能还没起来，句柄先留在协程队列里，工人起来后能取到。

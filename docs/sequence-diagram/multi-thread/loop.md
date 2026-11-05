@@ -1,8 +1,8 @@
 # 主循环
 
-三条线同时走。主线程只等停止。poll 线程只做 `uv_run`。工人等 `normal` 队列里的任务或协程。协程 `resume` 之后才 `DrainDetached`，不在 `final_suspend` 里销毁帧；执行普通任务之后不调。
+三条线同时走。主线程只等停止。poll 线程只做 `uv_run`。工人只从协程队列取句柄并 `resume`。协程 `resume` 之后才 `DrainDetached`，不在 `final_suspend` 里销毁帧。
 
-时间轮 `Update` 由 poll 线程在 tick 里直接执行，不经工人。`queue` 工人仍单独一条，只跑显式投给 `PRIO_QUEUE` 的普通任务。
+时间轮 `Update` 由 poll 线程在 tick 里直接执行，不经工人。
 
 ```mermaid
 sequenceDiagram
@@ -10,27 +10,23 @@ sequenceDiagram
     participant Main as 主线程
     participant Poll as poll 线程
     participant Uv as libuv
-    participant Worker as normal 工人
+    participant Worker as 工人
 
-    Main->>Worker: StartWork 拉起工人
+    Main->>Worker: StartWork 按 ThreadPool.normal 拉起工人
     Main->>Main: 等到 RequestStop
     par poll 一直转
         loop 直到 StopAndJoin
             Poll->>Uv: UV_RUN_ONCE
             Uv->>Poll: 可读 可写 或 tick
         end
-    and 工人一直取
+    and 工人一直取协程
         loop 直到 Stopping
-            alt 有协程
-                Worker->>Worker: resume
-                Worker->>Worker: DrainDetached
-            else 只有任务
-                Worker->>Worker: Exec 一个 Task
-            end
+            Worker->>Worker: resume
+            Worker->>Worker: DrainDetached
         end
     end
-    Main->>Worker: notify_all 然后 join
+    Main->>Worker: Broadcast 然后 join
     Main->>Poll: StopAndJoin
 ```
 
-`Schedule` 是 `PostCoroutine`：句柄放进 `normal` 队列，有空闲工人才 `notify_one`。
+`Schedule` 是 `PostCoroutine`：句柄放进协程队列，有空闲工人才 `Signal`。

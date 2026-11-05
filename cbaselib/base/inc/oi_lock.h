@@ -1,5 +1,6 @@
 #pragma once
 #include <atomic>
+#include <chrono>
 #include <mutex>
 #include <thread>
 #include <condition_variable>
@@ -55,6 +56,10 @@ class MutexCond
 	}
 	void Wait(Mutex&)
 	{
+	}
+	bool WaitUntil(Mutex&, const std::chrono::steady_clock::time_point&)
+	{
+		return false;
 	}
 	void Signal()
 	{
@@ -139,6 +144,11 @@ class MutexCond
 	void Wait(Mutex& stLocker)
 	{
 		m_stConditionVariable.wait(stLocker.m_stMutex);
+	}
+	// 到截止时间返回 false。和 Wait 一样可能虚假唤醒，调用方自己循环查条件。
+	bool WaitUntil(Mutex& stLocker, const std::chrono::steady_clock::time_point& stDeadline)
+	{
+		return m_stConditionVariable.wait_until(stLocker.m_stMutex, stDeadline) == std::cv_status::no_timeout;
 	}
 	void Signal()
 	{

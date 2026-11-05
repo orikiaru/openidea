@@ -8,11 +8,12 @@
 #include <mutex>
 #include <condition_variable>
 #include <vector>
+#include <list>
+#include <memory>
 #include <type_traits>
 #include <utility>
 #include "oi_config.h"
 #include "oi_singleton.h"
-#include "oi_task.h"
 #include "oi_lock.h"
 #include <cstdint>
 
@@ -20,7 +21,7 @@ namespace OI
 {
 namespace Thread
 {
-// 普通任务异常在调度入口隔离；处理器不得抛异常，nullptr 恢复 stderr 报告。
+// 协程、定时器、停止回调等调度入口的异常统一报到这里；处理器不得抛异常，nullptr 恢复 stderr 报告。
 using TaskErrorHandler = void (*)(std::exception_ptr);
 void SetTaskErrorHandler(TaskErrorHandler fnHandler);
 void ReportTaskError(std::exception_ptr stError) noexcept;
@@ -37,42 +38,30 @@ class ThreadPool
   public:
 	struct ThreadData
 	{
-		TASK_LIST vTaskList;
-		uint32_t iTaskCount;
 		// 协程句柄运行队列。工人取到就 resume，挂起后线程立刻去拿下一个。
 		std::deque<std::coroutine_handle<>> vCoroutines;
-		uint32_t iCoroutineCount = 0;
-		// 正睡在 _cond 上的工人数。为 0 时投递不用 notify，省一次 futex。
+		// 正睡在 stCondition 上的工人数。为 0 时投递不用 notify，省一次 futex。
 		int32_t iIdleThreadCount = 0;
-		int32_t iThreadCount;
-		std::mutex stMutex;
-		std::condition_variable stCondition;
-	} vThreadData[PRIO_NUM];
+		// 多线程工人数，配置 [ThreadPool] normal。
+		int32_t iThreadCount = 0;
+		::OI::Thread::Mutex stMutex;
+		::OI::Thread::MutexCond stCondition;
+	} stThreadData;
 
-	int32_t iStatus;
-	// 每个优先级队列里最多攒多少个 Task。配置 [ThreadPool] max_task_count，不配不限。
-	uint32_t iMaxTaskCount = UINT32_MAX;
 	bool (*fnDrain)() = nullptr;
 	bool (*fnPending)() = nullptr;
 	void (*fnResume)(std::coroutine_handle<>) = nullptr;
 	std::atomic<bool> bStop{false};
 	int32_t iExitCode = 0;
-	std::mutex stStopMutex;
-	std::condition_variable stStopCondition;
+	::OI::Thread::Mutex stStopMutex;
+	::OI::Thread::MutexCond stStopCondition;
 
   public:
 	bool Init();
 	// 多线程把协程句柄放进运行队列并叫醒一个工人。不分配 CoroTask。
 	void PostCoroutine(std::coroutine_handle<> stHandle);
-	template <typename F>
-	typename std::enable_if<!std::is_base_of<Task, typename std::remove_pointer<typename std::decay<F>::type>::type>::value, bool>::type
-	AddTask(F&& fnFunction, PRIO_ENUM iPriority = PRIO_NORMAL)
-	{
-		typedef typename std::decay<F>::type Fn;
-		return AddTask(new FnTask<Fn>(std::forward<F>(fnFunction), iPriority));
-	}
 	void StartWork();
-	// 单线程主循环及同步适配器共用：普通任务、协程、IO 都必须推进。
+	// 单线程主循环及同步适配器共用：协程和 IO 都必须推进。
 	void PumpOnce();
 	// 初始化时注册；停止开始后拒绝注册。回调在 poll 上执行且不可阻塞。
 	bool AddStopHandler(void (*fnHandler)());
@@ -103,7 +92,6 @@ class ThreadPool
 	static void InitUnIgnoreSig(int iSig);
 
   private:
-	bool AddTask(Task* pTask);
 	void SingleThreadStartWork();
 	void MultiThreadStartWork();
 };

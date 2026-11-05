@@ -2581,57 +2581,6 @@ static OI::Coro::TaskResult<int> CheckRegistryPairing()
 	co_return iBad;
 }
 
-// 异常必须释放闭包；随后继续执行普通任务，不能终止工作线程。
-static OI::Coro::TaskResult<int> CheckTaskExceptions()
-{
-	int iBadLocal = 0;
-	for (int iKind = 0; iKind < 2; ++iKind)
-	{
-		auto pOwner = std::make_shared<int>(1);
-		std::weak_ptr<int> pWeak = pOwner;
-		if (!OI::Thread::ThreadPool::GetInstance().AddTask([pOwner, iKind]()
-		{
-			if (iKind == 0)
-			{
-				throw std::runtime_error("ordinary task regression");
-			}
-			throw 7;
-		}))
-		{
-			++iBadLocal;
-		}
-		pOwner.reset();
-		const int64_t iDeadline = ::OI::Timer::SteadyMilliseconds() + ::OI::Timer::MS(::OI::Timer::Seconds(3)).iMilliseconds;
-		while (!pWeak.expired() && ::OI::Timer::SteadyMilliseconds() < iDeadline)
-		{
-			co_await OI::Coro::yield(1);
-		}
-		if (!pWeak.expired())
-		{
-			++iBadLocal;
-		}
-	}
-	auto pOrdinary = std::make_shared<std::atomic<bool>>(false);
-	if (!OI::Thread::ThreadPool::GetInstance().AddTask([pOrdinary]()
-	{
-		pOrdinary->store(true);
-	}))
-	{
-		++iBadLocal;
-	}
-	const int64_t iTaskDeadline = ::OI::Timer::SteadyMilliseconds() + ::OI::Timer::MS(::OI::Timer::Seconds(3)).iMilliseconds;
-	while (!pOrdinary->load() && ::OI::Timer::SteadyMilliseconds() < iTaskDeadline)
-	{
-		co_await OI::Coro::yield(1);
-	}
-	if (!pOrdinary->load())
-	{
-		++iBadLocal;
-	}
-	LOG_TRACE("hold task exceptions bad=%d", iBadLocal);
-	co_return iBadLocal;
-}
-
 static OI::Coro::TaskResult<int> CheckServerEncoding()
 {
 	int iBadLocal = 0;
@@ -2801,7 +2750,7 @@ static int CheckSendBudget()
 	return iBadLocal;
 }
 
-// 持续就绪的协程不能饿死同优先级普通任务。
+// 64 个协程不停 yield(0) 时，新协程仍能在 1.5 秒内跑到。
 static OI::Coro::TaskResult<int> CheckSchedulerFairness()
 {
 	int iBadLocal = 0;
@@ -2820,14 +2769,11 @@ static OI::Coro::TaskResult<int> CheckSchedulerFairness()
 		});
 	}
 	co_await OI::Coro::yield(OI::Timer::Milliseconds(50));
-	if (!OI::Thread::ThreadPool::GetInstance().AddTask([&bOrdinaryDone]()
+	OI::Coro::StartTask([&bOrdinaryDone](OI::Coro::Token) -> OI::Coro::Task
 	{
 		bOrdinaryDone.store(true);
-	}))
-	{
-		++iBadLocal;
-		bOrdinaryDone.store(true);
-	}
+		co_return;
+	});
 	while (!bOrdinaryDone.load())
 	{
 		co_await OI::Coro::yield(0);
@@ -3680,7 +3626,6 @@ OI::Coro::Task HoldMgr::Pump()
 		iBad += co_await CheckRouteTargetStability();
 	}
 	iBad += CheckJsonDecoding();
-	iBad += co_await CheckTaskExceptions();
 	bool bEncodingRegression = false;
 	TryGetConfig("Regression.encoding_failure", bEncodingRegression);
 	if (bEncodingRegression)

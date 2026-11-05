@@ -19,6 +19,15 @@
 
 用户说「提交」时，包含本地 `git commit` 和推送到当前分支的远程。推送用普通 `git push`，不要强推。远程拒绝或需要登录时，把验证信息交给用户。
 
+# 锁用项目封装
+
+- 自有代码（基础库、模块、测试）加锁和等待一律用 `cbaselib/base/inc/oi_lock.h`：互斥用 `OI::Thread::Mutex` + `MutexGuard`，自旋用 `SpinLock` + `SpinLockGuard`，等待通知用 `MutexCond`（`Wait`、`WaitUntil`、`Signal`、`Broadcast`）。
+- 禁止直接写 `std::mutex`、`std::recursive_mutex`、`std::lock_guard`、`std::unique_lock`、`std::scoped_lock`、`std::condition_variable(_any)`。`oi_lock.h` 自身的实现和第三方源码除外。
+- `MutexCond` 不带条件参数，等待一律写成 `while (条件不满足) { Wait(...); }`，带超时的用 `WaitUntil` 的返回值退出循环，防虚假唤醒。
+- 单线程编译下这些锁和条件变量是空实现，不会真的阻塞；单线程路径不能靠它们等待，要转 poll。
+- 封装里没有的能力（例如新的等待方式），先在 `oi_lock.h` 里补，单线程和多线程两套一起补，不在业务代码里绕过去用标准库。
+- 改代码时看到存量的标准库锁，一并换掉。
+
 # 杂活交给 subagent
 
 主对话只做核心代码的分析、修改和对 subagent 结果的核对。下面这些费 token 但不难的活，一律派 subagent 做，不在主对话里自己动手：

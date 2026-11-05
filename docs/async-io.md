@@ -21,7 +21,7 @@ RPC、Redis、HTTP、日志仍从会话收发。`logd` 的字节和轮转规则�
 ## 保持不变
 
 - 仍是一条 poll 线程。io_uring 和 IOCP 都不交给工人线程抢。
-- `PollWait(0)` 只取已经完成的，不堵。没有完成也没有待跑任务时才堵住。
+- `PollWait(0)` 只取已经完成的，不堵。没有完成也没有待跑协程时才堵住。
 - 完成回调里不 `resume` 协程，只 `Schedule`。poll 回调里仍然不能 `CallRedisSync` 这类同步等待，也不能在里面同步读文件。
 - 时间轮仍是叫醒后在 poll 线程直接 `Update`。io_uring 用超时完成来叫醒，Windows 用可等待定时器或 `GetQueuedCompletionStatusEx` 的超时。
 - 单线程、多线程都要跑现有回声、Hold、Redis、Web，再加上日志落盘。文件写失败和磁盘满仍要能从现有错误路径看出来。行为变了才算这一项做完。

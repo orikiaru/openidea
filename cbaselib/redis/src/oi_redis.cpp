@@ -103,7 +103,7 @@ bool ArmRedisSweep()
 	{
 		return true;
 	}
-	// 超时直接由 poll 推进，不能依赖可能正在 CallSync 的队列线程。
+	// 超时直接由 poll 推进，不能依赖可能正在 CallSync 的工人线程。
 	return uv_timer_start(&g_stSweepTimer, [](uv_timer_t*)
 	{
 		RedisClient::SweepTimeout(nullptr);
@@ -295,7 +295,7 @@ RedisResult RedisClient::CallSync(std::vector<std::string> vArgumentsLocal)
 #ifdef _SINGLE_THREAD_
 	while (!pSt->bReady && !::OI::Thread::ThreadPool::GetInstance().Stopping())
 	{
-		// 同步调用也可能来自定时回调；不能依赖该回调返回后才能继续推进的时间轮。
+		// 每轮先自己扫一次超时，不等扫描定时器的下一跳。
 		SweepTimeout(nullptr);
 		if (!pSt->bReady)
 		{

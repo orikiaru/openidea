@@ -21,10 +21,7 @@ root_path = "./logs"
 max_pending_bytes = 67108864
 
 [ThreadPool]
-normal = 3 #标准线程池数
-urgent = 1 #加急线程池数
-queue = 1  #有序线程池数
-max_task_count = 1000000
+normal = 3 #协程工人线程数
 
 [Timer]
 offset_ms = 50		#定时器间隔,必须被1000整除

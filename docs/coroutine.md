@@ -34,7 +34,7 @@ TaskResult 每次等待返回一份结果副本，不移走共享结果。大对
 
 ## 单线程和多线程
 
-单线程主循环每一轮只跑进入时已经在队列里的普通 `Task`，再 `StScheduler::Poll` 只 `resume` 进入时已经在协程队列里的句柄。这一轮里 `yield(0)` 和 `StartTask` 进的是原队列，这次碰不到。然后如果还有待跑的任务或协程，`PollWait(0)` 只试一次网络；什么都没有才 `PollWait(1000)` 堵住等。
+单线程 `PumpOnce` 先 `StScheduler::Poll`，把此刻协程队列整批 `resume`。这一轮里 `yield(0)` 和 `StartTask` 进的是原队列，这次碰不到。然后有待跑协程就 `PollWait(0)`，否则 `PollWait(1000)` 堵住等。
 
 多线程由 `ThreadPool::PostCoroutine` 把句柄放进工人队列。工人和单线程队列都经 `OI::Coro::ResumeTask` 恢复协程，期间新建的任务算作“在协程里”，当场执行。协程在 `final_suspend` 里登记执行引用回收，这次 `resume` 返回后 `DrainDetached` 再释放该引用。当场跑完的子任务在调用方下一次 `co_await` 时回收，不等最外层协程挂起。仍有任务对象或等待者时保留帧与结果。
 
@@ -107,11 +107,11 @@ auto& res = result.GetRes();
 
 `TaskScope` 不是 `TaskCompletionSource`。它只负责圈住一组任务：`Start` 放进去，`RequestStop` 给 `StopToken`，`Join` 等它们结束。只取消某一段等待时，传 `StopToken` 即可，不必建作用域。
 
-线程池的 `AddTask(lambda)` 留给还不是协程的普通任务。`PostCoroutine`、`PumpOnce`、`SetDrain`、`SetPending`、`SetResume` 只有运行时用，应用层不调用。
+线程池只调度协程句柄。`PostCoroutine`、`PumpOnce`、`SetDrain`、`SetPending`、`SetResume` 只有运行时用，应用层不调用。
 
 ## 异常和任务作用域
 
-子任务的异常在父任务 `co_await` 处重新抛出，可以用 try/catch 捕获。独立根任务异常默认打印到 stderr，也可用 `SetTaskErrorHandler` 设置线程安全的错误处理函数。普通任务的异常如果直到最后一个引用释放都没有被 `co_await` 取走，也交给同一个处理函数，不会悄悄丢掉。
+子任务的异常在父任务 `co_await` 处重新抛出，可以用 try/catch 捕获。独立根任务异常默认打印到 stderr，也可用 `SetTaskErrorHandler` 设置线程安全的错误处理函数。协程任务的异常如果直到最后一个引用释放都没有被 `co_await` 取走，也交给同一个处理函数，不会悄悄丢掉。
 
 `TaskScope` 持有一组任务；`scope.Start(fn)` 的 fn 接收 `(OI::Coro::Token, OI::Coro::StopToken)`，循环检查 `StopRequested()`。`RequestStop()` 关闭入口并请求协作停止，`co_await scope.Join()` 等待所有任务完成后转交第一个异常。Join 本身也关闭入口。模块销毁前必须先完成 Join，再停止框架线程池。析构只请求停止，不能代替异步 Join。
 
@@ -171,7 +171,7 @@ auto& res = result.GetRes(); // 自动配对的响应类型
 
 不带输出的直连接口在实际 await 提交时选择当前会话，并在同一客户端临界区决定排队或绑定回包来源；构造等待对象不会截取会话号，首次连接前仍按原规则排队。可以先创建等待对象，等连接成功后再 await。需要固定会话时使用 `RpcCall(manager, sid, req, duration)`，此接口不会自动改发到新连接。自带结果的显式响应模板接口保留；输出引用的直接 co_await 写法兼容，但返回类型已改为 TaskResult<int32_t>，需要操作底层等待器的框架代码改用 MakeRpcCallAwaiter。新接口只接受明确的时长类型。创建等待对象时复制请求，调用方可用 `std::move(req)` 交出大请求以避免复制。未使用的任务或 RPC 等待对象会产生 nodiscard 编译诊断。
 
-多线程工作线程在同一优先级普通任务等待时，最多连续执行 32 次协程恢复后取一次普通任务，防止持续 yield(0) 的协程饿死普通任务。单线程同步适配器与主循环共用 PumpOnce，推进普通任务、协程和 IO；不要从网络回调中使用同步适配器。
+`CallRedisSync`、`RegistryClient::Lookup`、`PullSync`、`Publish` 不能在 poll 回调（含定时器回调）里调。适合在启动阶段调用，运行期用 `co_await` 版本。在协程里直接调这些同步接口：多线程会占住一个工人；单线程的 `CallRedisSync` 在当前协程里转 `PumpOnce`，注册表这几个在单线程里转 `PollWait`。只建议测试或特殊场景使用。
 
 ## 标准 RPC 回执
 
@@ -228,7 +228,7 @@ OI_RPC_BIND(Hold, HandleHold);
 
 `OI_RPC_BIND(Name, Function)` 使用请求关联的响应类型注册，不增加运行时包装层。也可传函数对象或 lambda；实例成员函数需绑定对象，且对象必须活到所有请求处理结束。原模板接口仍可直接使用，不按 NameReq/NameRes 命名的协议可用模板注册。
 
-普通任务回调抛异常时，闭包仍会释放，调度器捕获并报告异常后继续处理后续任务；可通过 `OI::Thread::SetTaskErrorHandler` 设置线程安全处理器，默认输出 stderr。处理器自身抛异常也不会穿透工作线程。服务端响应编码失败会丢弃半包，重新发送 `OI_ERR_FAIL` 的无响应体回执；无法编码或发送失败回执时关闭连接，避免调用方只靠超时发现错误。
+定时器回调和停止回调抛异常时，交给 `OI::Thread::SetTaskErrorHandler`，默认输出 stderr。处理器自身抛异常也不会穿透调用方。服务端响应编码失败会丢弃半包，重新发送 `OI_ERR_FAIL` 的无响应体回执；无法编码或发送失败回执时关闭连接，避免调用方只靠超时发现错误。
 
 ## 等待建连
 

@@ -61,8 +61,8 @@ static bool BulkIs(const ::OI::Redis::RedisResult& stResult, const char* pText, 
 
 static OI::Coro::Task RedisQueueTimeoutRegression()
 {
-	// 故意占用普通队列线程，超时必须仍由 poll 推进。
-	if (!OI::Thread::ThreadPool::GetInstance().AddTask([]()
+	// 故意在协程里同步阻塞，超时必须仍由 poll 推进。
+	OI::Coro::StartTask([](OI::Coro::Token) -> OI::Coro::Task
 	{
 		const auto stStart = std::chrono::steady_clock::now();
 		auto stResult = OI::Redis::CallRedisSync({"BLPOP", "oi-queue-timeout-regression", "2"});
@@ -71,27 +71,22 @@ static OI::Coro::Task RedisQueueTimeoutRegression()
 		LOG_TRACE("redis queue timeout elapsed=%lld bad=%d", static_cast<long long>(iElapsed), bGood ? 0 : 1);
 		fflush(stdout);
 		TestBoard::GetInstance().Done(bGood ? 0 : 1);
-	}, OI::Thread::PRIO_QUEUE))
-	{
-		TestBoard::GetInstance().Done(1);
-	}
+		co_return;
+	});
 	co_return;
 }
 
 static OI::Coro::Task RedisShutdownRegression()
 {
-	if (!OI::Thread::ThreadPool::GetInstance().AddTask([]()
+	OI::Coro::StartTask([](OI::Coro::Token) -> OI::Coro::Task
 	{
 		auto stResult = OI::Redis::CallRedisSync({"BLPOP", "oi-shutdown-regression", "0"});
 		auto stLate = OI::Redis::CallRedisSync({"PING"});
 		const bool bGood = stResult.iStatus == OI::Redis::RedisStatus::Disconnected && stLate.iStatus == OI::Redis::RedisStatus::Disconnected && stLate.GetRet() == OI_ERR_CONNECT && OI::Redis::RedisClient::GetInstance().PendingCount() == 0;
 		LOG_TRACE("redis shutdown result=%d late=%d bad=%d", static_cast<int>(stResult.iStatus), static_cast<int>(stLate.iStatus), bGood ? 0 : 1);
 		fflush(stdout);
-	}))
-	{
-		TestBoard::GetInstance().Done(1);
 		co_return;
-	}
+	});
 	const int64_t iDeadline = ::OI::Timer::SteadyMilliseconds() + ::OI::Timer::MS(::OI::Timer::Seconds(3)).iMilliseconds;
 	while (OI::Redis::RedisClient::GetInstance().PendingCount() == 0 && ::OI::Timer::SteadyMilliseconds() < iDeadline)
 	{

@@ -36,7 +36,4 @@ timer_lv_count = 4
 timer_lvs = [128,128,128,1]
 
 [ThreadPool]
-normal = 1
-urgent = 1
-queue = 1
-max_task_count = 100000
+normal = 1 #协程工人线程数

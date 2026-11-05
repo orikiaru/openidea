@@ -125,8 +125,8 @@ class RegistryClient : public ::OI::Net::SessionManager
 	void ArmHeartbeat();
 	void ArmPull();
 
-	std::mutex stMutex;
-	std::condition_variable stConditionVariable;
+	::OI::Thread::Mutex stMutex;
+	::OI::Thread::MutexCond stConditionVariable;
 	std::atomic<bool> bConnected;
 	std::atomic<bool> bConnecting;
 	std::atomic<bool> bFailed;
