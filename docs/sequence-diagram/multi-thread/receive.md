@@ -1,6 +1,6 @@
 # 收到一帧
 
-读发生在 poll 线程。一轮最多读 4MB。切出请求或回包之后，`Schedule` 和 `StartTask` 都把句柄放进 `normal` 工人队列。解包和处理在工人上，不在 poll 回调里 `resume`。
+读发生在 poll 线程。一轮最多读 4MB。切出请求或回包之后，`Schedule` 和 `StartTask` 都把句柄放进工人队列。解包和处理在工人上，不在 poll 回调里 `resume`。
 
 头或包体不够就留下，下一次可读再拼。
 
@@ -13,7 +13,7 @@ sequenceDiagram
     participant Sess as ProtoSession
     participant Rpc as DeliverRpc
     participant Wait as 等待表
-    participant Worker as normal 工人
+    participant Worker as 工人
 
     Poll->>Tcp: uv_run 里 DataIn
     loop 直到 EAGAIN 或满 4MB

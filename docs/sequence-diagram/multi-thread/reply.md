@@ -1,13 +1,13 @@
 # 处理并回包
 
-处理协程在 `normal` 工人上跑。业务当场结束时，调用方不挂起。回包在工人里写进发送缓冲，写事件交给 poll 线程。`send` 不在工人上。
+处理协程在工人上跑。业务当场结束时，调用方不挂起。回包在工人里写进发送缓冲，写事件交给 poll 线程。`send` 不在工人上。
 
 `co_return` 不在 `final_suspend` 里销毁帧。工人 `resume` 返回后 `DrainDetached` 再销毁。
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Worker as normal 工人
+    participant Worker as 工人
     participant Run as RunHandledRpc
     participant Biz as 业务任务
     participant Sess as ProtoSession

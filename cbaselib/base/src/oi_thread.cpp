@@ -54,10 +54,22 @@ bool ThreadPool::Init()
 	stThreadData.iThreadCount = 1;
 #else
 	// 只读工人数。旧配置里的 urgent、queue、max_task_count 已无对应队列，保留也不报错。
-	TryGetConfigAndReturnFalse("ThreadPool.normal", stThreadData.iThreadCount);
+	if (!TryGetConfig("ThreadPool.threadcount", stThreadData.iThreadCount))
+	{
+		// normal 是改名前的键，留着兼容老配置，读到了提示一次改名。
+		if (!TryGetConfig("ThreadPool.normal", stThreadData.iThreadCount))
+		{
+			fprintf(stderr, "ThreadPool.threadcount missing or not an integer; set [ThreadPool] threadcount = <worker count>\n");
+			fflush(stderr);
+			return false;
+		}
+		fprintf(stderr, "ThreadPool.normal is deprecated, rename it to ThreadPool.threadcount\n");
+		fflush(stderr);
+	}
 	if (stThreadData.iThreadCount <= 0)
 	{
-		fprintf(stderr, "ThreadPool.normal=%d must be positive\n", stThreadData.iThreadCount);
+		fprintf(stderr, "ThreadPool.threadcount=%d must be positive\n", stThreadData.iThreadCount);
+		fflush(stderr);
 		return false;
 	}
 #endif

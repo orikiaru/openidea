@@ -2,16 +2,16 @@
 
 单次等待用 `OI::Coro::Gate`。RPC、注册表路由、Redis 协程调用和 HTTP 都是这一道门。`Task` 可以有多个等待者，走完成列表，不走这里。
 
-业务协程在 `normal` 工人上跑。状态上先记下 `stHandle`。结果字段在 `exchange(Ready)` 之前写完：RPC 是 `iResult` / `bReplied`，路由是 `iCode` / `vList`，Redis 是 `pReply` / `iStatus`，HTTP 是 `iStatus` / `sBody` / `bFailed`。门还是 `Idle` 时不 `Schedule`。完成发生在 poll 线程，看见 `Waiting` 才 `PostCoroutine`，不在回调里 `resume`。第二次完成由各自的一次性标记挡住，RPC 摘走调用号，Redis 用 `iWon`，HTTP 用 `iDone`，不再改已经写好的结果。
+业务协程在工人上跑。状态上先记下 `stHandle`。结果字段在 `exchange(Ready)` 之前写完：RPC 是 `iResult` / `bReplied`，路由是 `iCode` / `vList`，Redis 是 `pReply` / `iStatus`，HTTP 是 `iStatus` / `sBody` / `bFailed`。门还是 `Idle` 时不 `Schedule`。完成发生在 poll 线程，看见 `Waiting` 才 `PostCoroutine`，不在回调里 `resume`。第二次完成由各自的一次性标记挡住，RPC 摘走调用号，Redis 用 `iWon`，HTTP 用 `iDone`，不再改已经写好的结果。
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Worker as normal 工人
+    participant Worker as 工人
     participant Biz as 业务协程
     participant Wait as 等待状态
     participant Poll as poll 线程
-    participant Queue as normal 队列
+    participant Queue as 工人队列
 
     Worker->>Biz: ResumeTask
     Biz->>Wait: co_await，await_ready 为假

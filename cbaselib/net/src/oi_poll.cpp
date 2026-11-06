@@ -323,6 +323,8 @@ bool Poll::Init()
 	}
 	catch (...)
 	{
+		fprintf(stderr, "poll thread create failed\n");
+		fflush(stderr);
 		return false;
 	}
 	for (;;)

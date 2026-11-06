@@ -91,14 +91,14 @@ if (iRangeRet != OI_OK)
 
 时序在 [时序图](sequence-diagram/README.md)。生成出来的 `main` 按这个顺序：
 
-1. `OI::Base::StartFramework(配置路径)`：`Config` 读 `deploy/config/<进程名>.toml`，再依次 `ThreadPool::Init`、`BaseTimerManager::Init`、`Poll::Init`。返回非 0 时 `main` 直接把它返回，配置读不了是 -2，框架初始化失败是 -1
+1. `OI::Base::StartFramework(配置路径)`：`Config` 读 `deploy/config/<进程名>.toml`，再依次 `ThreadPool::Init`、`BaseTimerManager::Init`、`Poll::Init`。返回非 0 时 `main` 直接把它返回，配置读不了是 -2，框架初始化失败是 -1。初始化失败会在 stderr 按阶段打一行 `framework init failed: ...`，带出配置路径并指明是哪一步：`parse config`、`thread pool`（提示看 `[ThreadPool] threadcount`）、`timer manager`（提示看 `[Timer]`）、`poll`
 2. `OI::Log::Init`
 3. 各组件 `Init`，服务端再 `StartServer`，客户端再 `StartClient`
 4. `return OI::Base::RunFramework()`：进入主循环，退出后返回退出码
 
 `logd` 不调 `OI::Log::Init`，不作为日志客户端连自己。它在 `LogManager::Init` 之后调 `OI::Log::InitLocal`，自己的日志直接进本地文件。
 
-`[ThreadPool] normal` 是多线程工人数，必须配且大于 0，否则 `ThreadPool::Init` 返回 false。旧键 `urgent`、`queue`、`max_task_count` 不再读取，留着不报错。线程池没有任务队列，只有一条协程句柄队列。
+`[ThreadPool] threadcount` 是多线程工人数，必须配且大于 0，否则 `ThreadPool::Init` 返回 false。旧键 `normal` 仍会作为兼容读一次：读不到 `threadcount` 时会再读 `normal`，读到了就在 stderr 打一行 `ThreadPool.normal is deprecated, rename it to ThreadPool.threadcount`，然后照常用。旧键 `urgent`、`queue`、`max_task_count` 不再读取，留着不报错。线程池没有任务队列，只有一条协程句柄队列。
 
 ## 发送缓冲限额与同步等待
 

@@ -2,7 +2,7 @@
 
 多线程里 poll 先单独转起来。`StartWork` 再拉工人，主线程自己不 poll，堵到 `RequestStop`。
 
-条数只读 `ThreadPool.normal`，必须配，并且大于 0。缺了或不是正数，`ThreadPool::Init` 返回 false，进程起不来。旧配置里的 `urgent`、`queue`、`max_task_count` 不再读取，留着不报错。时间轮的 `Update` 在 poll 线程上跑。
+条数读 `ThreadPool.threadcount`，必须配，并且大于 0。旧键 `normal` 仍会作为兼容读一次：读不到 `threadcount` 时会再读 `normal`，读到了就在 stderr 打一行提示改名。缺了或不是正数，`ThreadPool::Init` 返回 false，进程起不来。旧配置里的 `urgent`、`queue`、`max_task_count` 不再读取，留着不报错。时间轮的 `Update` 在 poll 线程上跑。
 
 ```mermaid
 sequenceDiagram
@@ -36,7 +36,7 @@ sequenceDiagram
         Main->>App: StartClient
     end
     Main->>Pool: StartWork
-    Pool->>Worker: 按 normal 拉起工人
+    Pool->>Worker: 按 threadcount 拉起工人
     Main->>Main: 等到 RequestStop
 ```
 

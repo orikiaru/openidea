@@ -12,7 +12,7 @@ sequenceDiagram
     participant Uv as libuv
     participant Worker as 工人
 
-    Main->>Worker: StartWork 按 ThreadPool.normal 拉起工人
+    Main->>Worker: StartWork 按 ThreadPool.threadcount 拉起工人
     Main->>Main: 等到 RequestStop
     par poll 一直转
         loop 直到 StopAndJoin

@@ -36,4 +36,4 @@ timer_lv_count = 4
 timer_lvs = [128,128,128,1]
 
 [ThreadPool]
-normal = 1 #协程工人线程数
+threadcount = 1 #协程工人线程数

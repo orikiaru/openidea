@@ -13,12 +13,26 @@ int StartFramework(const char* pConfigPath)
 {
 	if (!Config::GlobalMutableConfig().Parse(pConfigPath))
 	{
-		printf("ParseConfigError\n");
+		fprintf(stderr, "framework init failed: parse config %s\n", pConfigPath ? pConfigPath : "(null)");
+		fflush(stderr);
 		return -2;
 	}
-	if (!::OI::Thread::ThreadPool::GetInstance().Init() || !::OI::Timer::BaseTimerManager::GetInstance().Init() || !::OI::Net::Poll::GetInstance().Init())
+	if (!::OI::Thread::ThreadPool::GetInstance().Init())
 	{
-		printf("framework init error\n");
+		fprintf(stderr, "framework init failed: thread pool; see [ThreadPool] threadcount in %s\n", pConfigPath);
+		fflush(stderr);
+		return -1;
+	}
+	if (!::OI::Timer::BaseTimerManager::GetInstance().Init())
+	{
+		fprintf(stderr, "framework init failed: timer manager; see [Timer] in %s\n", pConfigPath);
+		fflush(stderr);
+		return -1;
+	}
+	if (!::OI::Net::Poll::GetInstance().Init())
+	{
+		fprintf(stderr, "framework init failed: poll in %s\n", pConfigPath);
+		fflush(stderr);
 		return -1;
 	}
 	return 0;

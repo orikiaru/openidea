@@ -100,7 +100,7 @@ def main():
             source, obj, binary = root / "probe.cpp", root / "probe.o", root / "probe"
             source.write_text(SOURCE)
             config = root / "config.toml"
-            config.write_text("[ThreadPool]\nnormal=4\n")
+            config.write_text("[ThreadPool]\nthreadcount=4\n")
             compile_args = [part for part in shlex.split(entry["command"]) if not part.startswith("-D_SINGLE_THREAD_")]
             compile_args[compile_args.index("-o") + 1] = str(obj)
             compile_args[compile_args.index("-c") + 1] = str(source)

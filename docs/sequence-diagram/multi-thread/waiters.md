@@ -2,7 +2,7 @@
 
 两个协程 `co_await` 同一个 `Task` / `TaskResult`。任务只跑一次。`return_value` 先把结果放进 `stResult`，`final_suspend` 才在 `stMutex` 里把 `bReady` 写成真，并摘走 `pWaiters`。`await_resume` 复制结果，不移走。异常留在任务上，每个等待者各抛一次。
 
-`Schedule` 把句柄放进 `normal` 工人队列，不在 poll 回调里 `resume`。单次的 RPC、Redis、HTTP 不走这张表，它们用 [完成门](gate.md)。
+`Schedule` 把句柄放进工人队列，不在 poll 回调里 `resume`。单次的 RPC、Redis、HTTP 不走这张表，它们用 [完成门](gate.md)。
 
 ## 两个都在完成前
 
@@ -14,7 +14,7 @@ sequenceDiagram
     participant A as 等待者 A
     participant B as 等待者 B
     participant Child as 子任务
-    participant Queue as normal 队列
+    participant Queue as 工人队列
     participant Worker as 工人
 
     A->>Child: co_await，bReady 为假，链入 pWaiters
@@ -35,7 +35,7 @@ sequenceDiagram
     autonumber
     participant A as 等待者 A
     participant Child as 子任务
-    participant Queue as normal 队列
+    participant Queue as 工人队列
     participant Worker as 工人
     participant B as 等待者 B
 

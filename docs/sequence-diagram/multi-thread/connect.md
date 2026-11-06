@@ -14,7 +14,7 @@ sequenceDiagram
     participant Poll as poll 线程
     participant Mgr as ProtoClientManager
     participant Sess as ProtoSession
-    participant Worker as normal 工人
+    participant Worker as 工人
 
     Main->>Mgr: StartClient 返回可等待对象
     Mgr->>Poll: CallOnLoop 发起非阻塞建连

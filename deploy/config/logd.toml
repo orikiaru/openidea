@@ -21,7 +21,7 @@ root_path = "./logs"
 max_pending_bytes = 67108864
 
 [ThreadPool]
-normal = 3 #协程工人线程数
+threadcount = 3 #协程工人线程数
 
 [Timer]
 offset_ms = 50		#定时器间隔,必须被1000整除

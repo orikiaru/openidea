@@ -42,7 +42,7 @@ class ThreadPool
 		std::deque<std::coroutine_handle<>> vCoroutines;
 		// 正睡在 stCondition 上的工人数。为 0 时投递不用 notify，省一次 futex。
 		int32_t iIdleThreadCount = 0;
-		// 多线程工人数，配置 [ThreadPool] normal。
+		// 多线程工人数，配置 [ThreadPool] threadcount。
 		int32_t iThreadCount = 0;
 		::OI::Thread::Mutex stMutex;
 		::OI::Thread::MutexCond stCondition;
