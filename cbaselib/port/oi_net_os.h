@@ -27,7 +27,10 @@ typedef int net_socket_t;
 #define INVALID_SOCKET_ID ((net_socket_t) - 1)
 
 void NetOs_Startup();
-net_socket_t NetOs_CreateTcp(bool bNonblock);
+// IPv4 TCP 套接字。
+net_socket_t NetOs_CreateTcp4(bool bNonblock);
+// IPv6 TCP 套接字。打开 IPV6_V6ONLY，不接 IPv4 映射地址。
+net_socket_t NetOs_CreateTcp6(bool bNonblock);
 int NetOs_SetNonblock(net_socket_t iDescriptor);
 // 关掉 Nagle。小包一来一回的请求不等凑包
 int NetOs_SetNoDelay(net_socket_t iDescriptor);

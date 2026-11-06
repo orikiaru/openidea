@@ -46,6 +46,7 @@ class SessionManager
 	void FinishConnectWaiters(bool bResult);
 	// 在 poll 线程上登记等待者并发起连接。已经连上就直接成功。
 	void StartConnect(const std::shared_ptr<ConnectWait>& pWait);
+	friend struct ConnectResolver;
 	// 切到 poll 线程再调用 StartConnect。停止中直接失败。
 	void BeginConnect(const std::shared_ptr<ConnectWait>& pWait);
 
@@ -69,13 +70,13 @@ class SessionManager
 	sid_t iCurrentSessionId;
 	// 保护会话表和连接状态。
 	::OI::Thread::Mutex stLocker;
-	// 监听或要连接的地址。
+	// 监听或要连接的地址。客户端可以是域名，连上之前会换成解析出来的数字地址。
 	std::string sIpAddress;
 	std::string sPort;
 	SESSION_TYPE iSessionType; // 管理的会话类型。目前只有 TCP。
 	// 在注册表里的服务名。空表示地址来自配置，不走发现。
 	std::string sServiceName;
-	// 当前 ip:port 文本。
+	// 当前端点文本。IPv4 是 ip:port，IPv6 是 [ip]:port。
 	std::string sEndpoint;
 	// 服务名已经从列表消失，不再连接。
 	bool bServiceDown;
@@ -187,6 +188,8 @@ class SessionManager
 	void AddSession(Session* pSession, const std::string& sEndpoint, size_t iSendBytes, size_t iReceiveBytes);
 	// 这一代连接失败。代次对不上就忽略，避免旧连接改掉新连接。
 	void AbortSession(uint64_t iGeneration);
+	// 放弃还没完成的这一代。晚到的解析或连接结果作废。
+	void CancelConnect();
 	// 这一代连接成功，装上新套接字。代次对不上就关掉新描述符。
 	void CompleteConnect(net_socket_t iDescriptor, uint64_t iGeneration);
 	//不用怕重入,必然由IO线程触发

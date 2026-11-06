@@ -1,6 +1,7 @@
 #include "oi_rpc_coro.h"
 #include "oi_config.h"
 #include "oi_thread.h"
+#include "oi_log.h"
 #include "oi_tcp_channel.h"
 #include <tuple>
 #include <mutex>
@@ -177,6 +178,8 @@ struct RouteConnection
 	}
 	void Ensure();
 	void Begin();
+	void Connect(::OI::Net::NetAddr stAddr);
+	static void OnResolved(void* pArgument, bool bOk, ::OI::Net::NetAddr stAddr);
 	void Retire();
 	void Connected(net_socket_t iSocketLocal);
 	void Finish(sid_t iSessionIdLocal)
@@ -331,7 +334,7 @@ sid_t RouteManager::Adopt(net_socket_t iSocketLocal, const std::shared_ptr<Route
 	auto pChannel = std::make_unique<::OI::Net::TCP_Channel>(stSocket, pSession.get());
 	stOwner.iSocket = INVALID_SOCKET_ID; // 从这里起由通道关闭描述符。
 	pSession->SetChannel(pChannel.get());
-	AddSession(pSession.get(), pConnection->sIp + ":" + pConnection->sPort,
+	AddSession(pSession.get(), ::OI::Net::NetAddr::Endpoint(pConnection->sIp, pConnection->sPort),
 	    pConnection->stPolicy.iSendBytes, pConnection->stPolicy.iReceiveBytes);
 	const sid_t iSessionId = pSession->GetSessionID();
 	try
@@ -422,6 +425,31 @@ void RouteConnection::Connected(net_socket_t iSocketLocal)
 	Finish(iConnected);
 }
 
+void RouteConnection::OnResolved(void* pArgument, bool bOk, ::OI::Net::NetAddr stAddr)
+{
+	std::unique_ptr<std::shared_ptr<RouteConnection>> pHold(static_cast<std::shared_ptr<RouteConnection>*>(pArgument));
+	if (!pHold || !*pHold)
+	{
+		return;
+	}
+	RouteConnection* pConnection = pHold->get();
+	bool bRetiredLocal = false;
+	{
+		::OI::Thread::MutexGuard stLock(pConnection->stMutex);
+		bRetiredLocal = pConnection->bRetired;
+	}
+	if (!bOk || bRetiredLocal)
+	{
+		if (!bOk)
+		{
+			LOG_ERROR("RouteConnection resolve failed ip=%s port=%s", pConnection->sIp.c_str(), pConnection->sPort.c_str());
+		}
+		pConnection->Finish(INVALID_SID);
+		return;
+	}
+	pConnection->Connect(stAddr);
+}
+
 void RouteConnection::Begin()
 {
 	assert(::OI::Net::Poll::GetInstance().InLoopThread());
@@ -434,24 +462,33 @@ void RouteConnection::Begin()
 		}
 		bConnecting = true;
 	}
-	sockaddr_in stAddress{};
-	stAddress.sin_family = AF_INET;
 	char* pEnd = nullptr;
 	const long iPort = strtol(sPort.c_str(), &pEnd, 10);
-	if (sPort.empty() || *pEnd || iPort < 1 || iPort > 65535 || inet_pton(AF_INET, sIp.c_str(), &stAddress.sin_addr) != 1)
+	if (sPort.empty() || pEnd == nullptr || *pEnd || iPort < 1 || iPort > 65535)
 	{
 		Finish(INVALID_SID);
 		return;
 	}
-	stAddress.sin_port = htons(static_cast<uint16_t>(iPort));
+	auto* pHold = new std::shared_ptr<RouteConnection>(pSelf.lock());
+	if (!*pHold)
+	{
+		delete pHold;
+		Finish(INVALID_SID);
+		return;
+	}
+	::OI::Net::NetAddr::Resolve(sIp, sPort, &RouteConnection::OnResolved, pHold);
+}
+
+void RouteConnection::Connect(::OI::Net::NetAddr stAddr)
+{
 	::OI::Net::NetSocket stSocket;
-	stSocket.Attach(NetOs_CreateTcp(true));
+	stSocket.Attach(stAddr.CreateTcp(true));
 	if (stSocket.GetSocket() == INVALID_SOCKET_ID)
 	{
 		Finish(INVALID_SID);
 		return;
 	}
-	const int iResult = NetOs_Connect(stSocket.GetSocket(), reinterpret_cast<sockaddr*>(&stAddress), sizeof(stAddress));
+	const int iResult = NetOs_Connect(stSocket.GetSocket(), stAddr.NetAttrPtr(), stAddr.NetAttrLen());
 	if (iResult == 0)
 	{
 		Connected(stSocket.GetSocket());

@@ -8,6 +8,7 @@
 #include "oi_rpcdata_regpull.h"
 #include "oi_rpcdata_regpullres.h"
 #include "oi_net_session.h"
+#include "oi_socket.h"
 #include "oi_config.h"
 #include "oi_log.h"
 #include "oi_poll.h"
@@ -1055,7 +1056,8 @@ bool PublishAddress(const std::string& sSection, const std::string& sBindIp, con
 	TakeAdvertise("Service.advertise_port", sPortLocal);
 	TakeAdvertise(sSection + ".advertise_ip", sIpLocal);
 	TakeAdvertise(sSection + ".advertise_port", sPortLocal);
-	if (sIpLocal.empty() || sPortLocal.empty() || sIpLocal == "0.0.0.0" || sIpLocal == "*")
+	::OI::Net::NetAddr stAddr;
+	if (sIpLocal.empty() || sPortLocal.empty() || sIpLocal == "*" || (stAddr.Init(sIpLocal, sPortLocal) && stAddr.IsUnspecified()))
 	{
 		return false;
 	}

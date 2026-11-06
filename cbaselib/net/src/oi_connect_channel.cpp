@@ -21,7 +21,8 @@ ConnectChannel::ConnectChannel(NetSocket stText, SessionManager* pMgr, uint64_t 
 
 void ConnectChannel::DataIn()
 {
-	// libuv 遇到 POLLERR 只回调 status<0，不再报可写，监听也停了。连接被拒只能在这里收。
+	// libuv 看到 POLLERR 会停掉 poll，回调只有 UV_EBADF、事件掩码 0，可写不会再来。
+	// CheckTcpConnect 返回 false（EINPROGRESS / EINTR，Windows 的 WSAEWOULDBLOCK 也收成 EINPROGRESS）时必须在这里作废，否则等连接的人一直挂着。
 	if (IsClosed())
 	{
 		return;
@@ -68,11 +69,7 @@ bool ConnectChannel::TryClose()
 
 bool ConnectChannel::CheckTcpConnect()
 {
-	//The  socket  is  nonblocking  and  the connection cannot be completed immediately.
-	//It is possible to select(2) or poll(2) for completion by selecting the socket for writing.  After select(2)indicates writability,
-	//use getsockopt(2) to read the SO_ERROR option at level SOL_SOCKET to determine whether connect() completed successfully (SO_ERROR is zero) or
-	//unsuccessfully  (SO_ERROR is one of the usual error codes listed here, explaining the reason for the failure).
-	//       int getsockopt(int sockfd, int level, int optname, void *optval, socklen_t *optlen);
+	// 读 SO_ERROR。false 表示还在连：DataOut 留着等下一次可写；DataIn 不能留，poll 已经被 libuv 停掉。
 	int iValue = NetOs_GetSocketError(stSocket.GetSocket());
 	if (iValue == EINPROGRESS || iValue == EINTR)
 	{

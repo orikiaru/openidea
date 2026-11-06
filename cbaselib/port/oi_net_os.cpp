@@ -33,11 +33,11 @@ void NetOs_Startup()
 #endif
 }
 
-net_socket_t NetOs_CreateTcp(bool bNonblock)
+static net_socket_t NetOs_OpenTcp(int iFamily, bool bNonblock)
 {
 	NetOs_Startup();
 #ifdef _WIN32
-	SOCKET iDescriptorLocal = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	SOCKET iDescriptorLocal = socket(iFamily, SOCK_STREAM, IPPROTO_TCP);
 	if (iDescriptorLocal == INVALID_SOCKET)
 	{
 		NetOs_MapError(WSAGetLastError());
@@ -59,7 +59,7 @@ net_socket_t NetOs_CreateTcp(bool bNonblock)
 		iFlags |= SOCK_NONBLOCK;
 	}
 #endif
-	int iDescriptorLocal = socket(AF_INET, iFlags, 0);
+	int iDescriptorLocal = socket(iFamily, iFlags, 0);
 	if (iDescriptorLocal < 0)
 	{
 		return INVALID_SOCKET_ID;
@@ -72,6 +72,41 @@ net_socket_t NetOs_CreateTcp(bool bNonblock)
 #endif
 	return iDescriptorLocal;
 #endif
+}
+
+static int NetOs_SetV6Only(net_socket_t iDescriptor)
+{
+	int iOnly = 1;
+#ifdef _WIN32
+	if (setsockopt((SOCKET)iDescriptor, IPPROTO_IPV6, IPV6_V6ONLY, (const char*)&iOnly, sizeof(iOnly)) != 0)
+	{
+		NetOs_MapError(WSAGetLastError());
+		return -1;
+	}
+	return 0;
+#else
+	return setsockopt((int)iDescriptor, IPPROTO_IPV6, IPV6_V6ONLY, &iOnly, sizeof(iOnly));
+#endif
+}
+
+net_socket_t NetOs_CreateTcp4(bool bNonblock)
+{
+	return NetOs_OpenTcp(AF_INET, bNonblock);
+}
+
+net_socket_t NetOs_CreateTcp6(bool bNonblock)
+{
+	net_socket_t iDescriptor = NetOs_OpenTcp(AF_INET6, bNonblock);
+	if (iDescriptor == INVALID_SOCKET_ID)
+	{
+		return INVALID_SOCKET_ID;
+	}
+	if (NetOs_SetV6Only(iDescriptor) != 0)
+	{
+		NetOs_Close(iDescriptor);
+		return INVALID_SOCKET_ID;
+	}
+	return iDescriptor;
 }
 
 int NetOs_SetNonblock(net_socket_t iDescriptor)

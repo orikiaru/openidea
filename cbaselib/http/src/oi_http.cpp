@@ -4,12 +4,9 @@
 #include "oi_net_session.h"
 #include "oi_poll.h"
 #include "oi_session_manager.h"
+#include "oi_socket.h"
 #include "oi_timer_manager.h"
-#include "uv.h"
-#include <arpa/inet.h>
-#include <netinet/in.h>
 #include <atomic>
-#include <cstring>
 #include <deque>
 #include <memory>
 #include <stdexcept>
@@ -180,13 +177,10 @@ struct Client::Impl : public ::OI::Net::SessionManager
 	std::deque<std::shared_ptr<Call::Request>> m_vQueue;
 	std::shared_ptr<Call::Request> m_pFlight;
 	HttpSession* m_pSession;
-	std::shared_ptr<Impl> m_pDnsHold;
 	std::weak_ptr<Impl> m_pSelf;
-	uv_getaddrinfo_t m_stDns;
 	sid_t m_iSessionId;
 	bool m_bConnected;
 	bool m_bConnecting;
-	bool m_bDnsPending;
 	bool m_bClosed;
 	bool m_bReuse;
 
@@ -197,7 +191,6 @@ struct Client::Impl : public ::OI::Net::SessionManager
 	void BeginConnect();
 	void UseAddress(const std::string& sIp);
 	void FailFront(const char* pWhy);
-	static void OnDns(uv_getaddrinfo_t* pRequestLocal, int iStatusLocal, struct addrinfo* pResponse);
 
   public:
 	Impl(const std::string& sHost, int32_t iPort, int32_t iTimeoutMilliseconds, bool bReuse);
@@ -662,9 +655,8 @@ void HttpSession::OnClose()
 }
 
 Client::Impl::Impl(const std::string& sHost, int32_t iPort, int32_t iTimeoutMilliseconds, bool bReuse)
-    : m_sHost(sHost), m_iPort(iPort), m_iTimeoutMilliseconds(iTimeoutMilliseconds), m_pSession(NULL), m_iSessionId(INVALID_SID), m_bConnected(false), m_bConnecting(false), m_bDnsPending(false), m_bClosed(false), m_bReuse(bReuse)
+    : m_sHost(sHost), m_iPort(iPort), m_iTimeoutMilliseconds(iTimeoutMilliseconds), m_pSession(NULL), m_iSessionId(INVALID_SID), m_bConnected(false), m_bConnecting(false), m_bClosed(false), m_bReuse(bReuse)
 {
-	std::memset(&m_stDns, 0, sizeof(m_stDns));
 	iMaxReceiveBufferBytes = kMaxHeader + kMaxBody;
 }
 
@@ -702,7 +694,7 @@ void Client::Impl::UseAddress(const std::string& sIp)
 {
 	std::string sPortLocal = std::to_string(m_iPort);
 	DefaultInit(sIp, sPortLocal);
-	sEndpoint = sIp + ":" + sPortLocal;
+	sEndpoint = ::OI::Net::NetAddr::Endpoint(sIp, sPortLocal);
 }
 
 void Client::Impl::FailFront(const char* pWhy)
@@ -775,7 +767,7 @@ void Client::Impl::Pump()
 		}
 		return;
 	}
-	if (m_bConnecting || m_bDnsPending)
+	if (m_bConnecting)
 	{
 		return;
 	}
@@ -785,63 +777,8 @@ void Client::Impl::Pump()
 
 void Client::Impl::BeginConnect()
 {
-	in_addr stAddr;
-	if (inet_pton(AF_INET, m_sHost.c_str(), &stAddr) == 1)
-	{
-		UseAddress(m_sHost);
-		StartClient();
-		return;
-	}
-	m_bDnsPending = true;
-	m_pDnsHold = Hold();
-	std::memset(&m_stDns, 0, sizeof(m_stDns));
-	m_stDns.data = this;
-	addrinfo stHints;
-	std::memset(&stHints, 0, sizeof(stHints));
-	stHints.ai_family = AF_INET;
-	stHints.ai_socktype = SOCK_STREAM;
-	if (uv_getaddrinfo(::OI::Net::Poll::GetInstance().Loop(), &m_stDns, Impl::OnDns, m_sHost.c_str(), NULL, &stHints) != 0)
-	{
-		m_bDnsPending = false;
-		m_pDnsHold.reset();
-		m_bConnecting = false;
-		FailFront("dns");
-		Pump();
-	}
-}
-
-void Client::Impl::OnDns(uv_getaddrinfo_t* pRequestLocal, int iStatusLocal, struct addrinfo* pResponse)
-{
-	Impl* pSelf = static_cast<Impl*>(pRequestLocal->data);
-	std::shared_ptr<Impl> pHold = std::move(pSelf->m_pDnsHold);
-	pSelf->m_bDnsPending = false;
-	if (pSelf->m_bClosed || iStatusLocal != 0 || pResponse == NULL || pResponse->ai_addr == NULL || pResponse->ai_family != AF_INET)
-	{
-		if (pResponse)
-		{
-			uv_freeaddrinfo(pResponse);
-		}
-		if (!pSelf->m_bClosed)
-		{
-			pSelf->m_bConnecting = false;
-			pSelf->FailFront("dns");
-			pSelf->Pump();
-		}
-		return;
-	}
-	char sIp[INET_ADDRSTRLEN];
-	std::memset(sIp, 0, sizeof(sIp));
-	sockaddr_in stAddr = *reinterpret_cast<const sockaddr_in*>(pResponse->ai_addr);
-	uv_freeaddrinfo(pResponse);
-	if (inet_ntop(AF_INET, &stAddr.sin_addr, sIp, sizeof(sIp)) == NULL)
-	{
-		pSelf->m_bConnecting = false;
-		pSelf->FailFront("dns");
-		pSelf->Pump();
-		return;
-	}
-	pSelf->UseAddress(sIp);
-	pSelf->StartClient();
+	UseAddress(m_sHost);
+	StartClient();
 }
 
 void Client::Impl::ArmTimer(const std::shared_ptr<Call::Request>& pRequestLocal)
@@ -966,6 +903,7 @@ void Client::Impl::Shutdown()
 	{
 		Publish(pRequestLocal, true, "closed");
 	}
+	CancelConnect();
 	CloseAllSessions();
 }
 

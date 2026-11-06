@@ -23,6 +23,7 @@
 #include "test_board.h"
 #include <atomic>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <fstream>
@@ -345,7 +346,7 @@ class ConnectGenerationProbe : public OI::Net::SessionManager
 		iConnectGeneration = 2;
 		bConnectPending = true;
 		AbortSession(1);
-		const auto iDescriptor = NetOs_CreateTcp(true);
+		const auto iDescriptor = NetOs_CreateTcp4(true);
 		if (iDescriptor == INVALID_SOCKET_ID)
 		{
 			return 1;
@@ -516,6 +517,177 @@ static OI::Coro::TaskResult<int> CheckClientConnect()
 	iBad += pResult->iBad;
 	LOG_TRACE("hold coroutine connect bad=%d", iBad);
 	co_return iBad;
+}
+
+// 字面地址当场用，域名交给 StartClient 解析。监听口用配置端口加 17，避开回归脚本的端口表。
+class AddressConnectProbe : public OI::Net::SessionManager
+{
+	class ProbeSession : public OI::Net::NetSession
+	{
+	  public:
+		explicit ProbeSession(AddressConnectProbe* pOwner)
+		    : NetSession(pOwner)
+		{
+		}
+		void OnDataIn() override
+		{
+			stInputBuffer.Clear();
+		}
+		void OnDataOut() override
+		{
+		}
+	};
+	std::atomic<int> m_iConnections{0};
+	OI::Net::Session* CloneSession() override
+	{
+		return new ProbeSession(this);
+	}
+	void OnAddSession(OI::Net::Session*) override
+	{
+		++m_iConnections;
+	}
+	void OnDelSession(const OI::Net::Session*) override
+	{
+	}
+	// StartServer 会按管理器名字发布。返回 Registry 时发布直接成功，避免把 ipcclient 登记到测试端口。
+	const std::string GetIDString() override
+	{
+		return "Registry";
+	}
+
+  public:
+	explicit AddressConnectProbe(const std::string& sIpLocal, const std::string& sPortLocal)
+	{
+		DefaultInit(sIpLocal, sPortLocal);
+	}
+	int Connections() const
+	{
+		return m_iConnections.load();
+	}
+};
+
+static std::string Ipv6ListenPort()
+{
+	const std::string sIpcPort = IpcServerPort();
+	char* pEnd = nullptr;
+	const long iPort = std::strtol(sIpcPort.c_str(), &pEnd, 10);
+	if (pEnd == sIpcPort.c_str() || pEnd == nullptr || *pEnd != '\0' || iPort <= 0 || iPort > 65535 - 17)
+	{
+		return std::string();
+	}
+	return std::to_string(iPort + 17);
+}
+
+static int CheckLiteralAddress(const std::string& sPort)
+{
+	int iBad = 0;
+	OI::Net::NetAddr stLoopback;
+	if (!stLoopback.Init("127.0.0.1", sPort) || stLoopback.Endpoint() != "127.0.0.1:" + sPort || stLoopback.IsUnspecified())
+	{
+		++iBad;
+	}
+	OI::Net::NetAddr stV6;
+	if (!stV6.Init("::1", sPort) || stV6.Endpoint() != "[::1]:" + sPort || stV6.IsUnspecified())
+	{
+		++iBad;
+	}
+	OI::Net::NetAddr stBracket;
+	if (!stBracket.Init("[::1]", sPort) || stBracket.Endpoint() != "[::1]:" + sPort || stBracket.IsUnspecified())
+	{
+		++iBad;
+	}
+	OI::Net::NetAddr stAny4;
+	if (!stAny4.Init("0.0.0.0", sPort) || !stAny4.IsUnspecified())
+	{
+		++iBad;
+	}
+	OI::Net::NetAddr stAny6;
+	if (!stAny6.Init("::", sPort) || !stAny6.IsUnspecified())
+	{
+		++iBad;
+	}
+	OI::Net::NetAddr stAnyBracket;
+	if (!stAnyBracket.Init("[::]", sPort) || !stAnyBracket.IsUnspecified())
+	{
+		++iBad;
+	}
+	if (OI::Net::NetAddr::Endpoint("localhost", sPort) != "localhost:" + sPort)
+	{
+		++iBad;
+	}
+	return iBad;
+}
+
+static OI::Coro::TaskResult<int> AwaitAddressConnect(AddressConnectProbe* pProbe)
+{
+	co_return (co_await pProbe->StartClient()) ? 0 : 1;
+}
+
+static OI::Coro::TaskResult<int> CheckAddressConnect()
+{
+	const std::string sPort = IpcServerPort();
+	const std::string sListenPort = Ipv6ListenPort();
+	int iBad = CheckLiteralAddress(sPort);
+	static AddressConnectProbe stLocal("localhost", sPort);
+	if (!(co_await stLocal.StartClient()) || stLocal.Connections() != 1)
+	{
+		++iBad;
+	}
+	if (!(co_await stLocal.StartClient()) || stLocal.Connections() != 1)
+	{
+		++iBad;
+	}
+	stLocal.CloseAllSessions();
+	static AddressConnectProbe stServer("::1", sListenPort);
+	if (!stServer.StartServer(true))
+	{
+		++iBad;
+	}
+	static AddressConnectProbe stV6("::1", sListenPort);
+	static AddressConnectProbe stBracket("[::1]", sListenPort);
+	if (!(co_await stV6.StartClient()) || stV6.Connections() != 1)
+	{
+		++iBad;
+	}
+	if (!(co_await stBracket.StartClient()) || stBracket.Connections() != 1)
+	{
+		++iBad;
+	}
+	stV6.CloseAllSessions();
+	stBracket.CloseAllSessions();
+	static AddressConnectProbe stMissing("no-such-host.invalid", sPort);
+	if (co_await stMissing.StartClient())
+	{
+		++iBad;
+	}
+	stMissing.CloseAllSessions();
+	LOG_TRACE("hold address connect bad=%d", iBad);
+	static AddressConnectProbe stStress("localhost", sPort);
+	std::vector<OI::Coro::TaskResult<int>> vConnects;
+	for (int iIndex = 0; iIndex < 64; ++iIndex)
+	{
+		vConnects.push_back(AwaitAddressConnect(&stStress));
+	}
+	int iStressBad = 0;
+	for (const auto& stConnect : vConnects)
+	{
+		iStressBad += co_await stConnect;
+	}
+	if (stStress.Connections() != 1)
+	{
+		++iStressBad;
+	}
+	for (int iRound = 0; iRound < 20; ++iRound)
+	{
+		stStress.CloseAllSessions();
+		if (!(co_await stStress.StartClient()))
+		{
+			++iStressBad;
+		}
+	}
+	stStress.CloseAllSessions();
+	LOG_TRACE("hold address stress waiters=64 rounds=20 bad=%d", iStressBad);
+	co_return iBad + iStressBad;
 }
 
 struct TimerExceptionProbe
@@ -3609,6 +3781,7 @@ OI::Coro::Task HoldMgr::Pump()
 	iBad += co_await CheckAwaitOwnership();
 	iBad += CheckBinaryBool();
 	iBad += co_await CheckClientConnect();
+	iBad += co_await CheckAddressConnect();
 	iBad += co_await CheckDirectBackpressure();
 	iBad += co_await CheckConnectionIsolation();
 	bool bRegistryChecks = false;

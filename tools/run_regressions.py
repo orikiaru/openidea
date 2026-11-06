@@ -652,6 +652,8 @@ def run(case, args):
                 assert "hold binary bool bad=0" in text
                 assert "hold connection isolation bad=0" in text
                 assert "hold coroutine connect bad=0" in text
+                assert "hold address connect bad=0" in text
+                assert "hold address stress waiters=64 rounds=20 bad=0" in text
                 assert "hold reentrant connect first=1 retry=0 connections=1 bad=0" in text
                 assert "hold registry pairing bad=0" in text
                 assert "hold route target stability bad=0" in text

@@ -62,7 +62,7 @@ bool SessionManager::Init()
 
 	assert(GetSessionTypeByString(sType) != SESSION_TYPE_INVALID);
 	DefaultInit(sIpLocal, sPortLocal, GetSessionTypeByString(sType));
-	sEndpoint = sIpLocal + ":" + sPortLocal;
+	sEndpoint = NetAddr::Endpoint(sIpLocal, sPortLocal);
 	if (!sServiceName.empty())
 	{
 		::OI::Base::RegistryClient::GetInstance().Watch(this, sServiceName);
@@ -165,6 +165,47 @@ void SessionManager::BeginConnect(const std::shared_ptr<ConnectWait>& pWaitLocal
 	pRequest.release();
 }
 
+struct ConnectResolve
+{
+	SessionManager* pManager;
+	uint64_t iGeneration;
+};
+
+struct ConnectResolver
+{
+	static void OnResolved(void* pArgument, bool bOk, NetAddr stAddr)
+	{
+		std::unique_ptr<ConnectResolve> pJob(static_cast<ConnectResolve*>(pArgument));
+		if (!pJob || !pJob->pManager)
+		{
+			return;
+		}
+		SessionManager* pManager = pJob->pManager;
+		// 代次已经被换掉或收过口时，等待者由那边唤醒。这一代还挂着就必须走 AbortSession，co_await StartClient() 才能回来。
+		if (pJob->iGeneration != pManager->iConnectGeneration || !pManager->bConnectPending)
+		{
+			return;
+		}
+		if (pManager->bServiceDown || !bOk || stAddr.Host().empty())
+		{
+			pManager->AbortSession(pJob->iGeneration);
+			return;
+		}
+		pManager->DefaultInit(stAddr.Host(), pManager->sPort, pManager->iSessionType);
+		pManager->sEndpoint = stAddr.Endpoint();
+		if (pManager->HasEndpoint(pManager->sEndpoint))
+		{
+			pManager->bConnectPending = false;
+			pManager->FinishConnectWaiters(true);
+			return;
+		}
+		if (!ConnectChannel::StartConnect(pManager, true))
+		{
+			pManager->AbortSession(pJob->iGeneration);
+		}
+	}
+};
+
 void SessionManager::StartConnect(const std::shared_ptr<ConnectWait>& pWaitLocal)
 {
 	assert(Poll::GetInstance().InLoopThread());
@@ -173,7 +214,7 @@ void SessionManager::StartConnect(const std::shared_ptr<ConnectWait>& pWaitLocal
 		pWaitLocal->Finish(false);
 		return;
 	}
-	if (!bConnectPending && HasEndpoint(sIpAddress + ":" + sPort))
+	if (!bConnectPending && HasEndpoint(NetAddr::Endpoint(sIpAddress, sPort)))
 	{
 		pWaitLocal->Finish(true);
 		return;
@@ -189,11 +230,10 @@ void SessionManager::StartConnect(const std::shared_ptr<ConnectWait>& pWaitLocal
 		return;
 	}
 	bConnectPending = true;
-	const uint64_t iGeneration = ++iConnectGeneration;
-	if (!ConnectChannel::StartConnect(this, true))
-	{
-		AbortSession(iGeneration);
-	}
+	ConnectResolve* pJob = new ConnectResolve();
+	pJob->pManager = this;
+	pJob->iGeneration = ++iConnectGeneration;
+	NetAddr::Resolve(sIpAddress, sPort, &ConnectResolver::OnResolved, pJob);
 }
 
 void SessionManager::CloseEndpoint(const std::string& sEndpoint)
@@ -290,7 +330,7 @@ void SessionManager::ApplyService(const std::string& sIpLocal, const std::string
 		OnServiceDown();
 		return;
 	}
-	std::string sEndpointLocal = sIpLocal + ":" + sPortLocal;
+	std::string sEndpointLocal = NetAddr::Endpoint(sIpLocal, sPortLocal);
 	bool bWasDown = bServiceDown;
 	bool bMoved = sEndpoint != sEndpointLocal;
 	bServiceSeen = true;
@@ -387,7 +427,7 @@ int32_t SessionManager::SendBytesResult(sid_t iSessionId, const ::OI::Base::Byte
 
 void SessionManager::AddSession(Session* pSession)
 {
-	AddSession(pSession, sIpAddress + ":" + sPort, iMaxSendQueueBytes, iMaxReceiveBufferBytes);
+	AddSession(pSession, NetAddr::Endpoint(sIpAddress, sPort), iMaxSendQueueBytes, iMaxReceiveBufferBytes);
 }
 
 void SessionManager::AddSession(Session* pSession, const std::string& sEndpoint, size_t iSendBytes, size_t iReceiveBytes)
@@ -449,6 +489,17 @@ void SessionManager::CompleteConnect(net_socket_t iDescriptor, uint64_t iGenerat
 			pWait->Finish(true);
 		}
 	}
+}
+
+void SessionManager::CancelConnect()
+{
+	if (!bConnectPending)
+	{
+		return;
+	}
+	++iConnectGeneration;
+	bConnectPending = false;
+	FinishConnectWaiters(false);
 }
 
 void SessionManager::AbortSession(uint64_t iGeneration)

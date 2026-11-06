@@ -24,19 +24,18 @@ bool NetHelper::CreateSocket(NetSocket& stNetSocket, SessionManager* pMgr, bool 
 		LOG_ERROR("NetHelper::CreateSocket sync socket not supported id=%s", pMgr->GetIDString().c_str());
 		return false;
 	}
-	net_socket_t iSfd = NetOs_CreateTcp(bAsync);
+	if (!stNetSocket.GetAddr().Init(pMgr))
+	{
+		LOG_ERROR("NetHelper::CreateSocket Init error id=%s", pMgr->GetIDString().c_str());
+		return false;
+	}
+	net_socket_t iSfd = stNetSocket.GetAddr().CreateTcp(bAsync);
 	if (iSfd == INVALID_SOCKET_ID)
 	{
 		LOG_ERROR("NetHelper::CreateSocket id=%s, err=%s", pMgr->GetIDString().c_str(), NetOs_StrError(errno));
 		return false;
 	}
-	if (!stNetSocket.Init(iSfd, pMgr))
-	{
-		LOG_ERROR("NetHelper::CreateSocket Init error id=%s", pMgr->GetIDString().c_str());
-		NetOs_Close(iSfd);
-		stNetSocket.Detach();
-		return false;
-	}
+	stNetSocket.Attach(iSfd);
 	stNetSocket.SetAsync(bAsync);
 	return true;
 }
