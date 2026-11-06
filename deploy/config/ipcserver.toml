@@ -26,6 +26,13 @@ type = "tcp"
 # advertise_port = "27981"
 
 
+# UDP 回归的服务端口。一个对端地址一条会话，idle_timeout_ms 内没收没发就关。
+[IpcUdp]
+ip = "127.0.0.1"
+port = "17983"
+type = "udp"
+idle_timeout_ms = 60000
+
 # 起服后发一次 GET 看 HTTP 客户端。host 不填就不发，压测时别打开。
 [HttpProbe]
 # host = "www.baidu.com"

@@ -81,3 +81,23 @@ endforeach()
 这次只修改 C++ 字段名：字段编号、类型、顺序和已有 JSON 键保持不变，配置键不改。生成后的头文件不要手工修；修改协议源后重新执行 cmake。
 
 JSON 解码约定：整数只接受 JSON 整数 token，拒绝小数（包括 `1.0`）、越界和负数转无符号；整数 map 键必须完整匹配十进制整数，不接受空白、加号、尾随字符或溢出。生成的 `FromJson` 返回 false 时保留原对象，成功时更新提供的字段，缺失字段保持原值；容器成功后整体替换。保证覆盖普通验证失败，不把内存分配异常伪装为 false。
+
+## 枚举和错误码
+
+文本协议认 `rpcdata`、`rpc`、`enum`、`errordef` 四种。`enum` 和 `errordef` 只生成普通 C 枚举，不参与序列化，全部写进 `modules/include/rpc_enums.h`，名字空间 `OI::RpcData`，`rpc_ids.h` 已经包含它。
+
+```text
+enum UdpProbe {
+    UDP_PROBE_PEER_ADDR = -1;
+    UDP_PROBE_SESSIONS = -2;
+}
+
+errordef UdpError {
+    UDP_ERR_REJECTED = 1001;
+}
+```
+
+- 每项写成 `名字 = 值;`，值必须手写。名字是大写下划线，不带作用域，所有 `enum` 和 `errordef` 之间不能重名；同一个枚举里值不能重。
+- `errordef` 是业务错误码，必须是正数，所有 `errordef` 之间值不能重。框架错误码在 `oi_errno.h`，是负数，0 是成功。处理函数直接 `co_return ::OI::RpcData::UDP_ERR_REJECTED;`，客户端 `RpcCall` 原样拿到这个值。
+- `rpcdata` 字段不能写枚举类型，用定宽整数（通常是 `int32_t`），比较和赋值时用枚举常量。
+- 只有文本协议支持，XML 协议不支持。用例是 `modules/xmlconfig/proto.xml` 的 `UdpProbe`、`UdpError`，由 `udp` 回归覆盖。

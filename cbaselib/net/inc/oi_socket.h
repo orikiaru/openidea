@@ -20,6 +20,7 @@ class Ipv4Addr
 	// 拷进一条 IPv4 sockaddr。族不对返回 false。
 	bool Init(const sockaddr* pAddr, socklen_t iLength);
 	std::string Host() const;
+	uint16_t Port() const;
 	// ip:port。
 	std::string Endpoint() const;
 	bool IsUnspecified() const;
@@ -41,6 +42,7 @@ class Ipv6Addr
 	// 拷进一条 IPv6 sockaddr。族不对返回 false。
 	bool Init(const sockaddr* pAddr, socklen_t iLength);
 	std::string Host() const;
+	uint16_t Port() const;
 	// [ip]:port。
 	std::string Endpoint() const;
 	bool IsUnspecified() const;
@@ -66,8 +68,16 @@ class NetAddr
 	bool Init(SessionManager* pMgr);
 	// 解析结果里有 IPv4 就用 IPv4，否则用 IPv6。
 	bool Init(const addrinfo* pList);
+	// 拷进一条系统地址，比如 recvfrom 带回来的来源。族不认识返回 false。
+	bool Init(const sockaddr* pAddr, socklen_t iLength);
+	// AF_INET、AF_INET6，还没填是 AF_UNSPEC。
+	int32_t Family() const
+	{
+		return m_iProtocolType;
+	}
 	// 不带方括号的地址文本。
 	std::string Host() const;
+	uint16_t Port() const;
 	// 端点文本。交给当前地址族去拼。
 	std::string Endpoint() const;
 	// 认得出就用 Endpoint()，认不出就按原文字拼 ip:port。
@@ -76,6 +86,8 @@ class NetAddr
 	bool IsUnspecified() const;
 	// 按当前地址族建 TCP 套接字。
 	net_socket_t CreateTcp(bool bNonblock) const;
+	// 按当前地址族建 UDP 套接字。
+	net_socket_t CreateUdp(bool bNonblock) const;
 	// 字面 IPv4 / IPv6 在返回前回调。域名在 poll 线程解析，有 IPv4 用 IPv4，否则用 IPv6。
 	// 只在 poll 线程调用。成功失败都回调一次。
 	static void Resolve(const std::string& sHost, const std::string& sPort, void (*fnDone)(void* pArgument, bool bOk, NetAddr stAddr), void* pArgument);

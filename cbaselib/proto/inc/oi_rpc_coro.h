@@ -70,6 +70,8 @@ OI::Coro::Task RunHandledRpc(F fnFunction, proto_type_t iResponseId, OI::Coro::T
 		ReportRpcError(iToken, 0, iSessionId, iResponseId, "decode_call_id", std::current_exception());
 		co_return;
 	}
+	// 单向消息发到了请求处理函数上：照常处理，不回包，免得回执被对端当成又一条单向消息。
+	const bool bNotify = iCallIdLocal == 0;
 	iCallIdLocal &= ~(uint64_t)RPC_REQ_MASK;
 	Req stRequestLocal{};
 	Res stResponseLocal{};
@@ -114,6 +116,10 @@ OI::Coro::Task RunHandledRpc(F fnFunction, proto_type_t iResponseId, OI::Coro::T
 		iRetcode = OI_ERR_FAIL;
 		ReportRpcError(iToken, iCallIdLocal, iSessionId, iResponseId, pStage, std::current_exception());
 		OI::Coro::ReportTaskError(iToken, std::current_exception());
+	}
+	if (bNotify)
+	{
+		co_return;
 	}
 	::OI::Base::BytesStream stFrame;
 	try
@@ -176,6 +182,82 @@ template <typename Req, typename F>
 void HandleRpc(F fnFunction)
 {
 	HandleRpc<Req, typename RpcProtoId<Req>::Response>(std::move(fnFunction));
+}
+
+// 单向消息：调用号 0 + Msg，不回包。处理函数接收 (msg) 或 (context, msg)，返回 RpcTask 或 int32_t，返回码没人收，只是和 RPC 写法一致。
+template <typename Msg, typename F>
+OI::Coro::Task RunHandledNotify(F fnFunction, OI::Coro::Token iToken, ::OI::Net::SessionManager* pManager, sid_t iSessionId, ::OI::Base::BytesStream stBody)
+{
+	uint64_t iCallIdLocal = 0;
+	Msg stMessageLocal{};
+	const char* pStage = "decode_notify";
+	try
+	{
+		stBody >> iCallIdLocal;
+		stMessageLocal.deserialize(stBody);
+		pStage = "notify_handler";
+		RpcContext stContext{iToken, *pManager, iSessionId};
+		auto stInvoke = [pFunction = &fnFunction, pMessage = &stMessageLocal, pContext = &stContext]()
+		{
+			if constexpr (std::is_invocable_v<F&, Msg&>)
+			{
+				return (*pFunction)(*pMessage);
+			}
+			else
+			{
+				static_assert(std::is_invocable_v<F&, const RpcContext&, Msg&>, "notify handler must accept (msg) or (context, msg)");
+				return (*pFunction)(*pContext, *pMessage);
+			}
+		};
+		using Return = decltype(stInvoke());
+		if constexpr (std::is_same_v<Return, int32_t>)
+		{
+			stInvoke();
+		}
+		else
+		{
+			static_assert(std::is_same_v<Return, RpcTask>, "notify handler must return RpcTask or int32_t");
+			co_await OI::Coro::InvokeTask(OI::Coro::TaskLaunch{iToken, false, false}, stInvoke);
+		}
+	}
+	catch (::OI::Base::ParserException&)
+	{
+		ReportRpcError(iToken, iCallIdLocal, iSessionId, RpcProtoId<Msg>::iValue, pStage, std::current_exception());
+	}
+	catch (...)
+	{
+		ReportRpcError(iToken, iCallIdLocal, iSessionId, RpcProtoId<Msg>::iValue, pStage, std::current_exception());
+		OI::Coro::ReportTaskError(iToken, std::current_exception());
+	}
+	co_return;
+}
+
+template <typename Msg, typename F>
+void HandleNotify(F fnFunction)
+{
+	BindRpcHandler(RpcProtoId<Msg>::iValue, [fnFunction](OI::Coro::Token iToken, ::OI::Net::SessionManager* pManager, sid_t iSessionId, ::OI::Base::BytesStream stBody) -> OI::Coro::Task
+	{
+		return RunHandledNotify<Msg>(fnFunction, iToken, pManager, iSessionId, std::move(stBody));
+	});
+}
+
+// 发一条单向消息，不等回包。返回 SendBytesResult 的错误码，编码失败是 OI_ERR_ENCODE。
+template <typename Msg>
+int32_t RpcNotify(::OI::Net::SessionManager& stManager, sid_t iSessionId, const Msg& stMessage)
+{
+	::OI::Base::BytesStream stFrame;
+	try
+	{
+		::OI::Base::BytesStream stBody;
+		stBody << uint64_t(0);
+		stMessage.serialize(stBody);
+		stFrame = EncodePbFrame(RpcProtoId<Msg>::iValue, stBody);
+	}
+	catch (...)
+	{
+		return OI_ERR_ENCODE;
+	}
+	return stManager.SendBytesResult(iSessionId, stFrame.GetMutableBuff());
 }
 
 // 返回调用号。回包、超时或 WakeRpcCall 三者只有一个会触发 decode/resume。
@@ -1077,3 +1159,23 @@ auto ProtoClientManager::CallMany(const std::vector<int32_t>& vZoneIds, const Re
 	::OI::Rpc::RpcTask Function(const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::Name##Req& stRequest, ::OI::RpcData::Name##Res& stResponse)
 #define OI_RPC_BIND(Name, ...) \
 	::OI::Rpc::HandleRpc<::OI::RpcData::Name##Req>((__VA_ARGS__))
+// 从本次回调的上下文拿回组件。stManager 必须就是这个类型，对象要活过所有在途请求。
+#define OI_RPC_SELF(Type) static_cast<Type&>(stContext.stManager)
+// 注册成员函数。不在这里绑 this，处理时用上下文还原对象再调用。成员签名与 OI_RPC_CONTEXT_HANDLER 相同。
+#define OI_RPC_BIND_SELF(Name, Type, Member) \
+	::OI::Rpc::HandleRpc<::OI::RpcData::Name##Req>([](const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::Name##Req& stRequest, ::OI::RpcData::Name##Res& stResponse) -> decltype(auto) \
+	{ \
+		return OI_RPC_SELF(Type).Member(stContext, stRequest, stResponse); \
+	})
+
+// 单向消息。协议 Name 只用 NameReq，生成的 NameRes 不会出现在线上。
+#define OI_NOTIFY_HANDLER(Name, Function) \
+	::OI::Rpc::RpcTask Function(const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::Name##Req& stRequest)
+#define OI_NOTIFY_BIND(Name, ...) \
+	::OI::Rpc::HandleNotify<::OI::RpcData::Name##Req>((__VA_ARGS__))
+// 注册成员函数，签名与 OI_NOTIFY_HANDLER 相同。
+#define OI_NOTIFY_BIND_SELF(Name, Type, Member) \
+	::OI::Rpc::HandleNotify<::OI::RpcData::Name##Req>([](const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::Name##Req& stRequest) -> decltype(auto) \
+	{ \
+		return OI_RPC_SELF(Type).Member(stContext, stRequest); \
+	})

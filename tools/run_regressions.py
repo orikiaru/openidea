@@ -38,8 +38,10 @@ IPC_FALLBACK_PORT = 17982
 REDIS_SERVER_PORT = 16379
 REGISTRY_PORT = 17990
 GAME_PORTS = (17992, 17993)
+# ipcserver 的 UDP 口，只有 udp 用例往这里发。
+UDP_PORT = 17983
 # --port-offset 平移的端口；多份工作目录并行跑时各用一段，互不抢占。
-BASE_PORTS = (REDIS_PORT, LOGD_PORT, IPC_PORT, IPC_FALLBACK_PORT, REDIS_SERVER_PORT, REGISTRY_PORT) + GAME_PORTS
+BASE_PORTS = (REDIS_PORT, LOGD_PORT, IPC_PORT, IPC_FALLBACK_PORT, REDIS_SERVER_PORT, REGISTRY_PORT, UDP_PORT) + GAME_PORTS
 PORT_OFFSET = 0
 CLIENT_SECONDS = {"hold": 120}
 
@@ -130,8 +132,9 @@ def cleanup_owned(procs, handles, root, args, case, *, db=None, db_paused=False,
 
 
 def apply_port_offset(offset):
-    global REDIS_PORT, LOGD_PORT, IPC_PORT, IPC_FALLBACK_PORT, REDIS_SERVER_PORT, REGISTRY_PORT, GAME_PORTS, PORT_OFFSET
+    global REDIS_PORT, LOGD_PORT, IPC_PORT, IPC_FALLBACK_PORT, REDIS_SERVER_PORT, REGISTRY_PORT, UDP_PORT, GAME_PORTS, PORT_OFFSET
     PORT_OFFSET = offset
+    UDP_PORT += offset
     REDIS_PORT += offset
     LOGD_PORT += offset
     IPC_PORT += offset
@@ -366,7 +369,7 @@ def run(case, args):
                 if case == "redis-limit":
                     text = text.replace("[RedisClient]", "[RedisClient]\nmax_pending = 1")
                     text = replace(text, "tasks", "0")
-                for flag in ("echo", "log", "redis", "hold"):
+                for flag in ("echo", "log", "redis", "hold", "udp"):
                     text = replace(text, flag, "true" if mode == flag else "false")
                 if mode == "hold":
                     text = replace(text, "max_pending_pulls", "16")
@@ -482,6 +485,8 @@ def run(case, args):
                     text = text.replace('name = "ipcserver"', 'name = "gameserver"', 1)
                     text = re.sub(r"(?m)^id = 1$", 'id = %s\nzone = "%s"' % (zone, zone), text, count=1)
                     text = text.replace('port = "%d"' % IPC_PORT, 'port = "%d"' % port, 1)
+                    # 同一份配置，UDP 口让系统分配，不和主服抢。
+                    text = text.replace('port = "%d"' % UDP_PORT, 'port = "0"', 1)
                     path = cfg / ("gameserver-%s.toml" % zone)
                     path.write_text(text, encoding="utf-8")
                     proc, output = start("gameserver-" + zone, [str(work / ("ipcserver" + SUFFIX)), str(path)])
@@ -573,6 +578,19 @@ def run(case, args):
             if mode == "echo":
                 assert "ok=1000000 mismatch=0 rpc_fail=0" in text
                 assert text.count("ipc client connect sid=") == 1, "echo test started more than once"
+            elif mode == "udp":
+                assert "ipc udp listen port=%d" % UDP_PORT in serverpath.read_text(encoding="utf-8", errors="replace")
+                assert re.search(r"udp local port=[1-9]\d* bad=0", text)
+                assert "udp open dedup bad=0" in text
+                assert "udp peer addr bad=0" in text
+                assert "udp server sees client port bad=0" in text
+                assert "udp rpc calls=1000 bad=0" in text
+                assert "udp notify sent=1000 received=1000 duplicate=0 bad=0" in text
+                assert "udp protocol error code ret=1001 bad=0" in text
+                assert "udp large datagram bytes=60000 bad=0" in text
+                assert "udp garbage keeps session sessions=1 bad=0" in text
+                assert "udp idle close reopen bad=0" in text
+                assert "udp done bad=0" in text
             elif case == "redis-shutdown":
                 assert shutdown_sent and "redis shutdown result=2 late=2 bad=0" in text
             elif case == "redis-queue-timeout":
@@ -769,7 +787,7 @@ def run_web(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case", default="all", choices=("all", "echo", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "clock-forward", "clock-back", "registry", "web"))
+    parser.add_argument("--case", default="all", choices=("all", "echo", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "clock-forward", "clock-back", "registry", "udp", "web"))
     parser.add_argument("--bin-dir", type=Path, default=REPO / "deploy/bin")
     parser.add_argument("--redis-binary", type=Path, default=Path("/usr/local/bin/redis-server"))
     parser.add_argument("--clock-fault-so", type=Path)
@@ -790,7 +808,9 @@ if __name__ == "__main__":
         with socket.socket() as probe:
             probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             probe.bind(("127.0.0.1", port))
-    cases = ("echo", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "registry", "web") if options.case == "all" else (options.case,)
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        probe.bind(("127.0.0.1", UDP_PORT))
+    cases = ("echo", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "registry", "udp", "web") if options.case == "all" else (options.case,)
     results = []
     for item in cases:
         started = time.monotonic()

@@ -1,0 +1,12 @@
+---
+description: 分层、Channel、Session、会话、会话管理器、逻辑mgr、Mgr、实体、转发、裸包、拆包、recvfrom、sendto、CloneSession、Load、Save、读改存、配置解析、框架缺能力。写业务或改收发前先读 docs/develop.md 第 1 节。
+alwaysApply: false
+---
+
+# 分层
+
+先读 `docs/develop.md` 第 1 节。
+
+Channel 只收发字节，Session 负责序列化和反序列化。业务不碰裸包。会话管理器只管会话和协议转发：协议转给逻辑 mgr，mgr 处理，填回包并返回错误码。mgr 管实体的集合和配置，实体的操作写在实体类里，例如 `RoomServer` 转给 `RoomMgr`，`RoomMgr` 操作 `Room`。
+
+读改存写成 Load、Handle、Save。配置在 mgr 的 `Init` 里读一次，再按参数交给实体。要换会话类型就重写 `CloneSession`。框架缺能力就在 cbaselib 里补，并补齐回归，不在业务里绕。

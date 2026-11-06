@@ -134,6 +134,12 @@ Redis 也单独测。开关是 `[Test] redis`。先起本机 Redis（`maxmemory 
 | 协议、proto.xml、rpcdata、模块 | `docs/module.md` | `modules/xmlconfig/proto.xml` 的 `AllEcho`、`Hold` |
 | 端口、复用、bind、TIME_WAIT、监听 | `docs/cbaselib.md` 的 net 段 | `cbaselib/port/oi_net_os.cpp` 的 `NetOs_Bind` |
 | Web、HTTP、JSON、urlencode、二进制 body | `docs/module.md` 的 Web 段 | `modules/webserver` 的四个路径；`modules/webclient` 的 `Run` |
+| 分层、Channel、Session、会话管理器、逻辑 mgr、裸包、转发、CloneSession | `docs/develop.md` 第 1 节 | `modules/ipcserver/src/ipcudp.cpp` 的 `IpcUdp` |
+| 目录、src、类外函数、全局/静态变量、友元、StartTask、单线程/多线程选型 | `docs/develop.md` 第 2、6 节 | `OI_RPC_BIND_SELF`、`OI_NOTIFY_BIND_SELF` |
+| 错误码、iCode、errordef、自定义结构、手写序列化 | `docs/develop.md` 第 3、4 节 | `cbaselib/include/oi_errno.h` |
+| 时间、计时、GetTime、毫秒、过期、ttl、缓存 | `docs/develop.md` 第 5 节 | `cbaselib/timer/inc/oi_timer_helper.h` 的 `GetTime` |
+| 测试、回归、补用例、全量、clangd | `docs/develop.md` 第 7 节、`docs/testing.md` | `modules/ipcclient/src/udp_mgr.cpp` 的 `UdpMgr` |
+| 提交、推送、子模块、todo | `docs/develop.md` 第 8 节 | 本文件「提交就是提交并推送」 |
 
 
 # 字段、参数和局部变量命名规范

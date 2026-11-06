@@ -1,0 +1,12 @@
+---
+description: 测试、回归、用例、补用例、全量、矩阵、run_regressions、test_matrix、run_cases、单线程多线程都跑、Redis 实例、clangd、编译。加用例或跑测试前先读 docs/develop.md 第 7 节和 docs/testing.md。
+alwaysApply: false
+---
+
+# 测试
+
+先读 `docs/develop.md` 第 7 节和 `docs/testing.md`。
+
+框架的新能力要在 `ipcclient` / `ipcserver` 里加回归：一个 Mgr，一个 `[Test]` 开关，`run_regressions.py` 里加用例和标记断言，并收进 `--case all`，同步改 `testing.md`。参照 `udp` 用例的 `UdpMgr` 和 `IpcUdp`。
+
+测试自己起 Redis 等临时实例，不借用户的服务。全量是 Windows、Linux 各跑多线程和单线程，编译和矩阵交给 subagent。应用仓库另跑自己的用例（lanroom 是 `python test\run_cases.py`）。改完在本机编一次，让 clangd 能跳转。清理用 `tools/kill_test_procs.py`，不按进程名杀。

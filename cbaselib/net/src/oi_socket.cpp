@@ -62,6 +62,11 @@ std::string Ipv4Addr::Host() const
 	return sText;
 }
 
+uint16_t Ipv4Addr::Port() const
+{
+	return ntohs(m_stAddr.sin_port);
+}
+
 std::string Ipv4Addr::Endpoint() const
 {
 	const std::string sHost = Host();
@@ -147,6 +152,11 @@ std::string Ipv6Addr::Host() const
 		return std::string();
 	}
 	return sText;
+}
+
+uint16_t Ipv6Addr::Port() const
+{
+	return ntohs(m_stAddr.sin6_port);
 }
 
 std::string Ipv6Addr::Endpoint() const
@@ -262,6 +272,22 @@ bool NetAddr::Init(const addrinfo* pList)
 	return false;
 }
 
+bool NetAddr::Init(const sockaddr* pAddr, socklen_t iLength)
+{
+	m_iProtocolType = AF_UNSPEC;
+	if (m_stV4.Init(pAddr, iLength))
+	{
+		m_iProtocolType = AF_INET;
+		return true;
+	}
+	if (m_stV6.Init(pAddr, iLength))
+	{
+		m_iProtocolType = AF_INET6;
+		return true;
+	}
+	return false;
+}
+
 std::string NetAddr::Host() const
 {
 	if (m_iProtocolType == AF_INET)
@@ -273,6 +299,19 @@ std::string NetAddr::Host() const
 		return m_stV6.Host();
 	}
 	return std::string();
+}
+
+uint16_t NetAddr::Port() const
+{
+	if (m_iProtocolType == AF_INET)
+	{
+		return m_stV4.Port();
+	}
+	if (m_iProtocolType == AF_INET6)
+	{
+		return m_stV6.Port();
+	}
+	return 0;
 }
 
 std::string NetAddr::Endpoint() const
@@ -321,6 +360,20 @@ net_socket_t NetAddr::CreateTcp(bool bNonblock) const
 	if (m_iProtocolType == AF_INET6)
 	{
 		return NetOs_CreateTcp6(bNonblock);
+	}
+	errno = EAFNOSUPPORT;
+	return INVALID_SOCKET_ID;
+}
+
+net_socket_t NetAddr::CreateUdp(bool bNonblock) const
+{
+	if (m_iProtocolType == AF_INET)
+	{
+		return NetOs_CreateUdp4(bNonblock);
+	}
+	if (m_iProtocolType == AF_INET6)
+	{
+		return NetOs_CreateUdp6(bNonblock);
 	}
 	errno = EAFNOSUPPORT;
 	return INVALID_SOCKET_ID;

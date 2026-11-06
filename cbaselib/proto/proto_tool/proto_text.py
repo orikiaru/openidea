@@ -1,3 +1,4 @@
+import re
 from common import loginfo
 from serialize_data_parse import ClassMember
 from serialize_data_parse import SerializeData
@@ -63,6 +64,16 @@ class ProtoLexer:
         while self.i < self.n and self.text[self.i].isdigit():
             self.i += 1
         return int(self.text[start:self.i])
+
+    def signed_number(self):
+        negative = False
+        if self.peek_char() == "-":
+            self.i += 1
+            negative = True
+        value = self.number()
+        if value is None:
+            return None
+        return -value if negative else value
 
     def punct(self, ch):
         if self.peek_char() != ch:
@@ -193,6 +204,41 @@ def ParseRpc(lex):
     data.members.append(res)
     return data
 
+ENUM_ITEM_NAME = re.compile(r"[A-Z][A-Z0-9_]*")
+# 框架错误码是负数（oi_errno.h），业务错误码用正数。
+
+# enum 和 errordef 都是 `名字 = 值;`，值必须手写。
+def ParseEnum(lex, data_type):
+    name = lex.ident()
+    if name is None or not lex.punct("{"):
+        return None
+    data = SerializeData(data_type, None)
+    data.name = name
+    values = set()
+    while not lex.eof() and lex.peek_char() != "}":
+        item = lex.ident()
+        if item is None or not lex.punct("="):
+            return None
+        value = lex.signed_number()
+        if value is None or not lex.punct(";"):
+            return None
+        if not ENUM_ITEM_NAME.fullmatch(item):
+            return lex.fail("enum item must be UPPER_SNAKE name=" + item)
+        if data_type == SerializeDataType.ERROR_DEF and value <= 0:
+            return lex.fail("errordef value must be positive name=%s value=%d" % (item, value))
+        if value in values:
+            return lex.fail("duplicate enum value name=" + item)
+        values.add(value)
+        member = ClassMember()
+        member.name = item
+        member.value = value
+        data.members.append(member)
+    if not lex.punct("}"):
+        return None
+    if len(data.members) == 0:
+        return lex.fail("empty enum name=" + name)
+    return data
+
 def ParseProtoText(text):
     lex = ProtoLexer(text)
     datas = []
@@ -202,8 +248,12 @@ def ParseProtoText(text):
             data = ParseRpcData(lex)
         elif kind == "rpc":
             data = ParseRpc(lex)
+        elif kind == "enum":
+            data = ParseEnum(lex, SerializeDataType.ENUM)
+        elif kind == "errordef":
+            data = ParseEnum(lex, SerializeDataType.ERROR_DEF)
         else:
-            loginfo("proto line", lex.line, "expect rpcdata or rpc")
+            loginfo("proto line", lex.line, "expect rpcdata, rpc, enum or errordef")
             return None
         if data is None:
             return None

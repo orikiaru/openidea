@@ -26,6 +26,7 @@ class Session
 {
 	friend class Poll;
 	friend class NetChannel;
+	friend class UDP_Channel;
 
   protected:
 	// 连接状态，取 IO_ST_*。

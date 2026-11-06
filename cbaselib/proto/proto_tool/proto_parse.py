@@ -113,7 +113,38 @@ class ProtocolGen:
             if not self.CheckSerializeData(p.GetType(), p):
                 return False
             self.serialize_datas.append(p)
-        return self.CheckKeyComparators()
+        return self.CheckEnums() and self.CheckKeyComparators()
+
+    # 枚举项不带作用域，名字全局唯一；错误码在所有 errordef 之间也不能重。
+    # 枚举不参与序列化，rpcdata 字段用定宽整数，不能直接写枚举类型。
+    def CheckEnums(self)->bool:
+        items = {}
+        codes = {}
+        enum_names = set()
+        for data in self.serialize_datas:
+            if data.GetType() not in (SerializeDataType.ENUM, SerializeDataType.ERROR_DEF):
+                continue
+            enum_names.add(data.GetName())
+            for member in data.members:
+                if member.GetName() in items:
+                    loginfo("duplicate enum item name=", member.GetName(), ",first=", items[member.GetName()], ",second=", data.GetName())
+                    return False
+                items[member.GetName()] = data.GetName()
+                if data.GetType() != SerializeDataType.ERROR_DEF:
+                    continue
+                if member.GetValue() in codes:
+                    loginfo("duplicate error code value=", member.GetValue(), ",first=", codes[member.GetValue()], ",second=", member.GetName())
+                    return False
+                codes[member.GetValue()] = member.GetName()
+        for data in self.serialize_datas:
+            if data.GetType() != SerializeDataType.RPC_DATA:
+                continue
+            for member in data.members:
+                used = set(re.findall(r"[A-Za-z_][A-Za-z0-9_:]*", member.GetType())) & enum_names
+                if used:
+                    loginfo("rpcdata field cannot use enum type, use a fixed-width integer proto=", data.GetName(), ",field=", member.GetName(), ",enum=", sorted(used)[0])
+                    return False
+        return True
     
     def GenRpc(self,root)->bool:
         rpcs=root.findall("rpc")

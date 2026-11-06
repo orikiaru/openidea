@@ -8,6 +8,7 @@
 #include "oi_accept_channel.h"
 #include "oi_connect_channel.h"
 #include "oi_tcp_channel.h"
+#include "oi_udp_channel.h"
 #include <stdio.h>
 #include <vector>
 #include <memory>
@@ -30,11 +31,13 @@ bool SessionManager::Init()
 	int64_t iReceiveLimit = 64 * 1024 * 1024 + 8;
 	int64_t iFrameLimit = 64 * 1024 * 1024;
 	int64_t iFrameTimeout = 10000;
+	int64_t iIdleTimeout = 60000;
 	TryGetConfig(GetIDString() + ".max_receive_buffer_bytes", iReceiveLimit);
 	TryGetConfig(GetIDString() + ".max_frame_bytes", iFrameLimit);
 	TryGetConfig(GetIDString() + ".incomplete_frame_timeout_ms", iFrameTimeout);
+	TryGetConfig(GetIDString() + ".idle_timeout_ms", iIdleTimeout);
 	if (iFrameLimit < 8 || iFrameLimit > INT32_MAX || iReceiveLimit < iFrameLimit + 8 ||
-	    static_cast<uint64_t>(iReceiveLimit) > SIZE_MAX || iFrameTimeout <= 0)
+	    static_cast<uint64_t>(iReceiveLimit) > SIZE_MAX || iFrameTimeout <= 0 || iIdleTimeout <= 0)
 	{
 		fprintf(stderr, "invalid receive limits for %s\n", GetIDString().c_str());
 		return false;
@@ -42,6 +45,7 @@ bool SessionManager::Init()
 	iMaxReceiveBufferBytes = static_cast<size_t>(iReceiveLimit);
 	iMaxFrameBytes = static_cast<size_t>(iFrameLimit);
 	iIncompleteFrameTimeoutMilliseconds = static_cast<uint64_t>(iFrameTimeout);
+	iIdleTimeoutMilliseconds = static_cast<uint64_t>(iIdleTimeout);
 	std::string sIpLocal, sPortLocal, sType;
 	TryGetConfigAndReturnFalse(GetIDString() + ".ip", sIpLocal);
 	TryGetConfigAndReturnFalse(GetIDString() + ".port", sPortLocal);
@@ -363,6 +367,11 @@ bool SessionManager::StartServer(bool bAsync)
 	{
 		return false;
 	}
+	// 注册表登记的是 RPC 连接地址，UDP 口不登记。
+	if (iSessionType == SESSION_TYPE_UDP)
+	{
+		return true;
+	}
 	return ::OI::Base::RegistryClient::GetInstance().Publish(GetIDString(), GetStrIP(), GetStrPort());
 }
 
@@ -372,7 +381,31 @@ SESSION_TYPE SessionManager::GetSessionTypeByString(const std::string& sType)
 	{
 		return SESSION_TYPE_TCP;
 	}
+	if (sType == "udp")
+	{
+		return SESSION_TYPE_UDP;
+	}
 	return SESSION_TYPE_INVALID;
+}
+
+uint16_t SessionManager::LocalPort() const
+{
+	return pUdpChannel ? pUdpChannel->LocalPort() : 0;
+}
+
+sid_t SessionManager::OpenPeer(const std::string& sIp, const std::string& sPortLocal)
+{
+	NetAddr stAddr;
+	if (!pUdpChannel || !stAddr.Init(sIp, sPortLocal))
+	{
+		return INVALID_SID;
+	}
+	return pUdpChannel->OpenPeer(stAddr);
+}
+
+bool SessionManager::GetPeerAddr(sid_t iSessionId, NetAddr& stAddr)
+{
+	return pUdpChannel && pUdpChannel->GetPeerAddr(iSessionId, stAddr);
 }
 
 SessionManager::~SessionManager()

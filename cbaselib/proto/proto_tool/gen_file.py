@@ -61,14 +61,35 @@ class GenFile:
                     data_file = data_file.replace('#include "oi_rpc.h"\n', '#include "oi_rpc.h"\n' + extra, 1)
             if(data_file):
                 write_utf8(os.path.join(write_path, p.GetDataName()), data_file)
+        if(not self.GenEnums(write_path)):
+            return False
         if(not self.GenRpcIds(write_path)):
             return False
+        return True
+
+    # enum 和 errordef 都生成普通 C 枚举，放在一个头里；没有定义时也生成空头，包含它的地方不用判断。
+    def GenEnums(self, write_path):
+        lines = []
+        lines.append("#pragma once")
+        lines.append("namespace OI { namespace RpcData {")
+        for p in self.proto_parse.serialize_datas:
+            if p.GetType() not in (SerializeDataType.ENUM, SerializeDataType.ERROR_DEF):
+                continue
+            lines.append("enum %s" % p.GetName())
+            lines.append("{")
+            for m in p.members:
+                lines.append("    %s = %d," % (m.GetName(), m.GetValue()))
+            lines.append("};")
+        lines.append("}}")
+        lines.append("")
+        write_utf8(os.path.join(write_path, "rpc_enums.h"), "\n".join(lines) + "\n")
         return True
 
     def GenRpcIds(self, write_path):
         lines = []
         lines.append("#pragma once")
         lines.append("#include \"oi_header.h\"")
+        lines.append("#include \"rpc_enums.h\"")
         for p in self.proto_parse.serialize_datas:
             if p.GetType() == SerializeDataType.RPC:
                 lines.append('#include "oi_rpcdata_%s.h"' % p.GetRes().lower())

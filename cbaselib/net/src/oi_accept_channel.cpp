@@ -8,6 +8,7 @@
 
 #include "oi_accept_channel.h"
 #include "oi_session_manager.h"
+#include "oi_udp_channel.h"
 #include "oi_poll.h"
 #include "oi_net_os.h"
 #include "oi_log.h"
@@ -51,6 +52,9 @@ bool AcceptChannel::StartAccept(SessionManager* pMgr, bool bAsync)
 	{
 	case SESSION_TYPE_TCP:
 		return StartTcpAccept(pMgr, bAsync);
+	case SESSION_TYPE_UDP:
+		// UDP 没有 accept：绑上口，收到没见过的来源就新建会话。
+		return UDP_Channel::StartBind(pMgr);
 	default:
 		printf("SessionManager::StartServer not support session_type=%d\n", iSessionTypeLocal);
 		return false;

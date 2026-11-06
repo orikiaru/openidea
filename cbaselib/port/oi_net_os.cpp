@@ -33,11 +33,11 @@ void NetOs_Startup()
 #endif
 }
 
-static net_socket_t NetOs_OpenTcp(int iFamily, bool bNonblock)
+static net_socket_t NetOs_OpenSocket(int iFamily, int iType, int iProtocol, bool bNonblock)
 {
 	NetOs_Startup();
 #ifdef _WIN32
-	SOCKET iDescriptorLocal = socket(iFamily, SOCK_STREAM, IPPROTO_TCP);
+	SOCKET iDescriptorLocal = socket(iFamily, iType, iProtocol);
 	if (iDescriptorLocal == INVALID_SOCKET)
 	{
 		NetOs_MapError(WSAGetLastError());
@@ -49,7 +49,7 @@ static net_socket_t NetOs_OpenTcp(int iFamily, bool bNonblock)
 	}
 	return (net_socket_t)iDescriptorLocal;
 #else
-	int iFlags = SOCK_STREAM;
+	int iFlags = iType;
 #ifdef SOCK_CLOEXEC
 	iFlags |= SOCK_CLOEXEC;
 #endif
@@ -59,7 +59,7 @@ static net_socket_t NetOs_OpenTcp(int iFamily, bool bNonblock)
 		iFlags |= SOCK_NONBLOCK;
 	}
 #endif
-	int iDescriptorLocal = socket(iFamily, iFlags, 0);
+	int iDescriptorLocal = socket(iFamily, iFlags, iProtocol);
 	if (iDescriptorLocal < 0)
 	{
 		return INVALID_SOCKET_ID;
@@ -91,12 +91,53 @@ static int NetOs_SetV6Only(net_socket_t iDescriptor)
 
 net_socket_t NetOs_CreateTcp4(bool bNonblock)
 {
-	return NetOs_OpenTcp(AF_INET, bNonblock);
+	return NetOs_OpenSocket(AF_INET, SOCK_STREAM, IPPROTO_TCP, bNonblock);
 }
 
 net_socket_t NetOs_CreateTcp6(bool bNonblock)
 {
-	net_socket_t iDescriptor = NetOs_OpenTcp(AF_INET6, bNonblock);
+	net_socket_t iDescriptor = NetOs_OpenSocket(AF_INET6, SOCK_STREAM, IPPROTO_TCP, bNonblock);
+	if (iDescriptor == INVALID_SOCKET_ID)
+	{
+		return INVALID_SOCKET_ID;
+	}
+	if (NetOs_SetV6Only(iDescriptor) != 0)
+	{
+		NetOs_Close(iDescriptor);
+		return INVALID_SOCKET_ID;
+	}
+	return iDescriptor;
+}
+
+#ifdef _WIN32
+#ifndef SIO_UDP_CONNRESET
+#define SIO_UDP_CONNRESET _WSAIOW(IOC_VENDOR, 12)
+#endif
+#endif
+
+static net_socket_t NetOs_OpenUdp(int iFamily, bool bNonblock)
+{
+	net_socket_t iDescriptor = NetOs_OpenSocket(iFamily, SOCK_DGRAM, IPPROTO_UDP, bNonblock);
+#ifdef _WIN32
+	if (iDescriptor != INVALID_SOCKET_ID)
+	{
+		// Windows 收到 ICMP 端口不可达后，下一次 recvfrom 报 WSAECONNRESET。不关掉的话，一个对端下线会打断整个口的收包。
+		BOOL bReport = FALSE;
+		DWORD iReturned = 0;
+		WSAIoctl((SOCKET)iDescriptor, SIO_UDP_CONNRESET, &bReport, sizeof(bReport), NULL, 0, &iReturned, NULL, NULL);
+	}
+#endif
+	return iDescriptor;
+}
+
+net_socket_t NetOs_CreateUdp4(bool bNonblock)
+{
+	return NetOs_OpenUdp(AF_INET, bNonblock);
+}
+
+net_socket_t NetOs_CreateUdp6(bool bNonblock)
+{
+	net_socket_t iDescriptor = NetOs_OpenUdp(AF_INET6, bNonblock);
 	if (iDescriptor == INVALID_SOCKET_ID)
 	{
 		return INVALID_SOCKET_ID;
@@ -211,6 +252,78 @@ int NetOs_Send(net_socket_t iDescriptor, const void* pBuffer, size_t iLength)
 #endif
 }
 
+int NetOs_RecvFrom(net_socket_t iDescriptor, void* pBuffer, size_t iLength, sockaddr* pAddr, socklen_t* pAddrLength)
+{
+#ifdef _WIN32
+	int iAddrLength = (int)*pAddrLength;
+	int iCount = recvfrom((SOCKET)iDescriptor, (char*)pBuffer, (int)iLength, 0, pAddr, &iAddrLength);
+	if (iCount == SOCKET_ERROR)
+	{
+		int iError = WSAGetLastError();
+		if (iError == WSAEWOULDBLOCK)
+		{
+			errno = EAGAIN;
+		}
+		else if (iError == WSAEINTR)
+		{
+			errno = EINTR;
+		}
+		else
+		{
+			errno = iError;
+		}
+		return -1;
+	}
+	*pAddrLength = (socklen_t)iAddrLength;
+	return iCount;
+#else
+	return (int)recvfrom((int)iDescriptor, pBuffer, iLength, 0, pAddr, pAddrLength);
+#endif
+}
+
+int NetOs_SendTo(net_socket_t iDescriptor, const void* pBuffer, size_t iLength, const sockaddr* pAddr, socklen_t iAddrLength)
+{
+#ifdef _WIN32
+	int iCount = sendto((SOCKET)iDescriptor, (const char*)pBuffer, (int)iLength, 0, pAddr, (int)iAddrLength);
+	if (iCount == SOCKET_ERROR)
+	{
+		int iError = WSAGetLastError();
+		if (iError == WSAEWOULDBLOCK)
+		{
+			errno = EAGAIN;
+		}
+		else if (iError == WSAEINTR)
+		{
+			errno = EINTR;
+		}
+		else
+		{
+			errno = iError;
+		}
+		return -1;
+	}
+	return iCount;
+#else
+	return (int)sendto((int)iDescriptor, pBuffer, iLength, 0, pAddr, iAddrLength);
+#endif
+}
+
+int NetOs_GetSockName(net_socket_t iDescriptor, sockaddr* pAddr, socklen_t* pAddrLength)
+{
+#ifdef _WIN32
+	int iAddrLength = (int)*pAddrLength;
+	if (getsockname((SOCKET)iDescriptor, pAddr, &iAddrLength) != 0)
+	{
+		NetOs_MapError(WSAGetLastError());
+		return -1;
+	}
+	*pAddrLength = (socklen_t)iAddrLength;
+	return 0;
+#else
+	return getsockname((int)iDescriptor, pAddr, pAddrLength);
+#endif
+}
+
 net_socket_t NetOs_Accept(net_socket_t iDescriptor)
 {
 #ifdef _WIN32
@@ -288,6 +401,20 @@ int NetOs_Bind(net_socket_t iDescriptor, const sockaddr* pAddr, int iLength)
 	{
 		return -1;
 	}
+	return bind((int)iDescriptor, pAddr, iLength);
+#endif
+}
+
+int NetOs_BindDatagram(net_socket_t iDescriptor, const sockaddr* pAddr, int iLength)
+{
+#ifdef _WIN32
+	if (bind((SOCKET)iDescriptor, pAddr, iLength) != 0)
+	{
+		NetOs_MapError(WSAGetLastError());
+		return -1;
+	}
+	return 0;
+#else
 	return bind((int)iDescriptor, pAddr, iLength);
 #endif
 }

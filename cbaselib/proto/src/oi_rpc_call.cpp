@@ -638,12 +638,15 @@ bool DeliverRpc(proto_type_t iId, ::OI::Base::BytesStream& stBodyLocal, ::OI::Ne
 {
 	uint64_t iRaw = 0;
 	bool bIsRequest = false;
+	bool bIsNotify = false;
 	try
 	{
 		stBodyLocal.StartTransaction();
 		stBodyLocal >> iRaw;
 		stBodyLocal.RollBack();
-		bIsRequest = (iRaw & (uint64_t)RPC_REQ_MASK) != 0;
+		// 调用号 0 是单向消息：和请求一样交给处理协程，不回包。
+		bIsNotify = iRaw == 0;
+		bIsRequest = (iRaw & (uint64_t)RPC_REQ_MASK) != 0 || bIsNotify;
 	}
 	catch (::OI::Base::ParserException&)
 	{
@@ -679,6 +682,10 @@ bool DeliverRpc(proto_type_t iId, ::OI::Base::BytesStream& stBodyLocal, ::OI::Ne
 		else
 		{
 			auto stLease = AcquireRpc(pManagerLocal, iSessionIdLocal, stBodyLocal.Size());
+			if (!stLease && bIsNotify)
+			{
+				return true;
+			}
 			if (!stLease)
 			{
 				::OI::Base::BytesStream stReply;

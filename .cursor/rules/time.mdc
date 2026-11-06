@@ -1,0 +1,12 @@
+---
+description: 时间、计时、GetTime、GetCurTickTime、std::chrono、毫秒、精度、过期、ttl、超时清理、心跳、时间戳、缓存。处理时间或过期前先读 docs/develop.md 第 5 节。
+alwaysApply: false
+---
+
+# 时间和过期
+
+先读 `docs/develop.md` 第 5 节。
+
+秒级用 `GetTime()`，要 tick 时间用 `BaseTimerManager` 的 `GetCurTickTime()`，不自己调 `std::chrono`。秒够用就不上毫秒。定时用 `AddTimer` 或 `co_await OI::Coro::yield(毫秒)`。
+
+每个对象记自己上次活跃的时间戳，在心跳这类现有入口里顺手清理，不用静态变量，也不另起扫描任务。缓存就是 Load 先查内存、Save 时写回。只做需求要的那一步。

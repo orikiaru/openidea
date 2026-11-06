@@ -1,0 +1,14 @@
+---
+description: 目录、放哪、src、modules、module、进程、共享代码、类外函数、自由函数、全局变量、静态变量、友元、临时变量、StartTask、单线程、多线程、线程模型。新建文件、加函数或选线程模式前先读 docs/develop.md 第 2、6 节。
+alwaysApply: false
+---
+
+# 代码组织
+
+先读 `docs/develop.md` 第 2、6 节。
+
+一个 module 对应一个进程，业务代码都放在 `modules/<进程>/inc`、`src` 里。共用的东西放 `modules/include`，或者单独建目录，不放仓库根下的 `src`。组件由 `module.xml`、`module_component.xml` 生成骨架。
+
+不写类外的 C 风格函数，不用全局状态和静态变量。处理函数是组件的成员，用 `OI_RPC_BIND_SELF` / `OI_NOTIFY_BIND_SELF` 注册，不用友元。不在会话或 mgr 里随手 `StartTask`。
+
+逻辑简单的转发服务端用单线程；要接 UI 的客户端用多线程。

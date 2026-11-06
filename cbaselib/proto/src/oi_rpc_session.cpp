@@ -9,7 +9,8 @@ namespace OI
 namespace Rpc
 {
 ProtoSession::ProtoSession(::OI::Net::SessionManager* pMgr)
-    : NetSession(pMgr), m_iFrameBytes(pMgr->MaxFrameBytes()), m_iFrameTimeoutMilliseconds(pMgr->IncompleteFrameTimeoutMilliseconds())
+    : NetSession(pMgr), m_iFrameBytes(pMgr->MaxFrameBytes()), m_iFrameTimeoutMilliseconds(pMgr->IncompleteFrameTimeoutMilliseconds()),
+      m_bDatagram(pMgr->GetSessionType() == ::OI::Net::SESSION_TYPE_UDP)
 {
 }
 struct ProtoSession::PartialFrameTimer
@@ -90,7 +91,10 @@ void ProtoSession::OnDataIn()
 			memcpy(&iDeclaredSize, stOutputStream.GetCurPtr() + sizeof(uint32_t), sizeof(iDeclaredSize));
 			if (iDeclaredSize > m_iFrameBytes)
 			{
-				PassiveClose(EMSGSIZE);
+				if (!m_bDatagram)
+				{
+					PassiveClose(EMSGSIZE);
+				}
 				break;
 			}
 		}
@@ -105,7 +109,10 @@ void ProtoSession::OnDataIn()
 		}
 		if (iSt != ::OI::Base::PB_HEADER_OK)
 		{
-			PassiveClose(PARSER_ERR_OTHER);
+			if (!m_bDatagram)
+			{
+				PassiveClose(PARSER_ERR_OTHER);
+			}
 			break;
 		}
 		::OI::Base::BytesStream stBody;
@@ -119,7 +126,12 @@ void ProtoSession::OnDataIn()
 	}
 	stInputBuffer.Swap(stOutputStream);
 	stInputBuffer.Erase(0, stOutputStream.GetCurPos());
-	if (IsClosed())
+	if (m_bDatagram)
+	{
+		// 包和包之间不拼接，剩下的只能是坏帧或残帧。
+		stInputBuffer.Clear();
+	}
+	else if (IsClosed())
 	{
 		CancelIncompleteTimer();
 		stInputBuffer.Clear();

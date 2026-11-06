@@ -14,6 +14,8 @@ class ProtoSession : public ::OI::Net::NetSession
 	void CancelIncompleteTimer();
 	size_t m_iFrameBytes;
 	uint64_t m_iFrameTimeoutMilliseconds;
+	// UDP 会话：一包里只放整帧，坏包和残包整包丢掉，不关会话，也不等后续字节。
+	bool m_bDatagram;
 
   public:
 	ProtoSession(::OI::Net::SessionManager* pMgr);

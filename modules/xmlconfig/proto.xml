@@ -88,6 +88,41 @@ rpcdata JsonAll {
     22 map<uint64_t, string> mLargeUnsignedTable json ubig;
 }
 
-// 请求和回复共用一个协议号。调用号最高位区分请求和回包。
+// UdpEchoReq.iSeq 取这些值时服务端回诊断，不回显。
+enum UdpProbe {
+    UDP_PROBE_PEER_ADDR = -1;
+    UDP_PROBE_SESSIONS = -2;
+    UDP_PROBE_REJECT = -3;
+}
+
+// 业务错误码用正数，框架错误码是负数。处理函数直接 co_return。
+errordef UdpError {
+    UDP_ERR_REJECTED = 1001;
+}
+
+// UDP 上的 RPC。iSeq 是 UdpProbe 时回诊断：对端地址、建过的会话数，或者回 UDP_ERR_REJECTED。
+rpcdata UdpEchoReq {
+    0 int32_t iSeq json seq;
+    1 string sData json data;
+}
+
+rpcdata UdpEchoRes {
+    0 int32_t iSeq json seq;
+    1 string sData json data;
+}
+
+// UDP 上的单向消息。服务端收到后原样单向发回。
+rpcdata UdpNoteReq {
+    0 int32_t iSeq json seq;
+}
+
+// 单向消息不回包，生成器要求成对才留着。
+rpcdata UdpNoteRes {
+    0 int32_t iSeq json seq;
+}
+
+// 请求和回复共用一个协议号。调用号最高位区分请求和回包，调用号 0 是单向消息。
 rpc AllEcho { id 3001; request AllEchoReq; response AllEchoRes; timeout 25; }
 rpc Hold { id 3002; request HoldReq; response HoldRes; timeout 25; }
+rpc UdpEcho { id 3003; request UdpEchoReq; response UdpEchoRes; timeout 25; }
+rpc UdpNote { id 3004; request UdpNoteReq; response UdpNoteRes; timeout 25; }

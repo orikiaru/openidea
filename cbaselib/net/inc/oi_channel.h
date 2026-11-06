@@ -47,13 +47,14 @@ class Channel
 		stSocket.Detach();
 	}
 	// 打开写事件。关闭中的会话也打开一次，让空闲连接能被收回。
-	void AllowSend();
+	// 会话在 Send 追加完、仍持会话锁时调用。UDP 的对端通道在这里直接发出一包。
+	virtual void AllowSend();
 	// 关掉写事件。会话已经关闭时不动。
-	void ForbidSend();
+	virtual void ForbidSend();
 	// 打开读事件。会话已经关闭时不动。
-	void AllowRead();
+	virtual void AllowRead();
 	// 关掉读事件。会话已经关闭时不动。
-	void ForbidRead();
+	virtual void ForbidRead();
 };
 }
 }

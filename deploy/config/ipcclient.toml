@@ -30,6 +30,21 @@ echo = true
 log = false
 redis = false
 hold = false
+udp = false
+
+# UDP 回归的本地口。端口 0 让系统分配；idle_timeout_ms 内没收没发就关会话。
+[IpcUdp]
+ip = "127.0.0.1"
+port = "0"
+type = "udp"
+idle_timeout_ms = 1500
+
+# 对端是 ipcserver 的 [IpcUdp]。
+[TestUdp]
+ip = "127.0.0.1"
+port = "17983"
+total = 1000
+notes = 1000
 
 [TestEcho]
 total = 1000000

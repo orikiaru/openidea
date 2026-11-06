@@ -27,15 +27,18 @@ enum SESSION_TYPE
 {
 	SESSION_TYPE_INVALID,
 	SESSION_TYPE_TCP,
-	//目前只提供TCP
-	/*
+	// 一个绑好的口，按对端地址分会话。只有 StartServer，没有 StartClient，主动发用 OpenPeer。
 	SESSION_TYPE_UDP,
+	//还没做
+	/*
 	SESSION_TYPE_FIFO,
 	SESSION_TYPE_UNIX,
 	*/
 };
 class SessionManager;
 class ConnectChannel;
+class UDP_Channel;
+class NetAddr;
 
 class SessionManager
 {
@@ -66,6 +69,10 @@ class SessionManager
 	size_t iMaxFrameBytes = 64 * 1024 * 1024;
 	// 半帧超过这么久就关掉会话。
 	uint64_t iIncompleteFrameTimeoutMilliseconds = 10000;
+	// UDP 会话这么久没收没发就关掉。
+	uint64_t iIdleTimeoutMilliseconds = 60000;
+	// UDP 的本端口。StartServer 之后才有。
+	UDP_Channel* pUdpChannel = NULL;
 	// 下一个要分配的会话号。
 	sid_t iCurrentSessionId;
 	// 保护会话表和连接状态。
@@ -73,7 +80,7 @@ class SessionManager
 	// 监听或要连接的地址。客户端可以是域名，连上之前会换成解析出来的数字地址。
 	std::string sIpAddress;
 	std::string sPort;
-	SESSION_TYPE iSessionType; // 管理的会话类型。目前只有 TCP。
+	SESSION_TYPE iSessionType; // 管理的会话类型。TCP 或 UDP。
 	// 在注册表里的服务名。空表示地址来自配置，不走发现。
 	std::string sServiceName;
 	// 当前端点文本。IPv4 是 ip:port，IPv6 是 [ip]:port。
@@ -134,6 +141,16 @@ class SessionManager
 	{
 		return iIncompleteFrameTimeoutMilliseconds;
 	}
+	uint64_t IdleTimeoutMilliseconds() const
+	{
+		return iIdleTimeoutMilliseconds;
+	}
+	// UDP：实际绑上的本端端口。还没 StartServer 返回 0。
+	uint16_t LocalPort() const;
+	// UDP：找到或新建到这个字面地址的会话，返回会话号。不解析域名。还没 StartServer 或地址不对返回 INVALID_SID。
+	sid_t OpenPeer(const std::string& sIp, const std::string& sPortLocal);
+	// UDP：会话的对端地址。会话不在返回 false。
+	bool GetPeerAddr(sid_t iSessionId, NetAddr& stAddr);
 	const std::string& GetStrIP()
 	{
 		return sIpAddress;
@@ -178,6 +195,7 @@ class SessionManager
 	friend class NetSession;
 	friend class AcceptChannel;
 	friend class ConnectChannel;
+	friend class UDP_Channel;
 	friend class NetHelper;
 	//AcceptSession调用,必然由IO线程触发
 	// poll 线程上用新套接字建一条会话并纳入表。

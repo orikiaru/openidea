@@ -2,6 +2,7 @@
 #include "oi_net.h"
 #include "oi_base.h"
 #include "ipcserver.h"
+#include "ipcudp.h"
 
 int main(int iArgumentCount, char* vArguments[])
 {
@@ -27,6 +28,12 @@ int main(int iArgumentCount, char* vArguments[])
 		printf("IpcServer StartServer error\n");
 		return -1;
 	}
+	if (!IpcUdp::GetInstance().Init() || !IpcUdp::GetInstance().StartServer())
+	{
+		printf("IpcUdp StartServer error\n");
+		return -1;
+	}
+	printf("ipc udp listen port=%u\n", (unsigned)IpcUdp::GetInstance().LocalPort());
 	printf("ipc server listen\n");
 	fflush(stdout);
 	IpcServer::GetInstance().StartHttpProbe();

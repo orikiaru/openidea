@@ -226,7 +226,22 @@ OI_RPC_BIND(Hold, HandleHold);
 
 `OI_RPC_HANDLER(Name, Function)` 用于协程函数声明或定义，提供 `stRequest`（const 引用）和 `stResponse` 参数，函数体用 `co_return int32_t`。`OI_RPC_SYNC_HANDLER` 用于同步处理，函数体用 `return int32_t`。`OI_RPC_CONTEXT_HANDLER` 额外提供 `stContext`，按需访问 iToken、stManager 和 iSessionId。头文件声明可写 `OI_RPC_HANDLER(Hold, HandleHold);`。宏本身不加 static，文件内部函数可自行加 static。
 
-`OI_RPC_BIND(Name, Function)` 使用请求关联的响应类型注册，不增加运行时包装层。也可传函数对象或 lambda；实例成员函数需绑定对象，且对象必须活到所有请求处理结束。原模板接口仍可直接使用，不按 NameReq/NameRes 命名的协议可用模板注册。
+`OI_RPC_BIND(Name, Function)` 使用请求关联的响应类型注册，不增加运行时包装层。也可传函数对象或 lambda。自由函数不需要对象。实例成员函数用 `OI_RPC_BIND_SELF(Name, Type, Member)`：处理时从 `stContext.stManager` 还原成 `Type` 再调用，不在注册时绑 `this`。函数体里要自己拿对象时用 `OI_RPC_SELF(Type)`。对象必须活到所有请求处理结束。原模板接口仍可直接使用，不按 NameReq/NameRes 命名的协议可用模板注册。
+
+## 单向消息
+
+调用号 0 是单向消息：不登记等待、不回包。发送用 `RpcNotify(mgr, sid, msg)`，返回 `SendBytesResult` 的错误码，编码失败是 `OI_ERR_ENCODE`。接收和 RPC 共用一张按协议号的处理表，一个协议号只注册一种：
+
+```cpp
+static OI_NOTIFY_HANDLER(UdpNote, HandleNote)
+{
+    co_return ::OI::Rpc::RpcNotify(stContext.stManager, stContext.iSessionId, stRequest);
+}
+
+OI_NOTIFY_BIND(UdpNote, HandleNote);
+```
+
+`OI_NOTIFY_HANDLER(Name, Function)` 提供 `stContext` 和 `stRequest`，返回值只用于日志，不发回对端。成员函数用 `OI_NOTIFY_BIND_SELF(Name, Type, Member)`，规则与 `OI_RPC_BIND_SELF` 相同。生成器要求每条 rpc 都写 response，单向协议也要声明一个 `NameRes`，线上不会出现。服务端执行额度满时单向消息直接丢弃，不回 `OI_ERR_BUSY`。
 
 定时器回调和停止回调抛异常时，交给 `OI::Thread::SetTaskErrorHandler`，默认输出 stderr。处理器自身抛异常也不会穿透调用方。服务端响应编码失败会丢弃半包，重新发送 `OI_ERR_FAIL` 的无响应体回执；无法编码或发送失败回执时关闭连接，避免调用方只靠超时发现错误。
 

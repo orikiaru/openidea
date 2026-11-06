@@ -19,6 +19,7 @@ set(LIBSRC
 	src/oi_connect_channel.cpp
 	src/oi_net_channel.cpp 
 	src/oi_tcp_channel.cpp
+	src/oi_udp_channel.cpp
 	../port/oi_net_os.cpp
 
 	)

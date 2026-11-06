@@ -10,6 +10,8 @@
 
 `net` 是网络，类型在 `OI::Net`。`Poll` 包 libuv 的事件循环。文件读写改走 Linux io_uring、Windows IOCP 已排期，套接字和文件共用这条完成队列，见 [异步 IO](async-io.md)，现在还没改。`NetSocket`、`AcceptChannel`、`ConnectChannel`、`TcpChannel` 负责监听、连接和收发。`Session` 和 `SessionManager` 管一类连接，组件配置里的 ip、port、type 从这里读。ip 可以是 IPv4、IPv6 或域名。监听只认字面地址。客户端连接域名时在 poll 线程解析，有 IPv4 用 IPv4，否则用 IPv6。`SendBytes` 只在查会话表时持管理器锁，拷贝数据在锁外、持会话锁做；会话带引用计数，通道销毁时先断开会话到通道的指针再释放引用。监听口在 `bind` 之前打开 `SO_REUSEADDR`。进程退出后旧连接还会在 `TIME_WAIT` 里待一会儿，但不再挡住下一次监听。客户端连出去不走 `bind`。按服务名发现地址在 [服务注册](registry.md)。表由 `registry` 进程管，存在 Redis，应用只连 registry。配置里写了 `<名字>.service` 时，`SessionManager::Init` 先向 registry 查，查不到再用同一段的 ip/port。监听方在 `StartServer` 成功后登记并定时报告在线。空间按 registry 的 `[Registry] project/env` 分开。
 
+`type = "udp"` 的组件是 `UDP_Channel`：`StartServer` 绑一个口，按对端地址各开一条会话，会话从 `CloneSession` 克隆，业务照常走 `Session` 和 RPC，不碰裸包。端口填 `"0"` 由系统分配，`LocalPort()` 取实际端口。没有 `StartClient`；主动发用 `OpenPeer(ip, port)` 拿会话号，同一地址重复打开返回同一条，地址只认字面 IPv4/IPv6。`GetPeerAddr(sid, addr)` 取对端地址。每次 `Send` 立即发成一个数据报，一个数据报必须装下整帧，超过 64KB 的发不出去；收到的数据报按整帧解析，坏包只丢这一个，不断会话、不起残包计时。`idle_timeout_ms` 默认 60000，期间没收没发就关会话并走 `OnDelSession`，之后再来包或再 `OpenPeer` 会建新会话。UDP 绑定不开 `SO_REUSEADDR`，两个进程抢不到同一个口；Windows 关掉了 ICMP 端口不可达导致的 `WSAECONNRESET`。UDP 口不向 registry 登记。
+
 `proto` 是自有协议，类型在 `OI::Rpc`。`Protocol` 是协议基类，`Rpc` 是远程调用。`oi_rpc_coro.h` 是协程任务和 RPC 等待。收包按协议号交给 `DeliverRpc`，不再按协议号克隆存根。`parser` 做组包。`proto_tool` 是 cmake 时跑的 Python 生成器。
 
 `timer` 是分层时间轮，类型在 `OI::Timer`，见 [定时器](timer.md)。应用层时长是 `MS`，由 `Milliseconds`、`Seconds`、`Minutes`、`Hours`、`Days` 构造。

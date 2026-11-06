@@ -1,0 +1,12 @@
+---
+description: 提交、commit、push、推送、子模块、submodule、主干、git、todo、待办、记下来。提交或改子模块前先读 docs/develop.md 第 8 节。
+alwaysApply: false
+---
+
+# 提交和待办
+
+先读 `docs/develop.md` 第 8 节。
+
+「提交」包含 commit 和推送当前分支，不强推，不改 git 配置。openidea 作为子模块时，应用侧的改动不进子模块；要改框架先说明，在子模块里单独提交，父仓库再更新子模块指针。
+
+没做完的事和以后要加的能力写进 `todo.md`，写清需求、现状和大致方向。

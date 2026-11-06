@@ -6,6 +6,9 @@ class SerializeDataType(Enum):
     PROTOCOL = 1
     RPC_DATA = 2
     RPC = 3
+    # 只生成 C 枚举，不参与序列化。
+    ENUM = 4
+    ERROR_DEF = 5
     
 class ClassMember:
     def __init__(self):
