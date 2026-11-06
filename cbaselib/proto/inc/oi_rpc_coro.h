@@ -39,8 +39,11 @@ using RpcTask = OI::Coro::TaskResult<int32_t>;
 // 仅需要连接信息的处理函数接收上下文；生命周期覆盖本次处理协程。
 struct RpcContext
 {
+	// 处理这条请求的任务标识。
 	OI::Coro::Token iToken;
+	// 请求从哪个管理器进来。
 	::OI::Net::SessionManager& stManager;
+	// 请求所在的会话。回包发回这里。
 	sid_t iSessionId;
 };
 

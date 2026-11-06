@@ -19,11 +19,11 @@ typedef std::vector<TimerList> TimerListVector;
 class TimerLevel
 {
 	friend class BaseTimerManager;
-	uint32_t m_iMaxTick;               //当前等级的timer的tick数
-	uint32_t m_iLevelOffsetTick;       //当前等级基础偏移tick数,第一级就是1，第二集就是1*lv[0]._max_tick =====
-	uint32_t m_iOffset;                //当前数组偏移量
-	TimerListVector m_vTimerTickDatas; //定时器队列
-	::OI::Thread::Mutex m_stLocker;
+	uint32_t m_iMaxTick;               // 这一层有多少个槽。
+	uint32_t m_iLevelOffsetTick;       // 一个槽代表多少基础 tick。第 0 层是 1。
+	uint32_t m_iOffset;                // 当前转到哪个槽。每跳加一，绕回数组开头。
+	TimerListVector m_vTimerTickDatas; // 每个槽一条定时器链表。
+	::OI::Thread::Mutex m_stLocker;    // 保护这一层的槽。和管理器的时间轮锁分开。
 
   public:
 	TimerLevel()

@@ -4,18 +4,22 @@ namespace OI
 {
 namespace Net
 {
-//use for connected net_fd
+// 已经连上的 TCP 会话。关闭分主动和被动两条路径，避免管理器重入。
 class NetSession : public Session
 {
   protected:
-	virtual void Close(int iError); //内部调用关闭,必然由IO线程调用,无锁
+	// poll 线程内部关闭。调用方已经在合适的上下文里，这里不再加会话锁。
+	virtual void Close(int iError);
   public:
 	NetSession(SessionManager* pMgr)
 	    : Session(pMgr)
 	{
 	}
-	virtual void ActiveClose();                 //主动close,由SessionManager触发或者IO线程触发
-	virtual void PassiveClose(int iError); //IO线程被动关闭调用,会回调Mgr->CloseSession
+	// 管理器或 poll 线程主动关。持锁，不再回调管理器的 CloseSession。
+	virtual void ActiveClose();
+	// poll 线程发现对端或错误时关，并回调管理器的 CloseSession。
+	virtual void PassiveClose(int iError);
+	// 关闭收尾。子类在这里释放自己的协议状态。
 	virtual void OnClose();
 };
 }

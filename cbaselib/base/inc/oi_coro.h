@@ -23,6 +23,7 @@ namespace Coro
 typedef uint64_t Token;
 typedef Token TaskUid;
 
+// 分配进程内递增的任务标识。0 留给还没分配的状态。
 TaskUid AllocTaskUid();
 
 // 挂起的协程放回运行队列。单线程进本线程队列，多线程进工人队列。RPC 回包和定时器都走这里。
@@ -40,21 +41,29 @@ enum class Gate : int32_t
 
 // 根协程跑完后不能在 final_suspend 里销毁自己。登记下来，等 resume 返回再释放。
 void DetachFinished(std::coroutine_handle<> stHandle, void (*fnRelease)(std::coroutine_handle<>));
+// 释放已经跑完、等 resume 返回后才能销毁的根协程。
 void DrainDetached();
 // 调度器唯一的 resume 入口。期间新建的任务当场跑到第一次挂起，协程外新建的任务入队。
 void ResumeTask(std::coroutine_handle<> stHandle);
+// 当前栈是否正在 ResumeTask 里。新任务用它决定能不能当场跑。
 bool InTaskResume() noexcept;
 
 // 新任务构造 promise 时取走。只在 StartTask、TaskScope 等框架入口里设置。
 struct TaskLaunch
 {
+	// 这条任务的标识。0 表示构造时再分配。
 	Token iToken = 0;
+	// 没有人等。异常由任务自己报告，不留给 co_await。
 	bool bDetached = false;
+	// initial_suspend 必须入队，不在调用方栈上跑。
 	bool bPost = false;
 };
+// 取走当前线程刚设置的启动信息，取完就清空。
 TaskLaunch TakeTaskLaunch() noexcept;
+// 构造时压入一份启动信息，析构时恢复上一份。
 class TaskLaunchScope
 {
+	// 进入之前线程上的那一份，析构时放回去。
 	TaskLaunch m_stPrevious;
 
   public:
@@ -66,20 +75,25 @@ class TaskLaunchScope
 using TaskErrorHandler = void (*)(Token, std::exception_ptr);
 // 在工作线程调用；处理函数必须线程安全，不允许抛异常。nullptr 恢复默认 stderr 报告。
 void SetTaskErrorHandler(TaskErrorHandler fnHandler);
+// 把没人接住的任务异常交给处理器。处理器不得再抛。
 void ReportTaskError(Token iToken, std::exception_ptr stError) noexcept;
 
 // 单线程就绪队列。Poll 只跑进入时已经在队列里的句柄，这一轮新挂上的留到 poll 之后。
 class StScheduler
 {
   public:
+	// 把句柄放进本线程队列。单线程的锁是空的，不能从别的线程写。
 	static void Post(std::coroutine_handle<> stHandle);
+	// 只跑进入时已经在队列里的句柄。这一轮新挂上的留到下次。
 	static bool Poll();
+	// 队列里是否还有没跑的句柄。
 	static bool Queued();
 };
 
 // 下一轮再跑，或者过 ms 毫秒再跑。到点就是 Schedule。
 struct SleepMs
 {
+	// 再过这么久唤醒。0 表示下一轮再跑，不睡真实时间。
 	int32_t iMilliseconds;
 	bool await_ready() const noexcept
 	{
@@ -102,13 +116,17 @@ SleepMs yield(::OI::Timer::MS stDelay);
 // fnReady 为空时，完成即唤醒。WhenAll 只在最后一个任务完成时返回 true。
 struct TaskWaiter
 {
+	// 被挂起的等待方。
 	std::coroutine_handle<> stParent;
+	// 同一条任务上的下一个等待者。
 	TaskWaiter* pNext = nullptr;
+	// 空则完成即唤醒。WhenAll 用它等到最后一个子任务。
 	bool (*fnReady)(TaskWaiter* pWaiter) = nullptr;
 };
 // 协程里新建的任务当场跑；协程外（网络回调、main）新建的或框架要求入队的，放进运行队列。
 struct TaskInitialSuspend
 {
+	// 真则不挂起，在当前 resume 栈上跑到第一次 co_await。
 	bool bInline;
 	bool await_ready() const noexcept
 	{
@@ -169,16 +187,23 @@ struct TaskFinalSuspend
 // 异常：bObserved 表示某个等待者已经重抛过；bErrorReported 保证 ReportError 只进一次。没人看的异常在最后一个引用释放时再报。
 struct TaskState
 {
+	// 保活启动时的闭包，避免带捕获的 lambda 在协程还活着时被销毁。
 	std::shared_ptr<void> pCallable;
+	// 协程里没接住的异常。等待者重抛，没人看则在最后一份引用释放时报告。
 	std::exception_ptr stError;
+	// StartTask 或 Start 分配的标识。0 表示还没分配。
 	Token iTaskId = 0;
+	// 保护完成标记、等待者链表和任务标识。
 	OI::Thread::Mutex stMutex;
+	// 完成前挂上来的等待者。final_suspend 一次摘走。
 	TaskWaiter* pWaiters = nullptr;
 	std::atomic<size_t> iReferences{2}; // 创建时两份：Task 对象一份，正在跑的帧一份。每个等待器再加一份。
 	bool bReady = false;                // 假=还在跑或还没开始；真=已经 co_return 或异常结束。
 	bool bInlineStart = false;          // 真=initial_suspend 不挂起。
 	std::atomic<bool> bDetached{false}; // 真=独立任务，异常不等待者来取。
+	// 已经有等待者重抛过异常。最后一份引用据此决定还要不要再报。
 	std::atomic<bool> bObserved{false};
+	// ReportError 只进一次。
 	std::atomic<bool> bErrorReported{false};
 	TaskState()
 	{
@@ -216,6 +241,7 @@ struct TaskState
 template <typename T>
 struct TaskReturn : TaskState
 {
+	// co_return 写下的值。按值复制给每个等待者，不从这里移走。
 	std::optional<T> stResult;
 	void return_value(T stValue)
 	{
@@ -255,6 +281,7 @@ struct BasicTask
 		}
 	};
 	using Handle = std::coroutine_handle<promise_type>;
+	// 协程帧。空句柄表示已经移走。
 	Handle stHandle;
 	explicit BasicTask(Handle stHandle)
 	    : stHandle(stHandle)
@@ -406,9 +433,13 @@ struct WhenAllState
 	{
 		WhenAllState* pState = nullptr;
 	};
+	// 调用方的任务数组。await 期间必须还活着。
 	std::vector<BasicTask<T>>* pTasks = nullptr;
+	// 每个子任务一个等待节点。挂上链表之后不能再重新分配。
 	std::vector<Slot> vSlots;
+	// 还没完成的子任务数。减到 0 才考虑唤醒父协程。
 	std::atomic<size_t> iLeft{0};
+	// 完成和挂起谁先到。只有从 Waiting 换成 Ready 的那一方负责唤醒。
 	std::atomic<Gate> iGate{Gate::Idle};
 
 	static bool OnReady(TaskWaiter* pWaiter)
@@ -426,6 +457,7 @@ struct WhenAllState
 template <typename T>
 struct WhenAllAwaiter
 {
+	// 堆上的汇合状态。awaiter 被协程帧挪走时，已经链进任务的地址不变。
 	std::shared_ptr<WhenAllState<T>> pState;
 
 	explicit WhenAllAwaiter(std::vector<BasicTask<T>>& vTasks)
@@ -558,6 +590,7 @@ auto StartTask(F&& fnFunction)
 // 协作停止：不会销毁仍被 IO/定时器引用的帧。模块销毁前必须 await Join。
 class StopToken
 {
+	// 和 TaskScope 共享的停止标记。真表示不要再开工，已经挂在 IO 上的帧不会被拆掉。
 	std::shared_ptr<std::atomic<bool>> m_pStop;
 
   public:
@@ -575,13 +608,20 @@ class TaskScope
 {
 	struct State
 	{
+		// 保护计数、等待者和第一条异常。
 		::OI::Thread::Mutex stMutex;
+		// 协作停止标记。RequestStop 或某个任务失败时置真。
 		std::shared_ptr<std::atomic<bool>> pStop = std::make_shared<std::atomic<bool>>(false);
+		// 还没跑完的任务数。减到 0 时唤醒 Join。
 		size_t iActive = 0;
+		// 在 Join 里挂起的协程。
 		std::vector<std::coroutine_handle<>> vWaiters;
+		// 已经 RequestStop 或析构，不能再 Start。
 		bool bClosed = false;
+		// 第一个失败任务的异常。Join 时重抛。
 		std::exception_ptr stError;
 	};
+	// 作用域和它启动的任务共享的停止、计数和异常。
 	std::shared_ptr<State> m_pState = std::make_shared<State>();
 	template <typename F>
 	static Task Run(std::shared_ptr<State> pState, F fnFunction, Token iToken)
@@ -629,7 +669,9 @@ class TaskScope
 	TaskScope(const TaskScope&) = delete;
 	TaskScope& operator=(const TaskScope&) = delete;
 	~TaskScope();
+	// 置停止标记并关闭 Start。不取消已经挂在 IO 或定时器上的帧。
 	void RequestStop();
+	// 入队一条任务并计入还在跑的数量。作用域已关闭时抛 logic_error。
 	template <typename F>
 	Token Start(F&& fnFunction)
 	{
@@ -647,6 +689,7 @@ class TaskScope
 		++m_pState->iActive;
 		return stTask.Start();
 	}
+	// 等到已启动的任务都结束。某个任务失败时重抛第一条异常。
 	Task Join();
 };
 

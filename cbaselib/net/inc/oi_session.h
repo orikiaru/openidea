@@ -12,9 +12,12 @@ namespace Net
 {
 enum
 {
+	// 可以收发。
 	IO_ST_CONNECTED,
+	// 正在关。发送只会被拒绝，通道还可能再触发一次 IO 来回收。
 	IO_ST_WILL_CLOSE,
-	IO_ST_CLOSED, //无意义目前关闭时,对象已销毁
+	// 已关闭。当前关闭路径上对象已经销毁，这个值很少用到。
+	IO_ST_CLOSED,
 };
 
 class SessionManager;
@@ -25,19 +28,31 @@ class Session
 	friend class NetChannel;
 
   protected:
+	// 连接状态，取 IO_ST_*。
 	std::atomic<int32_t> iStatus;
+	// 关闭原因。还没记错时是 0。
 	std::atomic<int32_t> iErrorCode;
 
+	// 输出缓冲里还没写到套接字的字节。
 	size_t iQueuedBytes = 0;
+	// 发送队列上限。再写就会返回忙。
 	size_t iMaxSendQueueBytes = 64 * 1024 * 1024;
+	// 接收缓冲上限。会话发布前设置，之后只由 poll 线程看。
 	size_t iMaxReceiveBufferBytes = 64 * 1024 * 1024 + 8;
+	// 待写到套接字的字节。
 	::OI::Base::Bytes stOutputBuffer;
+	// 已读入、还没交给协议解析的字节。
 	::OI::Base::Bytes stInputBuffer;
+	// 保护缓冲、状态和通道指针。
 	::OI::Thread::Mutex stLocker;
 
+	// 管理器分配的会话号。
 	sid_t iSessionId;
+	// 底下的套接字通道。DetachChannel 之后为空，Send 只追加缓冲。
 	Channel* pChannel;
+	// 所属管理器。关闭时用它把会话从表里摘掉。
 	SessionManager* pSessionManager;
+	// 对端地址文本，按地址关闭时用。
 	std::string sEndpoint;
 	// 通道持有一份，SendBytes 在锁外发送时临时再持一份。最后一份释放时 delete。
 	std::atomic<int32_t> iReferences;
@@ -45,17 +60,21 @@ class Session
   public:
 	Session(SessionManager* pMgr);
 	virtual ~Session();
+	// 入站任务持有的业务租约。默认没有，子类需要时返回一份共享状态。
 	virtual std::shared_ptr<void> HoldTask()
 	{
 		return {};
 	}
+	// 增加一份引用。和 Release 配对。
 	void AddRef()
 	{
 		iReferences.fetch_add(1, std::memory_order_relaxed);
 	}
+	// 引用减到 0 时删除自己。
 	void Release();
 
   public: //提供给Channel的调用
+	// 绑上通道。
 	void SetChannel(Channel* pChannelLocal)
 	{
 		pChannel = pChannelLocal;
@@ -101,8 +120,11 @@ class Session
 		return sEndpoint;
 	}
 
+	// 追加到发送队列并打开写事件。已关闭或队列放不下返回 false。
 	bool Send(const ::OI::Base::Bytes& stBytes);
+	// 和 Send 一样。已关闭返回连接错误，队列放不下返回忙。
 	int32_t SendResult(const ::OI::Base::Bytes& stBytes);
+	// 改发送队列上限。
 	void SetSendQueueLimit(size_t iBytes);
 	// 接收缓冲仅 poll 线程访问；会话发布前设置限制。
 	void SetReceiveQueueLimit(size_t iBytes)
@@ -113,15 +135,19 @@ class Session
 	{
 		return stInputBuffer.Size() < iMaxReceiveBufferBytes ? iMaxReceiveBufferBytes - stInputBuffer.Size() : 0;
 	}
+	// 还没写出去的字节数。
 	size_t PendingSendBytes();
+	// 通道写出这么多字节后扣掉排队计数。
 	void OnBytesSent(size_t iBytes);
 	virtual void ActiveClose() = 0; //外部Mgr主动关闭调用,有锁,不会回调Mgr->CloseSession
 
   protected:
+	// 转给通道打开或关掉对应事件。
 	void AllowSend();
 	void ForbidSend();
 	void AllowRead();
 	void ForbidRead();
+	// 子类完成关闭，并记下错误码。
 	virtual void Close(int iError) = 0;
 	virtual void OnClose()
 	{

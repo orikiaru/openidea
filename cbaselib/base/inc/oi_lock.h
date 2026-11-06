@@ -12,8 +12,10 @@ namespace OI
 {
 namespace Thread
 {
+// 自有代码的互斥、自旋和条件等待。单线程编译下全是空操作，不能靠它们阻塞；要等事件改走 poll。
 #ifdef _SINGLE_THREAD_
 
+// 短临界区自旋。单线程下加锁和解锁都是空的。
 class SpinLock
 {
   public:
@@ -25,6 +27,7 @@ class SpinLock
 	}
 };
 
+// 可重入互斥。单线程下加锁和解锁都是空的。
 class Mutex
 {
   public:
@@ -36,6 +39,7 @@ class Mutex
 	}
 };
 
+// 构造时加锁，析构时解锁。单线程下两个动作都是空的。
 template <class T>
 class LockGuard
 {
@@ -48,19 +52,23 @@ class LockGuard
 	}
 };
 
+// 和 Mutex 配对的等待。单线程里 Wait 立即返回，WaitUntil 直接返回 false，不会阻塞。
 class MutexCond
 {
   public:
 	MutexCond()
 	{
 	}
+	// 单线程不等待。调用方不能靠返回这一刻条件已经成立。
 	void Wait(Mutex&)
 	{
 	}
+	// 单线程立即返回 false，表示没等到截止时间前的通知。
 	bool WaitUntil(Mutex&, const std::chrono::steady_clock::time_point&)
 	{
 		return false;
 	}
+	// 单线程没有等待者。
 	void Signal()
 	{
 	}
@@ -77,8 +85,10 @@ class MutexCond
 
 #else
 
+// 短临界区自旋。持有超过约 5 秒断言，避免死锁被当成正常等待。
 class SpinLock
 {
+	// 0 空闲，1 已占用。
 	std::atomic<int32_t> m_iLockState;
 
   public:
@@ -106,9 +116,11 @@ class SpinLock
 	}
 };
 
+// 可重入互斥。同一线程可以再次 Lock，必须配对 UnLock。
 class Mutex
 {
 	friend class MutexCond;
+	// 实际的可重入锁。
 	std::recursive_mutex m_stMutex;
 
   public:
@@ -120,6 +132,7 @@ class Mutex
 	{
 		m_stMutex.unlock();
 	}
+	// 一直试到拿到。超过约 10 秒仍拿不到就断言。
 	void TryLock()
 	{
 		int iSpins = 0;
@@ -136,11 +149,14 @@ class Mutex
 	}
 };
 
+// 和 Mutex 配对的等待。Wait 可能虚假唤醒，调用方用 while 查条件。
 class MutexCond
 {
+	// 实际的条件变量。等待时用调用方 Mutex 里的那把锁。
 	std::condition_variable_any m_stConditionVariable;
 
   public:
+	// 放开锁并等待通知，返回时重新持有锁。可能虚假唤醒。
 	void Wait(Mutex& stLocker)
 	{
 		m_stConditionVariable.wait(stLocker.m_stMutex);
@@ -150,19 +166,23 @@ class MutexCond
 	{
 		return m_stConditionVariable.wait_until(stLocker.m_stMutex, stDeadline) == std::cv_status::no_timeout;
 	}
+	// 唤醒一个等待者。
 	void Signal()
 	{
 		m_stConditionVariable.notify_one();
 	}
+	// 唤醒全部等待者。
 	void Broadcast()
 	{
 		m_stConditionVariable.notify_all();
 	}
 };
 
+// 构造时 Lock，析构时 UnLock。
 template <class T>
 class LockGuard
 {
+	// 被守卫的锁。
 	T* m_pLock;
 
   public:

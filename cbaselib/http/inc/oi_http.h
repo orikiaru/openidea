@@ -14,9 +14,13 @@ namespace Http
 // status 为 0 表示没拿到 HTTP 状态行。fail 为真是连接、超时或报文不完整。
 struct Response
 {
+	// HTTP 状态码。没拿到状态行是 0。
 	int32_t iStatus;
+	// 响应体原始字节。
 	std::string sBody;
+	// 连接、超时或报文不完整。HTTP 4xx/5xx 本身不算这个。
 	bool bFail;
+	// 失败时的简短原因。
 	std::string sError;
 	Response()
 	    : iStatus(0), bFail(true)
@@ -35,6 +39,7 @@ class Call
 	struct Request;
 
   private:
+	// 这一次请求的路径、正文和完成门。await 期间必须还活着。
 	std::shared_ptr<Request> m_pRequest;
 	explicit Call(std::shared_ptr<Request> pRequest);
 
@@ -62,6 +67,7 @@ class Client
 	struct Impl;
 
   private:
+	// 地址、超时、是否复用，以及底下那条连接。
 	std::shared_ptr<Impl> m_pImpl;
 
   public:
@@ -70,7 +76,9 @@ class Client
 	Client(const Client&) = delete;
 	Client& operator=(const Client&) = delete;
 
+	// 发 GET。查询参数按百分号编码。
 	Call Get(const std::string& sPath, const std::vector<std::pair<std::string, std::string>>& vQuery);
+	// 发 POST。正文按字节送出，Content-Type 用调用方给的。
 	Call Post(const std::string& sPath, const std::string& sBody, const std::string& sContentType);
 };
 

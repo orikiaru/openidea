@@ -20,24 +20,30 @@ class DiagnosticText
 {
   public:
 	explicit DiagnosticText(std::string_view sText) noexcept;
+	// 转义后的文本。
 	const char* GetText() const noexcept
 	{
 		return m_vText;
 	}
+	// 原文是否被截断。
 	bool IsTruncated() const noexcept
 	{
 		return m_bTruncated;
 	}
 
   private:
+	// 转义后的文本，末尾带结束符。最长 4096 个可见字符。
 	char m_vText[4097]{};
+	// 原文超长，文本里已经标了截断。
 	bool m_bTruncated = false;
 };
 
+// 按配置初始化日志客户端。失败返回 false。
 bool Init();
 // 日志服自己用：不连日志服，整行日志交给 sink 写本地。传 NULL 摘掉，之后只打 stdout。
 typedef bool (*LocalSink)(LOG_LEVEL iLevel, const char* pText, size_t iLength);
 void InitLocal(LocalSink fnSink);
+// 按级别格式化一条日志。写不出去返回 false。
 bool Log(LOG_LEVEL iLevel, const char* pFormat, ...) __attribute__((format(printf, 2, 3)));
 }
 }

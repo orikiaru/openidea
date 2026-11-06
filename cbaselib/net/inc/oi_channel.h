@@ -11,12 +11,17 @@ class Channel
 {
   public:
 	// 工作线程发布期望掩码，poll 线程读取；复合修改仍由通道锁串行化。
+	// 期望的读写掩码。工作线程写，poll 线程读。
 	std::atomic<int32_t> iEventMask;
+	// poll 侧的监视对象。还没挂上、已摘掉，或正在用的 IoWatch，由 poll 解释。
 	void* pPollToken;
 
   protected:
+	// 这条通道的套接字和地址。
 	NetSocket stSocket;
+	// 数据进出交给它。监听通道可以为空。
 	Session* pSession;
+	// 串行化掩码修改。
 	::OI::Thread::Mutex stLocker;
 
   public:
@@ -28,8 +33,11 @@ class Channel
 	virtual ~Channel();
 
   public:
+	// poll 线程上可读。
 	virtual void DataIn() = 0;
+	// poll 线程上可写。
 	virtual void DataOut() = 0;
+	// 子类决定现在能不能关。返回 true 表示可以回收。
 	virtual bool TryClose() = 0;
 
   public:
@@ -38,9 +46,13 @@ class Channel
 	{
 		stSocket.Detach();
 	}
+	// 打开写事件。关闭中的会话也打开一次，让空闲连接能被收回。
 	void AllowSend();
+	// 关掉写事件。会话已经关闭时不动。
 	void ForbidSend();
+	// 打开读事件。会话已经关闭时不动。
 	void AllowRead();
+	// 关掉读事件。会话已经关闭时不动。
 	void ForbidRead();
 };
 }

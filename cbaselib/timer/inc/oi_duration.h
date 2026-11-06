@@ -9,6 +9,7 @@ namespace Timer
 // 时长参数只有 MS。其他单位在构造时换成毫秒。
 struct Milliseconds
 {
+	// 毫秒数。构造 MS 时原样使用。
 	int64_t iMilliseconds;
 
 	constexpr explicit Milliseconds(int64_t iMilliseconds)
@@ -19,6 +20,7 @@ struct Milliseconds
 
 struct Seconds
 {
+	// 秒数。构造 MS 时乘 1000。
 	int64_t iSeconds;
 
 	constexpr explicit Seconds(int64_t iSeconds)
@@ -29,6 +31,7 @@ struct Seconds
 
 struct Minutes
 {
+	// 分钟数。构造 MS 时乘 60 秒。
 	int64_t iMinutes;
 
 	constexpr explicit Minutes(int64_t iMinutes)
@@ -39,6 +42,7 @@ struct Minutes
 
 struct Hours
 {
+	// 小时数。构造 MS 时乘 3600 秒。
 	int64_t iHours;
 
 	constexpr explicit Hours(int64_t iHours)
@@ -49,6 +53,7 @@ struct Hours
 
 struct Days
 {
+	// 天数。构造 MS 时乘 24 小时。
 	int64_t iDays;
 
 	constexpr explicit Days(int64_t iDays)
@@ -59,6 +64,7 @@ struct Days
 
 struct MS
 {
+	// 统一后的毫秒数。定时器和 yield 都用这个。
 	int64_t iMilliseconds;
 
 	constexpr MS()

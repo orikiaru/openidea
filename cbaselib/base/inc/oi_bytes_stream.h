@@ -20,6 +20,7 @@ namespace OI
 {
 namespace Base
 {
+// 解码字节不够或类型写不进去。调用方用它丢掉这一包。
 struct ParserException : public std::exception
 {
 	const char* what() const noexcept override
@@ -42,10 +43,13 @@ struct PbFixedTrait
 	static const bool bValue = std::is_arithmetic<T>::value || std::is_enum<T>::value;
 };
 
+// 带读游标的字节流。编码往末尾追加，解码从游标往前读，字节不够抛 ParserException。
 class BytesStream : public Bytes
 {
-	size_t m_iCurrentPosition;  //反序列化时使用
-	size_t m_iSnapshotPosition; //快照位置
+	// 下一次读取的起点。
+	size_t m_iCurrentPosition;
+	// StartTransaction 记下的游标。RollBack 回到这里。
+	size_t m_iSnapshotPosition;
   public:
 	BytesStream()
 	    : m_iCurrentPosition(0), m_iSnapshotPosition(0)
@@ -90,10 +94,12 @@ class BytesStream : public Bytes
 		return Size() - m_iCurrentPosition;
 	}
 
+	// 记下当前读游标，半包解析失败时可以退回去。
 	void StartTransaction()
 	{
 		m_iSnapshotPosition = m_iCurrentPosition;
 	}
+	// 读游标退回最近一次 StartTransaction。
 	void RollBack()
 	{
 		m_iCurrentPosition = m_iSnapshotPosition;

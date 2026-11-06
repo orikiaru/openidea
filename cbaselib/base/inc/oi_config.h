@@ -3,26 +3,28 @@
 #include "oi_singleton.h"
 #include <assert.h>
 #include <memory>
-//配置文件实例
 namespace cpptoml
 {
 class table;
 }
 
-//暂时先将Config设计成全局Config并且配置文件为单个toml文件
 namespace OI
 {
 namespace Base
 {
+// 进程唯一的 toml。多次 Parse 把新文件合进已有表，同名顶层键后写的覆盖先写的。
 class Config
 {
 	DECLARE_SINGLETON(Config)
 	Config();
+	// Parse 成功后合进来的表。读接口都从这里取。
 	std::shared_ptr<cpptoml::table> m_pTomlConfig;
 
   public:
+	// 读一份 toml 并合进当前表。解析失败返回 false，已有内容不动。
 	bool Parse(const std::string& sConfFileName);
 
+	// 按点分键取单个值。没有这个键或类型对不上时返回 false，不改输出。
 	template <class T>
 	bool GetAs(const std::string& sKey, T& stValueLocal) const
 	{
@@ -36,6 +38,7 @@ class Config
 		return true;
 	}
 
+	// 按点分键取数组。没有这个键或元素类型对不上时返回 false，不改输出。
 	template <class T>
 	bool GetArrayAs(const std::string& sKey, typename std::vector<T>& stValueLocal) const
 	{
@@ -49,10 +52,12 @@ class Config
 		return true;
 	}
 
+	// 进程唯一配置，给读取用。
 	static const Config& GlobalConfig()
 	{
 		return GetInstance();
 	}
+	// 同一个实例，给 Parse 用。
 	static Config& GlobalMutableConfig()
 	{
 		return GetInstance();
