@@ -1,4 +1,5 @@
 #include "oi_udp_channel.h"
+#include "oi_errno.h"
 #include "oi_log.h"
 #include "oi_net_os.h"
 #include "oi_poll.h"
@@ -21,14 +22,14 @@ UDP_PeerChannel::UDP_PeerChannel(UDP_Channel* pOwner, const NetAddr& stAddr, Ses
 {
 }
 
-void UDP_PeerChannel::AllowSend()
+int32_t UDP_PeerChannel::AllowSend()
 {
 	if (pSession->IsClosed())
 	{
 		m_pOwner->MarkClosing(this);
-		return;
+		return OI_ERR_CONNECT;
 	}
-	m_pOwner->Flush(this);
+	return m_pOwner->Flush(this);
 }
 
 UDP_Channel::UDP_Channel(NetSocket stSocketLocal, SessionManager* pMgr, uint16_t iLocalPort)
@@ -116,20 +117,29 @@ bool UDP_Channel::GetPeerAddr(sid_t iSessionId, NetAddr& stAddr)
 	return true;
 }
 
-void UDP_Channel::Flush(UDP_PeerChannel* pPeer)
+int32_t UDP_Channel::Flush(UDP_PeerChannel* pPeer)
 {
 	::OI::Base::Bytes stOutput;
 	pPeer->pSession->SwapOutBuff(stOutput);
 	if (stOutput.Size() == 0)
 	{
-		return;
+		return OI_OK;
+	}
+	// 已从会话缓冲移走，成功或失败都要释放这次的发送额度。
+	pPeer->pSession->OnBytesSent(stOutput.Size());
+	const size_t iMaxDatagramBytes = pPeer->m_stAddr.Family() == AF_INET ? 65507 : 65527;
+	if (stOutput.Size() > iMaxDatagramBytes)
+	{
+		return OI_ERR_INVALID_ARGUMENT;
 	}
 	if (NetOs_SendTo(stSocket.GetSocket(), stOutput.Begin(), stOutput.Size(), pPeer->m_stAddr.NetAttrPtr(), pPeer->m_stAddr.NetAttrLen()) < 0)
 	{
-		LOG_TRACE("UDP_Channel::Flush drop sid=%d bytes=%zu err=%s", pPeer->pSession->GetSessionID(), stOutput.Size(), NetOs_StrError(errno));
+		const int iError = errno;
+		LOG_TRACE("UDP_Channel::Flush drop sid=%d bytes=%zu errno=%d err=%s", pPeer->pSession->GetSessionID(), stOutput.Size(), iError, NetOs_StrError(iError));
+		return OI_ERR_FAIL;
 	}
-	pPeer->pSession->OnBytesSent(stOutput.Size());
 	pPeer->m_iLastActive.store(UdpNowMilliseconds(), std::memory_order_relaxed);
+	return OI_OK;
 }
 
 void UDP_Channel::MarkClosing(UDP_PeerChannel* pPeer)

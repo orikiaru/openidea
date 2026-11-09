@@ -68,7 +68,7 @@ endforeach()
 
 `webclient` 不直接调 `cpp-httplib`。它走基础库 `OI::Http::Client`：`Start` 用 `StartTask` 拉起 `Run`，四次请求都是 `co_await`。完成时 poll 线程 `Schedule` 协程句柄，不在回调里 `resume`。单线程模块链 `http_static`。退出码 0 表示四下都对上了。以后换 Go 或其他语言的 HTTP 服务时，仍用这个客户端，只改地址。
 
-`host` 可以写 IPv4 或域名。域名用 libuv 的 `uv_getaddrinfo` 在它自己的线程池里解析一次，回调回到 poll 线程，再交给 `SessionManager` 去连，不卡 poll。`Client` 最后一个参数 `bReuse` 默认是复用：同一个 `Client` 上的请求串行共用这一条连接，请求头是 `Connection: keep-alive`。传 `false` 时请求头改成 `Connection: close`，这一响结束后主动关掉，下一个请求重新连。对端写了 `Connection: close`、HTTP/1.0 没有 keep-alive、报文没收完对端就断开、这一响解析失败，或者当前响应后面还粘着没消费的字节，就把这条会话关掉，下一个请求重新连。响应认 `Content-Length`、`chunked` 和读到断开三种结尾。超时定时器取消不了，所以请求状态用共享指针留到定时器回来；已经收完的结果不会被晚到的超时改掉。
+`host` 可以写 IPv4、IPv6 字面地址或域名。IPv6 字面地址可以带方括号或不带方括号，请求的 `Host` 头统一使用方括号；端口不是 80 时附加端口。域名用 libuv 的 `uv_getaddrinfo` 在它自己的线程池里解析一次，回调回到 poll 线程，再交给 `SessionManager` 去连，不卡 poll。`Client` 最后一个参数 `bReuse` 默认是复用：同一个 `Client` 上的请求串行共用这一条连接，请求头是 `Connection: keep-alive`。传 `false` 时请求头改成 `Connection: close`，这一响结束后主动关掉，下一个请求重新连。对端写了 `Connection: close`、HTTP/1.0 没有 keep-alive、报文没收完对端就断开、这一响解析失败，或者当前响应后面还粘着没消费的字节，就把这条会话关掉，下一个请求重新连。响应认 `Content-Length`、`chunked` 和读到断开三种结尾。超时定时器取消不了，所以请求状态用共享指针留到定时器回来；已经收完的结果不会被晚到的超时改掉。
 
 `ipcserver` 也链了这个客户端，多线程模块链 `http_m_static`。`ipcserver.toml` 的 `[HttpProbe]` 填了 `host` 时，起服后 `StartTask` 发一次 GET，打印 `http probe ... status=... bytes=... title=...`。默认不填，压测时不要打开。
 
@@ -98,6 +98,6 @@ errordef UdpError {
 ```
 
 - 每项写成 `名字 = 值;`，值必须手写。名字是大写下划线，不带作用域，所有 `enum` 和 `errordef` 之间不能重名；同一个枚举里值不能重。
-- `errordef` 是业务错误码，必须是正数，所有 `errordef` 之间值不能重。框架错误码在 `oi_errno.h`，是负数，0 是成功。处理函数直接 `co_return ::OI::RpcData::UDP_ERR_REJECTED;`，客户端 `RpcCall` 原样拿到这个值。
+- `errordef` 是业务错误码，取值范围为 1..2147483647，所有 `errordef` 之间值不能重；普通 `enum` 的取值规则不变。框架错误码在 `oi_errno.h`，是负数，0 是成功。处理函数直接 `co_return ::OI::RpcData::UDP_ERR_REJECTED;`，客户端 `RpcCall` 原样拿到这个值。
 - `rpcdata` 字段不能写枚举类型，用定宽整数（通常是 `int32_t`），比较和赋值时用枚举常量。
 - 只有文本协议支持，XML 协议不支持。用例是 `modules/xmlconfig/proto.xml` 的 `UdpProbe`、`UdpError`，由 `udp` 回归覆盖。

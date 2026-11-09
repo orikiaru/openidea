@@ -134,7 +134,15 @@ bool ParseHex(const std::string& sText, size_t iPosition, size_t iEnd, uint64_t&
 std::string HostHeader(const std::string& sHost, int32_t iPort)
 {
 	std::string sLine = "Host: ";
-	sLine += sHost;
+	::OI::Net::Ipv6Addr stAddress;
+	if (!sHost.starts_with('[') && stAddress.Init(sHost, 0))
+	{
+		sLine += "[" + sHost + "]";
+	}
+	else
+	{
+		sLine += sHost;
+	}
 	if (iPort != 80)
 	{
 		sLine += ":";

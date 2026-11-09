@@ -224,8 +224,8 @@ def ParseEnum(lex, data_type):
             return None
         if not ENUM_ITEM_NAME.fullmatch(item):
             return lex.fail("enum item must be UPPER_SNAKE name=" + item)
-        if data_type == SerializeDataType.ERROR_DEF and value <= 0:
-            return lex.fail("errordef value must be positive name=%s value=%d" % (item, value))
+        if data_type == SerializeDataType.ERROR_DEF and not 1 <= value <= 2147483647:
+            return lex.fail("errordef value must be in 1..2147483647 name=%s value=%d" % (item, value))
         if value in values:
             return lex.fail("duplicate enum value name=" + item)
         values.add(value)

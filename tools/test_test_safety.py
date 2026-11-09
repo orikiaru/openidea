@@ -533,12 +533,23 @@ class RegressionCleanupTests(unittest.TestCase):
         self.args.bin_dir = self.root
         self.stopped.side_effect = subprocess.TimeoutExpired("helper", 5)
         client = subprocess.CompletedProcess([], 0, "rpc=1 bin=1 bad=0", "")
+        fixture = Mock()
+        fixture.server_address = ("::1", 12345)
+        fixture.__enter__ = Mock(return_value=fixture)
+        fixture.__exit__ = Mock(return_value=False)
+        def run_client(*args, **kwargs):
+            if hasattr(fixture, "hosts") and isinstance(fixture.hosts, list):
+                fixture.hosts.extend(["[::1]:12345"] * 4)
+            return client
         with patch.object(self.runner.shutil, "copy2"), \
              patch.object(self.runner, "launch", return_value=self.first), \
              patch.object(self.runner, "record_process"), \
              patch.object(self.runner.socket, "create_connection"), \
-             patch.object(self.runner.subprocess, "run", return_value=client), \
+             patch.object(self.runner, "IPv6HttpServer", return_value=fixture), \
+             patch.object(self.runner.threading, "Thread") as thread, \
+             patch.object(self.runner.subprocess, "run", side_effect=run_client), \
              contextlib.redirect_stdout(io.StringIO()):
+            thread.return_value.is_alive.return_value = False
             with self.assertRaisesRegex(RuntimeError, "TimeoutExpired"):
                 self.runner.run_web(self.args)
         self.first.kill.assert_called_once_with()

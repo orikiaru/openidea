@@ -16,6 +16,7 @@ try:
 except ImportError:
     resource = None
 import json
+import http.server
 import traceback
 from regression_platform import WINDOWS, SUFFIX, launch, stop, pause, rss_kib, WslRedis
 import signal
@@ -27,6 +28,7 @@ import struct
 import subprocess
 import tempfile
 import time
+import urllib.parse
 
 REPO = Path(__file__).resolve().parents[1]
 CAP = 2 * 1024**3
@@ -588,6 +590,7 @@ def run(case, args):
                 assert "udp notify sent=1000 received=1000 duplicate=0 bad=0" in text
                 assert "udp protocol error code ret=1001 bad=0" in text
                 assert "udp large datagram bytes=60000 bad=0" in text
+                assert "udp oversized notify=-6 call=-6 immediate=1 recovered=1 bad=0" in text
                 assert "udp garbage keeps session sessions=1 bad=0" in text
                 assert "udp idle close reopen bad=0" in text
                 assert "udp done bad=0" in text
@@ -749,6 +752,37 @@ def run(case, args):
                           primary=sys.exc_info()[1], registry=registry, registry_paused=registry_paused)
 
 
+class HostHttpRegression(http.server.BaseHTTPRequestHandler):
+    def respond(self):
+        self.server.hosts.append(self.headers.get("Host"))
+        path = urllib.parse.urlsplit(self.path)
+        if path.path == "/query":
+            body = json.dumps({"text": urllib.parse.parse_qs(path.query)["text"][0]}).encode()
+        else:
+            body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            if path.path in ("/json", "/rpcjson"):
+                data = json.loads(body)
+                if path.path == "/json":
+                    data["ok"] = True
+                else:
+                    data["gap"] += 1
+                body = json.dumps(data).encode()
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    do_GET = respond
+    do_POST = respond
+
+    def log_message(self, format, *args):
+        pass
+
+
+class IPv6HttpServer(http.server.ThreadingHTTPServer):
+    address_family = socket.AF_INET6
+
+
 def run_web(args):
     # 仍使用模块自带的 WebClient 用例，验证字段改名后的 HTTP/JSON/二进制收发。
     with regression_directory(prefix="oi-regression-web-p%d-" % PORT_OFFSET) as tmp:
@@ -780,6 +814,27 @@ def run_web(args):
                 client = subprocess.run([str(work / ("webclient" + SUFFIX))], cwd=work, capture_output=True, text=True, timeout=30)
                 print(client.stdout, flush=True)
                 assert client.returncode == 0 and "rpc=1 bin=1 bad=0" in client.stdout, client.stderr
+                with IPv6HttpServer(("::1", 0), HostHttpRegression) as fixture:
+                    fixture.hosts = []
+                    thread = threading.Thread(target=fixture.serve_forever, kwargs={"poll_interval": 0.05})
+                    thread.start()
+                    try:
+                        fixture_port = fixture.server_address[1]
+                        for host in ("::1", "[::1]"):
+                            config = (REPO / "deploy/config/webclient.toml").read_text(encoding="utf-8-sig")
+                            config = shift_ports(config).replace('[WebClient]\nip = "127.0.0.1"', '[WebClient]\nip = "' + host + '"')
+                            config = config.replace("port = 18080", "port = " + str(fixture_port))
+                            (cfg / "webclient.toml").write_text(config, encoding="utf-8")
+                            fixture.hosts.clear()
+                            client = subprocess.run([str(work / ("webclient" + SUFFIX))], cwd=work, capture_output=True, text=True, timeout=30)
+                            assert client.returncode == 0 and "rpc=1 bin=1 bad=0" in client.stdout, (host, client.stdout, client.stderr)
+                            assert fixture.hosts == ["[::1]:%d" % fixture_port] * 4, (host, fixture.hosts)
+                            print("web ipv6 host %s PASS" % host, flush=True)
+                    finally:
+                        fixture.shutdown()
+                        thread.join(timeout=3)
+                        if thread.is_alive():
+                            raise RuntimeError("IPv6 HTTP fixture failed to stop")
                 print("web PASS", flush=True)
             finally:
                 cleanup_owned([server], [output], root, args, "web", primary=sys.exc_info()[1])

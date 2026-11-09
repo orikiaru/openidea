@@ -41,7 +41,7 @@ class UDP_PeerChannel : public Channel
 	{
 		return false;
 	}
-	void AllowSend() override;
+	int32_t AllowSend() override;
 	void ForbidSend() override
 	{
 	}
@@ -55,7 +55,7 @@ class UDP_PeerChannel : public Channel
 
 // 一个绑好的 UDP 口，只在 poll 上挂一次读。管理器的会话按对端地址挂在这里。
 // 收：一次 recvfrom 一包，按来源找会话，没见过的地址用 CloneSession 新建，再 SwapInBuff。
-// 发：会话自己 sendto，不走写事件。发不出去就丢，UDP 本来就会丢包。
+// 发：会话自己 sendto，不走写事件。本地发送失败直接返回错误。
 // 关：会话关闭后排到 poll 线程回收；空闲超过 idle_timeout_ms 的会话由计时器关掉。
 class UDP_Channel : public Channel
 {
@@ -98,7 +98,7 @@ class UDP_Channel : public Channel
 	// 会话的对端地址。不是本口的会话返回 false。
 	bool GetPeerAddr(sid_t iSessionId, NetAddr& stAddr);
 	// 对端通道在会话锁里调。把会话待发的字节作为一包发出去。
-	void Flush(UDP_PeerChannel* pPeer);
+	int32_t Flush(UDP_PeerChannel* pPeer);
 	// 会话已经关了，排到 poll 线程回收。
 	void MarkClosing(UDP_PeerChannel* pPeer);
 

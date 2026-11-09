@@ -1,4 +1,5 @@
 #include "oi_channel.h"
+#include "oi_errno.h"
 #include "oi_session.h"
 #include "oi_poll.h"
 #include "oi_net_os.h"
@@ -17,7 +18,7 @@ Channel::~Channel()
 	stSocket.Detach();
 }
 
-void Channel::AllowSend()
+int32_t Channel::AllowSend()
 {
 	::OI::Thread::MutexGuard stLock(stLocker);
 	// 关闭中的会话也要触发一次 IO，让 TryClose 回收空闲连接，不能等对端发数据。
@@ -26,6 +27,7 @@ void Channel::AllowSend()
 		iEventMask |= IO_EV_WRITE;
 		Poll::GetInstance().IOEventMod(this, iEventMask);
 	}
+	return OI_OK;
 }
 
 void Channel::ForbidSend()

@@ -144,7 +144,7 @@ class Session
 
   protected:
 	// 转给通道打开或关掉对应事件。
-	void AllowSend();
+	int32_t AllowSend();
 	void ForbidSend();
 	void AllowRead();
 	void ForbidRead();

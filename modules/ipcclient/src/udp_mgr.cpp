@@ -193,6 +193,19 @@ OI::Coro::Task UdpMgr::Run()
 	const bool bLarge = co_await EchoOnce(iSessionId, 1000000, std::string(60000, 'U'));
 	fnReport("udp large datagram bytes=%d bad=%d\n", bLarge ? 0 : 1, 60000);
 
+	::OI::RpcData::UdpEchoReq stOversized;
+	stOversized.iSeq = 1000003;
+	stOversized.sData.assign(65528, 'U');
+	const int64_t iOversizedStartMilliseconds = ::OI::Timer::SteadyMilliseconds();
+	const int32_t iNotifyRet = ::OI::Rpc::RpcNotify(stManager, iSessionId, stOversized);
+	::OI::RpcData::UdpEchoRes stOversizedResponse;
+	const int32_t iCallRet = co_await ::OI::Rpc::RpcCall(stManager, iSessionId, stOversized, stOversizedResponse, ::OI::Timer::Seconds(3));
+	const bool bImmediate = ::OI::Timer::SteadyMilliseconds() - iOversizedStartMilliseconds < 1000;
+	const bool bRecovered = co_await EchoOnce(iSessionId, 1000004, "after oversized");
+	fnReport("udp oversized notify=%d call=%d immediate=%d recovered=%d bad=%d\n",
+	    (iNotifyRet == OI_ERR_INVALID_ARGUMENT && iCallRet == OI_ERR_INVALID_ARGUMENT && bImmediate && bRecovered) ? 0 : 1,
+	    iNotifyRet, iCallRet, bImmediate ? 1 : 0, bRecovered ? 1 : 0);
+
 	::OI::Base::Bytes stGarbage;
 	stGarbage.Append("garbage-garbage", 15);
 	const bool bGarbageSent = stManager.SendBytes(iSessionId, stGarbage);

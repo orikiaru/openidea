@@ -32,8 +32,7 @@ int32_t Session::SendResult(const ::OI::Base::Bytes& stBytes)
 	}
 	stOutputBuffer.Append(stBytes);
 	iQueuedBytes += stBytes.Size();
-	AllowSend();
-	return OI_OK;
+	return AllowSend();
 }
 
 void Session::SetSendQueueLimit(size_t iBytes)
@@ -107,12 +106,9 @@ bool Session::IsClosed()
 	return iStatus.load(std::memory_order_acquire) != IO_ST_CONNECTED;
 }
 
-void Session::AllowSend()
+int32_t Session::AllowSend()
 {
-	if (pChannel)
-	{
-		pChannel->AllowSend();
-	}
+	return pChannel ? pChannel->AllowSend() : OI_OK;
 }
 
 void Session::ForbidSend()

@@ -47,6 +47,15 @@ class FieldNamesTest(unittest.TestCase):
         self.assertIsNone(ParseProtoText("rpcdata Bad { 0 int32_t iOne json same; 1 int32_t iTwo json same; }"))
         self.assertIsNone(ParseProtoText("rpcdata Bad { 0 int32_t iOne; 0 int32_t iTwo; }"))
 
+    def test_errordef_int32_bounds(self):
+        for value in (1, 2147483647):
+            with self.subTest(value=value):
+                self.assertIsNotNone(ParseProtoText("errordef Errors { ERR_VALUE = %d; }" % value))
+        for value in (0, -1, 2147483648, 4294967296):
+            with self.subTest(value=value):
+                self.assertIsNone(ParseProtoText("errordef Errors { ERR_VALUE = %d; }" % value))
+        self.assertIsNotNone(ParseProtoText("enum Ordinary { ZERO = 0; NEGATIVE = -1; LARGE = 2147483648; }"))
+
     def test_xml_alias(self):
         node = ET.fromstring('<rpcdata name="Example"><member name="iCount" type="int32_t" seq="7" json="count"/></rpcdata>')
         data = SerializeData(SerializeDataType.RPC_DATA, node)
