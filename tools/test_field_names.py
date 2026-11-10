@@ -1,5 +1,7 @@
 """Protocol field naming and stable JSON/wire-number regressions."""
 import sys
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 import xml.etree.ElementTree as ET
@@ -63,6 +65,44 @@ class FieldNamesTest(unittest.TestCase):
         self.assertEqual(data.members[0].json_name, "count")
         node[0].set("name", "count")
         self.assertFalse(SerializeData(SerializeDataType.RPC_DATA, node).ParseClassMember())
+
+
+class ModuleGeneratorTest(unittest.TestCase):
+    def run_generator(self, modules):
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as temp:
+            temp = Path(temp)
+            module_file = temp / "module.xml"
+            component_file = temp / "components.xml"
+            manifest = temp / "modules.cmake"
+            module_file.write_text("<Modules>" + modules + "</Modules>", encoding="utf-8")
+            component_file.write_text("<Components/>", encoding="utf-8")
+            command = [sys.executable, str(root / "cbaselib/proto/proto_tool/main.py"),
+                 str(root / "modules/xmlconfig/proto.xml"), str(module_file),
+                 str(component_file), str(temp / "include"), str(temp / "modules"),
+                 str(temp / "deploy"), str(manifest)]
+            result = subprocess.run(command, cwd=root, capture_output=True, text=True, errors="replace")
+            output = manifest.read_text(encoding="utf-8") if manifest.exists() else None
+            if result.returncode == 0:
+                repeated = subprocess.run(command, cwd=root, capture_output=True, text=True, errors="replace")
+                self.assertEqual(repeated.returncode, 0, repeated.stdout + repeated.stderr)
+                self.assertEqual(manifest.read_text(encoding="utf-8"), output)
+            return result, output
+
+    def test_invalid_module_names(self):
+        for module in ('<module/>', '<module name=""/>', '<module name="../bad"/>',
+                       '<module name="bad name"/>', '<module name="é"/>',
+                       '<module name="-bad"/>',
+                       '<module name="Echo"/><module name="eCHO"/>'):
+            with self.subTest(module=module):
+                result, _ = self.run_generator(module)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_manifest_uses_generated_directory_names(self):
+        result, manifest = self.run_generator('<module name="LogD"/><module name="Test-2_ABC"/>')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIsNotNone(manifest)
+        self.assertEqual(manifest.split(), ["set(OI_MODULES", "logd", "test-2_abc", ")"])
 
 
 if __name__ == "__main__":

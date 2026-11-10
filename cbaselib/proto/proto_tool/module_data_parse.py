@@ -1,3 +1,4 @@
+import re
 from enum import Enum
 from typing import List,Tuple,Dict,Union,Optional
 from xml.etree.ElementTree import Element
@@ -95,13 +96,18 @@ class ModuleGen:
             
     def ParseModule(self, m_xml):
         module = Module()
+        name = m_xml.get("name", "")
+        if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_-]*", name):
+            loginfo("ParseModule Error Invalid Module=", name)
+            return False
+        module_dir = name.lower()
+        if module_dir in self.modules:
+            loginfo("ParseModule Error Repeat Module=", name)
+            return False
         if(not module.Parse(m_xml, self.components)):
             loginfo("{} {}".format(module.name, "[Module ParseFault]"))
             return False
-        if(module.name in self.modules.keys()):
-            loginfo("ParseModule Error Repeat Module=", module.name)
-            return False
-        self.modules[module.name] = module
+        self.modules[module_dir] = module
         loginfo("{} {}".format("[Module ParseSuccess]", module.name))
         return True
         

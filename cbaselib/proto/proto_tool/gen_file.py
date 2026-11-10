@@ -18,19 +18,23 @@ class GenFile:
         self.module_include_path = module_include_path
         self.module_path = module_path
         self.module_depoly_path = module_depoly_path
-    def Gen(self):
+    def Gen(self, module_manifest_path=None):
         if(not self.GenSerailizeIncludeFile()):
             return False
-        if(not self.GenModuleFile()):
+        if(not self.GenModuleFile(module_manifest_path)):
             return False
         return True
     
-    def GenModuleFile(self):
+    def GenModuleFile(self, module_manifest_path):
+        module_names = []
         for m in self.module_parse.modules.values():
             mp = ModuleFileGen(m, self.module_path, self.module_depoly_path)
             if(not mp.Gen()):
                 loginfo("ModuleName=[{}] [{}]".format(m.name, "GenFileError"))
                 return False
+            module_names.append("    " + mp.GetModuleNameLower())
+        if module_manifest_path:
+            write_utf8(module_manifest_path, "\n".join(["set(OI_MODULES", *module_names, ")", ""]))
         return True
 
     def GenSerailizeIncludeFile(self):

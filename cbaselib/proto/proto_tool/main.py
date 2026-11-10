@@ -56,7 +56,8 @@ if __name__ == "__main__":
         exit(-2)
         
     file_gen = GenFile(module, proto, module_header_path, module_path, module_depoly_path)
-    ret = file_gen.Gen()
+    module_manifest_path = sys.argv[7] if len(sys.argv) > 7 else None
+    ret = file_gen.Gen(module_manifest_path)
     if(not ret):
         exit(-3)
         

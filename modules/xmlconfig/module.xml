@@ -27,4 +27,7 @@
     <module name="WebClient">
     </module>
 
+    <module name="Registry">
+    </module>
+
 </Modules>

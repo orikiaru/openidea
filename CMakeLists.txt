@@ -92,21 +92,30 @@ add_subdirectory(${BASE_LIB_PATH}/redis EXCLUDE_FROM_ALL)
 add_subdirectory(${BASE_LIB_PATH}/http EXCLUDE_FROM_ALL)
 
 
-set(PROTO_TOOL_PATH ${BASE_LIB_PATH}/proto/proto_tool/main.py)
+set(PROTO_TOOL_DIR "${BASE_LIB_PATH}/proto/proto_tool")
 set(PROTO_XML_PATH ${MODULES_PATH}/xmlconfig)
-set(PROTO_GEN_PARAM
+set(PROTO_INPUTS
     ${PROTO_XML_PATH}/proto.xml
     ${PROTO_XML_PATH}/module.xml
     ${PROTO_XML_PATH}/module_component.xml
-    ${MODULES_PATH}/include
-    ${MODULES_PATH}
-    ${DEPOLY_PATH}
 )
+file(GLOB PROTO_TOOL_SOURCES "${PROTO_TOOL_DIR}/*.py")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${PROTO_INPUTS} ${PROTO_TOOL_SOURCES})
 
 find_program(PYTHON_BIN NAMES python3 python)
-execute_process(COMMAND  echo "---------------ProtoAndModuleGen Start---------------")
-execute_process(COMMAND  ${PYTHON_BIN} ${PROTO_TOOL_PATH} ${PROTO_GEN_PARAM})
-execute_process(COMMAND  echo "---------------ProtoAndModuleGen End---------------")
+if(NOT PYTHON_BIN)
+    message(FATAL_ERROR "Python 3 is required to generate protocols and modules")
+endif()
+set(OI_MODULE_MANIFEST "${CMAKE_CURRENT_BINARY_DIR}/oi_modules.cmake")
+execute_process(
+    COMMAND "${PYTHON_BIN}" "${PROTO_TOOL_DIR}/main.py" ${PROTO_INPUTS}
+        "${MODULES_PATH}/include" "${MODULES_PATH}" "${DEPOLY_PATH}" "${OI_MODULE_MANIFEST}"
+    RESULT_VARIABLE PROTO_GEN_RESULT
+)
+if(NOT "${PROTO_GEN_RESULT}" STREQUAL "0")
+    message(FATAL_ERROR "Protocol and module generation failed: ${PROTO_GEN_RESULT}")
+endif()
+include("${OI_MODULE_MANIFEST}")
 
 #设置可执行程序和库文件生成目录到 deploy/
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${DEPOLY_PATH}/ar)
@@ -114,14 +123,12 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${DEPOLY_PATH}/lib)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${DEPOLY_PATH}/bin)
 set(LIBRARY_OUTPUT_PATH ${DEPOLY_PATH}/path)
 
-#增加编译模块。新模块由 xml 生成到 modules/<name>/CMakeLists.txt
-foreach(_mod logd ipcclient ipcserver redisserver webserver webclient registry)
-    if(EXISTS ${MODULES_PATH}/${_mod}/CMakeLists.txt)
-        add_subdirectory(${MODULES_PATH}/${_mod})
-    endif()
+# 模块名单由 module.xml 生成。
+foreach(_mod IN LISTS OI_MODULES)
+    add_subdirectory("${MODULES_PATH}/${_mod}")
 endforeach()
 
-if(OI_ENABLE_TEST_HOOKS)
+if(OI_ENABLE_TEST_HOOKS AND TARGET logd)
     target_compile_definitions(logd PRIVATE OI_ENABLE_TEST_HOOKS)
 endif()
 file(GENERATE OUTPUT "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>/oi_test_hooks.txt" CONTENT "${OI_ENABLE_TEST_HOOKS}\n")
