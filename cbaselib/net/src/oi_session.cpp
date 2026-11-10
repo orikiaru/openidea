@@ -32,7 +32,20 @@ int32_t Session::SendResult(const ::OI::Base::Bytes& stBytes)
 	}
 	stOutputBuffer.Append(stBytes);
 	iQueuedBytes += stBytes.Size();
-	return AllowSend();
+	const size_t iQueuedBeforeSend = stOutputBuffer.Size();
+	const int32_t iRet = AllowSend();
+	// UDP 失败时包已从缓冲取走且没有写出。缓冲变短的部分不再排队，额度退回。成功由 OnBytesSend 扣。
+	if (iRet != OI_OK)
+	{
+		const size_t iStillQueued = stOutputBuffer.Size();
+		if (iStillQueued < iQueuedBeforeSend)
+		{
+			const size_t iAbandoned = iQueuedBeforeSend - iStillQueued;
+			assert(iAbandoned <= iQueuedBytes);
+			iQueuedBytes -= iAbandoned;
+		}
+	}
+	return iRet;
 }
 
 void Session::SetSendQueueLimit(size_t iBytes)
@@ -47,7 +60,7 @@ size_t Session::PendingSendBytes()
 	return iQueuedBytes;
 }
 
-void Session::OnBytesSent(size_t iBytes)
+void Session::OnBytesSend(size_t iBytes)
 {
 	::OI::Thread::MutexGuard stLock(stLocker);
 	assert(iBytes <= iQueuedBytes);

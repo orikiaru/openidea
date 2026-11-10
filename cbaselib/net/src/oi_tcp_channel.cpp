@@ -78,7 +78,7 @@ void TCP_Channel::DataOut()
 		if (iWriteNumber > 0)
 		{
 			stOutputBuffer.Erase(0, iWriteNumber);
-			pSession->OnBytesSent((size_t)iWriteNumber);
+			pSession->OnBytesSend((size_t)iWriteNumber);
 			continue;
 		}
 		else if (iWriteNumber == -1 && errno == EAGAIN)

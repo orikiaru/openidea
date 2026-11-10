@@ -48,6 +48,7 @@ class Channel
 	}
 	// 打开写事件。关闭中的会话也打开一次，让空闲连接能被收回。
 	// 会话在 Send 追加完、仍持会话锁时调用。UDP 直接发送一包并返回本地发送结果。
+	// 返回非 OI_OK 时不要调用 OnBytesSend。缓冲里被取走的未写出字节由 SendResult 退回额度。
 	virtual int32_t AllowSend();
 	// 关掉写事件。会话已经关闭时不动。
 	virtual void ForbidSend();

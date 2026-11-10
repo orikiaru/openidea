@@ -125,19 +125,35 @@ int32_t UDP_Channel::Flush(UDP_PeerChannel* pPeer)
 	{
 		return OI_OK;
 	}
-	// 已从会话缓冲移走，成功或失败都要释放这次的发送额度。
-	pPeer->pSession->OnBytesSent(stOutput.Size());
+	// 这一包已经离开会话缓冲。超限或 sendto 没收下整包就丢掉，不并进下一包，也不调用 OnBytesSend。
+	// 发送额度由 SendResult 按取走但未写出的字节退回。
 	const size_t iMaxDatagramBytes = pPeer->m_stAddr.Family() == AF_INET ? 65507 : 65527;
 	if (stOutput.Size() > iMaxDatagramBytes)
 	{
 		return OI_ERR_INVALID_ARGUMENT;
 	}
-	if (NetOs_SendTo(stSocket.GetSocket(), stOutput.Begin(), stOutput.Size(), pPeer->m_stAddr.NetAttrPtr(), pPeer->m_stAddr.NetAttrLen()) < 0)
+	int iSent = -1;
+	for (;;)
+	{
+		iSent = NetOs_SendTo(stSocket.GetSocket(), stOutput.Begin(), stOutput.Size(), pPeer->m_stAddr.NetAttrPtr(), pPeer->m_stAddr.NetAttrLen());
+		if (iSent < 0 && errno == EINTR)
+		{
+			continue;
+		}
+		break;
+	}
+	if (iSent < 0)
 	{
 		const int iError = errno;
 		LOG_TRACE("UDP_Channel::Flush drop sid=%d bytes=%zu errno=%d err=%s", pPeer->pSession->GetSessionID(), stOutput.Size(), iError, NetOs_StrError(iError));
 		return OI_ERR_FAIL;
 	}
+	if ((size_t)iSent != stOutput.Size())
+	{
+		LOG_TRACE("UDP_Channel::Flush drop sid=%d bytes=%zu sent=%d", pPeer->pSession->GetSessionID(), stOutput.Size(), iSent);
+		return OI_ERR_FAIL;
+	}
+	pPeer->pSession->OnBytesSend(stOutput.Size());
 	pPeer->m_iLastActive.store(UdpNowMilliseconds(), std::memory_order_relaxed);
 	return OI_OK;
 }

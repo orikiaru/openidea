@@ -3157,7 +3157,7 @@ static int CheckSendBudget()
 	{
 		++iBadLocal;
 	}
-	stBuffered.OnBytesSent(8);
+	stBuffered.OnBytesSend(8);
 	stStaged.Clear();
 	if (!stBuffered.Send(stPayload))
 	{
