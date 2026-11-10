@@ -293,8 +293,10 @@ class ProtoMultiClientManager : public ProtoSessionManager
 	sid_t ConnectedSid(int32_t iInstanceId);
 	// 名单里没有这台返回空。
 	std::shared_ptr<RpcSender> PeerSender(int32_t iInstanceId);
-	// 在已连上的实例里轮询；一台都没连上时在名单里轮询。名单为空返回空。
+	// 在已连上的实例里轮询；一台都没连上时在名单里轮询，调用先暂存。名单为空返回空。
 	std::shared_ptr<RpcSender> AnySender();
+	// 只在已连上的里轮询，返回这台当前的会话号。一台都没连上返回 INVALID_SID。
+	sid_t ConnectedAny();
 	// 按实例号升序取当前名单的发送目标，vIds 与 stRoute.vClients 一一对应。
 	void AllSenders(std::vector<int32_t>& vIds, ServiceRoute& stRoute);
 	// 注册表下发这个名字的整份名单。按实例号比对：多出的建连，消失的退役，地址变了的先退役再新建。
@@ -303,6 +305,9 @@ class ProtoMultiClientManager : public ProtoSessionManager
 	// 给这台发单向消息。没连上返回 OI_ERR_CONNECT。
 	template <typename Msg>
 	int32_t NotifyPeer(int32_t iInstanceId, const Msg& stMessage);
+	// 发给任一台已连上的，选法同 AnySender。一台都没连上返回 OI_ERR_CONNECT。
+	template <typename Msg>
+	int32_t NotifyAny(const Msg& stMessage);
 	// 指定一台。名单里没有返回 OI_ERR_CONNECT；在名单里还没连上就先暂存，连上补发。返回 TaskResult<int32_t>。
 	template <typename Req>
 	auto Call(int32_t iInstanceId, Req stRequest, typename RpcProtoId<Req>::Response& stResponse, ::OI::Timer::MS stTimeout = ::OI::Timer::Seconds(180));

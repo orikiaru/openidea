@@ -276,14 +276,14 @@ OI::Coro::Task MultiMgr::Run()
 	stPushRequest.iNotify = 1;
 	const int32_t iPushTwo = m_stPeers.NotifyPeer(2, stPushRequest);
 	const int32_t iPushNone = m_stPeers.NotifyPeer(9, stPushRequest);
+	const int32_t iPushAny = m_stPeers.NotifyAny(stPushRequest);
 	const bool bNotes = co_await WaitFor([this]()
 	{
-		return m_stPeers.Notes() + m_stPeers.NoteBad() >= 2;
+		return m_stPeers.Notes() >= 3;
 	}, 3000);
-	fnReport("multi reverse notify call=%d notify=%d none=%d received=%d wrong=%d bad=%d\n",
-	    (iPushOne == 1 && iPushTwo == OI_OK && iPushNone == OI_ERR_CONNECT && bNotes && m_stPeers.Notes() == 2 && m_stPeers.NoteBad() == 0) ? 0
-	                                                                                                                                        : 1,
-	    iPushOne, iPushTwo, iPushNone, m_stPeers.Notes(), m_stPeers.NoteBad());
+	fnReport("multi reverse notify call=%d notify=%d none=%d any=%d received=%d wrong=%d bad=%d\n",
+	    (iPushOne == 1 && iPushTwo == OI_OK && iPushNone == OI_ERR_CONNECT && iPushAny == OI_OK && bNotes && m_stPeers.Notes() == 3 && m_stPeers.NoteBad() == 0) ? 0 : 1,
+	    iPushOne, iPushTwo, iPushNone, iPushAny, m_stPeers.Notes(), m_stPeers.NoteBad());
 
 	// 脚本看到这行就杀掉 2 号。先断连接，注册表撤掉之后名单里也没了。
 	std::printf("multi request stop id=2\n");

@@ -97,6 +97,7 @@ Redis 连不上或卡住时，登记和续期回失败，客户端下一次心�
 | `CallAny(req, res)` | 在已连上的实例里轮询，一台都没连上时在名单里轮询。 |
 | `CallAll<Res>(req)` | 按发送这一刻的名单每台一份，先全部发出再等。结果按实例号升序，每格带 `iInstanceId`。 |
 | `NotifyPeer(实例号, msg)` | 单向消息。没连上回 `OI_ERR_CONNECT`。 |
+| `NotifyAny(msg)` | 发给任一台已连上的，选法同 `CallAny`。一台都没连上回 `OI_ERR_CONNECT`。 |
 
 服务端推下来的消息照常用 `OI_NOTIFY_BIND_SELF` 绑定，`OI_RPC_SELF(类型)` 拿到的就是这个管理器。`InstanceIds()` 给当前名单，`ConnectedSid(实例号)` 给这台当前的会话，`IsConnect()` 表示至少有一台连着。
 

@@ -694,10 +694,7 @@ std::shared_ptr<RpcSender> ProtoMultiClientManager::AnySender()
 			vPeers.push_back(pPeer);
 		}
 	}
-	if (vPeers.empty())
-	{
-		return nullptr;
-	}
+	// 只在已连上的里挑。一台都没连上时退到名单里，调用先暂存，连上补发。
 	std::vector<std::shared_ptr<PeerConnection>> vConnected;
 	for (const auto& pPeer : vPeers)
 	{
@@ -707,8 +704,40 @@ std::shared_ptr<RpcSender> ProtoMultiClientManager::AnySender()
 		}
 	}
 	const auto& vPick = vConnected.empty() ? vPeers : vConnected;
+	if (vPick.empty())
+	{
+		return nullptr;
+	}
 	const uint32_t iCursor = m_iCursor.fetch_add(1, std::memory_order_relaxed);
 	return vPick[iCursor % vPick.size()]->SharedSender();
+}
+
+sid_t ProtoMultiClientManager::ConnectedAny()
+{
+	std::vector<std::shared_ptr<PeerConnection>> vPeers;
+	{
+		::OI::Thread::MutexGuard stLock(m_stPeerLocker);
+		vPeers.reserve(m_mPeers.size());
+		for (const auto& [iInstanceId, pPeer] : m_mPeers)
+		{
+			vPeers.push_back(pPeer);
+		}
+	}
+	std::vector<sid_t> vSids;
+	for (const auto& pPeer : vPeers)
+	{
+		const sid_t iSessionIdLocal = pPeer->SessionId();
+		if (iSessionIdLocal != INVALID_SID)
+		{
+			vSids.push_back(iSessionIdLocal);
+		}
+	}
+	if (vSids.empty())
+	{
+		return INVALID_SID;
+	}
+	const uint32_t iCursor = m_iCursor.fetch_add(1, std::memory_order_relaxed);
+	return vSids[iCursor % vSids.size()];
 }
 
 void ProtoMultiClientManager::AllSenders(std::vector<int32_t>& vIds, ServiceRoute& stRoute)

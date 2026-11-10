@@ -826,7 +826,7 @@ struct RouteAwaiter
 	std::string sTarget;
 	bool bBatch = false;
 	bool bResolved = false;
-	int32_t iCode = OI_ERR_CONNECT; // 注册表回包码。exchange(Ready) 之前写完。
+	int32_t iCode = OI_ERR_CONNECT;                 // 注册表回包码。exchange(Ready) 之前写完。
 	std::vector<::OI::Base::ServiceInstance> vList; // 回包名单。和 iCode 一起在认领完成前写完。
 	std::vector<std::string> vZoneNames;
 	ServiceRoute stRoute;
@@ -1221,6 +1221,17 @@ int32_t ProtoMultiClientManager::NotifyPeer(int32_t iInstanceId, const Msg& stMe
 	return RpcNotify(*this, iSessionIdLocal, stMessage);
 }
 
+template <typename Msg>
+int32_t ProtoMultiClientManager::NotifyAny(const Msg& stMessage)
+{
+	const sid_t iSessionIdLocal = ConnectedAny();
+	if (iSessionIdLocal == INVALID_SID)
+	{
+		return OI_ERR_CONNECT;
+	}
+	return RpcNotify(*this, iSessionIdLocal, stMessage);
+}
+
 template <typename Req>
 [[nodiscard]] auto ProtoMultiClientManager::Call(int32_t iInstanceId, Req stRequest, typename RpcProtoId<Req>::Response& stResponse,
     ::OI::Timer::MS stTimeout)
@@ -1260,10 +1271,10 @@ auto ProtoMultiClientManager::CallAll(const Req& stRequest, ::OI::Timer::MS stTi
 // 从本次回调的上下文拿回组件。stManager 必须就是这个类型，对象要活过所有在途请求。
 #define OI_RPC_SELF(Type) static_cast<Type&>(stContext.stManager)
 // 注册成员函数。不在这里绑 this，处理时用上下文还原对象再调用。成员签名与 OI_RPC_CONTEXT_HANDLER 相同。
-#define OI_RPC_BIND_SELF(Name, Type, Member) \
+#define OI_RPC_BIND_SELF(Name, Type, Member)                                                                                                                                                     \
 	::OI::Rpc::HandleRpc<::OI::RpcData::Name##Req>([](const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::Name##Req& stRequest, ::OI::RpcData::Name##Res& stResponse) -> decltype(auto) \
-	{ \
-		return OI_RPC_SELF(Type).Member(stContext, stRequest, stResponse); \
+	{                                                                                                                                                                                            \
+		return OI_RPC_SELF(Type).Member(stContext, stRequest, stResponse);                                                                                                                       \
 	})
 
 // 单向消息。协议 Name 只用 NameReq，生成的 NameRes 不会出现在线上。
@@ -1272,8 +1283,8 @@ auto ProtoMultiClientManager::CallAll(const Req& stRequest, ::OI::Timer::MS stTi
 #define OI_NOTIFY_BIND(Name, ...) \
 	::OI::Rpc::HandleNotify<::OI::RpcData::Name##Req>((__VA_ARGS__))
 // 注册成员函数，签名与 OI_NOTIFY_HANDLER 相同。
-#define OI_NOTIFY_BIND_SELF(Name, Type, Member) \
+#define OI_NOTIFY_BIND_SELF(Name, Type, Member)                                                                                                               \
 	::OI::Rpc::HandleNotify<::OI::RpcData::Name##Req>([](const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::Name##Req& stRequest) -> decltype(auto) \
-	{ \
-		return OI_RPC_SELF(Type).Member(stContext, stRequest); \
+	{                                                                                                                                                         \
+		return OI_RPC_SELF(Type).Member(stContext, stRequest);                                                                                                \
 	})
