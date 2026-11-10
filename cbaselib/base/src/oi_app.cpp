@@ -4,6 +4,7 @@
 #include "oi_thread.h"
 #include "oi_timer_manager.h"
 #include "oi_poll.h"
+#include "oi_singleton.h"
 
 namespace OI
 {
@@ -40,6 +41,7 @@ int StartFramework(const char* pConfigPath)
 
 int RunFramework()
 {
+	SingletonUpdates::Instance().Start();
 	::OI::Thread::ThreadPool::GetInstance().StartWork();
 	return ::OI::Thread::ThreadPool::GetInstance().ExitCode();
 }

@@ -92,8 +92,34 @@ static OI_RPC_HANDLER(Hold, HandleReverseHold)
 }
 
 HoldMgr::HoldMgr()
-    : m_bEnabled(false), m_iSessionId(0), m_iRedisTimeoutMilliseconds(25000)
+    : m_bEnabled(false), m_iSessionId(0), m_iRedisTimeoutMilliseconds(25000), m_bWatchUpdate(false), m_iTickUpdates(0), m_iSecondUpdates(0)
 {
+}
+
+void HoldMgr::OnTickUpdate(uint64_t iNowMilliseconds)
+{
+	if (m_bWatchUpdate.load(std::memory_order_relaxed) && iNowMilliseconds != 0)
+	{
+		m_iTickUpdates.fetch_add(1, std::memory_order_relaxed);
+	}
+}
+
+void HoldMgr::OnSecondUpdate(time_t iNow)
+{
+	if (m_bWatchUpdate.load(std::memory_order_relaxed) && iNow != 0)
+	{
+		m_iSecondUpdates.fetch_add(1, std::memory_order_relaxed);
+	}
+}
+
+void HoldMgr::WatchUpdate(bool bWatch)
+{
+	if (bWatch)
+	{
+		m_iTickUpdates.store(0, std::memory_order_relaxed);
+		m_iSecondUpdates.store(0, std::memory_order_relaxed);
+	}
+	m_bWatchUpdate.store(bWatch, std::memory_order_relaxed);
 }
 
 void HoldMgr::Load()
@@ -718,6 +744,7 @@ struct TimerClosureProbe
 
 static OI::Coro::TaskResult<int> CheckTimerExceptions()
 {
+	HoldMgr::GetInstance().WatchUpdate(true);
 	auto pState = std::make_shared<TimerExceptionProbe>();
 	// 帧持有状态直到 uv_close 回调完成；冻结时间轮也不会阻止独立看门狗。
 	OI::Net::Poll::GetInstance().CallOnLoop([](void* pArgument)
@@ -781,12 +808,23 @@ static OI::Coro::TaskResult<int> CheckTimerExceptions()
 	{
 		co_await OI::Coro::yield(0);
 	}
+	const time_t iBeginSecond = OI::Timer::BaseTimerManager::GetInstance().GetTime();
+	while (HoldMgr::GetInstance().SecondUpdates() == 0 && OI::Timer::BaseTimerManager::GetInstance().GetTime() <= iBeginSecond + 2)
+	{
+		co_await OI::Coro::yield(OI::Timer::BaseTimerManager::GetInstance().GetTickOffsetMS());
+	}
+	HoldMgr::GetInstance().WatchUpdate(false);
+	const int32_t iTickUpdates = HoldMgr::GetInstance().TickUpdates();
+	const int32_t iSecondUpdates = HoldMgr::GetInstance().SecondUpdates();
 	int iBad = pState->bPassed ? 0 : 1;
 	if (pState->vTicks[0] != pState->vTicks[1].load() || pState->vTicks[2] != pState->vTicks[3].load() || pState->vTicks[4] <= pState->vTicks[3].load())
 	{
 		++iBad;
 	}
+	const int iUpdateBad = (iTickUpdates > 0 && iSecondUpdates > 0) ? 0 : 1;
 	LOG_TRACE("hold timer exceptions executed=%d destroyed=%d bad=%d", pState->iExecuted.load(), pState->iDestroyed.load(), iBad);
+	LOG_TRACE("hold timer update tick=%d second=%d bad=%d", iTickUpdates, iSecondUpdates, iUpdateBad);
+	iBad += iUpdateBad;
 	fflush(stdout);
 	co_return iBad;
 }

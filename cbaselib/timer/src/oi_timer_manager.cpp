@@ -85,6 +85,7 @@ bool BaseTimerManager::Init()
 	m_stLastTickMonotonic = std::chrono::steady_clock::now();
 	gettimeofday(&m_stCurrentTimeValue, 0); //记录第0帧的时间
 	m_iCurrentTime = time(NULL);
+	m_iDispatchedSecond = m_iCurrentTime;
 	localtime_r(&m_iCurrentTime, &m_stCurrentCalendarTime);
 	// Windows / Linux 都用 poll 循环上的 libuv timer 叫醒
 	::OI::Net::Poll::GetInstance().ArmTick(m_iTickOffsetMilliseconds, OnLoopTick);
@@ -156,6 +157,22 @@ void BaseTimerManager::Update()
 			}
 		}
 	}
+	if (iTicks > 0)
+	{
+		DispatchUpdates();
+	}
+}
+
+void BaseTimerManager::DispatchUpdates()
+{
+	const uint64_t iNowMilliseconds = (uint64_t)m_stCurrentTimeValue.tv_sec * 1000 + (uint64_t)(m_stCurrentTimeValue.tv_usec / 1000);
+	::OI::Base::SingletonUpdates::Instance().DispatchTick(iNowMilliseconds);
+	if (m_iCurrentTime == m_iDispatchedSecond)
+	{
+		return;
+	}
+	m_iDispatchedSecond = m_iCurrentTime;
+	::OI::Base::SingletonUpdates::Instance().DispatchSecond(m_iCurrentTime);
 }
 
 void BaseTimerManager::AddTimer(BaseTimer* pTimer, int iMillisecond)

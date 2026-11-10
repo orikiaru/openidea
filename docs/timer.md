@@ -35,6 +35,10 @@ libuv 到点调用 `OnSignal`，`OnSignal` 在 poll 线程上直接执行 `Updat
 
 业务侧用 `AddTimer(fn, millisecond)`，或者传入一个 `BaseTimer`。
 
+单例跟着时间轮更新：在 `DECLARE_SINGLETON` 的类里写公有的 `void OnTickUpdate(uint64_t iNowMilliseconds)` 或 `void OnSecondUpdate(time_t iNow)`，不写就不注册，等于空 Update。毫秒参数是秒时间戳乘 1000 再加毫秒；秒参数是 `time_t`。推进了 tick 才调用 `OnTickUpdate`；日历秒变化才调用 `OnSecondUpdate`，错过的秒不补。时间戳只在 `Update` 里写。
+
+注册在单例第一次 `GetInstance` 构造完成后自动进行，析构前自动注销。注册表比所有单例先构造、后析构，析构顺序不会访问已经销毁的对象。`RunFramework` 开始前不分发，`main` 里的 `Init` 都在第一次 Update 之前做完；之后才第一次取到的单例从下一跳开始收到。回调在 poll 线程同步执行，里面不做协程、不等待。多线程下 Update 和工人并发，成员要按需自己保护。
+
 协程不等在 poll 回调里。`OI::Coro::yield` 接受毫秒整数，也接受 `OI::Timer::MS`。`MS` 在挂起前换成毫秒。大于 0 时先切到 poll 线程 `AddTimer`，到点再把协程句柄放回调度队列。小于等于 0 不进时间轮，只把句柄放回队列。
 
 应用层时长只有 `OI::Timer::MS`。`Milliseconds`、`Seconds`、`Minutes`、`Hours`、`Days` 在构造时换成毫秒。单调钟用 `SteadyMilliseconds()`，不受系统校时影响。

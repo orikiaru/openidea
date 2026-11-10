@@ -93,7 +93,6 @@ class BaseTimerManager
 
 	// 按毫秒挂上一个定时器。对象所有权仍在调用方，除非 OnTimer 里自己销毁。
 	void AddTimer(BaseTimer* pTimer, int iMillisecond);
-
 	template <typename F>
 	typename std::enable_if<!std::is_base_of<BaseTimer, typename std::remove_pointer<typename std::decay<F>::type>::type>::value, void>::type
 	AddTimer(F fnFunction, int iMillisecond)
@@ -127,6 +126,8 @@ class BaseTimerManager
 	void try_uniform();
 	// 取出最低层这一跳到点的定时器。
 	void try_run_timer(TimerList& vDue);
+	// 推进过 tick 后，把毫秒和秒交给单例的 OnTickUpdate / OnSecondUpdate。
+	void DispatchUpdates();
 
   private:
 	friend class TimerLevel;
@@ -150,6 +151,8 @@ class BaseTimerManager
 
 	// 最近一次 Update 的秒。
 	time_t m_iCurrentTime;
+	// 已经分发给秒回调的秒。秒没变就不再调用。只在 Update 里读写。
+	time_t m_iDispatchedSecond = 0;
 	// 同一时刻的本地日历。
 	struct tm m_stCurrentCalendarTime;
 };

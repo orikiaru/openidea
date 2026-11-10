@@ -14,6 +14,7 @@ set(LIBSRC
 	src/oi_registry.cpp
 	src/oi_app.cpp
 	src/oi_coro.cpp
+	src/oi_singleton.cpp
 	)
 
 add_library(${LIBRARY} STATIC ${LIBSRC})
