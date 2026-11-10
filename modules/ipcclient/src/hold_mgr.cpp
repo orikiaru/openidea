@@ -29,7 +29,9 @@
 #include <fstream>
 #include <memory>
 #include <optional>
+#include <random>
 #include <string>
+#include <thread>
 #include <vector>
 
 // 仅本回归持有的堆资源，不改变 Hold 的线上字段或协议号。
@@ -1070,6 +1072,254 @@ static OI::Coro::Task SharedVoidStarter(OI::Coro::Task stTask)
 	stTask.Start();
 	co_await stTask;
 	co_await stTask;
+}
+static int32_t BlockingCopy(std::string sInput, std::string& sOutput)
+{
+	sOutput = std::move(sInput);
+	return 0;
+}
+
+static OI::Coro::TaskResult<int> BlockingWaiter(OI::Coro::TaskResult<int32_t> stTask)
+{
+	const int32_t iFirst = co_await stTask;
+	const int32_t iSecond = co_await stTask;
+	co_return iFirst == 0 && iSecond == 0 ? 0 : 1;
+}
+
+struct BlockingPipeProbe
+{
+	uv_file vFiles[2]{-1, -1};
+	std::atomic<bool> bStarted{false};
+	std::atomic<bool> bFinished{false};
+	std::atomic<bool> bOtherThread{false};
+	std::thread::id stCallerThread;
+	~BlockingPipeProbe()
+	{
+		for (const auto iFile : vFiles)
+		{
+			if (iFile >= 0)
+			{
+				uv_fs_t stClose{};
+				uv_fs_close(nullptr, &stClose, iFile, nullptr);
+				uv_fs_req_cleanup(&stClose);
+			}
+		}
+	}
+};
+
+static int32_t ReadBlocking(std::shared_ptr<BlockingPipeProbe> pProbe, std::string& sOutput)
+{
+	char vBuffer[16]{};
+	uv_buf_t stBuffer = uv_buf_init(vBuffer, sizeof(vBuffer));
+	uv_fs_t stRead{};
+	pProbe->bOtherThread.store(std::this_thread::get_id() != pProbe->stCallerThread);
+	pProbe->bStarted.store(true);
+	const int iRead = uv_fs_read(nullptr, &stRead, pProbe->vFiles[0], &stBuffer, 1, -1, nullptr);
+	uv_fs_req_cleanup(&stRead);
+	if (iRead > 0)
+	{
+		sOutput.assign(vBuffer, static_cast<size_t>(iRead));
+	}
+	pProbe->bFinished.store(true);
+	return iRead > 0 ? 0 : OI_ERR_FAIL;
+}
+
+static OI::Coro::TaskResult<int> CheckForeignTaskStart()
+{
+#ifdef _SINGLE_THREAD_
+	auto pRejected = std::make_shared<std::atomic<int>>(0);
+	auto pRuns = std::make_shared<std::atomic<int>>(0);
+	// 故意从非 poll 线程调用，用于验证拒绝；应用和后台工作不得这样启动协程。
+	std::thread stForeign([pRejected, pRuns]()
+	{
+		try
+		{
+			auto stTask = OI::Coro::StartTask([pRuns](OI::Coro::Token)
+			{
+				++*pRuns;
+				return SharedVoidChild(pRuns);
+			});
+		}
+		catch (const std::logic_error&)
+		{
+			++*pRejected;
+		}
+	});
+	stForeign.join();
+	const int iBad = pRejected->load() != 1 || pRuns->load() != 0;
+	LOG_TRACE("hold foreign task st rejected=%d runs=%d bad=%d", pRejected->load(), pRuns->load(), iBad);
+	co_return iBad;
+#else
+	LOG_TRACE("hold foreign task mt skipped=1 bad=0");
+	co_return 0;
+#endif
+}
+
+static OI::Coro::TaskResult<int> CheckBlockingWork()
+{
+	int iBad = 0;
+	std::vector<OI::Coro::TaskResult<int>> vTasks;
+	constexpr uint32_t iSeed = 20261110;
+	std::mt19937 stRandom(iSeed);
+	std::uniform_int_distribution<int> stDelay(1, 20);
+	for (int iIndex = 0; iIndex < 128; ++iIndex)
+	{
+		const int iDelayMilliseconds = stDelay(stRandom);
+		vTasks.push_back(OI::Coro::RunBlocking([iIndex, iDelayMilliseconds]()
+		{
+			uv_sleep(iDelayMilliseconds);
+			return iIndex * 3;
+		}));
+	}
+	LOG_TRACE("hold blocking delay seed=%u min_ms=1 max_ms=20", iSeed);
+	const auto vResults = co_await OI::Coro::WhenAll(std::move(vTasks));
+	for (int iIndex = 0; iIndex < 128; ++iIndex)
+	{
+		if (vResults[iIndex] != iIndex * 3)
+		{
+			std::fprintf(stderr, "blocking check failed line=%d\n", __LINE__);
+			++iBad;
+		}
+	}
+	auto pVoidRuns = std::make_shared<std::atomic<int>>(0);
+	auto stVoid = OI::Coro::RunBlocking([pVoidRuns]()
+	{
+		++*pVoidRuns;
+		return int32_t{0};
+	});
+	co_await stVoid;
+	co_await stVoid;
+	if (pVoidRuns->load() != 1)
+	{
+		std::fprintf(stderr, "blocking check failed line=%d\n", __LINE__);
+		++iBad;
+	}
+	auto stMove = OI::Coro::RunBlocking([pValue = std::make_unique<int>(73)]()
+	{
+		return *pValue;
+	});
+	if ((co_await stMove) != 73)
+	{
+		std::fprintf(stderr, "blocking check failed line=%d\n", __LINE__);
+		++iBad;
+	}
+	auto stException = OI::Coro::RunBlocking([]() -> int
+	{
+		throw std::runtime_error("blocking failure");
+	});
+	for (int iIndex = 0; iIndex < 2; ++iIndex)
+	{
+		try
+		{
+			(void)(co_await stException);
+			std::fprintf(stderr, "blocking check failed line=%d\n", __LINE__);
+			++iBad;
+		}
+		catch (const std::runtime_error& stError)
+		{
+			if (std::string(stError.what()) != "blocking failure")
+			{
+				std::fprintf(stderr, "blocking check failed line=%d\n", __LINE__);
+				++iBad;
+			}
+		}
+	}
+	std::string sOutput;
+	const int32_t iCopyCode = co_await OI::Coro::RunBlocking(BlockingCopy, std::string(256, 'r'), sOutput);
+	if (iCopyCode != 0 || sOutput != std::string(256, 'r'))
+	{
+		std::fprintf(stderr, "blocking direct function failed line=%d\n", __LINE__);
+		++iBad;
+	}
+	auto pRuns = std::make_shared<std::atomic<int>>(0);
+	auto pSharedOutput = std::make_shared<std::string>();
+	auto stShared = OI::Coro::RunBlocking([pRuns, pSharedOutput]()
+	{
+		++*pRuns;
+		uv_sleep(20);
+		*pSharedOutput = std::string(256, 's');
+		return int32_t{0};
+	});
+	std::vector<OI::Coro::TaskResult<int>> vWaiters;
+	for (int iIndex = 0; iIndex < 64; ++iIndex)
+	{
+		vWaiters.push_back(BlockingWaiter(stShared));
+	}
+	for (const auto& stWaiter : vWaiters)
+	{
+		iBad += co_await stWaiter;
+	}
+	if (pRuns->load() != 1 || *pSharedOutput != std::string(256, 's'))
+	{
+		std::fprintf(stderr, "blocking check failed line=%d\n", __LINE__);
+		++iBad;
+	}
+	auto pProbe = std::make_shared<BlockingPipeProbe>();
+	if (uv_pipe(pProbe->vFiles, 0, 0) != 0)
+	{
+		std::fprintf(stderr, "blocking pipe creation failed line=%d\n", __LINE__);
+		co_return iBad + 1;
+	}
+	pProbe->stCallerThread = std::this_thread::get_id();
+	std::string sRead;
+	auto stBlocking = OI::Coro::RunBlocking(ReadBlocking, pProbe, sRead);
+	bool bStarted = false;
+	bool bTimerProgress = false;
+	bool bRpcProgress = false;
+	bool bCompletedBeforeWrite = false;
+	try
+	{
+		for (int iIndex = 0; iIndex < 500 && !pProbe->bStarted.load(); ++iIndex)
+		{
+			co_await OI::Coro::yield(1);
+		}
+		bStarted = pProbe->bStarted.load();
+		co_await OI::Coro::yield(200);
+		bTimerProgress = !pProbe->bFinished.load();
+		OI::RpcData::HoldReq stRequest;
+		stRequest.iMark = 42;
+		OI::RpcData::HoldRes stResponse;
+		const int32_t iCode = co_await OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequest, stResponse, OI::Timer::Seconds(2));
+		bRpcProgress = iCode == 0 && stResponse.iMark == 42;
+	}
+	catch (const std::exception& stError)
+	{
+		std::fprintf(stderr, "blocking progress exception: %s\n", stError.what());
+		++iBad;
+	}
+	catch (...)
+	{
+		std::fprintf(stderr, "blocking progress unknown exception\n");
+		++iBad;
+	}
+	bCompletedBeforeWrite = pProbe->bFinished.load();
+	char vMessage[] = "pipe-ok";
+	uv_buf_t stMessage = uv_buf_init(vMessage, sizeof(vMessage) - 1);
+	uv_fs_t stWrite{};
+	const int iWritten = uv_fs_write(nullptr, &stWrite, pProbe->vFiles[1], &stMessage, 1, -1, nullptr);
+	uv_fs_req_cleanup(&stWrite);
+	if (iWritten != static_cast<int>(sizeof(vMessage) - 1))
+	{
+		// 关闭写端让读端收到 EOF，即便写失败也不留下永久等待。
+		uv_fs_t stClose{};
+		uv_fs_close(nullptr, &stClose, pProbe->vFiles[1], nullptr);
+		uv_fs_req_cleanup(&stClose);
+		pProbe->vFiles[1] = -1;
+	}
+	const int32_t iReadCode = co_await stBlocking;
+	if (!bStarted || !bTimerProgress || !bRpcProgress || bCompletedBeforeWrite ||
+	    !pProbe->bOtherThread.load() || iWritten != static_cast<int>(sizeof(vMessage) - 1) ||
+	    iReadCode != 0 || sRead != "pipe-ok")
+	{
+		std::fprintf(stderr, "blocking read failed started=%d timer=%d rpc=%d early=%d thread=%d write=%d read=%d value=%d\n",
+		    bStarted, bTimerProgress, bRpcProgress, bCompletedBeforeWrite, pProbe->bOtherThread.load(), iWritten, iReadCode, sRead == "pipe-ok");
+		++iBad;
+	}
+	LOG_TRACE("hold blocking read started=%d timer=%d rpc=%d early=%d content=%d bad=%d",
+	    bStarted, bTimerProgress, bRpcProgress, bCompletedBeforeWrite, sRead == "pipe-ok", iBad);
+	LOG_TRACE("hold blocking tasks=128 waiters=64 runs=%d bad=%d", pRuns->load(), iBad);
+	fflush(stdout);
+	co_return iBad;
 }
 static OI::Coro::TaskResult<int> CheckSharedTasks()
 {
@@ -3776,6 +4026,8 @@ OI::Coro::Task HoldMgr::Pump()
 	iBad += co_await CheckStartedTaskWaiters();
 	iBad += co_await CheckHotStart();
 	iBad += co_await CheckSharedTasks();
+	iBad += co_await CheckBlockingWork();
+	iBad += co_await CheckForeignTaskStart();
 	iBad += co_await CheckDeferredRpcSession();
 	iBad += co_await CheckOutputRpcTask(m_iSessionId);
 	iBad += co_await CheckAwaitOwnership();

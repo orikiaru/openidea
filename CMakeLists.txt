@@ -107,6 +107,16 @@ if(NOT PYTHON_BIN)
     message(FATAL_ERROR "Python 3 is required to generate protocols and modules")
 endif()
 set(OI_MODULE_MANIFEST "${CMAKE_CURRENT_BINARY_DIR}/oi_modules.cmake")
+set(OI_WORK_PROTOCOL "${BASE_LIB_PATH}/net/protocol/proto.xml")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${OI_WORK_PROTOCOL}")
+execute_process(
+    COMMAND "${PYTHON_BIN}" "${PROTO_TOOL_DIR}/main.py" --data-only
+        "${OI_WORK_PROTOCOL}" "${BASE_LIB_PATH}/net/inc/work_protocol"
+    RESULT_VARIABLE WORK_PROTO_GEN_RESULT
+)
+if(NOT "${WORK_PROTO_GEN_RESULT}" STREQUAL "0")
+    message(FATAL_ERROR "Internal work protocol generation failed: ${WORK_PROTO_GEN_RESULT}")
+endif()
 execute_process(
     COMMAND "${PYTHON_BIN}" "${PROTO_TOOL_DIR}/main.py" ${PROTO_INPUTS}
         "${MODULES_PATH}/include" "${MODULES_PATH}" "${DEPOLY_PATH}" "${OI_MODULE_MANIFEST}"

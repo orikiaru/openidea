@@ -7,6 +7,7 @@
 #include <deque>
 #include <limits>
 #include <vector>
+#include "oi_blocking_work_session.h"
 
 namespace
 {
@@ -117,6 +118,19 @@ bool InTaskResume() noexcept
 	return g_iResumeDepth > 0;
 }
 
+void CheckTaskStartThread()
+{
+#ifdef _SINGLE_THREAD_
+	if (!OI::Net::Poll::GetInstance().InLoopThread())
+	{
+		// 不走异步日志客户端：违规线程本来就不能访问单线程的会话发送队列。
+		fprintf(stderr, "warning: coroutine start rejected: current thread is not the single-thread poll thread\n");
+		fflush(stderr);
+		throw std::logic_error("single-thread coroutine must start on the poll thread");
+	}
+#endif
+}
+
 TaskLaunch TakeTaskLaunch() noexcept
 {
 	return std::exchange(g_stLaunch, TaskLaunch{});
@@ -156,6 +170,26 @@ void DrainDetached()
 void Schedule(std::coroutine_handle<> stHandle)
 {
 	PostTask(stHandle);
+}
+
+namespace Detail
+{
+void SubmitBlocking(std::shared_ptr<BlockingOperation> pOperation)
+{
+	OI::Net::BlockingWorkSessionManager::GetInstance().Submit([pOperation]()
+	{
+		pOperation->Execute();
+	}, [pOperation](int32_t iStatus, std::exception_ptr stError)
+	{
+		pOperation->iStatus = iStatus;
+		pOperation->stError = stError;
+		const auto stWaiter = pOperation->stWaiter;
+		if (pOperation->iGate.exchange(Gate::Ready, std::memory_order_acq_rel) == Gate::Waiting)
+		{
+			Schedule(stWaiter);
+		}
+	});
+}
 }
 
 struct WakeLater

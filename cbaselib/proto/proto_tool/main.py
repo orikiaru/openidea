@@ -14,6 +14,14 @@ local_ip = ''
 if __name__ == "__main__":
     loginfo("local path = ", work_path)
 
+    # 基础库内部协议只生成现有 rpcdata/枚举，不生成应用模块。
+    if len(sys.argv) == 4 and sys.argv[1] == '--data-only':
+        proto = ProtocolGen(sys.argv[2])
+        if not proto.Gen():
+            sys.exit(1)
+        file_gen = GenFile(None, proto, sys.argv[3], '', '')
+        sys.exit(0 if file_gen.GenSerailizeIncludeFile() else 1)
+
     command_params = []
     #命令行参数要有 协议目录,协议生成根目录,协议公用序列化接口目录
     if(len(sys.argv) < 7):

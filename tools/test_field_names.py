@@ -89,6 +89,29 @@ class ModuleGeneratorTest(unittest.TestCase):
                 self.assertEqual(manifest.read_text(encoding="utf-8"), output)
             return result, output
 
+    def test_data_only_generator(self):
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "generated"
+            command = [sys.executable, str(root / "cbaselib/proto/proto_tool/main.py"),
+                       "--data-only", str(root / "cbaselib/net/protocol/proto.xml"), str(output)]
+            result = subprocess.run(command, cwd=root, capture_output=True, text=True, errors="replace")
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            generated = output / "oi_rpcdata_workcompleted.h"
+            enums = output / "rpc_enums.h"
+            self.assertTrue(generated.exists())
+            self.assertTrue(enums.exists())
+            self.assertIn("iOperation", generated.read_text(encoding="utf-8"))
+            self.assertIn("WORK_PROTOCOL_COMPLETED", enums.read_text(encoding="utf-8"))
+            before = {path.name: path.read_bytes() for path in output.iterdir() if path.is_file()}
+            repeated = subprocess.run(command, cwd=root, capture_output=True, text=True, errors="replace")
+            self.assertEqual(repeated.returncode, 0, repeated.stdout + repeated.stderr)
+            self.assertEqual(before, {path.name: path.read_bytes() for path in output.iterdir() if path.is_file()})
+            bad = subprocess.run([sys.executable, str(root / "cbaselib/proto/proto_tool/main.py"),
+                                  "--data-only", str(Path(temp) / "missing.xml"), str(output)],
+                                 cwd=root, capture_output=True, text=True, errors="replace")
+            self.assertNotEqual(bad.returncode, 0)
+
     def test_invalid_module_names(self):
         for module in ('<module/>', '<module name=""/>', '<module name="../bad"/>',
                        '<module name="bad name"/>', '<module name="é"/>',

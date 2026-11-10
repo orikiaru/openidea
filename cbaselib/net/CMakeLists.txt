@@ -12,6 +12,8 @@ set(LIBSRC
 
 	src/oi_session_manager.cpp
 	src/oi_session.cpp 
+	src/oi_blocking_work_session.cpp
+	src/oi_blocking_work_channel.cpp
 	src/oi_net_session.cpp 
 
 	src/oi_channel.cpp 

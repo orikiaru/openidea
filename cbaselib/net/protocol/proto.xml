@@ -1,0 +1,9 @@
+// 进程内工作会话的协议号，独立于业务网络协议空间。
+// 协议 ID 已表示消息类型，不在包体重复放 type。
+enum WorkProtocolId {
+    WORK_PROTOCOL_COMPLETED = 1;
+}
+
+rpcdata WorkCompleted {
+    0 uint64_t iOperation;
+}

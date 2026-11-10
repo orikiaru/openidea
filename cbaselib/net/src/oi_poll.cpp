@@ -21,6 +21,7 @@
 #include "oi_thread.h"
 #include "oi_header.h"
 #include "oi_net_os.h"
+#include "oi_blocking_work_session.h"
 namespace OI
 {
 namespace Net
@@ -297,10 +298,22 @@ void* Poll::StartThreadPollWait(void*)
 
 void Poll::StopAndJoin()
 {
-	g_poll_stop.store(true);
-	if (g_loop_ready)
+	if (g_loop_ready && !g_poll_stop.load())
 	{
-		uv_async_send(&g_async);
+		CallOnLoop([](void*)
+		{
+			BlockingWorkSessionManager::GetInstance().Drain([](void*)
+			{
+				g_poll_stop.store(true);
+				uv_async_send(&g_async);
+			}, nullptr);
+		}, nullptr);
+#ifdef _SINGLE_THREAD_
+		while (!g_poll_stop.load())
+		{
+			PollWait();
+		}
+#endif
 	}
 	if (m_stThread.joinable())
 	{
@@ -310,6 +323,8 @@ void Poll::StopAndJoin()
 
 bool Poll::Init()
 {
+	// 常驻管理器在 poll 之后构造，析构时先排空它的后台请求。
+	(void)BlockingWorkSessionManager::GetInstance();
 	NetOs_Startup();
 	g_loop_ready = false;
 #ifdef _SINGLE_THREAD_

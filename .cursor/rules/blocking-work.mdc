@@ -1,0 +1,6 @@
+---
+description: 阻塞工作回调及回归审查规则
+alwaysApply: true
+---
+
+遵守 [AGENTS.md 的 Review 与开发优先级](../../AGENTS.md#review-与开发优先级)中关于 `RunBlocking` 回调、引用生命周期和真实阻塞回归的规则。

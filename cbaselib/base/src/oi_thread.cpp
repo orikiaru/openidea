@@ -6,6 +6,7 @@
 #include <future>
 #include "oi_timer_manager.h"
 #include "oi_poll.h"
+#include "oi_blocking_work_session.h"
 #include "oi_header.h"
 #include "oi_thread.h"
 
@@ -164,7 +165,10 @@ void ThreadPool::RequestStop(int iCode)
 	}
 	::OI::Net::Poll::GetInstance().CallOnLoop([](void* pArgument)
 	{
-		static_cast<ThreadPool*>(pArgument)->FinishStop();
+		::OI::Net::BlockingWorkSessionManager::GetInstance().Drain([](void* pArgumentLocal)
+		{
+			static_cast<ThreadPool*>(pArgumentLocal)->FinishStop();
+		}, pArgument);
 	}, this);
 }
 

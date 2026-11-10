@@ -14,6 +14,8 @@
 
 所以不要在第一次挂起之前层层调用子任务，栈会随层数涨。`StartTask` 和 `TaskScope::Start` 总是入队，不加栈。
 
+单线程模式下，任务创建和启动必须在 poll 线程执行；违规时输出警告并抛出 `std::logic_error`，拒绝创建或启动。多线程模式不限制启动线程。故障注入负例可在后台线程刻意触发并验证此拒绝，不作为业务调用范例。
+
 `co_return` 才结束一条 `OI::Coro::Task`。同一个 Task / TaskResult 可以重复或并发 `co_await`，任务只执行一次。两个等待者都在完成前，会挂进 `pWaiters`，结束时逐个 `Schedule`；一个在完成前、一个在完成后，先来的入队，后来的看见 `bReady` 当场取结果；两个都在完成后，都不挂起，各复制一次结果。时序见 [单线程](sequence-diagram/single-thread/waiters.md) 和 [多线程](sequence-diagram/multi-thread/waiters.md)。完成后再等，直接取得已保存的结果或异常。`StartTask` 启动独立任务并返回对应的 Task / TaskResult 实例；可直接 await，也可按值传给多个协程。需要调用号时用 `stTask.GetToken()`。不接返回值仍然正常独立执行，不取消任务。底层 `task.Start()` 只把任务标成独立任务（分配 token、异常直接报告），可重复调用，不会再次执行。
 
 Task 对象、每个等待器及运行中的帧各持一份引用。任务对象析构不会取消已启动任务，等待器可独立保活；最后一个引用释放才销毁帧。任务对象可复制或移动；复制只增加共享引用，不复制任务或结果，已经登记的等待不受影响；移后对象再次 Start/await 抛 logic_error。不支持一边移动/销毁同一个 C++ 对象一边从其他线程访问它。
@@ -23,6 +25,30 @@ Task 对象、每个等待器及运行中的帧各持一份引用。任务对象
 TaskResult 每次等待返回一份结果副本，不移走共享结果。大对象或不可复制对象使用 `TaskResult<std::shared_ptr<T>>`，多个等待者共享同一个对象；其业务数据的并发读写仍由应用同步。异常保留并在每次 await 时重抛。RPC 的输出引用接口本身返回 TaskResult<int32_t>，可以共享等待；不带输出的直连 RPC 等待对象及 Redis/HTTP 请求等待对象仍是单次请求，要共享可以封装到一个 TaskResult 中。
 
 输出引用调用建议独立成句：先 `const int32_t iRet = co_await Call(..., stOutput);`，再判断状态码和读取输出。当前 GCC13 的最小独立协程复现中，同一 `||` 条件内交替执行两次 await、读取并复用同一输出，会错误地判断中间结果；-O0 与 -O3 都能复现，拆成逐条等待后正常。因此不要用一个复杂条件串联依赖前一步输出的多个命令。此限制来自本机编译器验证，不是框架允许并发修改同一输出。Redis 的 0/1 数组使用 `vector<int64_t>`，不把 `vector<bool>` 的代理引用带入协程表达式。
+
+## 阻塞函数
+
+同步文件操作或第三方同步 SDK 等会阻塞线程的函数，可交给 `RunBlocking`，协程等待期间 poll 仍能继续处理事件：
+
+```cpp
+int32_t ReadFile(const std::string& sPath, std::string& sData);
+
+const std::string sPath = "data.txt";
+std::string sData;
+const int32_t iRet = co_await OI::Coro::RunBlocking(ReadFile, sPath, sData);
+if (iRet == 0)
+{
+    UseData(sData);
+}
+```
+
+直接传入同步函数及其参数；函数必须返回 `int32_t`，接口返回 `TaskResult<int32_t>`。非零状态码原样返回，不自动转换成异常；函数抛出的异常在 `co_await` 时重抛。左值参数借用原对象，包括输出引用；右值参数和可调用对象按值保活。输出对象及其他借用对象必须活到工作结束，丢弃 Task 不会取消工作。同步函数自行决定何时写入输出，失败时输出是否保持原值取决于该函数。同一个任务可重复或并发等待，函数只执行一次，不需要应用管理文件描述符或任务 ID。
+
+内部通过 `BlockingWorkChannel` 封装 `uv_queue_work`，libuv 利用异步 fd 或 IOCP 唤醒事件循环，在完成回调中经 `DataIn` 和会话输入缓冲交给 `BlockingWorkSession::OnDataIn`。内部通知使用独立可扩展的 proto 定义：协议号本身表示通知类型，帧包含协议号、包体长度和生成的包体，不另设重复的 type 字段。当前完成通知的包体包含操作号；会话按协议号分发并解码后，由 `BlockingWorkSessionManager` 按操作号完成。通道只传递预编码的字节，不依赖具体协议。结果和异常保留在进程内存中，业务返回值无需实现序列化；这不经过完整 RPC 派发或网络传输。管理器进程常驻，按需创建一条内部会话；它不监听网络端口，也不使用 TCP。
+
+函数由 libuv 的 `uv_queue_work` 交给进程全局线程池执行，默认 4 个线程，可在进程启动前用 `UV_THREADPOOL_SIZE` 设置；该池也供 libuv 的 DNS、文件 I/O 使用。执行顺序和线程亲和性没有保证。后台函数不能访问单线程业务管理器，也不能依赖这些对象在后台线程安全；借用的参数必须在工作结束前保持有效，且其并发访问由应用同步。libuv 内部使用同步，单线程应用投递队列没有自定义互斥锁，并不意味着整个系统无锁。
+
+最多接纳 1024 个在途工作；容量已满返回 `OI_ERR_BUSY`，停止入口或会话关闭返回 `OI_ERR_CONNECT`。用户函数抛出的异常仍在等待处重抛。框架不提供超时或强制取消；输出引用必须等函数真正完成后才能释放。同步 SDK 可以自行配置超时并返回状态码。正常停止会等待已接纳的工作结束；应用退出前应先等待任务或 Join 任务作用域，再停止框架，因为全局停止请求后不保证所有业务续体都能运行。
 
 ## 挂起
 

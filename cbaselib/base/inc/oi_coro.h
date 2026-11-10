@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -47,6 +48,10 @@ void DrainDetached();
 void ResumeTask(std::coroutine_handle<> stHandle);
 // 当前栈是否正在 ResumeTask 里。新任务用它决定能不能当场跑。
 bool InTaskResume() noexcept;
+
+// 单线程任务只能在 poll 所在线程创建/启动。违规先输出 warning，再抛 logic_error，绝不入队。
+// 多线程构建不限制启动线程。
+void CheckTaskStartThread();
 
 // 新任务构造 promise 时取走。只在 StartTask、TaskScope 等框架入口里设置。
 struct TaskLaunch
@@ -111,6 +116,61 @@ inline SleepMs yield(int32_t iMilliseconds)
 }
 
 SleepMs yield(::OI::Timer::MS stDelay);
+
+namespace Detail
+{
+// 后台线程只执行 Execute。完成门及 Schedule 由 poll 线程处理。
+struct BlockingOperation
+{
+	std::atomic<Gate> iGate{Gate::Idle};
+	std::coroutine_handle<> stWaiter;
+	std::exception_ptr stError;
+	int32_t iStatus = 0;
+	virtual ~BlockingOperation() = default;
+	virtual void Execute() = 0;
+};
+void SubmitBlocking(std::shared_ptr<BlockingOperation> pOperation);
+
+struct BlockingAwaiter
+{
+	std::shared_ptr<BlockingOperation> pOperation;
+	bool await_ready() const noexcept
+	{
+		return false;
+	}
+	bool await_suspend(std::coroutine_handle<> stHandle)
+	{
+		// 发布后可能立即在另一协程工人上恢复，局部副本保活完成门。
+		auto pState = pOperation;
+		pState->stWaiter = stHandle;
+		SubmitBlocking(pState);
+		return pState->iGate.exchange(Gate::Waiting, std::memory_order_acq_rel) != Gate::Ready;
+	}
+	int32_t await_resume()
+	{
+		if (pOperation->stError)
+		{
+			std::rethrow_exception(pOperation->stError);
+		}
+		return pOperation->iStatus;
+	}
+};
+
+template <typename F>
+struct BlockingState : BlockingOperation
+{
+	F fnFunction;
+	int32_t iResult = 0;
+	explicit BlockingState(F fnFunctionLocal)
+	    : fnFunction(std::move(fnFunctionLocal))
+	{
+	}
+	void Execute() override
+	{
+		iResult = std::invoke(fnFunction);
+	}
+};
+}
 
 // 等待节点放在调用方协程帧或 WhenAll 的稳定状态里，不按等待者另做包装协程。
 // fnReady 为空时，完成即唤醒。WhenAll 只在最后一个任务完成时返回 true。
@@ -207,6 +267,7 @@ struct TaskState
 	std::atomic<bool> bErrorReported{false};
 	TaskState()
 	{
+		CheckTaskStartThread();
 		const TaskLaunch stLaunch = TakeTaskLaunch();
 		iTaskId = stLaunch.iToken;
 		bDetached.store(stLaunch.bDetached, std::memory_order_relaxed);
@@ -333,6 +394,7 @@ struct BasicTask
 	// 任务创建即运行。Start 只把它标成独立任务：分配 token、保活闭包、异常直接报告。可重复调用。
 	Token Start(std::shared_ptr<void> pCallable = {}, Token iToken = 0) const
 	{
+		CheckTaskStartThread();
 		if (!stHandle)
 		{
 			throw std::logic_error("cannot start a moved-from Task");
@@ -424,6 +486,31 @@ struct BasicTask
 using Task = BasicTask<void>;
 template <typename T>
 using TaskResult = BasicTask<T>;
+
+namespace Detail
+{
+template <typename F>
+TaskResult<int32_t> RunBlockingTask(F fnFunction)
+{
+	auto pState = std::make_shared<Detail::BlockingState<F>>(std::move(fnFunction));
+	const int32_t iStatus = co_await Detail::BlockingAwaiter{pState};
+	co_return iStatus != 0 ? iStatus : pState->iResult;
+}
+}
+
+// 普通同步函数在后台执行，返回 int32_t 状态码，输出参数按引用传入。
+// 左值参数借用，右值参数及函数对象按值保活；引用必须覆盖任务执行期。
+// 丢弃 Task 不取消工作；退出作用域/框架前必须 await/Join，不能后台访问单线程业务对象。
+template <typename F, typename... Args>
+[[nodiscard]] TaskResult<int32_t> RunBlocking(F fnFunction, Args&&... stArguments)
+{
+	static_assert(std::is_same_v<std::invoke_result_t<F&, Args...>, int32_t>, "RunBlocking function must return int32_t status");
+	// 前端不做协程，先把右值放进闭包，避免转发引用跨挂起后悬空。
+	return Detail::RunBlockingTask([fnFunction = std::move(fnFunction), stArguments = std::tuple<Args...>(std::forward<Args>(stArguments)...)]() mutable -> int32_t
+	{
+		return std::apply(fnFunction, std::move(stArguments));
+	});
+}
 
 // 节点放在堆上。awaiter 被协程帧挪走时，已经链进任务的地址不能跟着变。
 template <typename T>
@@ -569,6 +656,7 @@ template <typename T>
 template <typename F>
 auto InvokeTask(TaskLaunch stLaunch, F&& fnFunction)
 {
+	CheckTaskStartThread();
 	TaskLaunchScope stScope(stLaunch);
 	return std::forward<F>(fnFunction)();
 }
@@ -577,6 +665,7 @@ auto InvokeTask(TaskLaunch stLaunch, F&& fnFunction)
 template <typename F>
 auto StartTask(F&& fnFunction)
 {
+	CheckTaskStartThread();
 	Token iTokenLocal = AllocTaskUid();
 	auto stCallable = std::make_shared<std::decay_t<F>>(std::forward<F>(fnFunction));
 	auto stTask = InvokeTask(TaskLaunch{iTokenLocal, true, true}, [&stCallable, iTokenLocal]()
@@ -675,6 +764,7 @@ class TaskScope
 	template <typename F>
 	Token Start(F&& fnFunction)
 	{
+		CheckTaskStartThread();
 		::OI::Thread::MutexGuard stLock(m_pState->stMutex);
 		if (m_pState->bClosed)
 		{

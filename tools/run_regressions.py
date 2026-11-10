@@ -649,6 +649,13 @@ def run(case, args):
                 assert "hold nested results completed=32768 caught=16384 bad=0" in text
                 assert "hold hot start inline=1 queued=1 bad=0" in text
                 assert "hold shared tasks waiters=64 bad=0" in text
+                assert "hold blocking delay seed=20261110 min_ms=1 max_ms=20" in text
+                assert ("hold foreign task st rejected=1 runs=0 bad=0" in text or
+                        "hold foreign task mt skipped=1 bad=0" in text)
+                if "hold foreign task st rejected=1 runs=0 bad=0" in text:
+                    assert "warning: coroutine start rejected: current thread is not the single-thread poll thread" in text
+                assert "hold blocking tasks=128 waiters=64 runs=1 bad=0" in text
+                assert "hold blocking read started=1 timer=1 rpc=1 early=0 content=1 bad=0" in text
                 for waiter_count in (2, 8, 64, 256):
                     for shared_mode in range(3):
                         assert f"hold started task mode={shared_mode} waiters={waiter_count} runs=1 awakened={waiter_count} bad=0" in text

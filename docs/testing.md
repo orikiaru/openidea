@@ -11,6 +11,8 @@
 - 必须全部返回 0；不能用删除断言、扩大超时、提高容量或重试掩盖失败。偶发失败保留日志，记录复测结果及根因是否确认。
 - 本次源码正在变化时不要声称覆盖了最新版本；核对结果目录的 environment.json、Git HEAD、diff 摘要后再报告。
 
+阻塞函数回归由 HoldMgr 覆盖：128 个后台工作及 64 个共享等待者，核对结果和单次执行。纯协程探针另检查 1024 项容量上限、超限拒绝以及停止时已接纳工作的完成。新增检查以实际矩阵结果为准，不代表四种构建模式已经通过。
+
 输出引用 RPC 的日常压力由 EchoMgr 使用 `Call(req, res)` 覆盖。HoldMgr 同时验证输出任务的请求保活、16 个等待者只提交一次、重复等待不重写响应、固定会话、业务错误保留原响应、超时后迟到回包不覆盖新响应，以及命名/分区调用。正常 Hold 必须输出 `hold output rpc shared waiters=16 submissions=1 bad=0`、`hold output rpc direct pinned error late bad=0`、`hold output rpc named any zone shared=8 bad=0`；它们已纳入脚本断言。底层单次等待器的重复等待和异常注入用例仍保留，与输出 Task 可重复等待的语义分开验证。
 
 路由与请求生命周期回归也集成在正常 Hold 中：容量策略隔离与真实大包收发、持有租约时不回收/释放后连接状态销毁及重新获取、注册查询限流和超时清空后的恢复、查询与回包共用端到端预算，以及保留已完成任务时请求资源仍被销毁。路由管理器固定为常驻单例，测试同时断言不同策略的连接共用管理器。脚本只在临时配置缩短池空闲时限、降低查询容量；通过暂停本次启动的 registry 进程制造有连接无回包和慢查询，finally 中恢复暂停状态再清理。应用请求仍从 ipcclient 发出，不新增测试客户端。
@@ -311,3 +313,7 @@ Terra 执行 Windows 原生 MSVC、WSL GCC13 单/多线程完整矩阵，每路 
 Windows ST 的 `verified` 轮另有两项在日志服务监听就绪检查中超时，服务输出为空，控制台通知辅助进程退出 120；不能据此断定根因。同代码独立完整复测 18 项通过，未复现，旧失败报告仍保留，不把该轮改写为成功。
 
 两端主目录 MT Release 生产构建均退出 0、测试钩子关闭，日志在 `verified/main-windows`、`verified/main-linux`。最终全局清理和 dry-run 均退出 0、无残留报告，记录在 `verified/cleanup.json`；Windows/WSL 的持久 Redis 安装保留。
+
+## 阻塞工作管道回归
+
+Hold 通过 `uv_pipe` 创建阻塞管道，在后台普通同步函数中调用 `uv_fs_read`；后台回调只执行普通同步代码，不调用 `co_await`、`StartTask` 或其他框架协程接口。空管道读开始后，前台协程计时 200 毫秒并完成真实 RPC，确认写入前读尚未结束；随后向管道写入 `pipe-ok`，等待读取结束并检查内容与返回码。异常和写入失败路径也要释放读端并等待后台结束。另以固定种子 20261110 在前台生成 1–20 毫秒延迟，128 个后台任务分别同步等待并返回不同值，按提交顺序核对 WhenAll 结果，不要求实际完成顺序必须变化。驱动强制检查 `hold blocking delay seed=20261110 min_ms=1 max_ms=20`、`hold blocking read started=1 timer=1 rpc=1 early=0 content=1 bad=0`，以及 `hold blocking tasks=128 waiters=64 runs=1 bad=0`。
