@@ -121,8 +121,32 @@ rpcdata UdpNoteRes {
     0 int32_t iSeq json seq;
 }
 
+// 多连接回归。服务端回自己的 [Service] id；iNotify 非 0 时先顺着这条连接推一条 PeerNote 再回包。
+rpcdata PeerProbeReq {
+    0 int32_t iTag json tag;
+    1 int32_t iNotify json notify;
+}
+
+rpcdata PeerProbeRes {
+    0 int32_t iTag json tag;
+    1 int32_t iServiceId json service_id;
+}
+
+// 服务端推给客户端的单向消息。
+rpcdata PeerNoteReq {
+    0 int32_t iTag json tag;
+    1 int32_t iServiceId json service_id;
+}
+
+// 单向消息不回包，生成器要求成对才留着。
+rpcdata PeerNoteRes {
+    0 int32_t iTag json tag;
+}
+
 // 请求和回复共用一个协议号。调用号最高位区分请求和回包，调用号 0 是单向消息。
 rpc AllEcho { id 3001; request AllEchoReq; response AllEchoRes; timeout 25; }
 rpc Hold { id 3002; request HoldReq; response HoldRes; timeout 25; }
 rpc UdpEcho { id 3003; request UdpEchoReq; response UdpEchoRes; timeout 25; }
 rpc UdpNote { id 3004; request UdpNoteReq; response UdpNoteRes; timeout 25; }
+rpc PeerProbe { id 3005; request PeerProbeReq; response PeerProbeRes; timeout 25; }
+rpc PeerNote { id 3006; request PeerNoteReq; response PeerNoteRes; timeout 25; }

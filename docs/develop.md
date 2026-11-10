@@ -15,6 +15,7 @@
 ## 2. 模块和代码组织
 
 - 一个 module 对应一个进程，业务代码都放在 `modules/<进程>/inc`、`src` 里。几个进程共用的东西放 `modules/include`，或者单独建目录，不放仓库根下的 `src`。
+- 基础库用 `framework.cmake`。本仓库根 `CMakeLists.txt` 和外部工程都 include 它，不在业务工程里再列一遍库。进程模块仍由调用方自己的 `module.xml` 生成后加入，见 [模块](module.md)。按功能接到具体接口见 [基础库](cbaselib.md) 的接入表。
 - 进程和组件在 `xmlconfig/module.xml`、`module_component.xml` 里声明，由 `proto_tool` 生成骨架，见 [模块](module.md)。生成器只在文件不存在时才写，生成出来以后就在上面改。
 - 不写类外的 C 风格函数，不用全局状态。处理函数是组件的成员，用 `OI_RPC_BIND_SELF` / `OI_NOTIFY_BIND_SELF` 注册，不用友元把类外函数放进类里。
 - 状态放成员，不用静态变量，也不堆临时变量。

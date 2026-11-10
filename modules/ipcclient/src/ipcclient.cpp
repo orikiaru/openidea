@@ -2,6 +2,7 @@
 #include "echo_mgr.h"
 #include "hold_mgr.h"
 #include "log_mgr.h"
+#include "multi_mgr.h"
 #include "redis_mgr.h"
 #include "udp_mgr.h"
 #include "oi_redis.h"
@@ -29,6 +30,11 @@ bool IpcClient::Init()
 		return false;
 	}
 	UdpMgr::GetInstance().Start();
+	if (!MultiMgr::GetInstance().Load())
+	{
+		return false;
+	}
+	MultiMgr::GetInstance().Start();
 	RedisMgr::GetInstance().Load();
 	HoldMgr::GetInstance().Load();
 	if (!RedisMgr::GetInstance().Enabled() && !HoldMgr::GetInstance().Enabled())

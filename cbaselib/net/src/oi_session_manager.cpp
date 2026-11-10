@@ -54,13 +54,7 @@ bool SessionManager::Init()
 	std::string sService;
 	if (::OI::Base::Config::GlobalConfig().GetAs(GetIDString() + ".service", sService) && !sService.empty())
 	{
-		std::string sFoundIp;
-		std::string sFoundPort;
-		if (::OI::Base::RegistryClient::GetInstance().Lookup(sService, sFoundIp, sFoundPort))
-		{
-			sIpLocal = sFoundIp;
-			sPortLocal = sFoundPort;
-		}
+		BindService(sService, sIpLocal, sPortLocal);
 		sServiceName = sService;
 	}
 
@@ -69,9 +63,25 @@ bool SessionManager::Init()
 	sEndpoint = NetAddr::Endpoint(sIpLocal, sPortLocal);
 	if (!sServiceName.empty())
 	{
-		::OI::Base::RegistryClient::GetInstance().Watch(this, sServiceName);
+		WatchService(sServiceName);
 	}
 	return true;
+}
+
+void SessionManager::BindService(const std::string& sService, std::string& sIpLocal, std::string& sPortLocal)
+{
+	std::string sFoundIp;
+	std::string sFoundPort;
+	if (::OI::Base::RegistryClient::GetInstance().Lookup(sService, sFoundIp, sFoundPort))
+	{
+		sIpLocal = sFoundIp;
+		sPortLocal = sFoundPort;
+	}
+}
+
+void SessionManager::WatchService(const std::string& sService)
+{
+	::OI::Base::RegistryClient::GetInstance().Watch(this, sService);
 }
 
 struct SessionManager::ConnectWait

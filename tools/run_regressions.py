@@ -308,6 +308,9 @@ def run(case, args):
     pause_at = None
     shutdown_sent = False
     redis_restarted = False
+    peers = {}
+    peer_stopped = False
+    peer_restarted = False
     procs = []
     handles = []
     http_fixture = None
@@ -322,7 +325,7 @@ def run(case, args):
         work, cfg, logs = root / "bin", root / "config", root / "logs"
         for p in (work, cfg, logs):
             p.mkdir()
-        for name in ("logd", "ipcclient", "ipcserver", "redisserver") + (("registry",) if case == "registry" or mode == "hold" else ()):
+        for name in ("logd", "ipcclient", "ipcserver", "redisserver") + (("registry",) if case == "registry" or mode in ("hold", "multi") else ()):
             shutil.copy2(args.bin_dir / (name + SUFFIX), work / (name + SUFFIX))
             text = shift_ports((REPO / "deploy/config" / (name + ".toml")).read_text(encoding="utf-8-sig"))
             if name in ("redisserver", "registry"):
@@ -371,7 +374,7 @@ def run(case, args):
                 if case == "redis-limit":
                     text = text.replace("[RedisClient]", "[RedisClient]\nmax_pending = 1")
                     text = replace(text, "tasks", "0")
-                for flag in ("echo", "log", "redis", "hold", "udp"):
+                for flag in ("echo", "log", "redis", "hold", "udp", "multi"):
                     text = replace(text, flag, "true" if mode == flag else "false")
                 if mode == "hold":
                     text = replace(text, "max_pending_pulls", "16")
@@ -461,7 +464,7 @@ def run(case, args):
                             return
                         raise RuntimeError(logpath.read_text(encoding="utf-8", errors="replace"))
                     time.sleep(0.05)
-            if mode in ("redis", "hold") or case == "registry":
+            if mode in ("redis", "hold", "multi") or case == "registry":
                 redis_conf = root / "redis.conf"
                 redis_conf.write_text('bind 127.0.0.1\nport %d\nsave ""\nappendonly no\n' % REDIS_PORT +
                                       'maxmemory 1536mb\nmaxmemory-policy allkeys-lru\n'
@@ -473,10 +476,10 @@ def run(case, args):
                     monitor = socket.create_connection(("127.0.0.1", REDIS_PORT), timeout=2)
                     monitor.sendall(b"*1\r\n$7\r\nMONITOR\r\n")
                     assert monitor.recv(100) == b"+OK\r\n"
-                if case == "registry" or mode == "hold":
+                if case == "registry" or mode in ("hold", "multi"):
                     registry, registry_path = start("registry")
                     ready(registry, registry_path, "registry server listen")
-                if case != "registry":
+                if case not in ("registry", "multi"):
                     rs, rsp = start("redisserver")
                     ready(rs, rsp, "redis server listen")
             server, serverpath = start("ipcserver")
@@ -493,6 +496,19 @@ def run(case, args):
                     path.write_text(text, encoding="utf-8")
                     proc, output = start("gameserver-" + zone, [str(work / ("ipcserver" + SUFFIX)), str(path)])
                     ready(proc, output, "ipc server listen")
+            if mode == "multi":
+                # 同名两台全局服，实例号 1、2。客户端起来前都已登记。
+                for instance, port in zip((1, 2), GAME_PORTS):
+                    text = (cfg / "ipcserver.toml").read_text(encoding="utf-8")
+                    text = text.replace('name = "ipcserver"', 'name = "peerserver"', 1)
+                    text = re.sub(r"(?m)^id = 1$", "id = %d" % instance, text, count=1)
+                    text = text.replace('port = "%d"' % IPC_PORT, 'port = "%d"' % port, 1)
+                    text = text.replace('port = "%d"' % UDP_PORT, 'port = "0"', 1)
+                    path = cfg / ("peerserver-%d.toml" % instance)
+                    path.write_text(text, encoding="utf-8")
+                    proc, output = start("peerserver-%d" % instance, [str(work / ("ipcserver" + SUFFIX)), str(path)])
+                    ready(proc, output, "ipc server listen")
+                    peers[instance] = proc
             if case == "reset":
                 reset_connections()
             if case == "rpc-ingress":
@@ -543,6 +559,18 @@ def run(case, args):
                         pause(registry, False)
                         registry_paused = False
                         registry_resume_at = None
+                if mode == "multi" and not peer_restarted:
+                    client_text = clientpath.read_text(encoding="utf-8", errors="replace")
+                    if not peer_stopped and "multi request stop id=2" in client_text:
+                        # 直接杀掉，连接和注册都靠对端发现断开。
+                        peers[2].kill()
+                        peers[2].wait(timeout=5)
+                        procs.remove(peers[2])
+                        peer_stopped = True
+                    if peer_stopped and "multi request start id=2" in client_text:
+                        peers[2], output = start("peerserver-2-again", [str(work / ("ipcserver" + SUFFIX)), str(cfg / "peerserver-2.toml")])
+                        ready(peers[2], output, "ipc server listen")
+                        peer_restarted = True
                 if case == "redis-shutdown" and not shutdown_sent and "redis shutdown pending" in clientpath.read_text(encoding="utf-8", errors="replace"):
                     stop(client)
                     shutdown_sent = True
@@ -580,6 +608,17 @@ def run(case, args):
             if mode == "echo":
                 assert "ok=1000000 mismatch=0 rpc_fail=0" in text
                 assert text.count("ipc client connect sid=") == 1, "echo test started more than once"
+            elif mode == "multi":
+                assert "multi fixed early=1 connected=1 ids=0 missing=-3 bad=0" in text
+                assert "multi registry seed=1,2 connected=1 bad=0" in text
+                assert "multi call by instance one=1 two=2 none=-3 bad=0" in text
+                assert re.search(r"multi call any one=[1-9]\d* two=[1-9]\d* failed=0 bad=0", text)
+                assert "multi call all slots=2 bad=0" in text
+                assert "multi reverse notify call=1 notify=0 none=-3 received=2 wrong=0 bad=0" in text
+                assert "multi peer down disconnect=1 gone=1 one=1 two=-3 bad=0" in text
+                assert re.search(r"multi peer back listed=1 two=2 connects=[2-9]\d* bad=0", text)
+                assert "multi done bad=0" in text
+                assert peer_stopped and peer_restarted
             elif mode == "udp":
                 assert "ipc udp listen port=%d" % UDP_PORT in serverpath.read_text(encoding="utf-8", errors="replace")
                 assert re.search(r"udp local port=[1-9]\d* bad=0", text)
@@ -850,15 +889,16 @@ def run_web(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case", default="all", choices=("all", "echo", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "clock-forward", "clock-back", "registry", "udp", "web"))
+    parser.add_argument("--case", default="all", choices=("all", "echo", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "clock-forward", "clock-back", "registry", "udp", "multi", "web"))
     parser.add_argument("--bin-dir", type=Path, default=REPO / "deploy/bin")
-    parser.add_argument("--redis-binary", type=Path, default=Path("/usr/local/bin/redis-server"))
+    parser.add_argument("--redis-binary", type=Path, help="default: redis-server on PATH")
     parser.add_argument("--clock-fault-so", type=Path)
     parser.add_argument("--redis-wsl", action="store_true", help="Windows: run only the owned Redis fixture in WSL")
     parser.add_argument("--wsl-user", default="jxy")
     parser.add_argument("--artifacts", type=Path, help="retain process output and results.json, not bulk log payload")
     parser.add_argument("--port-offset", type=int, default=0, help="shift every test port; parallel work copies need distinct offsets")
     options = parser.parse_args()
+    options.redis_binary = options.redis_binary or Path(shutil.which("redis-server") or "/usr/local/bin/redis-server")
     if options.redis_wsl and not WINDOWS:
         parser.error("--redis-wsl is only for native Windows tests")
     if WINDOWS and options.case.startswith("clock-"):
@@ -873,7 +913,7 @@ if __name__ == "__main__":
             probe.bind(("127.0.0.1", port))
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
         probe.bind(("127.0.0.1", UDP_PORT))
-    cases = ("echo", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "registry", "udp", "web") if options.case == "all" else (options.case,)
+    cases = ("echo", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "registry", "udp", "multi", "web") if options.case == "all" else (options.case,)
     results = []
     for item in cases:
         started = time.monotonic()

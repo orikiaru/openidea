@@ -2152,7 +2152,7 @@ static OI::Coro::TaskResult<int> CheckRouteTargetStability()
 	static ZoneService stMoving("gameserver");
 	auto* pFirst = stPool.vClients[0];
 	auto* pSecond = stPool.vClients[1];
-	if (!(co_await MoveRouteProbe(&stMoving, OI::Rpc::GetRouteConnectionInfo(*pFirst).sIp, OI::Rpc::GetRouteConnectionInfo(*pFirst).sPort)))
+	if (!(co_await MoveRouteProbe(&stMoving, OI::Rpc::RouteManager::GetInstance().ConnectionInfo(*pFirst).sIp, OI::Rpc::RouteManager::GetInstance().ConnectionInfo(*pFirst).sPort)))
 	{
 		co_return 1;
 	}
@@ -2169,7 +2169,7 @@ static OI::Coro::TaskResult<int> CheckRouteTargetStability()
 	stManyWait.vZones = {1002, 1001};
 	auto stMany = co_await stManyWait;
 	// 刻意在选路和提交之间完成换区，稳定覆盖竞态窗口，不依赖压力碰运气。
-	if (!(co_await MoveRouteProbe(&stMoving, OI::Rpc::GetRouteConnectionInfo(*pSecond).sIp, OI::Rpc::GetRouteConnectionInfo(*pSecond).sPort)))
+	if (!(co_await MoveRouteProbe(&stMoving, OI::Rpc::RouteManager::GetInstance().ConnectionInfo(*pSecond).sIp, OI::Rpc::RouteManager::GetInstance().ConnectionInfo(*pSecond).sPort)))
 	{
 		co_return 1;
 	}
@@ -2263,15 +2263,15 @@ static OI::Coro::TaskResult<int> CheckRoutePoolLifetime()
 	}
 	auto* pSmall = stSmallRoute.vClients[0];
 	auto* pLarge = stLargeRoute.vClients[0];
-	std::weak_ptr<void> pSmallOwner = OI::Rpc::GetRouteConnectionOwner(*pSmall);
-	std::weak_ptr<void> pLargeOwner = OI::Rpc::GetRouteConnectionOwner(*pLarge);
+	std::weak_ptr<void> pSmallOwner = OI::Rpc::RouteManager::GetInstance().ConnectionOwner(*pSmall);
+	std::weak_ptr<void> pLargeOwner = OI::Rpc::RouteManager::GetInstance().ConnectionOwner(*pLarge);
 	for (const auto& stPair : {std::make_pair(pSmall, &stSmall), std::make_pair(pLarge, &stLarge)})
 	{
-		if (OI::Rpc::GetRouteConnectionInfo(*stPair.first).iSendBytes != stPair.second->MaxSendQueueBytes() ||
-		    OI::Rpc::GetRouteConnectionInfo(*stPair.first).iReceiveBytes != stPair.second->MaxReceiveBufferBytes() ||
-		    OI::Rpc::GetRouteConnectionInfo(*stPair.first).iFrameBytes != stPair.second->MaxFrameBytes() ||
-		    OI::Rpc::GetRouteConnectionInfo(*stPair.first).iIncompleteMilliseconds != stPair.second->IncompleteFrameTimeoutMilliseconds() ||
-		    OI::Rpc::GetRouteConnectionInfo(*stPair.first).stPendingLimits != stPair.second->PendingCallLimits())
+		if (OI::Rpc::RouteManager::GetInstance().ConnectionInfo(*stPair.first).iSendBytes != stPair.second->MaxSendQueueBytes() ||
+		    OI::Rpc::RouteManager::GetInstance().ConnectionInfo(*stPair.first).iReceiveBytes != stPair.second->MaxReceiveBufferBytes() ||
+		    OI::Rpc::RouteManager::GetInstance().ConnectionInfo(*stPair.first).iFrameBytes != stPair.second->MaxFrameBytes() ||
+		    OI::Rpc::RouteManager::GetInstance().ConnectionInfo(*stPair.first).iIncompleteMilliseconds != stPair.second->IncompleteFrameTimeoutMilliseconds() ||
+		    OI::Rpc::RouteManager::GetInstance().ConnectionInfo(*stPair.first).stPendingLimits != stPair.second->PendingCallLimits())
 		{
 			++iBad;
 		}
@@ -2287,7 +2287,7 @@ static OI::Coro::TaskResult<int> CheckRoutePoolLifetime()
 	{
 		++iBad;
 	}
-	const auto iWarmSid = OI::Rpc::GetRouteConnectionInfo(*pSmall).iSessionId;
+	const auto iWarmSid = OI::Rpc::RouteManager::GetInstance().ConnectionInfo(*pSmall).iSessionId;
 	OI::RpcData::AllEchoReq stLargeRequest;
 	stLargeRequest.stData.sMessage.assign(512, 'P');
 	OI::RpcData::AllEchoRes stOutput;
@@ -2297,7 +2297,7 @@ static OI::Coro::TaskResult<int> CheckRoutePoolLifetime()
 	{
 		++iBad;
 	}
-	if (OI::Rpc::GetRouteConnectionInfo(*pSmall).iSessionId != iWarmSid)
+	if (OI::Rpc::RouteManager::GetInstance().ConnectionInfo(*pSmall).iSessionId != iWarmSid)
 	{
 		++iBad;
 	}
@@ -2309,14 +2309,14 @@ static OI::Coro::TaskResult<int> CheckRoutePoolLifetime()
 		++iBad;
 	}
 	LOG_TRACE("hold route backpressure status bad=%d", iBad);
-	const auto stBefore = OI::Rpc::GetRoutePoolStats();
+	const auto stBefore = OI::Rpc::RouteManager::GetInstance().Stats();
 	OI::RpcData::HoldReq stRequest;
 	stRequest.iDelayMilliseconds = 800;
 	stRequest.iMark = 821;
 	OI::RpcData::HoldRes stHeldOutput;
 	auto stHeld = OI::Rpc::RpcCall(*pLarge, stRequest, stHeldOutput, OI::Timer::Seconds(3));
 	co_await OI::Coro::yield(OI::Timer::Milliseconds(600));
-	if (OI::Rpc::GetRoutePoolStats().iLeasedClients < 2 || co_await stHeld != 0 || stHeldOutput.iMark != 821)
+	if (OI::Rpc::RouteManager::GetInstance().Stats().iLeasedClients < 2 || co_await stHeld != 0 || stHeldOutput.iMark != 821)
 	{
 		++iBad;
 	}
@@ -2331,7 +2331,7 @@ static OI::Coro::TaskResult<int> CheckRoutePoolLifetime()
 	{
 		co_await OI::Coro::yield(20);
 	}
-	const auto stAfter = OI::Rpc::GetRoutePoolStats();
+	const auto stAfter = OI::Rpc::RouteManager::GetInstance().Stats();
 	if (!pSmallLease.expired() || !pLargeLease.expired() || !pSmallOwner.expired() || !pLargeOwner.expired() ||
 	    stAfter.iEvicted < stBefore.iEvicted + 2 ||
 	    stAfter.iClients > stAfter.iMaxClients)
@@ -2372,7 +2372,7 @@ static OI::Coro::TaskResult<int> CheckRouteInboundAndReconnect()
 	}
 	for (int iRound = 0; iRound < 4; ++iRound)
 	{
-		pClient->Manager().CloseSession(OI::Rpc::GetRouteConnectionInfo(*pClient).iSessionId);
+		pClient->Manager().CloseSession(OI::Rpc::RouteManager::GetInstance().ConnectionInfo(*pClient).iSessionId);
 		// 不让出、不等 poll 清理：直接向同一连接发送，必须排队重连。
 		if (co_await OI::Rpc::RpcCall(*pClient, stRequest, stOutput, OI::Timer::Seconds(3)) != 0 || stOutput.iMark != 845)
 		{
@@ -2380,7 +2380,7 @@ static OI::Coro::TaskResult<int> CheckRouteInboundAndReconnect()
 		}
 	}
 	LOG_TRACE("hold pooled reconnect bad=%d", iBad);
-	std::weak_ptr<void> pWeakOwner = OI::Rpc::GetRouteConnectionOwner(*pClient);
+	std::weak_ptr<void> pWeakOwner = OI::Rpc::RouteManager::GetInstance().ConnectionOwner(*pClient);
 	stRequest.iMark = -2147483598;
 	if (co_await OI::Rpc::RpcCall(*pClient, stRequest, stOutput, OI::Timer::Seconds(3)) != 0)
 	{
@@ -2415,11 +2415,11 @@ static OI::Coro::TaskResult<int> CheckRoutePoolCapacity()
 {
 	int iBad = 0;
 	int64_t iDeadlineMilliseconds = OI::Timer::SteadyMilliseconds() + 3000;
-	while (OI::Rpc::GetRoutePoolStats().iClients != 0 && OI::Timer::SteadyMilliseconds() < iDeadlineMilliseconds)
+	while (OI::Rpc::RouteManager::GetInstance().Stats().iClients != 0 && OI::Timer::SteadyMilliseconds() < iDeadlineMilliseconds)
 	{
 		co_await OI::Coro::yield(20);
 	}
-	const auto stEmpty = OI::Rpc::GetRoutePoolStats();
+	const auto stEmpty = OI::Rpc::RouteManager::GetInstance().Stats();
 	if (stEmpty.iClients != 0 || stEmpty.iMaxClients != 8)
 	{
 		co_return 1;
@@ -2435,14 +2435,14 @@ static OI::Coro::TaskResult<int> CheckRoutePoolCapacity()
 	for (size_t iIndex = 0; iIndex < stEmpty.iMaxClients; ++iIndex)
 	{
 		vPolicies.push_back(std::make_unique<RoutePolicyProbe>(20 + iIndex));
-		vRoutes.push_back(OI::Rpc::FinishRoute("ipcserver", OI::Rpc::ServicePick::Any, "", 0, vInstances, vPolicies.back().get()));
+		vRoutes.push_back(OI::Rpc::RouteManager::GetInstance().Resolve("ipcserver", OI::Rpc::ServicePick::Any, "", 0, vInstances, vPolicies.back().get()));
 		if (vRoutes.back().iStatus != OI::Rpc::ServiceRouteStatus::Ok || vRoutes.back().vOwners.size() != 1)
 		{
 			++iBad;
 		}
 	}
 	RoutePolicyProbe stOverflow(100);
-	auto stRejected = OI::Rpc::FinishRoute("ipcserver", OI::Rpc::ServicePick::Any, "", 0, vInstances, &stOverflow);
+	auto stRejected = OI::Rpc::RouteManager::GetInstance().Resolve("ipcserver", OI::Rpc::ServicePick::Any, "", 0, vInstances, &stOverflow);
 	if (stRejected.iStatus != OI::Rpc::ServiceRouteStatus::Busy || !stRejected.vClients.empty() || !stRejected.vOwners.empty())
 	{
 		++iBad;
@@ -2452,7 +2452,7 @@ static OI::Coro::TaskResult<int> CheckRoutePoolCapacity()
 	OI::RpcData::HoldRes stOutput;
 	stOutput.iMark = -822;
 	const int32_t iBusy = co_await stOverflow.CallAny(stRequest, stOutput, OI::Timer::Seconds(3));
-	if (iBusy != OI_ERR_BUSY || stOutput.iMark != -822 || OI::Rpc::GetRoutePoolStats().iClients != 8)
+	if (iBusy != OI_ERR_BUSY || stOutput.iMark != -822 || OI::Rpc::RouteManager::GetInstance().Stats().iClients != 8)
 	{
 		++iBad;
 	}
@@ -2467,11 +2467,11 @@ static OI::Coro::TaskResult<int> CheckRoutePoolCapacity()
 	}
 	vRoutes.clear();
 	iDeadlineMilliseconds = OI::Timer::SteadyMilliseconds() + 3000;
-	while (OI::Rpc::GetRoutePoolStats().iClients != 0 && OI::Timer::SteadyMilliseconds() < iDeadlineMilliseconds)
+	while (OI::Rpc::RouteManager::GetInstance().Stats().iClients != 0 && OI::Timer::SteadyMilliseconds() < iDeadlineMilliseconds)
 	{
 		co_await OI::Coro::yield(20);
 	}
-	if (OI::Rpc::GetRoutePoolStats().iClients != 0 || co_await stOverflow.CallAny(stRequest, stOutput, OI::Timer::Seconds(3)) != 0 || stOutput.iMark != 822)
+	if (OI::Rpc::RouteManager::GetInstance().Stats().iClients != 0 || co_await stOverflow.CallAny(stRequest, stOutput, OI::Timer::Seconds(3)) != 0 || stOutput.iMark != 822)
 	{
 		++iBad;
 	}

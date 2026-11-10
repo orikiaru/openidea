@@ -167,7 +167,7 @@ OI::Coro::Task UdpMgr::Run()
 	{
 		::OI::RpcData::UdpNoteReq stNote;
 		stNote.iSeq = iSeq;
-		if (::OI::Rpc::RpcNotify(stManager, iSessionId, stNote) != OI_OK)
+		if (stManager.Notify(iSessionId, stNote) != OI_OK)
 		{
 			++iBadTotal;
 		}
@@ -197,7 +197,7 @@ OI::Coro::Task UdpMgr::Run()
 	stOversized.iSeq = 1000003;
 	stOversized.sData.assign(65528, 'U');
 	const int64_t iOversizedStartMilliseconds = ::OI::Timer::SteadyMilliseconds();
-	const int32_t iNotifyRet = ::OI::Rpc::RpcNotify(stManager, iSessionId, stOversized);
+	const int32_t iNotifyRet = stManager.Notify(iSessionId, stOversized);
 	::OI::RpcData::UdpEchoRes stOversizedResponse;
 	const int32_t iCallRet = co_await ::OI::Rpc::RpcCall(stManager, iSessionId, stOversized, stOversizedResponse, ::OI::Timer::Seconds(3));
 	const bool bImmediate = ::OI::Timer::SteadyMilliseconds() - iOversizedStartMilliseconds < 1000;

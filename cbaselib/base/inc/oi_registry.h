@@ -51,7 +51,9 @@ class ServiceTable
 	~ServiceTable();
 	// 让这个管理器跟着名字走。列表变化时改它的地址。
 	void Watch(::OI::Net::SessionManager* pManager, const std::string& sName);
-	// 当前关心这个名字的管理器。
+	// 让这个管理器收这个名字下的整份名单。名单相对 vInitial 有变化时调用 ApplyServiceList。
+	void WatchList(::OI::Net::SessionManager* pManager, const std::string& sName, const std::vector<ServiceInstance>& vInitial);
+	// 当前关心这个名字的管理器。只含跟着单台切换的，不含收整份名单的。
 	std::vector<::OI::Net::SessionManager*> Watchers(const std::string& sName);
 	// 正在关心的服务名。
 	std::vector<std::string> Names();
@@ -70,6 +72,10 @@ class ServiceTable
 		bool bOnline;
 		// 关心这个名字的会话管理器。地址变化时通知它们。
 		std::vector<::OI::Net::SessionManager*> vWatchers;
+		// 上次下发的整份名单，按实例号升序。
+		std::vector<ServiceInstance> vList;
+		// 收整份名单的会话管理器。
+		std::vector<::OI::Net::SessionManager*> vListWatchers;
 		State()
 		    : iId(0), bOnline(false)
 		{
@@ -121,6 +127,8 @@ class RegistryClient : public ::OI::Net::SessionManager
 	// StartServer 成功后登记本进程。返回 false 表示不能起：id 不对，或同名同 id 已经在线。
 	bool Publish(const std::string& sSection, const std::string& sIp, const std::string& sPort);
 	void Watch(::OI::Net::SessionManager* pManager, const std::string& sName);
+	// 收整份名单，vInitial 是调用方已经拿到的那份。没配 [Registry] 时什么都不做。
+	void WatchList(::OI::Net::SessionManager* pManager, const std::string& sName, const std::vector<ServiceInstance>& vInitial);
 	// 按 heartbeat_ms 报一次在线。没连上就去连，连上了还没登记就补登记。
 	void Touch();
 	// 按 pull_ms 把关心的名字整量拉一次。

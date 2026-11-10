@@ -12,6 +12,7 @@ set(MODULE_SRCS
         src/redis_mgr.cpp
         src/hold_mgr.cpp
         src/udp_mgr.cpp
+        src/multi_mgr.cpp
     )
 #可执行程序
 add_executable(ipcclient ${MODULE_SRCS})

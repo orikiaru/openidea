@@ -21,7 +21,7 @@ rpcdata AllTypesData {
 
 整数字段写 `int8_t`、`int16_t`、`int32_t`、`int64_t` 和 `uint8_t`、`uint16_t`、`uint32_t`、`uint64_t`。`string` 就是 `std::string`。`map` 的键可以是这些标量、`string`，也可以是名字后面加了 `key` 的 `rpcdata`。`key` 会生成 `operator<`。嵌进别的 `key`，或者再当 `map` 键时，里层也必须有比较器，生成时会检查。标了 `key` 的结构不生成 JSON；谁的字段里放了这种 `map`，谁也不生成 JSON。其余 `rpcdata` 仍生成 `ToJson` / `FromJson`。`rpc` 不生成 JSON。库是 JsonCpp。
 
-配置时 CMake 调用 `cbaselib/proto/proto_tool/main.py`，输入是这三个文件，输出到 `modules/include`、`modules` 和 `deploy`，并在构建目录写出模块清单。修改任一输入会触发重新配置和生成；生成失败会终止配置。
+基础库在 `framework.cmake`。它编三方库和 `cbaselib`，并生成 net 内部的工作协议，不加入进程模块。根目录 `CMakeLists.txt` include 它，再调用 `cbaselib/proto/proto_tool/main.py`。输入是上面三个文件，输出到 `modules/include`、`modules` 和 `deploy`，并在构建目录写出模块清单。修改任一输入会触发重新配置和生成；生成失败会终止配置。外部工程同样 include `openidea/framework.cmake`，换成自己的三个 xml 和输出目录，不再手写基础库列表。开发标准见 [开发标准](develop.md) 第 2 节。
 
 ## 什么会重写
 

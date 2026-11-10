@@ -19,6 +19,10 @@ void Schedule(std::coroutine_handle<> stHandle);
 }
 namespace OI
 {
+namespace Base
+{
+struct ServiceInstance;
+}
 namespace Net
 {
 
@@ -171,6 +175,10 @@ class SessionManager
 	bool StartServer(bool bAsync = true); //目前不支持同步操作
 	// 定期拉到的服务列表。online 为假表示这个名字已经从列表里消失。
 	void ApplyService(const std::string& sIp, const std::string& sPortLocal, bool bOnline);
+	// 关注整份名单的管理器收这个名字下的全部实例，名单有变化时才调用。默认什么都不做。
+	virtual void ApplyServiceList(const std::vector<::OI::Base::ServiceInstance>&)
+	{
+	}
 	// 关掉当前所有会话。
 	void CloseAllSessions();
 	// 关掉这个地址上的会话。
@@ -221,6 +229,10 @@ class SessionManager
 	virtual const std::string GetIDString();
 
   protected:
+	// 配了 service 时在 Init 里调用。默认按名字查一台，查到就改写 ip/port。
+	virtual void BindService(const std::string& sService, std::string& sIpLocal, std::string& sPortLocal);
+	// Init 末尾调用。默认跟着名单里选中的那一台切换地址。
+	virtual void WatchService(const std::string& sService);
 	// 按本模块的会话类型新建一条。
 	virtual Session* CloneSession() = 0;
 	// 会话进表时通知子类。

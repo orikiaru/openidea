@@ -78,6 +78,28 @@ Redis 连不上或卡住时，登记和续期回失败，客户端下一次心�
 
 分区号只作为登记字段和 `Call` 的参数，不编进 `sessionid`，也不编进 IP。同一分区再开一份进程时，仍是多条连接，`sessionid` 负责把回包送回其中一条。
 
+## 每台各连一条
+
+`ProtoClientManager` 同一个名字只连一台。要同时直连同名的多台全局服，继承 `ProtoMultiClientManager`，配置段和普通客户端一样：
+
+| 配置 | 名单 |
+| --- | --- |
+| 写了 `service`，注册表查得到 | 名单里每个 id 一条常驻连接，实例号就是登记的 `[Service] id` |
+| 没写 `service`，或查不到 | 按段里的 ip/port 连一台，实例号 0 |
+
+`Init` 之后名单已经有了，`Start` 对每台发起建连；不用 `StartClient`。连上回调 `OnPeerConnect(实例号, sid)`，断开回调 `OnPeerDisconnect(实例号, sid)`，都在 poll 线程。断开后自己重连，连不上隔 `RetryMilliseconds()` 再试。
+
+注册表按 `pull_ms` 下发这个名字的整份名单（`RegistryClient::WatchList`），名单有变化才调 `ApplyServiceList`。新登记的 id 自动建连；消失的 id 退役，在途调用回 `OI_ERR_CONNECT`；同一个 id 换了地址先退役再新建。
+
+| 调用 | 含义 |
+| --- | --- |
+| `Call(实例号, req, res)` | 只打这一台。名单里没有回 `OI_ERR_CONNECT`；在名单里还没连上就暂存，连上补发。 |
+| `CallAny(req, res)` | 在已连上的实例里轮询，一台都没连上时在名单里轮询。 |
+| `CallAll<Res>(req)` | 按发送这一刻的名单每台一份，先全部发出再等。结果按实例号升序，每格带 `iInstanceId`。 |
+| `NotifyPeer(实例号, msg)` | 单向消息。没连上回 `OI_ERR_CONNECT`。 |
+
+服务端推下来的消息照常用 `OI_NOTIFY_BIND_SELF` 绑定，`OI_RPC_SELF(类型)` 拿到的就是这个管理器。`InstanceIds()` 给当前名单，`ConnectedSid(实例号)` 给这台当前的会话。回归见 testing.md 的 multi。
+
 ## 应用侧看不到 Session
 
 `Session` 和 `SessionManager` 留在框架里。应用不继承它们，也不调用 `SendBytes`、`CloseSession`、`CloneSession`。

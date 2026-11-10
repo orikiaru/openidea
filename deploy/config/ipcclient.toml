@@ -31,6 +31,20 @@ log = false
 redis = false
 hold = false
 udp = false
+multi = false
+
+# 多连接回归。不配 service 就是写死地址的一台，实例号 0。
+[IpcMultiFixed]
+ip = "127.0.0.1"
+port = "17981"
+type = "tcp"
+
+# 配了 service，名单里每台实例各连一条。查不到时按下面的地址连一台。
+[IpcMulti]
+service = "peerserver"
+ip = "127.0.0.1"
+port = "17982"
+type = "tcp"
 
 # UDP 回归的本地口。端口 0 让系统分配；idle_timeout_ms 内没收没发就关会话。
 [IpcUdp]

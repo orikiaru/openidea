@@ -256,12 +256,12 @@ OI_RPC_BIND(Hold, HandleHold);
 
 ## 单向消息
 
-调用号 0 是单向消息：不登记等待、不回包。发送用 `RpcNotify(mgr, sid, msg)`，返回 `SendBytesResult` 的错误码，编码失败是 `OI_ERR_ENCODE`。接收和 RPC 共用一张按协议号的处理表，一个协议号只注册一种：
+调用号 0 是单向消息：不登记等待、不回包。管理器上用 `Notify(sid, msg)`，这次请求的上下文上用 `stContext.Notify(msg)`，换一条会话用 `stContext.Notify(sid, msg)`。返回 `SendBytesResult` 的错误码，编码失败是 `OI_ERR_ENCODE`。UDP 先用 `OpenPeer(ip, port)` 换成 sid。接收和 RPC 共用一张按协议号的处理表，一个协议号只注册一种：
 
 ```cpp
 static OI_NOTIFY_HANDLER(UdpNote, HandleNote)
 {
-    co_return ::OI::Rpc::RpcNotify(stContext.stManager, stContext.iSessionId, stRequest);
+    co_return stContext.Notify(stRequest);
 }
 
 OI_NOTIFY_BIND(UdpNote, HandleNote);

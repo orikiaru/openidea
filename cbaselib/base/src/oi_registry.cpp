@@ -249,13 +249,36 @@ void ServiceTable::Watch(::OI::Net::SessionManager* pManager, const std::string&
 	stState.vWatchers.push_back(pManager);
 }
 
+void ServiceTable::WatchList(::OI::Net::SessionManager* pManager, const std::string& sNameLocal, const std::vector<ServiceInstance>& vInitial)
+{
+	::OI::Thread::MutexGuard stLock(m_stMutex);
+	State& stState = m_mServices[sNameLocal];
+	for (const auto* pWatcher : stState.vListWatchers)
+	{
+		if (pWatcher == pManager)
+		{
+			return;
+		}
+	}
+	// 已有别的管理器在收时保留上次下发的名单，免得它漏掉这次之后的变化。
+	if (stState.vListWatchers.empty())
+	{
+		stState.vList = vInitial;
+		std::sort(stState.vList.begin(), stState.vList.end(), [](const ServiceInstance& stLeft, const ServiceInstance& stRight)
+		{
+			return stLeft.iId < stRight.iId;
+		});
+	}
+	stState.vListWatchers.push_back(pManager);
+}
+
 std::vector<std::string> ServiceTable::Names()
 {
 	std::vector<std::string> vNamesLocal;
 	::OI::Thread::MutexGuard stLock(m_stMutex);
 	for (const auto& [sName, stState] : m_mServices)
 	{
-		if (!stState.vWatchers.empty())
+		if (!stState.vWatchers.empty() || !stState.vListWatchers.empty())
 		{
 			vNamesLocal.push_back(sName);
 		}
@@ -272,7 +295,13 @@ void ServiceTable::Apply(const std::vector<std::string>& vNames, const std::vect
 		std::string sPort;
 		bool bOnline;
 	};
+	struct ListChange
+	{
+		::OI::Net::SessionManager* pManager;
+		std::vector<ServiceInstance> vList;
+	};
 	std::vector<Change> vChanged;
+	std::vector<ListChange> vListChanged;
 	{
 		::OI::Thread::MutexGuard stLock(m_stMutex);
 		for (size_t iNumber = 0; iNumber < vNames.size(); ++iNumber)
@@ -283,6 +312,34 @@ void ServiceTable::Apply(const std::vector<std::string>& vNames, const std::vect
 				continue;
 			}
 			State& stState = stIterator->second;
+			if (!stState.vListWatchers.empty())
+			{
+				std::vector<ServiceInstance> vMatched;
+				for (const auto& stInst : vList)
+				{
+					if (stInst.sName == vNames[iNumber])
+					{
+						vMatched.push_back(stInst);
+					}
+				}
+				std::sort(vMatched.begin(), vMatched.end(), [](const ServiceInstance& stLeft, const ServiceInstance& stRight)
+				{
+					return stLeft.iId < stRight.iId;
+				});
+				const bool bSame = vMatched.size() == stState.vList.size() &&
+				                   std::equal(vMatched.begin(), vMatched.end(), stState.vList.begin(), [](const ServiceInstance& stLeft, const ServiceInstance& stRight)
+				{
+					return stLeft.iId == stRight.iId && stLeft.sIp == stRight.sIp && stLeft.sPort == stRight.sPort && stLeft.sZone == stRight.sZone;
+				});
+				if (!bSame)
+				{
+					stState.vList = vMatched;
+					for (auto* pWatcher : stState.vListWatchers)
+					{
+						vListChanged.push_back(ListChange{pWatcher, vMatched});
+					}
+				}
+			}
 			ServiceInstance stPick;
 			bool bOnlineLocal = Pick(vList, vNames[iNumber], stState.bOnline ? stState.iId : 0, stPick);
 			if (bOnlineLocal == stState.bOnline && (!bOnlineLocal || (stPick.iId == stState.iId && stPick.sIp == stState.sIp && stPick.sPort == stState.sPort)))
@@ -307,6 +364,10 @@ void ServiceTable::Apply(const std::vector<std::string>& vNames, const std::vect
 	for (size_t iIndexLocal = 0; iIndexLocal < vChanged.size(); ++iIndexLocal)
 	{
 		vChanged[iIndexLocal].pManager->ApplyService(vChanged[iIndexLocal].sIp, vChanged[iIndexLocal].sPort, vChanged[iIndexLocal].bOnline);
+	}
+	for (const auto& stChange : vListChanged)
+	{
+		stChange.pManager->ApplyServiceList(stChange.vList);
 	}
 }
 
@@ -959,6 +1020,16 @@ void RegistryClient::Watch(::OI::Net::SessionManager* pManager, const std::strin
 		return;
 	}
 	ServiceTable::GetInstance().Watch(pManager, sNameLocal);
+	ArmPull();
+}
+
+void RegistryClient::WatchList(::OI::Net::SessionManager* pManager, const std::string& sNameLocal, const std::vector<ServiceInstance>& vInitial)
+{
+	if (!pManager || sNameLocal.empty() || !Configured())
+	{
+		return;
+	}
+	ServiceTable::GetInstance().WatchList(pManager, sNameLocal, vInitial);
 	ArmPull();
 }
 

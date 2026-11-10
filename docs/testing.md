@@ -6,7 +6,7 @@
 
 - Windows 原生 MSVC x64 Release、Linux WSL GCC 13，各运行多线程 MT 和单线程 ST，共四组。
 - ST/MT 只切换 ipcclient、ipcserver；logd 固定多线程，redisserver/registry 按各自配置单线程。
-- `all` 包含 19 项：echo、log、log-backpressure、redis、redis-limit、redis-shutdown、redis-queue-timeout、rpc-ingress、redis-backpressure-bytes、redis-backpressure-count、redis-fairness、hold、rpc-admission-count、rpc-admission-bytes、reset、disk-full、registry、udp、web。
+- `all` 包含 20 项：echo、log、log-backpressure、redis、redis-limit、redis-shutdown、redis-queue-timeout、rpc-ingress、redis-backpressure-bytes、redis-backpressure-count、redis-fairness、hold、rpc-admission-count、rpc-admission-bytes、reset、disk-full、registry、udp、multi、web。
 - Linux 可额外运行 clock-forward、clock-back，以及纯协程 ASan。校时故障只影响测试子进程，绝不调整宿主机时钟。
 - 必须全部返回 0；不能用删除断言、扩大超时、提高容量或重试掩盖失败。偶发失败保留日志，记录复测结果及根因是否确认。
 - 本次源码正在变化时不要声称覆盖了最新版本；核对结果目录的 environment.json、Git HEAD、diff 摘要后再报告。
@@ -116,6 +116,7 @@ Windows 的日志故障测试要求该产物以 `-DOI_ENABLE_TEST_HOOKS=ON` 构�
 - redis：`redis integrity ok`、压力统计 `bad=0`；同时验证毫秒 TTL、单次请求等待、脚本隔离、断线、队列超时及限流。
 - hold：`hold done bad=0`；覆盖多等待者、异常、RPC 接纳上限、请求生命周期、服务名/分区路由及批量调用。测试脚本额外启动两个 gameserver 分区（1001/1002），不能只起默认 ipcserver 就冒充全量。
 - udp：ipcserver 的 `[IpcUdp]` 和 ipcclient 的 UdpMgr，`udp done bad=0`。覆盖系统分配端口、同地址 `OpenPeer` 去重、对端地址、1000 次 RPC、1000 条单向消息不丢不重、60000 字节单个数据报、坏包不断会话（服务端会话数仍为 1）、客户端 1.5 秒空闲关会话后重开新会话。gameserver 分区的 UDP 口改为 0，不和主服抢。
+- multi：ipcclient 的 MultiMgr，`multi done bad=0`。`[IpcMultiFixed]` 不配 service，写死地址只连一台，实例号 0，没连上就发的调用连上后补发。`[IpcMulti]` 配 service=peerserver，脚本用 17992、17993 起两台同名全局 ipcserver，实例号 1、2，客户端起来前都已登记。覆盖每台各一条连接和建连回调、按实例号调用打到对应服务端、名单外实例号回 CONNECT、CallAny 两台都命中、CallAll 两个结果按实例号排列、服务端顺着连接反推（请求和 NotifyPeer 各触发一次，核对推送进的是这台的会话）。随后脚本杀掉 2 号：断开回调触发，注册表撤掉后名单只剩 1，调 2 回 CONNECT，1 照常；再重启 2 号：名单恢复，自动重连，调 2 成功。不起 redisserver。
 - 正常退出必须完成排空和 join。清理超过时限需要强杀，算失败。
 
 ## 5. 平台故障注入与清理

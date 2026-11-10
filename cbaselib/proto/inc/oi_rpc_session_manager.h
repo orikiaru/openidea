@@ -1,11 +1,17 @@
 #pragma once
 #include <string>
+#include <atomic>
 #include <deque>
 #include <list>
+#include <map>
+#include <memory>
 #include <unordered_map>
+#include <vector>
 #include "oi_session_manager.h"
 #include "oi_rpc_session.h"
 #include "oi_rpc_call.h"
+#include "oi_rpc_peer.h"
+#include "oi_registry.h"
 #include "oi_log.h"
 #include "oi_duration.h"
 namespace OI
@@ -15,6 +21,11 @@ namespace Rpc
 
 template <typename T>
 struct RpcProtoId;
+struct ServiceRoute;
+
+// 定义在 oi_rpc_coro.h。会话不在时由 SendBytesResult 返回 OI_ERR_CONNECT，编码失败是 OI_ERR_ENCODE。
+template <typename Msg>
+int32_t RpcNotify(::OI::Net::SessionManager& stManager, sid_t iSessionId, const Msg& stMessage);
 
 void FailRpcCalls(::OI::Net::SessionManager* pManager, sid_t iSessionId);
 
@@ -43,6 +54,12 @@ class ProtoSessionManager : public ::OI::Net::SessionManager
 	{
 		return "ProtoSessionManager";
 	}
+	// 向这条会话发一条单向消息。sid 从 ConnectedSid、OpenPeer 或 RpcContext 来。
+	template <typename Msg>
+	int32_t Notify(sid_t iSessionId, const Msg& stMessage)
+	{
+		return RpcNotify(*this, iSessionId, stMessage);
+	}
 	virtual ::OI::Net::Session* CloneSession()
 	{
 		return new ProtoSession(this);
@@ -55,10 +72,15 @@ class ProtoSessionManager : public ::OI::Net::SessionManager
 	{
 		LOG_INFO("ProtoSessionManager::OnDelSession sid=%d, error=%d", pSession->GetSessionID(), pSession->GetError());
 	}
+	// 固定地址连接建好后纳入本管理器的会话表，只在 poll 线程调用。
+	sid_t AdoptPeer(net_socket_t iSocketLocal, const std::shared_ptr<PeerConnection>& pConnection);
+	// 固定地址连接连上、连接前暂存的请求补发之后回调，在 poll 线程。默认什么都不做。
+	virtual void OnPeerConnect(int32_t, sid_t)
+	{
+	}
 };
 
-//client只负责连接一个server
-//如果需要连接池,需要建立多个client,自行设计吧
+// client 只连一个 server。同一服务名下每台实例各连一条，用 ProtoMultiClientManager。
 class ProtoClientManager : public ProtoSessionManager
 {
 	RpcSender m_stSender;
@@ -224,6 +246,67 @@ class ProtoClientManager : public ProtoSessionManager
 	// 没连上先存着，连上时按顺序补发。存满 max_pending_bytes 再来的丢掉，返回 false
 	bool SendRawOrPend(const ::OI::Base::Bytes& stData, size_t iMaxPendingBytes);
 	void Reconnect(int iDelayMilliseconds = 2000);
+};
+
+// 同一服务名下每台实例各一条常驻连接，断开或连不上自动重连。
+// 配了 <段名>.service：跟着注册表的整份名单，实例号取登记的 [Service] id；注册里查不到时先连配置地址。
+// 没配：只有一条连到 <段名>.ip/port 的连接，实例号是 0。
+class ProtoMultiClientManager : public ProtoSessionManager
+{
+	::OI::Thread::Mutex m_stPeerLocker;
+	std::map<int32_t, std::shared_ptr<PeerConnection>> m_mPeers;
+	std::vector<::OI::Base::ServiceInstance> m_vSeed;
+	bool m_bListed = false;
+	bool m_bStarted = false;
+	std::atomic<uint32_t> m_iCursor{0};
+	void ApplyPeers(std::map<int32_t, std::pair<std::string, std::string>> mTargets);
+	void RetirePeer(const std::shared_ptr<PeerConnection>& pPeer);
+
+  protected:
+	void BindService(const std::string& sService, std::string& sIpLocal, std::string& sPortLocal) override;
+	void WatchService(const std::string& sService) override;
+	void OnDelSession(const ::OI::Net::Session* pSession) override;
+	// 连不上之后隔多久再连。
+	virtual int RetryMilliseconds() const
+	{
+		return 2000;
+	}
+	// 某台断开，在 poll 线程。这台的在途调用已经回 OI_ERR_CONNECT。
+	virtual void OnPeerDisconnect(int32_t, sid_t)
+	{
+	}
+
+  public:
+	bool Init() override;
+	// 对当前名单里的每台发起建连。之后新登记的实例自动连。
+	void Start();
+	// 单地址建连不适用于这里。
+	ConnectAwaiter StartClient() = delete;
+	// 当前名单，按实例号升序。
+	std::vector<int32_t> InstanceIds();
+	// 没这台或没连上返回 INVALID_SID。
+	sid_t ConnectedSid(int32_t iInstanceId);
+	// 名单里没有这台返回空。
+	std::shared_ptr<RpcSender> PeerSender(int32_t iInstanceId);
+	// 在已连上的实例里轮询；一台都没连上时在名单里轮询。名单为空返回空。
+	std::shared_ptr<RpcSender> AnySender();
+	// 按实例号升序取当前名单的发送目标，vIds 与 stRoute.vClients 一一对应。
+	void AllSenders(std::vector<int32_t>& vIds, ServiceRoute& stRoute);
+	// 注册表下发这个名字的整份名单。按实例号比对：多出的建连，消失的退役，地址变了的先退役再新建。
+	void ApplyServiceList(const std::vector<::OI::Base::ServiceInstance>& vList) override;
+
+	// 给这台发单向消息。没连上返回 OI_ERR_CONNECT。
+	template <typename Msg>
+	int32_t NotifyPeer(int32_t iInstanceId, const Msg& stMessage);
+	// 指定一台。名单里没有返回 OI_ERR_CONNECT；在名单里还没连上就先暂存，连上补发。返回 TaskResult<int32_t>。
+	template <typename Req>
+	auto Call(int32_t iInstanceId, Req stRequest, typename RpcProtoId<Req>::Response& stResponse, ::OI::Timer::MS stTimeout = ::OI::Timer::Seconds(180));
+	// 任选一台，规则同 AnySender。
+	template <typename Req>
+	auto CallAny(Req stRequest, typename RpcProtoId<Req>::Response& stResponse, ::OI::Timer::MS stTimeout = ::OI::Timer::Seconds(180));
+	// 按发送这一刻的名单给每台各发一份，先全部发出再等。结果按实例号升序，带实例号。
+	template <typename Res, typename Req>
+	auto CallAll(const Req& stRequest, ::OI::Timer::MS stTimeout = ::OI::Timer::Seconds(180));
 };
 }
 }

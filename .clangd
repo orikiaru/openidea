@@ -1,8 +1,9 @@
 CompileFlags:
-  CompilationDatabase: build-clangd
+  CompilationDatabase: build-clangd-win
+  Compiler: clang-cl
   Add:
     - -std=c++20
-    - -Icbaselib/3rd/cpp-httplib
     - -ferror-limit=0
+    - -Icbaselib/3rd/cpp-httplib
 Index:
   Background: Build

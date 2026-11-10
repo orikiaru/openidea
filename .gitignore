@@ -9,6 +9,8 @@
 /*.obj
 /build-win
 /build-clangd
+/build-clangd-win
+/build-clangd-linux
 /compile_commands.json
 
 # Python tools and protocol generator caches

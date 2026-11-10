@@ -26,6 +26,11 @@ def find_cmake(explicit):
     raise RuntimeError("CMake not found; pass --cmake or install the C++ toolchain")
 
 
+def find_redis(explicit):
+    # 不指定就用 PATH 里有的那个。
+    return explicit or shutil.which("redis-server") or "/usr/local/bin/redis-server"
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--platform", choices=("native", "both"), default="native")
@@ -33,7 +38,7 @@ def main():
     parser.add_argument("--linux-build-dir", default="/home/jxy/openidea-build-gcc13")
     parser.add_argument("--cmake")
     parser.add_argument("--jobs", type=int, default=8)
-    parser.add_argument("--redis-binary", default="/usr/local/bin/redis-server")
+    parser.add_argument("--redis-binary", help="default: redis-server on PATH")
     parser.add_argument("--windows-redis-binary", help="--platform both: native Windows redis-server.exe for the Windows side")
     parser.add_argument("--redis-wsl", action="store_true")
     parser.add_argument("--wsl-user", default="jxy")
@@ -59,7 +64,9 @@ def main():
             parser.error("--platform both is launched on the Windows host")
         native = [sys.executable, str(Path(__file__).resolve()), "--artifacts", str(output / "windows"),
                   "--case", args.case, "--mode", args.mode, "--jobs", str(args.jobs), "--wsl-user", args.wsl_user,
-                  "--redis-binary", args.windows_redis_binary or args.redis_binary, "--port-offset", str(args.port_offset)]
+                  "--port-offset", str(args.port_offset)]
+        if args.windows_redis_binary or args.redis_binary:
+            native += ["--redis-binary", args.windows_redis_binary or args.redis_binary]
         if args.redis_wsl and not args.windows_redis_binary:
             native.append("--redis-wsl")
         if args.cmake:
@@ -72,7 +79,9 @@ def main():
         translate = lambda path: subprocess.check_output(prefix + ["wslpath", "-a", Path(path).as_posix()], text=True).strip()
         linux = prefix + ["python3", translate(Path(__file__).resolve()), "--build-dir", args.linux_build_dir,
                           "--artifacts", translate(output / "linux"), "--case", args.case, "--mode", args.mode,
-                          "--jobs", str(args.jobs), "--redis-binary", args.redis_binary, "--port-offset", str(args.port_offset)]
+                          "--jobs", str(args.jobs), "--port-offset", str(args.port_offset)]
+        if args.redis_binary:
+            linux += ["--redis-binary", args.redis_binary]
         if args.asan:
             linux.append("--asan")
         if args.clock_faults:
@@ -83,12 +92,14 @@ def main():
         summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
         return int(any(codes))
 
+    args.redis_binary = find_redis(args.redis_binary)
     records = []
     def run(name, command):
         print("START", name, flush=True)
         env = os.environ.copy()
         if name == "test-safety" and not args.redis_wsl:
-            env["OI_SAFETY_REDIS_BINARY"] = str(Path(args.redis_binary).resolve())
+            # 不解符号链接：发行版的 redis-server 指向 redis-check-rdb，按调用名决定身份。
+            env["OI_SAFETY_REDIS_BINARY"] = str(Path(args.redis_binary).absolute())
         with (output / (name + ".log")).open("w", encoding="utf-8") as log:
             code = subprocess.run([str(part) for part in command], cwd=ROOT, stdout=log,
                                   stderr=subprocess.STDOUT, env=env).returncode

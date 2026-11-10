@@ -3,6 +3,7 @@
 #include "oi_rpcdata_allechores.h"
 #include "oi_rpcdata_holdreq.h"
 #include "oi_rpcdata_holdres.h"
+#include "oi_rpcdata_peernotereq.h"
 #include "oi_parser.h"
 #include "oi_rpc_call.h"
 #include "oi_rpc_coro.h"
@@ -91,10 +92,31 @@ static OI::Rpc::RpcTask HandleEncodingRegression(const OI::Rpc::RpcContext& stCo
 	co_return iResult;
 }
 
+::OI::Rpc::RpcTask IpcServer::HandlePeerProbe(const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::PeerProbeReq& stRequest,
+    ::OI::RpcData::PeerProbeRes& stResponse)
+{
+	if (stRequest.iNotify != 0)
+	{
+		::OI::RpcData::PeerNoteReq stNote;
+		stNote.iTag = stRequest.iTag;
+		stNote.iServiceId = m_iServiceId;
+		const int32_t iRet = stContext.Notify(stNote);
+		if (iRet != OI_OK)
+		{
+			co_return iRet;
+		}
+	}
+	stResponse.iTag = stRequest.iTag;
+	stResponse.iServiceId = m_iServiceId;
+	co_return 0;
+}
+
 bool IpcServer::Init()
 {
+	TryGetConfig("Service.id", m_iServiceId);
 	OI_RPC_BIND(AllEcho, HandleAllEcho);
 	OI_RPC_BIND(Hold, HandleHold);
+	OI_RPC_BIND_SELF(PeerProbe, IpcServer, HandlePeerProbe);
 	bool bEncodingRegression = false;
 	TryGetConfig("Regression.encoding_failure", bEncodingRegression);
 	if (bEncodingRegression)

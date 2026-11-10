@@ -8,22 +8,27 @@
 #include "oi_rpc_session_manager.h"
 #include "oi_lock.h"
 #include "oi_duration.h"
+#include "oi_singleton.h"
 #include <algorithm>
 #include <atomic>
 #include <coroutine>
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
 #include "oi_coro.h"
 
+struct uv_timer_s;
 
 namespace OI
 {
@@ -45,6 +50,19 @@ struct RpcContext
 	::OI::Net::SessionManager& stManager;
 	// 请求所在的会话。回包发回这里。
 	sid_t iSessionId;
+
+	// 发回这次请求所在的会话。
+	template <typename Msg>
+	int32_t Notify(const Msg& stMessage) const
+	{
+		return RpcNotify(stManager, iSessionId, stMessage);
+	}
+	// 仍用这次请求的管理器，发给另一条会话。
+	template <typename Msg>
+	int32_t Notify(sid_t iSessionIdLocal, const Msg& stMessage) const
+	{
+		return RpcNotify(stManager, iSessionIdLocal, stMessage);
+	}
 };
 
 template <typename T>
@@ -707,8 +725,6 @@ struct RouteConnectionInfo
 	uint64_t iIncompleteMilliseconds = 0;
 	std::pair<size_t, size_t> stPendingLimits;
 };
-RouteConnectionInfo GetRouteConnectionInfo(const RpcSender& stSender);
-std::shared_ptr<void> GetRouteConnectionOwner(const RpcSender& stSender);
 
 inline int32_t RouteError(ServiceRouteStatus iStatus)
 {
@@ -734,7 +750,6 @@ struct RoutePoolStats
 	size_t iEvicted = 0;
 	int64_t iIdleMilliseconds = 0;
 };
-RoutePoolStats GetRoutePoolStats();
 
 enum class ServicePick
 {
@@ -743,19 +758,54 @@ enum class ServicePick
 	All,
 };
 
-// pManager 是发起调用的管理器。不带分区且它自己就在看这个名字时，直接用它，不再另连。
-// 返回 true 表示不用再问注册表，结果已经写进 stRoute。
-bool PrepareRoute(::OI::Net::SessionManager* pManager, const std::string& sName, ServicePick iPick, const std::string& sZone, ServiceRoute& stRoute);
-bool PrepareZones(::OI::Net::SessionManager* pManager, const std::string& sName, const std::vector<int32_t>& vZoneIds, ServiceRoute& stRoute, std::vector<std::string>& vZones);
-// bBatch 为真时只接受 name.*，否则只接受 name 或 name.分区。
-// 返回 true 表示目标字符串非法，结果在 stRoute。否则写出要拉取的名字、挑选方式和分区。
-bool PrepareTarget(const std::string& sTarget, bool bBatch, ServiceRoute& stRoute, std::string& sName, ServicePick& iPick, std::string& sZone);
-// 拉取不占线程。fnDone 只调用一次，里面不能再等注册表。
-void PullRoute(const std::string& sName, std::function<void(int32_t, const std::vector<::OI::Base::ServiceInstance>&)> fnDone, int64_t iTimeoutMilliseconds = 1000);
-// 名单完成后的路由只引用固定地址的池连接；不读取或复用可能切换地址的订阅管理器。
-ServiceRoute FinishRoute(const std::string& sName, ServicePick iPick, const std::string& sZone, int32_t iCode, const std::vector<::OI::Base::ServiceInstance>& vList, ::OI::Net::SessionManager* pManager = nullptr);
-// vClients 与分区号等长，空指针表示这个分区当前没登记。
-ServiceRoute FinishZones(const std::string& sName, const std::vector<std::string>& vZones, int32_t iCode, const std::vector<::OI::Base::ServiceInstance>& vList, ::OI::Net::SessionManager* pManager = nullptr);
+// 进程内只有这一个路由管理器。按名单选定的固定地址连接都挂在它上面，共用 SID 空间和断连清理。
+class RouteManager final : public ProtoSessionManager
+{
+	DECLARE_SINGLETON(RouteManager)
+	struct Entry
+	{
+		std::shared_ptr<PeerConnection> pClient;
+		int64_t iIdleSinceMilliseconds = 0;
+	};
+	::OI::Thread::Mutex m_stPoolLocker;
+	std::map<std::tuple<std::string, std::string, PeerPolicy>, Entry> m_mClients;
+	size_t m_iMaxClients = 1024;
+	size_t m_iEvicted = 0;
+	int64_t m_iIdleMilliseconds = 60000;
+	// 句柄跟进程走，不关。
+	uv_timer_s* m_pTimer = nullptr;
+	bool m_bStopped = false;
+	std::once_flag m_stArmOnce;
+	std::atomic<uint32_t> m_iCursor{0};
+
+	RouteManager();
+	// 在 poll 线程。bStop 为真时全部退役，之后不再出借。
+	void Sweep(bool bStop);
+	void Stop();
+	void Arm();
+	static void OnArm(void* pArgument);
+	static void OnSweep(uv_timer_s* pTimer);
+	// 池满或已停返回空。
+	std::shared_ptr<RpcSender> Lease(const std::string& sIp, const std::string& sPort, ::OI::Net::SessionManager* pManager);
+	bool AddClient(ServiceRoute& stRoute, const std::string& sIp, const std::string& sPort, ::OI::Net::SessionManager* pManager);
+
+  public:
+	const std::string GetIDString() override;
+	void OnAddSession(::OI::Net::Session*) override
+	{
+	}
+	void OnDelSession(const ::OI::Net::Session*) override
+	{
+	}
+	// 名单完成后的路由只引用固定地址的池连接；不读取或复用可能切换地址的订阅管理器。
+	ServiceRoute Resolve(const std::string& sName, ServicePick iPick, const std::string& sZone, int32_t iCode, const std::vector<::OI::Base::ServiceInstance>& vList, ::OI::Net::SessionManager* pManager = nullptr);
+	// vClients 与分区号等长，空指针表示这个分区当前没登记。
+	ServiceRoute ResolveZones(const std::string& sName, const std::vector<std::string>& vZones, int32_t iCode, const std::vector<::OI::Base::ServiceInstance>& vList, ::OI::Net::SessionManager* pManager = nullptr);
+	// 不是池连接返回空。
+	RouteConnectionInfo ConnectionInfo(const RpcSender& stSender);
+	std::shared_ptr<void> ConnectionOwner(const RpcSender& stSender);
+	RoutePoolStats Stats();
+};
 
 // 挂起等注册表，不在调用线程里同步等。快路径（名字非法、自己已经连着）不挂起。
 struct RouteAwaiter
@@ -792,23 +842,7 @@ struct RouteAwaiter
 	bool await_suspend(std::coroutine_handle<Promise> stHandleLocal)
 	{
 		stHandle = stHandleLocal;
-		if (iKind == Kind::Target)
-		{
-			if (PrepareTarget(sTarget, bBatch, stRoute, sName, iPick, sZone))
-			{
-				bResolved = true;
-				return false;
-			}
-		}
-		if (iKind == Kind::Zones)
-		{
-			if (PrepareZones(pManager, sName, vZones, stRoute, vZoneNames))
-			{
-				bResolved = true;
-				return false;
-			}
-		}
-		else if (PrepareRoute(pManager, sName, iPick, sZone, stRoute))
+		if (Prepare())
 		{
 			bResolved = true;
 			return false;
@@ -820,23 +854,7 @@ struct RouteAwaiter
 			return false;
 		}
 		const int64_t iRemaining = stDeadline.Remaining().iMilliseconds;
-		PullRoute(sName, [this](int32_t iCodeLocal, const std::vector<::OI::Base::ServiceInstance>& vListLocal)
-		{
-			iCode = iCodeLocal;
-			try
-			{
-				vList = vListLocal;
-			}
-			catch (...)
-			{
-				iCode = OI_ERR_FAIL;
-			}
-			// Waiting→Ready 才调度。回包先到时门已是 Ready，下面的 exchange(Waiting) 会选择不挂起。
-			if (iGate.exchange(OI::Coro::Gate::Ready, std::memory_order_acq_rel) == OI::Coro::Gate::Waiting)
-			{
-				OI::Coro::Schedule(stHandle);
-			}
-		}, iRemaining > 0 ? (std::min)(iRemaining, int64_t(1000)) : 1000);
+		Pull(iRemaining > 0 ? (std::min)(iRemaining, int64_t(1000)) : 1000);
 		// 看见 Ready 表示回包已经写完，不挂起。
 		return iGate.exchange(OI::Coro::Gate::Waiting, std::memory_order_acq_rel) != OI::Coro::Gate::Ready;
 	}
@@ -858,10 +876,22 @@ struct RouteAwaiter
 		}
 		if (iKind == Kind::Zones)
 		{
-			return FinishZones(sName, vZoneNames, iCode, vList, pManager);
+			return RouteManager::GetInstance().ResolveZones(sName, vZoneNames, iCode, vList, pManager);
 		}
-		return FinishRoute(sName, iPick, sZone, iCode, vList, pManager);
+		return RouteManager::GetInstance().Resolve(sName, iPick, sZone, iCode, vList, pManager);
 	}
+	// bBatch 为真时只接受 name.*，否则只接受 name 或 name.分区。合法时写出要拉取的名字、挑选方式和分区。
+	static bool SplitTarget(const std::string& sTargetLocal, bool bBatchLocal, std::string& sNameLocal, ServicePick& iPickLocal, std::string& sZoneLocal);
+
+  private:
+	// 返回 true 表示不用再问注册表，结果已经写进 stRoute。
+	bool Prepare();
+	// pManager 不带分区且自己就在看这个名字时，直接用它，不再另连。
+	bool PrepareNamed();
+	bool PrepareZones();
+	// 拉取不占线程。回包写进 iCode、vList 后过完成门。
+	void Pull(int64_t iTimeoutMilliseconds);
+	static bool ValidToken(const std::string& sText);
 };
 
 }
@@ -990,11 +1020,10 @@ template <typename Req>
     typename RpcProtoId<Req>::Response& stResponse, ::OI::Timer::MS stTimeout = ::OI::Timer::Seconds(180))
 {
 	// 本函数不是协程，解析/拷贝在返回前完成；任务帧按值保存选路参数。
-	ServiceRoute stRoute;
 	std::string sName;
 	std::string sZone;
 	ServicePick iPick = ServicePick::Any;
-	if (PrepareTarget(sService, false, stRoute, sName, iPick, sZone))
+	if (!RouteAwaiter::SplitTarget(sService, false, sName, iPick, sZone))
 	{
 		return FailRpcOutput(OI_ERR_FAIL);
 	}
@@ -1144,6 +1173,75 @@ template <typename Res, typename Req>
 auto ProtoClientManager::CallMany(const std::vector<int32_t>& vZoneIds, const Req& stRequest, ::OI::Timer::MS stTimeout)
 {
 	return CallRouted<Res>(RouteAwaiter::Kind::Zones, this, sServiceName, ServicePick::Any, std::string(), vZoneIds, std::string(), false, stRequest, stTimeout);
+}
+
+template <typename Res>
+struct PeerResult
+{
+	int32_t iInstanceId;
+	RpcResult<Res> stResult;
+};
+
+// 调用期间持有发送目标，实例中途退役也不会释放它。
+template <typename Req>
+OI::Coro::TaskResult<int32_t> RunPeerOutput(std::shared_ptr<RpcSender> pSender, std::optional<Req> stRequest,
+    typename RpcProtoId<Req>::Response& stResponse, ::OI::Timer::MS stTimeout)
+{
+	RpcRequestRelease<Req> stRelease{stRequest};
+	if (!pSender)
+	{
+		co_return OI_ERR_CONNECT;
+	}
+	auto stCall = MakeRpcCallAwaiter(*pSender, *stRequest, stResponse, stTimeout);
+	co_return co_await stCall;
+}
+
+template <typename Res, typename Req>
+OI::Coro::TaskResult<std::vector<PeerResult<Res>>> RunPeerBatch(std::vector<int32_t> vIds, ServiceRoute stRoute, Req stRequest, RpcDeadline stDeadline)
+{
+	auto stBatch = SendRouted<Res>(std::move(stRoute), std::move(stRequest), stDeadline, 0);
+	std::vector<RpcResult<Res>> vResults = co_await stBatch;
+	std::vector<PeerResult<Res>> vPeers;
+	vPeers.reserve(vResults.size());
+	for (size_t iIndexLocal = 0; iIndexLocal < vResults.size() && iIndexLocal < vIds.size(); ++iIndexLocal)
+	{
+		vPeers.push_back(PeerResult<Res>{vIds[iIndexLocal], std::move(vResults[iIndexLocal])});
+	}
+	co_return vPeers;
+}
+
+template <typename Msg>
+int32_t ProtoMultiClientManager::NotifyPeer(int32_t iInstanceId, const Msg& stMessage)
+{
+	const sid_t iSessionIdLocal = ConnectedSid(iInstanceId);
+	if (iSessionIdLocal == INVALID_SID)
+	{
+		return OI_ERR_CONNECT;
+	}
+	return RpcNotify(*this, iSessionIdLocal, stMessage);
+}
+
+template <typename Req>
+[[nodiscard]] auto ProtoMultiClientManager::Call(int32_t iInstanceId, Req stRequest, typename RpcProtoId<Req>::Response& stResponse,
+    ::OI::Timer::MS stTimeout)
+{
+	return RunPeerOutput<Req>(PeerSender(iInstanceId), std::optional<Req>(std::in_place, std::move(stRequest)), stResponse, stTimeout);
+}
+
+template <typename Req>
+[[nodiscard]] auto ProtoMultiClientManager::CallAny(Req stRequest, typename RpcProtoId<Req>::Response& stResponse, ::OI::Timer::MS stTimeout)
+{
+	return RunPeerOutput<Req>(AnySender(), std::optional<Req>(std::in_place, std::move(stRequest)), stResponse, stTimeout);
+}
+
+template <typename Res, typename Req>
+auto ProtoMultiClientManager::CallAll(const Req& stRequest, ::OI::Timer::MS stTimeout)
+{
+	static_assert(std::is_same_v<Res, typename RpcProtoId<Req>::Response>, "RPC response type does not match the request");
+	std::vector<int32_t> vIds;
+	ServiceRoute stRoute;
+	AllSenders(vIds, stRoute);
+	return RunPeerBatch<Res>(std::move(vIds), std::move(stRoute), stRequest, RpcDeadline(stTimeout));
 }
 
 }

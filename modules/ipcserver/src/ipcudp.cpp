@@ -37,7 +37,7 @@ const std::string IpcUdp::GetIDString()
 
 ::OI::Rpc::RpcTask IpcUdp::HandleNote(const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::UdpNoteReq& stRequest)
 {
-	co_return ::OI::Rpc::RpcNotify(stContext.stManager, stContext.iSessionId, stRequest);
+	co_return stContext.Notify(stRequest);
 }
 
 bool IpcUdp::Init()
