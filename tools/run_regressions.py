@@ -614,6 +614,7 @@ def run(case, args):
                 assert "multi call by instance one=1 two=2 none=-3 bad=0" in text
                 assert re.search(r"multi call any one=[1-9]\d* two=[1-9]\d* failed=0 bad=0", text)
                 assert "multi call all slots=2 bad=0" in text
+                assert "multi fixed swap reject=1 two=2 back=1 same=1 connected=1 bad=0" in text
                 assert "multi reverse notify call=1 notify=0 none=-3 received=2 wrong=0 bad=0" in text
                 assert "multi peer down disconnect=1 gone=1 one=1 two=-3 bad=0" in text
                 assert re.search(r"multi peer back listed=1 two=2 connects=[2-9]\d* bad=0", text)

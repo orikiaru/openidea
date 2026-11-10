@@ -282,6 +282,11 @@ class ProtoMultiClientManager : public ProtoSessionManager
 	void Start();
 	// 单地址建连不适用于这里。
 	ConnectAwaiter StartClient() = delete;
+	// 写死地址时换一台，Init 之后调用：旧连接退役，在途调用回 OI_ERR_CONNECT；实例号仍是 0，Start 过就马上连新地址。
+	// 配了 service 或地址为空返回 false。地址没变什么都不做。
+	bool UseAddress(const std::string& sIp, const std::string& sPortLocal);
+	// 名单里至少有一台连着。
+	bool IsConnect();
 	// 当前名单，按实例号升序。
 	std::vector<int32_t> InstanceIds();
 	// 没这台或没连上返回 INVALID_SID。

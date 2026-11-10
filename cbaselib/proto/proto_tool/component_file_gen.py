@@ -52,7 +52,7 @@ class ComponentFileGen:
         printf("__COMPONENT_NAME__ Init error\n");
         return -1;
     }
-    __COMPONENT_NAME__::GetInstance().StartClient();
+    __COMPONENT_NAME__::GetInstance().Start();
 '''     
         return self.DoReplace(file_data)
     
@@ -70,6 +70,7 @@ type = ""
     def GenClientComponentConfig(self):
         file_data = r'''
 [__COMPONENT_NAME__]
+service = ""	#留空只连下面这一台，实例号 0；填服务名就连注册表里的每一台
 ip = ""
 port = ""
 type = ""
@@ -110,45 +111,58 @@ type = ""
     
     def GenServerHeader(self):
         file_data = '''#pragma once
-#include "oi_protocol.h"
-#include "oi_rpc_call.h"
+#include <ctime>
 #include "oi_net.h"
+#include "oi_rpc_coro.h"
+#include "oi_singleton.h"
 
+// 配置段名就是 GetIDString()。
 class __COMPONENT_NAME__ : public OI::Rpc::ProtoSessionManager
 {
-	static __COMPONENT_NAME__ inst;
-public:
-	__COMPONENT_NAME__(){}
+	DECLARE_SINGLETON(__COMPONENT_NAME__)
+	__COMPONENT_NAME__();
+
+  public:
 	virtual ~__COMPONENT_NAME__();
-	bool Init();
-	static __COMPONENT_NAME__& GetInstance() { return inst; }
-	virtual const std::string GetIDString();
-private:
-	virtual void OnAddSession(OI::Net::Session* pSession);
-	virtual void OnDelSession(const OI::Net::Session* pSession);
-};        
+	bool Init() override;
+	const std::string GetIDString() override;
+	// 每秒一次，在 poll 线程。不要挂协程或等待。
+	void OnSecondUpdate(time_t iNow);
+
+  private:
+	void OnAddSession(OI::Net::Session* pSession) override;
+	void OnDelSession(const OI::Net::Session* pSession) override;
+};
 '''
         file_data = self.DoReplace(file_data)
         return file_data
     
     def GenClientHeader(self):
         file_data = '''#pragma once
-#include "oi_protocol.h"
-#include "oi_rpc_call.h"
+#include <ctime>
 #include "oi_net.h"
+#include "oi_rpc_coro.h"
+#include "oi_singleton.h"
 
-class __COMPONENT_NAME__ : public OI::Rpc::ProtoClientManager
+// 配置段名就是 GetIDString()。段里 service 留空只连 ip/port 这一台，实例号 0；填服务名就连注册表里的每一台。
+// 按实例号 Call(id, ...)，任选一台 CallAny，每台一份 CallAll。
+class __COMPONENT_NAME__ : public OI::Rpc::ProtoMultiClientManager
 {
-	static __COMPONENT_NAME__ inst;
-public:
-	__COMPONENT_NAME__(){}
+	DECLARE_SINGLETON(__COMPONENT_NAME__)
+	__COMPONENT_NAME__();
+
+  public:
 	virtual ~__COMPONENT_NAME__();
-	bool Init();
-	static __COMPONENT_NAME__& GetInstance()  { return inst; }
-	virtual const std::string GetIDString();
-private:
-	virtual void OnClientConnect(OI::Net::Session* pSession);
-	virtual void OnClientDisconnect(const OI::Net::Session* pSession);
+	bool Init() override;
+	const std::string GetIDString() override;
+	// 某台连上，连上前暂存的请求已补发，在 poll 线程。
+	void OnPeerConnect(int32_t iInstanceId, sid_t iSessionId) override;
+	// 每秒一次，在 poll 线程。不要挂协程或等待。
+	void OnSecondUpdate(time_t iNow);
+
+  protected:
+	// 某台断开，在 poll 线程。这台的在途调用已经回 OI_ERR_CONNECT。
+	void OnPeerDisconnect(int32_t iInstanceId, sid_t iSessionId) override;
 };
 '''
         file_data = self.DoReplace(file_data)
@@ -157,32 +171,34 @@ private:
     def GenClientCpp(self):
         file_data ='''#include "__HEADER_FILE_NAME__"
 
-__COMPONENT_NAME__ __COMPONENT_NAME__::inst;
+__COMPONENT_NAME__::__COMPONENT_NAME__()
+{
+}
 
 __COMPONENT_NAME__::~__COMPONENT_NAME__()
 {
-
 }
 
 bool __COMPONENT_NAME__::Init()
 {
-	return OI::Rpc::ProtoSessionManager::Init();
+	return OI::Rpc::ProtoMultiClientManager::Init();
 }
 
 const std::string __COMPONENT_NAME__::GetIDString()
 {
-    return "__COMPONENT_NAME__";
+	return "__COMPONENT_NAME__";
 }
 
-
-void __COMPONENT_NAME__::OnClientConnect(OI::Net::Session* pSession)
+void __COMPONENT_NAME__::OnPeerConnect(int32_t iInstanceId, sid_t iSessionId)
 {
-    
 }
 
-void __COMPONENT_NAME__::OnClientDisconnect(const OI::Net::Session* pSession)
+void __COMPONENT_NAME__::OnPeerDisconnect(int32_t iInstanceId, sid_t iSessionId)
 {
+}
 
+void __COMPONENT_NAME__::OnSecondUpdate(time_t iNow)
+{
 }
 '''
         file_data = self.DoReplace(file_data)
@@ -191,16 +207,12 @@ void __COMPONENT_NAME__::OnClientDisconnect(const OI::Net::Session* pSession)
     def GenServerCpp(self):
         file_data ='''#include "__HEADER_FILE_NAME__"
 
-__COMPONENT_NAME__ __COMPONENT_NAME__::inst;
+__COMPONENT_NAME__::__COMPONENT_NAME__()
+{
+}
 
 __COMPONENT_NAME__::~__COMPONENT_NAME__()
 {
-
-}
-
-const std::string __COMPONENT_NAME__::GetIDString()
-{
-    return "__COMPONENT_NAME__";
 }
 
 bool __COMPONENT_NAME__::Init()
@@ -208,16 +220,22 @@ bool __COMPONENT_NAME__::Init()
 	return OI::Rpc::ProtoSessionManager::Init();
 }
 
+const std::string __COMPONENT_NAME__::GetIDString()
+{
+	return "__COMPONENT_NAME__";
+}
+
+void __COMPONENT_NAME__::OnSecondUpdate(time_t iNow)
+{
+}
+
 void __COMPONENT_NAME__::OnAddSession(OI::Net::Session* pSession)
 {
-    
 }
 
 void __COMPONENT_NAME__::OnDelSession(const OI::Net::Session* pSession)
 {
-
 }
-
 '''
         file_data = self.DoReplace(file_data)
         return file_data

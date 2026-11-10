@@ -618,6 +618,37 @@ void ProtoMultiClientManager::Start()
 	}
 }
 
+bool ProtoMultiClientManager::UseAddress(const std::string& sIp, const std::string& sPortLocal)
+{
+	if (!sServiceName.empty() || sIp.empty() || sPortLocal.empty())
+	{
+		return false;
+	}
+	DefaultInit(sIp, sPortLocal, GetSessionType());
+	ApplyPeers({{0, {sIp, sPortLocal}}});
+	return true;
+}
+
+bool ProtoMultiClientManager::IsConnect()
+{
+	std::vector<std::shared_ptr<PeerConnection>> vPeers;
+	{
+		::OI::Thread::MutexGuard stLock(m_stPeerLocker);
+		for (const auto& [iInstanceId, pPeer] : m_mPeers)
+		{
+			vPeers.push_back(pPeer);
+		}
+	}
+	for (const auto& pPeer : vPeers)
+	{
+		if (pPeer->SessionId() != INVALID_SID)
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
 std::vector<int32_t> ProtoMultiClientManager::InstanceIds()
 {
 	std::vector<int32_t> vIds;

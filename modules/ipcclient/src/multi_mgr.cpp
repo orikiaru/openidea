@@ -87,8 +87,7 @@ void MultiMgr::Start()
 	});
 }
 
-// 成功回服务端的 [Service] id，失败回错误码，标记对不上回 OI_ERR_FAIL。
-static OI::Coro::TaskResult<int32_t> ProbeOnce(MultiClient& stClient, int32_t iInstanceId, int32_t iTag, int32_t iNotify)
+OI::Coro::TaskResult<int32_t> MultiMgr::ProbeOnce(MultiClient& stClient, int32_t iInstanceId, int32_t iTag, int32_t iNotify)
 {
 	::OI::RpcData::PeerProbeReq stRequest;
 	stRequest.iTag = iTag;
@@ -102,7 +101,7 @@ static OI::Coro::TaskResult<int32_t> ProbeOnce(MultiClient& stClient, int32_t iI
 	co_return stResponse.iTag == iTag ? stResponse.iServiceId : OI_ERR_FAIL;
 }
 
-static OI::Coro::TaskResult<bool> WaitFor(std::function<bool()> fnReady, int64_t iMilliseconds)
+OI::Coro::TaskResult<bool> MultiMgr::WaitFor(std::function<bool()> fnReady, int64_t iMilliseconds)
 {
 	const int64_t iDeadlineMilliseconds = ::OI::Timer::SteadyMilliseconds() + iMilliseconds;
 	while (!fnReady())
@@ -116,7 +115,7 @@ static OI::Coro::TaskResult<bool> WaitFor(std::function<bool()> fnReady, int64_t
 	co_return true;
 }
 
-static std::string JoinIds(const std::vector<int32_t>& vIds)
+std::string MultiMgr::JoinIds(const std::vector<int32_t>& vIds)
 {
 	std::string sText;
 	for (int32_t iId : vIds)
@@ -128,6 +127,75 @@ static std::string JoinIds(const std::vector<int32_t>& vIds)
 		sText += std::to_string(iId);
 	}
 	return sText.empty() ? std::string("none") : sText;
+}
+
+OI::Coro::TaskResult<int32_t> MultiMgr::SwapFixed()
+{
+	// 走注册表的不能改地址。
+	const bool bReject = !m_stPeers.UseAddress("127.0.0.1", "1") && !m_stFixed.UseAddress("", "1");
+
+	struct Found
+	{
+		std::string sIp;
+		std::string sPort;
+		std::atomic<bool> bDone{false};
+	};
+	auto pFound = std::make_shared<Found>();
+	::OI::Base::RegistryClient::GetInstance().PullAsync("peerserver", [pFound](int32_t iCode, const std::vector<::OI::Base::ServiceInstance>& vList)
+	{
+		for (const auto& stInst : vList)
+		{
+			if (iCode == OI_OK && stInst.iId == 2)
+			{
+				pFound->sIp = stInst.sIp;
+				pFound->sPort = stInst.sPort;
+			}
+		}
+		pFound->bDone.store(true, std::memory_order_release);
+	});
+	const bool bPulled = co_await WaitFor([pFound]()
+	{
+		return pFound->bDone.load(std::memory_order_acquire);
+	}, 3000);
+	const bool bListed = bPulled && !pFound->sPort.empty();
+
+	const std::string sOldIp = m_stFixed.GetStrIP();
+	const std::string sOldPort = m_stFixed.GetStrPort();
+	int32_t iTwo = OI_ERR_FAIL;
+	bool bSwapped = false;
+	if (bListed)
+	{
+		const int32_t iConnects = m_stFixed.Connects(0);
+		const int32_t iDisconnects = m_stFixed.Disconnects(0);
+		bSwapped = m_stFixed.UseAddress(pFound->sIp, pFound->sPort) && m_stFixed.GetStrPort() == pFound->sPort;
+		bSwapped = (co_await WaitFor([this, iConnects, iDisconnects]()
+		{
+			return m_stFixed.Connects(0) > iConnects && m_stFixed.Disconnects(0) > iDisconnects;
+		}, 5000)) &&
+		           bSwapped;
+		iTwo = co_await ProbeOnce(m_stFixed, 0, 61, 0);
+	}
+
+	const int32_t iConnects = m_stFixed.Connects(0);
+	const bool bBackCall = m_stFixed.UseAddress(sOldIp, sOldPort);
+	const bool bBackUp = co_await WaitFor([this, iConnects]()
+	{
+		return m_stFixed.Connects(0) > iConnects;
+	}, 5000);
+	const int32_t iBack = co_await ProbeOnce(m_stFixed, 0, 62, 0);
+
+	// 地址没变：不断开，照常能打。
+	const int32_t iDisconnects = m_stFixed.Disconnects(0);
+	const bool bSameCall = m_stFixed.UseAddress(sOldIp, sOldPort);
+	const int32_t iSame = co_await ProbeOnce(m_stFixed, 0, 63, 0);
+	const bool bSame = bSameCall && iSame == 1 && m_stFixed.Disconnects(0) == iDisconnects;
+
+	const bool bConnected = m_stFixed.IsConnect();
+	const int32_t iBad = (bReject && bListed && bSwapped && iTwo == 2 && bBackCall && bBackUp && iBack == 1 && bSame && bConnected) ? 0 : 1;
+	std::printf("multi fixed swap reject=%d two=%d back=%d same=%d connected=%d bad=%d\n", bReject ? 1 : 0, iTwo, iBack, bSame ? 1 : 0,
+	    bConnected ? 1 : 0, iBad);
+	std::fflush(stdout);
+	co_return iBad;
 }
 
 OI::Coro::Task MultiMgr::Run()
@@ -198,6 +266,8 @@ OI::Coro::Task MultiMgr::Run()
 		bAllOk = stPeer.iInstanceId == (int32_t)iIndex + 1 && stPeer.stResult.GetRet() == OI_OK && stPeer.stResult.GetRes().iTag == 40 && stPeer.stResult.GetRes().iServiceId == stPeer.iInstanceId;
 	}
 	fnReport("multi call all slots=%d bad=%d\n", bAllOk ? 0 : 1, (int32_t)vAll.size());
+
+	iBadTotal += co_await SwapFixed();
 
 	// 服务端顺着请求所在的连接推回来。第二台用单向消息触发，顺带验 NotifyPeer。
 	const int32_t iPushOne = co_await ProbeOnce(m_stPeers, 1, 51, 1);

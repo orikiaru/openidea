@@ -98,7 +98,11 @@ Redis 连不上或卡住时，登记和续期回失败，客户端下一次心�
 | `CallAll<Res>(req)` | 按发送这一刻的名单每台一份，先全部发出再等。结果按实例号升序，每格带 `iInstanceId`。 |
 | `NotifyPeer(实例号, msg)` | 单向消息。没连上回 `OI_ERR_CONNECT`。 |
 
-服务端推下来的消息照常用 `OI_NOTIFY_BIND_SELF` 绑定，`OI_RPC_SELF(类型)` 拿到的就是这个管理器。`InstanceIds()` 给当前名单，`ConnectedSid(实例号)` 给这台当前的会话。回归见 testing.md 的 multi。
+服务端推下来的消息照常用 `OI_NOTIFY_BIND_SELF` 绑定，`OI_RPC_SELF(类型)` 拿到的就是这个管理器。`InstanceIds()` 给当前名单，`ConnectedSid(实例号)` 给这台当前的会话，`IsConnect()` 表示至少有一台连着。
+
+写死地址时运行中要换服务器，在 `Init` 之后调 `UseAddress(ip, port)`：旧连接退役，在途调用回 `OI_ERR_CONNECT`，实例号仍是 0，`Start` 过就马上连新地址，`GetStrIP()`、`GetStrPort()` 跟着变。配了 `service` 时返回 false，地址没变什么都不做。
+
+模块生成器生成的 Client 组件默认就是这个类，Server 和 Client 都是单例，带一个空的 `OnSecondUpdate(time_t)`。回归见 testing.md 的 multi。
 
 ## 应用侧看不到 Session
 
