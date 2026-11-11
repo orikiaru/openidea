@@ -1,5 +1,6 @@
 #include "multi_mgr.h"
 #include "oi_config.h"
+#include "oi_poll.h"
 #include "oi_rpcdata_peerprobereq.h"
 #include "oi_rpcdata_peerproberes.h"
 #include "rpc_ids.h"
@@ -7,6 +8,28 @@
 #include <cstdio>
 #include <functional>
 #include <vector>
+
+class ListWatchProbe : public ::OI::Net::SessionManager
+{
+  public:
+	std::vector<::OI::Base::ServiceInstance> vList;
+	int32_t iUpdates = 0;
+	void ApplyServiceList(const std::vector<::OI::Base::ServiceInstance>& vNewList) override
+	{
+		vList = vNewList;
+		++iUpdates;
+	}
+	::OI::Net::Session* CloneSession() override
+	{
+		return nullptr;
+	}
+	void OnAddSession(::OI::Net::Session*) override
+	{
+	}
+	void OnDelSession(const ::OI::Net::Session*) override
+	{
+	}
+};
 
 MultiClient::MultiClient(std::string sName)
     : m_sName(std::move(sName))
@@ -49,7 +72,8 @@ int32_t MultiClient::Disconnects(int32_t iInstanceId)
 // 推送得从这台自己的连接、进这个管理器。注册表实例号和服务端 [Service] id 相同。
 ::OI::Rpc::RpcTask MultiClient::HandleNote(const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::PeerNoteReq& stRequest)
 {
-	if (&stContext.stManager != this || stContext.iSessionId == INVALID_SID || stContext.iSessionId != ConnectedSid(stRequest.iServiceId))
+	const int32_t iInstanceId = m_sName == "IpcMultiFixed" ? 0 : stRequest.iServiceId;
+	if (&stContext.stManager != this || stContext.iSessionId == INVALID_SID || stContext.iSessionId != ConnectedSid(iInstanceId))
 	{
 		m_iNoteBad.fetch_add(1);
 		co_return OI_OK;
@@ -208,8 +232,76 @@ OI::Coro::Task MultiMgr::Run()
 		std::fflush(stdout);
 	};
 
+	// 第二个观察者初次拉取失败后，下一次成功拉取即使名单没变也要收到完整名单。
+	struct WatchResult
+	{
+		std::atomic<bool> bDone{false};
+		bool bRecovered = false;
+	};
+	static WatchResult stWatchResult;
+	auto* pWatchResult = &stWatchResult;
+	::OI::Net::Poll::GetInstance().CallOnLoop([](void* pArgument)
+	{
+		auto* pResult = static_cast<WatchResult*>(pArgument);
+		static ListWatchProbe stFirstWatcher;
+		static ListWatchProbe stSecondWatcher;
+		::OI::Base::ServiceInstance stInstance;
+		stInstance.sName = "multi-watch-probe";
+		stInstance.iId = 17;
+		stInstance.sIp = "127.0.0.1";
+		stInstance.sPort = "12345";
+		const std::vector<::OI::Base::ServiceInstance> vWatchList{stInstance};
+		auto& stTable = ::OI::Base::ServiceTable::GetInstance();
+		stTable.WatchList(&stFirstWatcher, stInstance.sName, vWatchList);
+		stTable.Apply({stInstance.sName}, vWatchList);
+		const int32_t iFirstUpdates = stFirstWatcher.iUpdates;
+		stTable.WatchList(&stSecondWatcher, stInstance.sName, {});
+		stTable.Apply({stInstance.sName}, vWatchList);
+		pResult->bRecovered = stFirstWatcher.iUpdates == iFirstUpdates && stSecondWatcher.iUpdates == 1 &&
+		                      stSecondWatcher.vList.size() == 1 && stSecondWatcher.vList[0].iId == 17;
+		pResult->bDone.store(true, std::memory_order_release);
+	}, pWatchResult);
+	const bool bWatchDone = co_await WaitFor([pWatchResult]()
+	{
+		return pWatchResult->bDone.load(std::memory_order_acquire);
+	}, 5000);
+	const bool bWatchRecovered = bWatchDone && pWatchResult->bRecovered;
+	fnReport("multi watcher unchanged recovered=%d bad=%d\n", bWatchRecovered ? 0 : 1, bWatchRecovered ? 1 : 0);
+
 	// 写死地址：一台，实例号 0。没连上就发的调用先暂存，连上补发。
+	const auto stWaitBaseline = ::OI::Rpc::GetRpcWaitStats();
+	const bool bNotConnected = m_stFixed.ConnectedSid(0) == INVALID_SID;
+	::OI::RpcData::PeerProbeReq stEarlyNotify;
+	stEarlyNotify.iTag = 901;
+	stEarlyNotify.iNotify = 1;
+	const int32_t iEarlyNotify = m_stFixed.NotifyPeer(0, stEarlyNotify);
 	m_stFixed.Start();
+	const bool bEarlyDelivered = co_await WaitFor([this]()
+	{
+		return m_stFixed.Notes() == 1;
+	}, 5000);
+	fnReport("multi notify early accepted=%d delivered=%d bad=%d\n", bNotConnected && iEarlyNotify == OI_OK && bEarlyDelivered && m_stFixed.NoteBad() == 0 ? 0 : 1,
+	    iEarlyNotify, bEarlyDelivered ? 1 : 0);
+	const sid_t iOldSid = m_stFixed.ConnectedSid(0);
+	m_stFixed.CloseSession(iOldSid);
+	const bool bDisconnected = co_await WaitFor([this]()
+	{
+		return m_stFixed.Disconnects(0) >= 1;
+	}, 5000);
+	const int32_t iReconnectNotify = m_stFixed.NotifyAny(stEarlyNotify);
+	const bool bReconnectDelivered = co_await WaitFor([this]()
+	{
+		return m_stFixed.Notes() == 2;
+	}, 5000);
+	const bool bDrained = co_await WaitFor([stWaitBaseline]()
+	{
+		const auto stNow = ::OI::Rpc::GetRpcWaitStats();
+		return stNow.iCalls == stWaitBaseline.iCalls && stNow.iExpirations == stWaitBaseline.iExpirations &&
+		       stNow.iSessionEntries == stWaitBaseline.iSessionEntries;
+	}, 5000);
+	fnReport("multi notify reconnect disconnected=%d accepted=%d delivered=%d drained=%d bad=%d\n",
+	    bDisconnected && iReconnectNotify == OI_OK && bReconnectDelivered && bDrained && m_stFixed.NoteBad() == 0 ? 0 : 1,
+	    bDisconnected ? 1 : 0, iReconnectNotify, bReconnectDelivered ? 1 : 0, bDrained ? 1 : 0);
 	const int32_t iFixedEarly = co_await ProbeOnce(m_stFixed, 0, 1, 0);
 	const bool bFixedUp = co_await WaitFor([this]()
 	{

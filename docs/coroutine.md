@@ -267,7 +267,9 @@ static OI_NOTIFY_HANDLER(UdpNote, HandleNote)
 OI_NOTIFY_BIND(UdpNote, HandleNote);
 ```
 
-`OI_NOTIFY_HANDLER(Name, Function)` 提供 `stContext` 和 `stRequest`，返回值只用于日志，不发回对端。成员函数用 `OI_NOTIFY_BIND_SELF(Name, Type, Member)`，规则与 `OI_RPC_BIND_SELF` 相同。生成器要求每条 rpc 都写 response，单向协议也要声明一个 `NameRes`，线上不会出现。服务端执行额度满时单向消息直接丢弃，不回 `OI_ERR_BUSY`。
+`OI_NOTIFY_HANDLER(Name, Function)` 提供 `stContext` 和 `stRequest`。成员函数用 `OI_NOTIFY_BIND_SELF(Name, Type, Member)`，规则与 `OI_RPC_BIND_SELF` 相同。生成器要求每条 rpc 都写 response。调用号为 0 时处理返回码不发回对端，服务端执行额度满时直接丢弃，不回 `OI_ERR_BUSY`。
+
+`ProtoMultiClientManager` 的 `NotifyPeer` 和 `NotifyAny` 复制消息并启动异步 RPC 任务，复用协议号和连接的暂存、重连路径，默认超时 180 秒。返回 `OI_OK` 只表示任务已启动，发送、回执或超时失败由任务错误处理器报告。接收端需使用带 RPC 适配的新版 `HandleNotify`：对非零调用号回传处理返回码，成功时附带默认构造的关联 response；执行额度满时返回 `OI_ERR_BUSY`。旧版只处理调用号 0 的接收端不会为包装通知回包，发送任务会等待到超时。
 
 定时器回调和停止回调抛异常时，交给 `OI::Thread::SetTaskErrorHandler`，默认输出 stderr。处理器自身抛异常也不会穿透调用方。服务端响应编码失败会丢弃半包，重新发送 `OI_ERR_FAIL` 的无响应体回执；无法编码或发送失败回执时关闭连接，避免调用方只靠超时发现错误。
 

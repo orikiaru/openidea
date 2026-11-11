@@ -186,6 +186,13 @@ OI::Coro::Task UdpMgr::Run()
 	fnReport("udp notify sent=%d received=%d duplicate=%d bad=%d\n", (iReceived != m_iNotes || iDuplicate != 0) ? 1 : 0,
 	    m_iNotes, iReceived, iDuplicate);
 
+	// 向仅注册通知处理器的协议发送带调用号的请求，验证处理后的回执。
+	::OI::RpcData::UdpNoteReq stWrappedNote;
+	stWrappedNote.iSeq = 0;
+	::OI::RpcData::UdpNoteRes stWrappedResponse;
+	const int32_t iWrappedRet = co_await ::OI::Rpc::RpcCall(stManager, iSessionId, stWrappedNote, stWrappedResponse, ::OI::Timer::Seconds(3));
+	fnReport("udp notify rpc receipt=%d bad=%d\n", iWrappedRet == OI_OK ? 0 : 1, iWrappedRet);
+
 	const std::string sRejected = co_await Diagnose(iSessionId, ::OI::RpcData::UDP_PROBE_REJECT);
 	const std::string sRejectedExpect = "ret=" + std::to_string((int32_t)::OI::RpcData::UDP_ERR_REJECTED);
 	fnReport("udp protocol error code %s bad=%d\n", sRejected == sRejectedExpect ? 0 : 1, sRejected.c_str());

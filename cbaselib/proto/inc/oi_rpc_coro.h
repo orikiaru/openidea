@@ -202,52 +202,23 @@ void HandleRpc(F fnFunction)
 	HandleRpc<Req, typename RpcProtoId<Req>::Response>(std::move(fnFunction));
 }
 
-// 单向消息：调用号 0 + Msg，不回包。处理函数接收 (msg) 或 (context, msg)，返回 RpcTask 或 int32_t，返回码没人收，只是和 RPC 写法一致。
+// 调用号 0 不回包；RPC 包装通知复用默认响应与错误处理。
 template <typename Msg, typename F>
 OI::Coro::Task RunHandledNotify(F fnFunction, OI::Coro::Token iToken, ::OI::Net::SessionManager* pManager, sid_t iSessionId, ::OI::Base::BytesStream stBody)
 {
-	uint64_t iCallIdLocal = 0;
-	Msg stMessageLocal{};
-	const char* pStage = "decode_notify";
-	try
+	using Response = typename RpcProtoId<Msg>::Response;
+	auto fnAdapter = [fnFunction = std::move(fnFunction)](const RpcContext& stContext, Msg& stMessage, Response&) mutable
 	{
-		stBody >> iCallIdLocal;
-		stMessageLocal.deserialize(stBody);
-		pStage = "notify_handler";
-		RpcContext stContext{iToken, *pManager, iSessionId};
-		auto stInvoke = [pFunction = &fnFunction, pMessage = &stMessageLocal, pContext = &stContext]()
+		if constexpr (std::is_invocable_v<F&, Msg&>)
 		{
-			if constexpr (std::is_invocable_v<F&, Msg&>)
-			{
-				return (*pFunction)(*pMessage);
-			}
-			else
-			{
-				static_assert(std::is_invocable_v<F&, const RpcContext&, Msg&>, "notify handler must accept (msg) or (context, msg)");
-				return (*pFunction)(*pContext, *pMessage);
-			}
-		};
-		using Return = decltype(stInvoke());
-		if constexpr (std::is_same_v<Return, int32_t>)
-		{
-			stInvoke();
+			return fnFunction(stMessage);
 		}
 		else
 		{
-			static_assert(std::is_same_v<Return, RpcTask>, "notify handler must return RpcTask or int32_t");
-			co_await OI::Coro::InvokeTask(OI::Coro::TaskLaunch{iToken, false, false}, stInvoke);
+			return fnFunction(stContext, stMessage);
 		}
-	}
-	catch (::OI::Base::ParserException&)
-	{
-		ReportRpcError(iToken, iCallIdLocal, iSessionId, RpcProtoId<Msg>::iValue, pStage, std::current_exception());
-	}
-	catch (...)
-	{
-		ReportRpcError(iToken, iCallIdLocal, iSessionId, RpcProtoId<Msg>::iValue, pStage, std::current_exception());
-		OI::Coro::ReportTaskError(iToken, std::current_exception());
-	}
-	co_return;
+	};
+	return RunHandledRpc<Msg, Response>(std::move(fnAdapter), RpcProtoId<Msg>::iValue, iToken, pManager, iSessionId, std::move(stBody));
 }
 
 template <typename Msg, typename F>
@@ -1211,25 +1182,40 @@ OI::Coro::TaskResult<std::vector<PeerResult<Res>>> RunPeerBatch(std::vector<int3
 }
 
 template <typename Msg>
-int32_t ProtoMultiClientManager::NotifyPeer(int32_t iInstanceId, const Msg& stMessage)
+OI::Coro::Task RunPeerNotify(std::shared_ptr<RpcSender> pSender, Msg stMessage)
 {
-	const sid_t iSessionIdLocal = ConnectedSid(iInstanceId);
-	if (iSessionIdLocal == INVALID_SID)
+	auto stCall = RpcCall(*pSender, std::move(stMessage), ::OI::Timer::Seconds(180));
+	auto stResult = co_await stCall;
+	if (stResult.GetRet() != OI_OK)
+	{
+		throw std::runtime_error("RPC notification failed protocol=" + std::to_string(RpcProtoId<Msg>::iValue) + " code=" + std::to_string(stResult.GetRet()) + " call=" + std::to_string(stCall.iCallId));
+	}
+}
+
+template <typename Msg>
+int32_t StartPeerNotify(std::shared_ptr<RpcSender> pSender, const Msg& stMessage)
+{
+	if (!pSender)
 	{
 		return OI_ERR_CONNECT;
 	}
-	return RpcNotify(*this, iSessionIdLocal, stMessage);
+	OI::Coro::StartTask([pSender = std::move(pSender), stMessage](OI::Coro::Token) mutable
+	{
+		return RunPeerNotify(std::move(pSender), std::move(stMessage));
+	});
+	return OI_OK;
+}
+
+template <typename Msg>
+int32_t ProtoMultiClientManager::NotifyPeer(int32_t iInstanceId, const Msg& stMessage)
+{
+	return StartPeerNotify(PeerSender(iInstanceId), stMessage);
 }
 
 template <typename Msg>
 int32_t ProtoMultiClientManager::NotifyAny(const Msg& stMessage)
 {
-	const sid_t iSessionIdLocal = ConnectedAny();
-	if (iSessionIdLocal == INVALID_SID)
-	{
-		return OI_ERR_CONNECT;
-	}
-	return RpcNotify(*this, iSessionIdLocal, stMessage);
+	return StartPeerNotify(AnySender(), stMessage);
 }
 
 template <typename Req>

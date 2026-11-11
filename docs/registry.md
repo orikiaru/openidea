@@ -89,15 +89,17 @@ Redis 连不上或卡住时，登记和续期回失败，客户端下一次心�
 
 `Init` 之后名单已经有了，`Start` 对每台发起建连；不用 `StartClient`。连上回调 `OnPeerConnect(实例号, sid)`，断开回调 `OnPeerDisconnect(实例号, sid)`，都在 poll 线程。断开后自己重连，连不上隔 `RetryMilliseconds()` 再试。
 
-注册表按 `pull_ms` 下发这个名字的整份名单（`RegistryClient::WatchList`），名单有变化才调 `ApplyServiceList`。新登记的 id 自动建连；消失的 id 退役，在途调用回 `OI_ERR_CONNECT`；同一个 id 换了地址先退役再新建。
+注册表按 `pull_ms` 下发这个名字的整份名单（`RegistryClient::WatchList`），名单变化时调用 `ApplyServiceList`；新订阅者在下一次成功拉取时也会收到名单，即使共享名单没有变化。新登记的 id 自动建连；消失的 id 退役，在途调用回 `OI_ERR_CONNECT`；同一个 id 换了地址先退役再新建。
 
 | 调用 | 含义 |
 | --- | --- |
 | `Call(实例号, req, res)` | 只打这一台。名单里没有回 `OI_ERR_CONNECT`；在名单里还没连上就暂存，连上补发。 |
 | `CallAny(req, res)` | 在已连上的实例里轮询，一台都没连上时在名单里轮询。 |
 | `CallAll<Res>(req)` | 按发送这一刻的名单每台一份，先全部发出再等。结果按实例号升序，每格带 `iInstanceId`。 |
-| `NotifyPeer(实例号, msg)` | 单向消息。没连上回 `OI_ERR_CONNECT`。 |
-| `NotifyAny(msg)` | 发给任一台已连上的，选法同 `CallAny`。一台都没连上回 `OI_ERR_CONNECT`。 |
+| `NotifyPeer(实例号, msg)` | 向指定实例启动异步通知，名单里没有返回 `OI_ERR_CONNECT`，未连接时暂存并重连。 |
+| `NotifyAny(msg)` | 选路同 `CallAny`，名单为空返回 `OI_ERR_CONNECT`。 |
+
+通知复制消息并启动任务，通过现有 RPC 路径发送，默认超时 180 秒。返回 `OI_OK` 仅表示任务已启动，不代表对端收到；发送、回执或超时失败由任务错误处理器报告。
 
 服务端推下来的消息照常用 `OI_NOTIFY_BIND_SELF` 绑定，`OI_RPC_SELF(类型)` 拿到的就是这个管理器。`InstanceIds()` 给当前名单，`ConnectedSid(实例号)` 给这台当前的会话，`IsConnect()` 表示至少有一台连着。
 

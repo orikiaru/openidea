@@ -126,6 +126,15 @@ class SafetyTests(unittest.TestCase):
         self.assertEqual([(901, process["ExecutablePath"], 100)], self.select([process], {901: 100}))
         self.assertEqual([], self.select([process], {901: 99}))
 
+    def test_windows_reused_marker_pid_does_not_open_foreign_process(self):
+        process = self.process(901, "")
+        process["CreationFileTimeUtc"] = 200
+        with patch.object(windows, "windows_processes", return_value=[process]), \
+             patch.object(windows, "windows_records", return_value={901: 100}), \
+             patch.object(windows, "windows_birth", side_effect=AssertionError("foreign PID opened")) as birth:
+            self.assertEqual([], windows.windows_targets("windows-st", 1000, self.lanes))
+            birth.assert_not_called()
+
     def test_windows_lane_excludes_other_lane(self):
         own = self.process(901, self.lanes / "linux-mt" / "bin/ipcclient")
         other = self.process(902, self.lanes / "linux-st" / "bin/ipcclient")
@@ -503,7 +512,7 @@ class RegressionCleanupTests(unittest.TestCase):
                          for statement in node.finalbody for n in ast.walk(statement)))
         scope = dict(self.runner.__dict__, procs=[self.old, self.first], handles=self.handles,
                      root=self.root, args=self.args, case="echo", db=None, db_paused=False,
-                     monitor=None, http_fixture=None, http_thread=None,
+                     monitor=None, http_fixture=None, http_thread=None, timeline_thread=None,
                      registry=None, registry_paused=False)
         with self.assertRaisesRegex(RuntimeError, "graceful shutdown"):
             exec(compile(ast.Module(body=final, type_ignores=[]), "normal-finally", "exec"), scope)

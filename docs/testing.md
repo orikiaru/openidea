@@ -100,6 +100,14 @@ python3 tools/test_matrix.py --case hold --mode all
 python3 tools/run_regressions.py --case all --artifacts /tmp/oi-test-artifacts
 ```
 
+排查 Hold 的 Redis 迟到回包时，可对本次测试启动的 Redis 开启只读 MONITOR：
+
+```sh
+python3 tools/run_regressions.py --case hold --redis-timeline --port-offset 2000 --artifacts /path/to/results
+```
+
+`hold/redis-timeline.out` 只保留 PING 和测试用 BLPOP 的 Redis 执行时间及上游连接地址；结合 `hold/ipcclient.out` 的超时和耗时检查。MONITOR 记录执行命令，不能证明回包已送达客户端；定位丢包或错配仍需采集代理和客户端收发时间。端口偏移须与该路一致，测试前后按第 7 节清理对应路。
+
 Windows 原生直接运行时，要选择带 exe 的 Release 目录：
 
 ```powershell

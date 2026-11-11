@@ -302,10 +302,11 @@ class ProtoMultiClientManager : public ProtoSessionManager
 	// 注册表下发这个名字的整份名单。按实例号比对：多出的建连，消失的退役，地址变了的先退役再新建。
 	void ApplyServiceList(const std::vector<::OI::Base::ServiceInstance>& vList) override;
 
-	// 给这台发单向消息。没连上返回 OI_ERR_CONNECT。
+	// 向指定实例启动异步通知任务；名单里没有返回 OI_ERR_CONNECT，未连接时暂存并重连。
+	// 返回 OI_OK 只表示任务已启动，发送或回执失败由任务错误处理器报告。
 	template <typename Msg>
 	int32_t NotifyPeer(int32_t iInstanceId, const Msg& stMessage);
-	// 发给任一台已连上的，选法同 AnySender。一台都没连上返回 OI_ERR_CONNECT。
+	// 选路同 AnySender；名单为空返回 OI_ERR_CONNECT，返回 OI_OK 只表示任务已启动。
 	template <typename Msg>
 	int32_t NotifyAny(const Msg& stMessage);
 	// 指定一台。名单里没有返回 OI_ERR_CONNECT；在名单里还没连上就先暂存，连上补发。返回 TaskResult<int32_t>。

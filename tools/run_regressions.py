@@ -316,6 +316,10 @@ def run(case, args):
     http_fixture = None
     http_thread = None
     monitor = None
+    timeline_stop = threading.Event()
+    timeline_thread = None
+    timeline_lines = []
+    timeline_errors = []
     if resource is not None:
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     # 前缀带偏移，并行时每路只按自己的临时目录清理进程。
@@ -476,6 +480,47 @@ def run(case, args):
                     monitor = socket.create_connection(("127.0.0.1", REDIS_PORT), timeout=2)
                     monitor.sendall(b"*1\r\n$7\r\nMONITOR\r\n")
                     assert monitor.recv(100) == b"+OK\r\n"
+                elif case == "hold" and getattr(args, "redis_timeline", False):
+                    monitor = socket.create_connection(("127.0.0.1", REDIS_PORT), timeout=2)
+                    monitor.sendall(b"*1\r\n$7\r\nMONITOR\r\n")
+                    assert monitor.recv(100) == b"+OK\r\n"
+                    monitor.settimeout(0.2)
+
+                    def collect_timeline():
+                        pending = b""
+                        dropping = False
+                        try:
+                            while not timeline_stop.is_set():
+                                try:
+                                    part = monitor.recv(4096)
+                                except socket.timeout:
+                                    continue
+                                if not part:
+                                    if not timeline_stop.is_set():
+                                        timeline_errors.append(RuntimeError("Redis MONITOR closed unexpectedly"))
+                                    break
+                                for fragment in part.splitlines(keepends=True):
+                                    complete = fragment.endswith(b"\n")
+                                    if not dropping:
+                                        pending += fragment
+                                        if len(pending) > 65536:
+                                            pending = b""
+                                            dropping = True
+                                        elif complete:
+                                            line = pending.rstrip(b"\r\n")
+                                            if re.search(rb'"PING"\s*$', line) or re.search(rb'"BLPOP" "hold-(?:late|race)" ', line):
+                                                if len(timeline_lines) < 1000:
+                                                    timeline_lines.append(line)
+                                                elif not timeline_errors:
+                                                    timeline_errors.append(RuntimeError("Redis timeline exceeded 1000 entries"))
+                                            pending = b""
+                                    if complete:
+                                        dropping = False
+                        except Exception as error:
+                            timeline_errors.append(error)
+
+                    timeline_thread = threading.Thread(target=collect_timeline)
+                    timeline_thread.start()
                 if case == "registry" or mode in ("hold", "multi"):
                     registry, registry_path = start("registry")
                     ready(registry, registry_path, "registry server listen")
@@ -609,6 +654,9 @@ def run(case, args):
                 assert "ok=1000000 mismatch=0 rpc_fail=0" in text
                 assert text.count("ipc client connect sid=") == 1, "echo test started more than once"
             elif mode == "multi":
+                assert "multi watcher unchanged recovered=1 bad=0" in text
+                assert "multi notify early accepted=0 delivered=1 bad=0" in text
+                assert "multi notify reconnect disconnected=1 accepted=0 delivered=1 drained=1 bad=0" in text
                 assert "multi fixed early=1 connected=1 ids=0 missing=-3 bad=0" in text
                 assert "multi registry seed=1,2 connected=1 bad=0" in text
                 assert "multi call by instance one=1 two=2 none=-3 bad=0" in text
@@ -633,6 +681,7 @@ def run(case, args):
                 assert "udp oversized notify=-6 call=-6 immediate=1 recovered=1 bad=0" in text
                 assert "udp garbage keeps session sessions=1 bad=0" in text
                 assert "udp idle close reopen bad=0" in text
+                assert "udp notify rpc receipt=0 bad=0" in text
                 assert "udp done bad=0" in text
             elif case == "redis-shutdown":
                 assert shutdown_sent and "redis shutdown result=2 late=2 bad=0" in text
@@ -795,9 +844,24 @@ def run(case, args):
                 print("failure output unavailable:", repr(error), file=sys.stderr, flush=True)
             raise
         finally:
-            cleanup_owned(procs, handles, root, args, case, db=db, db_paused=db_paused,
-                          monitor=monitor, http_fixture=http_fixture, http_thread=http_thread,
-                          primary=sys.exc_info()[1], registry=registry, registry_paused=registry_paused)
+            primary = sys.exc_info()[1]
+            try:
+                if timeline_thread is not None:
+                    timeline_stop.set()
+                    timeline_thread.join(timeout=3)
+                    if timeline_thread.is_alive():
+                        raise RuntimeError("Redis timeline collector failed to stop")
+                    if timeline_errors:
+                        raise RuntimeError("Redis timeline collector failed: " + repr(timeline_errors[0]))
+                    (root / "redis-timeline.out").write_bytes(b"\n".join(timeline_lines) + b"\n")
+            except Exception as error:
+                if primary is None:
+                    raise
+                print("Redis timeline capture failed:", repr(error), file=sys.stderr, flush=True)
+            finally:
+                cleanup_owned(procs, handles, root, args, case, db=db, db_paused=db_paused,
+                              monitor=monitor, http_fixture=http_fixture, http_thread=http_thread,
+                              primary=sys.exc_info()[1] or primary, registry=registry, registry_paused=registry_paused)
 
 
 class HostHttpRegression(http.server.BaseHTTPRequestHandler):
@@ -897,8 +961,11 @@ if __name__ == "__main__":
     parser.add_argument("--redis-wsl", action="store_true", help="Windows: run only the owned Redis fixture in WSL")
     parser.add_argument("--wsl-user", default="jxy")
     parser.add_argument("--artifacts", type=Path, help="retain process output and results.json, not bulk log payload")
+    parser.add_argument("--redis-timeline", action="store_true", help="capture hold PING and BLPOP execution timestamps from the owned Redis fixture")
     parser.add_argument("--port-offset", type=int, default=0, help="shift every test port; parallel work copies need distinct offsets")
     options = parser.parse_args()
+    if options.redis_timeline and (options.case != "hold" or not options.artifacts):
+        parser.error("--redis-timeline requires --case hold and --artifacts")
     options.redis_binary = options.redis_binary or Path(shutil.which("redis-server") or "/usr/local/bin/redis-server")
     if options.redis_wsl and not WINDOWS:
         parser.error("--redis-wsl is only for native Windows tests")

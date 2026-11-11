@@ -24,7 +24,7 @@
 ## 3. 协议
 
 - 协议相关的数据结构一律写成 `proto.xml` 里的 rpcdata，用生成的 `oi_rpcdata_*.h` 做序列化。不手写结构体，也不手写序列化。Redis 里存的值也直接用 rpcdata。
-- 每条 rpc 都要写 request 和 response。单向消息也要声明一个 response 占位，线上不会出现。
+- 每条 rpc 都要写 request 和 response。调用号为 0 的单向消息不回 response；`NotifyPeer` / `NotifyAny` 的 RPC 包装使用非零调用号，成功时会收到默认构造的 response。
 - 常量和错误码用 `proto.xml` 的 `enum`、`errordef`，生成普通 C 枚举，不参与序列化，字段仍用定宽整数，见 [模块](module.md) 的枚举和错误码。协议暂时不支持的能力记进 `todo.md`，不另起一套。
 
 ## 4. 错误码

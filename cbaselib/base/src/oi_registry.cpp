@@ -270,6 +270,7 @@ void ServiceTable::WatchList(::OI::Net::SessionManager* pManager, const std::str
 		});
 	}
 	stState.vListWatchers.push_back(pManager);
+	stState.vPendingListWatchers.push_back(pManager);
 }
 
 std::vector<std::string> ServiceTable::Names()
@@ -339,6 +340,14 @@ void ServiceTable::Apply(const std::vector<std::string>& vNames, const std::vect
 						vListChanged.push_back(ListChange{pWatcher, vMatched});
 					}
 				}
+				else
+				{
+					for (auto* pWatcher : stState.vPendingListWatchers)
+					{
+						vListChanged.push_back(ListChange{pWatcher, vMatched});
+					}
+				}
+				stState.vPendingListWatchers.clear();
 			}
 			ServiceInstance stPick;
 			bool bOnlineLocal = Pick(vList, vNames[iNumber], stState.bOnline ? stState.iId : 0, stPick);

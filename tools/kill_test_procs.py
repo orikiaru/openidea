@@ -60,6 +60,11 @@ def windows_targets(lane, offset, windows_root):
             if lane.startswith("linux-") and owned_path(script, [ROOT]):
                 hit |= any(arguments[index:index + 2] == ["--lane", lane] for index in range(len(arguments)))
         if hit or pid in records:
+            snapshot_birth = item.get("CreationFileTimeUtc")
+            # A reused PID with no owned path is not our process. Do not open it.
+            if (not hit and type(snapshot_birth) is int and snapshot_birth > 0
+                    and snapshot_birth // 10 != records[pid] // 10):
+                continue
             try:
                 birth = windows_birth(pid)
             except OSError as error:
