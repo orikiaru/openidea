@@ -91,25 +91,89 @@ static OI_RPC_HANDLER(Hold, HandleReverseHold)
 	co_return 0;
 }
 
+// 秒更新单独注册。一个单例不能同时有 OnTickUpdate 和 OnSecondUpdate。
+class HoldSecondProbe
+{
+	DECLARE_SINGLETON(HoldSecondProbe)
+	HoldSecondProbe();
+	std::atomic<bool> m_bWatchUpdate;
+	std::atomic<int32_t> m_iSecondUpdates;
+	std::atomic<int32_t> m_iSecondActive;
+	std::atomic<int32_t> m_iSecondOverlap;
+
+  public:
+	OI::Coro::Task OnSecondUpdate(time_t iNow);
+	void WatchUpdate(bool bWatch);
+	int32_t SecondUpdates() const
+	{
+		return m_iSecondUpdates.load(std::memory_order_relaxed);
+	}
+	int32_t SecondActive() const
+	{
+		return m_iSecondActive.load(std::memory_order_relaxed);
+	}
+	int32_t SecondOverlap() const
+	{
+		return m_iSecondOverlap.load(std::memory_order_relaxed);
+	}
+};
+
+HoldSecondProbe::HoldSecondProbe()
+    : m_bWatchUpdate(false), m_iSecondUpdates(0), m_iSecondActive(0), m_iSecondOverlap(0)
+{
+}
+
+OI::Coro::Task HoldSecondProbe::OnSecondUpdate(time_t iNow)
+{
+	(void)iNow;
+	if (!m_bWatchUpdate.load(std::memory_order_relaxed))
+	{
+		co_return;
+	}
+	const int32_t iPreviousActive = m_iSecondActive.fetch_add(1, std::memory_order_relaxed);
+	if (iPreviousActive != 0)
+	{
+		m_iSecondOverlap.fetch_add(1, std::memory_order_relaxed);
+	}
+	m_iSecondUpdates.fetch_add(1, std::memory_order_relaxed);
+	co_await OI::Coro::yield(0);
+	m_iSecondActive.fetch_sub(1, std::memory_order_relaxed);
+	co_return;
+}
+
+void HoldSecondProbe::WatchUpdate(bool bWatch)
+{
+	if (bWatch)
+	{
+		m_iSecondUpdates.store(0, std::memory_order_relaxed);
+		m_iSecondOverlap.store(0, std::memory_order_relaxed);
+		m_iSecondActive.store(0, std::memory_order_relaxed);
+	}
+	m_bWatchUpdate.store(bWatch, std::memory_order_relaxed);
+}
+
 HoldMgr::HoldMgr()
-    : m_bEnabled(false), m_iSessionId(0), m_iRedisTimeoutMilliseconds(25000), m_bWatchUpdate(false), m_iTickUpdates(0), m_iSecondUpdates(0)
+    : m_bEnabled(false), m_iSessionId(0), m_iRedisTimeoutMilliseconds(25000), m_bWatchUpdate(false), m_iTickUpdates(0), m_iTickActive(0), m_iTickOverlap(0), m_iWatchBeginTick(0)
 {
 }
 
-void HoldMgr::OnTickUpdate(uint64_t iNowMilliseconds)
+OI::Coro::Task HoldMgr::OnTickUpdate(uint64_t iNowMilliseconds)
 {
-	if (m_bWatchUpdate.load(std::memory_order_relaxed) && iNowMilliseconds != 0)
+	(void)iNowMilliseconds;
+	if (!m_bWatchUpdate.load(std::memory_order_relaxed))
 	{
-		m_iTickUpdates.fetch_add(1, std::memory_order_relaxed);
+		co_return;
 	}
-}
-
-void HoldMgr::OnSecondUpdate(time_t iNow)
-{
-	if (m_bWatchUpdate.load(std::memory_order_relaxed) && iNow != 0)
+	const int32_t iPreviousActive = m_iTickActive.fetch_add(1, std::memory_order_relaxed);
+	if (iPreviousActive != 0)
 	{
-		m_iSecondUpdates.fetch_add(1, std::memory_order_relaxed);
+		m_iTickOverlap.fetch_add(1, std::memory_order_relaxed);
 	}
+	m_iTickUpdates.fetch_add(1, std::memory_order_relaxed);
+	// 跨过好几跳。没 co_return 之前，这一单例后续到点的跳直接跳过、不补。
+	co_await OI::Coro::yield(OI::Timer::BaseTimerManager::GetInstance().GetTickOffsetMS() * 3);
+	m_iTickActive.fetch_sub(1, std::memory_order_relaxed);
+	co_return;
 }
 
 void HoldMgr::WatchUpdate(bool bWatch)
@@ -117,7 +181,9 @@ void HoldMgr::WatchUpdate(bool bWatch)
 	if (bWatch)
 	{
 		m_iTickUpdates.store(0, std::memory_order_relaxed);
-		m_iSecondUpdates.store(0, std::memory_order_relaxed);
+		m_iTickOverlap.store(0, std::memory_order_relaxed);
+		m_iTickActive.store(0, std::memory_order_relaxed);
+		m_iWatchBeginTick = OI::Timer::BaseTimerManager::GetInstance().GetCurTick();
 	}
 	m_bWatchUpdate.store(bWatch, std::memory_order_relaxed);
 }
@@ -130,6 +196,8 @@ void HoldMgr::Load()
 		OI_RPC_BIND(Hold, HandleReverseHold);
 	}
 	TryGetConfig("RedisClient.timeout_ms", m_iRedisTimeoutMilliseconds);
+	// 首次 GetInstance 才注册秒更新，必须赶在 RunFramework 之前。
+	HoldSecondProbe::GetInstance();
 }
 
 void HoldMgr::Start(sid_t iSessionId)
@@ -745,6 +813,7 @@ struct TimerClosureProbe
 static OI::Coro::TaskResult<int> CheckTimerExceptions()
 {
 	HoldMgr::GetInstance().WatchUpdate(true);
+	HoldSecondProbe::GetInstance().WatchUpdate(true);
 	auto pState = std::make_shared<TimerExceptionProbe>();
 	// 帧持有状态直到 uv_close 回调完成；冻结时间轮也不会阻止独立看门狗。
 	OI::Net::Poll::GetInstance().CallOnLoop([](void* pArgument)
@@ -809,21 +878,35 @@ static OI::Coro::TaskResult<int> CheckTimerExceptions()
 		co_await OI::Coro::yield(0);
 	}
 	const time_t iBeginSecond = OI::Timer::BaseTimerManager::GetInstance().GetTime();
-	while (HoldMgr::GetInstance().SecondUpdates() == 0 && OI::Timer::BaseTimerManager::GetInstance().GetTime() <= iBeginSecond + 2)
+	while (HoldSecondProbe::GetInstance().SecondUpdates() == 0 && OI::Timer::BaseTimerManager::GetInstance().GetTime() <= iBeginSecond + 2)
 	{
 		co_await OI::Coro::yield(OI::Timer::BaseTimerManager::GetInstance().GetTickOffsetMS());
 	}
 	HoldMgr::GetInstance().WatchUpdate(false);
+	HoldSecondProbe::GetInstance().WatchUpdate(false);
+	const int64_t iElapsedTicks = OI::Timer::BaseTimerManager::GetInstance().GetCurTick() - HoldMgr::GetInstance().WatchBeginTick();
+	const int iTickOffsetMilliseconds = OI::Timer::BaseTimerManager::GetInstance().GetTickOffsetMS();
+	int iWaitedMilliseconds = 0;
+	while ((HoldMgr::GetInstance().TickActive() != 0 || HoldSecondProbe::GetInstance().SecondActive() != 0) && iWaitedMilliseconds < 1000)
+	{
+		co_await OI::Coro::yield(iTickOffsetMilliseconds);
+		iWaitedMilliseconds += iTickOffsetMilliseconds;
+	}
 	const int32_t iTickUpdates = HoldMgr::GetInstance().TickUpdates();
-	const int32_t iSecondUpdates = HoldMgr::GetInstance().SecondUpdates();
+	const int32_t iSecondUpdates = HoldSecondProbe::GetInstance().SecondUpdates();
+	const int32_t iTickOverlap = HoldMgr::GetInstance().TickOverlap();
+	const int32_t iSecondOverlap = HoldSecondProbe::GetInstance().SecondOverlap();
+	const int32_t iTickActive = HoldMgr::GetInstance().TickActive();
+	const int32_t iSecondActive = HoldSecondProbe::GetInstance().SecondActive();
+	const int iSkipped = static_cast<int>(iElapsedTicks - iTickUpdates);
 	int iBad = pState->bPassed ? 0 : 1;
 	if (pState->vTicks[0] != pState->vTicks[1].load() || pState->vTicks[2] != pState->vTicks[3].load() || pState->vTicks[4] <= pState->vTicks[3].load())
 	{
 		++iBad;
 	}
-	const int iUpdateBad = (iTickUpdates > 0 && iSecondUpdates > 0) ? 0 : 1;
+	const int iUpdateBad = (iTickUpdates > 0 && iSecondUpdates > 0 && iTickOverlap == 0 && iSecondOverlap == 0 && iTickActive == 0 && iSecondActive == 0 && iTickUpdates < iElapsedTicks) ? 0 : 1;
 	LOG_TRACE("hold timer exceptions executed=%d destroyed=%d bad=%d", pState->iExecuted.load(), pState->iDestroyed.load(), iBad);
-	LOG_TRACE("hold timer update tick=%d second=%d bad=%d", iTickUpdates, iSecondUpdates, iUpdateBad);
+	LOG_TRACE("hold timer update tick=%d second=%d overlap=%d/%d skipped=%d bad=%d", iTickUpdates, iSecondUpdates, iTickOverlap, iSecondOverlap, iSkipped, iUpdateBad);
 	iBad += iUpdateBad;
 	fflush(stdout);
 	co_return iBad;

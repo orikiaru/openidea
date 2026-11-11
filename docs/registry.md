@@ -105,7 +105,7 @@ Redis 连不上或卡住时，登记和续期回失败，客户端下一次心�
 
 写死地址时运行中要换服务器，在 `Init` 之后调 `UseAddress(ip, port)`：旧连接退役，在途调用回 `OI_ERR_CONNECT`，实例号仍是 0，`Start` 过就马上连新地址，`GetStrIP()`、`GetStrPort()` 跟着变。配了 `service` 时返回 false，地址没变什么都不做。
 
-模块生成器生成的 Client 组件默认就是这个类，Server 和 Client 都是单例，带一个空的 `OnSecondUpdate(time_t)`。回归见 testing.md 的 multi。
+模块生成器生成的 Client 组件默认就是这个类，Server 和 Client 都是单例，带 `OI::Coro::Task OnSecondUpdate(time_t)`，默认函数体是 `co_return;`。回归见 testing.md 的 multi。
 
 ## 应用侧看不到 Session
 

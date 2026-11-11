@@ -19,3 +19,6 @@ __pycache__/
 
 # Local code-review working reports
 /reviewsession/
+
+# 本机 Linux 测试机地址和用户名，不进仓库
+/.local/

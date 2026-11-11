@@ -34,7 +34,7 @@ rpcdata AllTypesData {
 - 组件的 `inc/*.h` 和 `src/*.cpp`
 - `deploy/config/<name>.toml`
 
-生成的组件都是单例（`DECLARE_SINGLETON`），带一个空的 `OnSecondUpdate(time_t)`，每秒在 poll 线程调一次。Server 继承 `ProtoSessionManager`；Client 继承 `ProtoMultiClientManager`，配置段多一个 `service`，留空只连 ip/port 这一台，填了服务名就连注册表里的每一台，见 [服务注册](registry.md) 的“每台各连一条”。
+生成的组件都是单例（`DECLARE_SINGLETON`），带 `OI::Coro::Task OnSecondUpdate(time_t)`，默认函数体是 `co_return;`。日历秒变化时 `StartTask` 启动，只启动、不等待。Server 继承 `ProtoSessionManager`；Client 继承 `ProtoMultiClientManager`，配置段多一个 `service`，留空只连 ip/port 这一台，填了服务名就连注册表里的每一台，见 [服务注册](registry.md) 的“每台各连一条”。
 
 `module.xml` 是模块注册的唯一来源；CMake 使用生成的清单添加模块，不需要再维护一份手写列表。模块名必须匹配 ASCII 格式 `[A-Za-z0-9_][A-Za-z0-9_-]*`，忽略大小写后不能重复；生成目录及清单使用小写名称。
 

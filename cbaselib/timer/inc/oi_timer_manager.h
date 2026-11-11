@@ -126,7 +126,7 @@ class BaseTimerManager
 	void try_uniform();
 	// 取出最低层这一跳到点的定时器。
 	void try_run_timer(TimerList& vDue);
-	// 推进过 tick 后，把毫秒和秒交给单例的 OnTickUpdate / OnSecondUpdate。
+	// 推进过 tick 后，为单例的 OnTickUpdate / OnSecondUpdate 各启动协程，不等它们结束。
 	void DispatchUpdates();
 
   private:

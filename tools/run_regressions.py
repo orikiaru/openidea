@@ -735,7 +735,7 @@ def run(case, args):
             elif mode == "hold":
                 assert "hold rpc session index calls=4096 bad=0" in text
                 assert "hold timer exceptions executed=5 destroyed=5 bad=0" in text
-                assert re.search(r"hold timer update tick=[1-9][0-9]* second=[1-9][0-9]* bad=0", text)
+                assert re.search(r"hold timer update tick=[1-9][0-9]* second=[1-9][0-9]* overlap=0/0 skipped=[0-9]+ bad=0", text)
                 assert "hold nested results completed=32768 caught=16384 bad=0" in text
                 assert "hold hot start inline=1 queued=1 bad=0" in text
                 assert "hold shared tasks waiters=64 bad=0" in text

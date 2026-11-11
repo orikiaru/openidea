@@ -126,8 +126,8 @@ class __COMPONENT_NAME__ : public OI::Rpc::ProtoSessionManager
 	virtual ~__COMPONENT_NAME__();
 	bool Init() override;
 	const std::string GetIDString() override;
-	// 每秒一次，在 poll 线程。不要挂协程或等待。
-	void OnSecondUpdate(time_t iNow);
+	// 每秒启动一条协程，可以 co_await。上一条没结束时这一秒跳过。
+	OI::Coro::Task OnSecondUpdate(time_t iNow);
 
   private:
 	void OnAddSession(OI::Net::Session* pSession) override;
@@ -157,8 +157,8 @@ class __COMPONENT_NAME__ : public OI::Rpc::ProtoMultiClientManager
 	const std::string GetIDString() override;
 	// 某台连上，连上前暂存的请求已补发，在 poll 线程。
 	void OnPeerConnect(int32_t iInstanceId, sid_t iSessionId) override;
-	// 每秒一次，在 poll 线程。不要挂协程或等待。
-	void OnSecondUpdate(time_t iNow);
+	// 每秒启动一条协程，可以 co_await。上一条没结束时这一秒跳过。
+	OI::Coro::Task OnSecondUpdate(time_t iNow);
 
   protected:
 	// 某台断开，在 poll 线程。这台的在途调用已经回 OI_ERR_CONNECT。
@@ -197,8 +197,9 @@ void __COMPONENT_NAME__::OnPeerDisconnect(int32_t iInstanceId, sid_t iSessionId)
 {
 }
 
-void __COMPONENT_NAME__::OnSecondUpdate(time_t iNow)
+OI::Coro::Task __COMPONENT_NAME__::OnSecondUpdate(time_t iNow)
 {
+	co_return;
 }
 '''
         file_data = self.DoReplace(file_data)
@@ -225,8 +226,9 @@ const std::string __COMPONENT_NAME__::GetIDString()
 	return "__COMPONENT_NAME__";
 }
 
-void __COMPONENT_NAME__::OnSecondUpdate(time_t iNow)
+OI::Coro::Task __COMPONENT_NAME__::OnSecondUpdate(time_t iNow)
 {
+	co_return;
 }
 
 void __COMPONENT_NAME__::OnAddSession(OI::Net::Session* pSession)
