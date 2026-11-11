@@ -141,7 +141,7 @@ Redis 也单独测。开关是 `[Test] redis`。先起本机 Redis（`maxmemory 
 | 目录、src、类外函数、全局/静态变量、友元、StartTask、单线程/多线程选型 | `docs/develop.md` 第 2、6 节 | `OI_RPC_BIND_SELF`、`OI_NOTIFY_BIND_SELF` |
 | 错误码、iCode、errordef、自定义结构、手写序列化 | `docs/develop.md` 第 3、4 节 | `cbaselib/include/oi_errno.h` |
 | 时间、计时、GetTime、毫秒、过期、ttl、缓存 | `docs/develop.md` 第 5 节 | `cbaselib/timer/inc/oi_timer_helper.h` 的 `GetTime` |
-| 测试、回归、补用例、全量、clangd | `docs/develop.md` 第 7 节、`docs/testing.md` | `modules/ipcclient/src/udp_mgr.cpp` 的 `UdpMgr` |
+| 测试、回归、补用例、全量、clangd | `docs/develop.md` 第 7 节、`docs/testing.md`；远程 Linux 另读 `.cursor/skills/linux-remote-test/SKILL.md` | `modules/ipcclient/src/udp_mgr.cpp` 的 `UdpMgr` |
 | 提交、推送、子模块、todo | `docs/develop.md` 第 8 节 | 本文件「提交就是提交并推送」 |
 
 
