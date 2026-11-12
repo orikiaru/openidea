@@ -295,6 +295,7 @@ class RawHttpRegression(socketserver.BaseRequestHandler):
 
 def run(case, args):
     mode = "hold" if case.startswith(("clock-", "rpc-admission-")) else ("echo" if case in ("reset", "registry", "rpc-ingress") else case)
+    mode = "db" if case == "mysql" else mode
     mode = "log" if case in ("disk-full", "log-backpressure") else mode
     mode = "redis" if case.startswith("redis-") else mode
     fairness = case == "redis-fairness"
@@ -378,8 +379,9 @@ def run(case, args):
                 if case == "redis-limit":
                     text = text.replace("[RedisClient]", "[RedisClient]\nmax_pending = 1")
                     text = replace(text, "tasks", "0")
-                for flag in ("echo", "log", "redis", "hold", "udp", "multi"):
+                for flag in ("echo", "log", "redis", "hold", "udp", "multi", "db"):
                     text = replace(text, flag, "true" if mode == flag else "false")
+                text = replace(text, "db_mysql", "true" if case == "mysql" else "false")
                 if mode == "hold":
                     text = replace(text, "max_pending_pulls", "16")
                     text = replace(text, "pull_ms", "60000")
@@ -649,6 +651,8 @@ def run(case, args):
                 time.sleep(0.1)
             text = clientpath.read_text(encoding="utf-8", errors="replace")
             print(text, flush=True)
+            if case == "mysql" and "mysql environment blocked:" in text:
+                raise EnvironmentBlocked("MySQL driver disabled in ipcclient build")
             assert client.returncode == 0, (case, client.returncode)
             if mode == "echo":
                 assert "ok=1000000 mismatch=0 rpc_fail=0" in text
@@ -710,6 +714,10 @@ def run(case, args):
                 samples = re.findall(r"redis pressure pause link=\d+ pending=(\d+) bytes=(\d+)", rsp.read_text(encoding="utf-8", errors="replace"))
                 assert samples and all(int(count) <= maximum_count and int(size) <= maximum_bytes for count, size in samples)
                 if case.endswith("count"): assert any(int(count) == maximum_count for count, size in samples)
+            elif case == "db":
+                assert "db fake done bad=0" in text
+            elif case == "mysql":
+                assert "mysql done bad=0" in text
             elif mode == "redis":
                 assert "redis integrity ok" in text
                 if case == "redis-limit":
@@ -746,6 +754,7 @@ def run(case, args):
                     assert "warning: coroutine start rejected: current thread is not the single-thread poll thread" in text
                 assert "hold blocking tasks=128 waiters=64 runs=1 bad=0" in text
                 assert "hold blocking read started=1 timer=1 rpc=1 early=0 content=1 bad=0" in text
+                assert "hold blocking categories bad=0" in text
                 for waiter_count in (2, 8, 64, 256):
                     for shared_mode in range(3):
                         assert f"hold started task mode={shared_mode} waiters={waiter_count} runs=1 awakened={waiter_count} bad=0" in text
@@ -952,9 +961,13 @@ def run_web(args):
                 cleanup_owned([server], [output], root, args, "web", primary=sys.exc_info()[1])
 
 
+class EnvironmentBlocked(RuntimeError):
+    pass
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case", default="all", choices=("all", "echo", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "clock-forward", "clock-back", "registry", "udp", "multi", "web"))
+    parser.add_argument("--case", default="all", choices=("all", "db", "mysql", "echo", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "clock-forward", "clock-back", "registry", "udp", "multi", "web"))
     parser.add_argument("--bin-dir", type=Path, default=REPO / "deploy/bin")
     parser.add_argument("--redis-binary", type=Path, help="default: redis-server on PATH")
     parser.add_argument("--clock-fault-so", type=Path)
@@ -981,17 +994,25 @@ if __name__ == "__main__":
             probe.bind(("127.0.0.1", port))
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
         probe.bind(("127.0.0.1", UDP_PORT))
-    cases = ("echo", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "registry", "udp", "multi", "web") if options.case == "all" else (options.case,)
+    cases = ("db", "echo", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "registry", "udp", "multi", "web") if options.case == "all" else (options.case,)
     results = []
     for item in cases:
         started = time.monotonic()
         result = {"case": item, "platform": "windows" if WINDOWS else "linux"}
         try:
+            if item == "mysql":
+                required = ("OI_TEST_MYSQL_HOST", "OI_TEST_MYSQL_PORT", "OI_TEST_MYSQL_USER", "OI_TEST_MYSQL_PASSWORD", "OI_TEST_MYSQL_DATABASE")
+                missing = [name for name in required if name not in os.environ or (name != "OI_TEST_MYSQL_PASSWORD" and not os.environ[name])]
+                if missing:
+                    raise EnvironmentBlocked("missing environment variables: " + ", ".join(missing))
             if item == "web":
                 run_web(options)
             else:
                 run(item, options)
             result["status"] = "passed"
+        except EnvironmentBlocked as error:
+            result.update(status="blocked", error=str(error))
+            print(item, "environment blocked:", error, flush=True)
         except Exception as error:
             result.update(status="failed", error=str(error))
             traceback.print_exc()

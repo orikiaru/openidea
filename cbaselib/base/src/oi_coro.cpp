@@ -176,7 +176,7 @@ namespace Detail
 {
 void SubmitBlocking(std::shared_ptr<BlockingOperation> pOperation)
 {
-	OI::Net::BlockingWorkSessionManager::GetInstance().Submit([pOperation]()
+	OI::Net::BlockingWorkSessionManager::GetInstance().Submit(pOperation->iType, [pOperation]()
 	{
 		pOperation->Execute();
 	}, [pOperation](int32_t iStatus, std::exception_ptr stError)

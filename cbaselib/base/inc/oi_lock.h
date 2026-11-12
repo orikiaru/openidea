@@ -12,6 +12,58 @@ namespace OI
 {
 namespace Thread
 {
+// 后台执行器与 poll 始终跨线程，不随业务单线程构建退化。
+class NativeMutex
+{
+	friend class NativeMutexCond;
+	std::mutex m_stMutex;
+
+  public:
+	void Lock()
+	{
+		m_stMutex.lock();
+	}
+	void UnLock()
+	{
+		m_stMutex.unlock();
+	}
+};
+class NativeMutexGuard
+{
+	NativeMutex& m_stMutex;
+
+  public:
+	explicit NativeMutexGuard(NativeMutex& stMutex)
+	    : m_stMutex(stMutex)
+	{
+		m_stMutex.Lock();
+	}
+	~NativeMutexGuard()
+	{
+		m_stMutex.UnLock();
+	}
+	NativeMutexGuard(const NativeMutexGuard&) = delete;
+	NativeMutexGuard& operator=(const NativeMutexGuard&) = delete;
+};
+class NativeMutexCond
+{
+	std::condition_variable_any m_stCondition;
+
+  public:
+	void Wait(NativeMutex& stMutex)
+	{
+		m_stCondition.wait(stMutex.m_stMutex);
+	}
+	void Signal()
+	{
+		m_stCondition.notify_one();
+	}
+	void Broadcast()
+	{
+		m_stCondition.notify_all();
+	}
+};
+
 // 自有代码的互斥、自旋和条件等待。单线程编译下全是空操作，不能靠它们阻塞；要等事件改走 poll。
 #ifdef _SINGLE_THREAD_
 

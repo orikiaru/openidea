@@ -17,6 +17,7 @@
 | 单向消息 | [单向消息](cbaselib/notify.md) | [`Notify`](../cbaselib/proto/inc/oi_rpc_session_manager.h#L52) |
 | UDP | [UDP](cbaselib/udp.md) | [`OpenPeer`](../cbaselib/net/inc/oi_session_manager.h#L151) |
 | Redis | [Redis](cbaselib/redis.md) | [`RedisGet`](../cbaselib/redis/inc/oi_redis_string.h#L11) |
+| 数据库 | [数据库](database.md) | 连接池、参数绑定与事务 |
 | HTTP 客户端 | [HTTP](cbaselib/http.md) | [`Client::Get`](../cbaselib/http/inc/oi_http.h#L80) |
 | 时间 | [时间](cbaselib/time.md) | [`AddTimer`](../cbaselib/timer/inc/oi_timer_manager.h#L95) |
 | 服务名 | [服务注册](cbaselib/registry.md) | [`Lookup`](../cbaselib/base/inc/oi_registry.h#L109) |

@@ -1,4 +1,5 @@
 #pragma once
+#include "oi_blocking_pool.h"
 #include "oi_channel.h"
 #include <exception>
 #include <functional>
@@ -14,7 +15,7 @@ struct WorkCompletion
 	std::exception_ptr stError;
 };
 
-// 复用 libuv 工作池的异步唤醒通道。平台 fd/IOCP 由 libuv 管理。
+// 独立分类工作池的完成通知通道，唤醒通过 poll 的异步队列。
 // 后台线程不访问 Session；通知回到 poll 后统一经 DataIn -> Session::OnDataIn。
 class BlockingWorkChannel : public Channel
 {
@@ -25,7 +26,7 @@ class BlockingWorkChannel : public Channel
   public:
 	explicit BlockingWorkChannel(Session* pSession);
 	// 仅 poll 调用；失败抛异常，成功后通过 Session 完成恰好一次。
-	void Submit(uint64_t iOperation, std::function<void()> fnWork, OI::Base::Bytes stPacket);
+	int32_t Submit(OI::Thread::BlockingType iType, uint64_t iOperation, std::function<void()> fnWork, OI::Base::Bytes stPacket);
 	// 只在 Session::OnDataIn 调用期间有效，不转交给后台线程。
 	const WorkCompletion& Completion() const;
 	void DataIn() override;

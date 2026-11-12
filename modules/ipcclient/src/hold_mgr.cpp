@@ -1276,9 +1276,154 @@ static OI::Coro::TaskResult<int> CheckForeignTaskStart()
 #endif
 }
 
+static OI::Coro::TaskResult<int> CheckBlockingCategories()
+{
+	using OI::Thread::BlockingType;
+	int iBad = 0;
+	const int32_t iMissing = co_await OI::Coro::RunBlocking(BlockingType::Sdk, []() -> int32_t
+	{
+		return 0;
+	});
+	const int32_t iMysqlConfig = OI::Thread::ConfigureBlockingPool(BlockingType::Mysql, 1, 1);
+	const int32_t iFileConfig = OI::Thread::ConfigureBlockingPool(BlockingType::File, 1, 4);
+	if (iMissing != OI_ERR_NOT_FOUND || iMysqlConfig != 0 || iFileConfig != 0 ||
+	    OI::Thread::ConfigureBlockingPool(BlockingType::Sdk, 0, 1) != OI_ERR_INVALID_ARGUMENT)
+	{
+		std::fprintf(stderr, "blocking category setup missing=%d mysql=%d file=%d\n", iMissing, iMysqlConfig, iFileConfig);
+		co_return 1;
+	}
+	auto pProbe = std::make_shared<BlockingPipeProbe>();
+	if (uv_pipe(pProbe->vFiles, 0, 0) != 0)
+	{
+		std::fprintf(stderr, "blocking category pipe creation failed\n");
+		co_return 1;
+	}
+	pProbe->stCallerThread = std::this_thread::get_id();
+	std::string sRead;
+	auto pQueuedRuns = std::make_shared<std::atomic<int>>(0);
+	auto stRead = OI::Coro::RunBlocking(BlockingType::Mysql, ReadBlocking, pProbe, sRead);
+	struct WriteEndGuard
+	{
+		std::shared_ptr<BlockingPipeProbe> pProbe;
+		void Close()
+		{
+			if (pProbe->vFiles[1] >= 0)
+			{
+				uv_fs_t stClose{};
+				uv_fs_close(nullptr, &stClose, pProbe->vFiles[1], nullptr);
+				uv_fs_req_cleanup(&stClose);
+				pProbe->vFiles[1] = -1;
+			}
+		}
+		~WriteEndGuard()
+		{
+			Close();
+		}
+	} stWriteGuard{pProbe};
+	std::optional<OI::Coro::TaskResult<int32_t>> stQueued;
+	std::optional<OI::Coro::TaskResult<int32_t>> stBusy;
+	int32_t iReconfigure = 0;
+	int32_t iFile = 0;
+	int32_t iRpc = OI_ERR_FAIL;
+	int iMark = 0;
+	int iWritten = -1;
+	bool bBlocked = false;
+	bool bProgressException = false;
+	try
+	{
+		for (int iIndex = 0; iIndex < 500 && !pProbe->bStarted.load(); ++iIndex)
+		{
+			co_await OI::Coro::yield(1);
+		}
+		if (pProbe->bStarted.load())
+		{
+			stQueued.emplace(OI::Coro::RunBlocking(BlockingType::Mysql, [pQueuedRuns]() -> int32_t
+			{
+				++*pQueuedRuns;
+				return 0;
+			}));
+			stBusy.emplace(OI::Coro::RunBlocking(BlockingType::Mysql, []() -> int32_t
+			{
+				return 0;
+			}));
+			iReconfigure = OI::Thread::ConfigureBlockingPool(BlockingType::Mysql, 2, 2);
+			iFile = co_await OI::Coro::RunBlocking(BlockingType::File, []() -> int32_t
+			{
+				return 17;
+			});
+			co_await OI::Coro::yield(200);
+			OI::RpcData::HoldReq stRequest;
+			stRequest.iMark = 43;
+			OI::RpcData::HoldRes stResponse;
+			iRpc = co_await OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequest, stResponse, OI::Timer::Seconds(2));
+			iMark = stResponse.iMark;
+			bBlocked = !pProbe->bFinished.load() && pQueuedRuns->load() == 0;
+			char vMessage[] = "category";
+			uv_buf_t stMessage = uv_buf_init(vMessage, sizeof(vMessage) - 1);
+			uv_fs_t stWrite{};
+			iWritten = uv_fs_write(nullptr, &stWrite, pProbe->vFiles[1], &stMessage, 1, -1, nullptr);
+			uv_fs_req_cleanup(&stWrite);
+		}
+	}
+	catch (const std::exception& stError)
+	{
+		std::fprintf(stderr, "blocking category progress exception: %s\n", stError.what());
+		bProgressException = true;
+	}
+	catch (...)
+	{
+		std::fprintf(stderr, "blocking category progress unknown exception\n");
+		bProgressException = true;
+	}
+	stWriteGuard.Close();
+	const int32_t iRead = co_await stRead;
+	int32_t iQueued = OI_ERR_FAIL;
+	int32_t iBusy = OI_ERR_FAIL;
+	if (stQueued)
+	{
+		iQueued = co_await *stQueued;
+	}
+	if (stBusy)
+	{
+		iBusy = co_await *stBusy;
+	}
+	const int32_t iError = co_await OI::Coro::RunBlocking(BlockingType::File, []() -> int32_t
+	{
+		return OI_ERR_FAIL;
+	});
+	bool bException = false;
+	try
+	{
+		(void)(co_await OI::Coro::RunBlocking(BlockingType::File, []() -> int32_t
+		{
+			throw std::runtime_error("category failure");
+		}));
+	}
+	catch (const std::runtime_error&)
+	{
+		bException = true;
+	}
+	const int32_t iRecovery = co_await OI::Coro::RunBlocking(BlockingType::File, []() -> int32_t
+	{
+		return 23;
+	});
+	if (bProgressException || !bBlocked || !pProbe->bOtherThread.load() || iBusy != OI_ERR_BUSY || iReconfigure != OI_ERR_BUSY ||
+	    iFile != 17 || iRpc != 0 || iMark != 43 || iWritten != 8 ||
+	    iRead != 0 || sRead != "category" || iQueued != 0 || pQueuedRuns->load() != 1 ||
+	    iError != OI_ERR_FAIL || !bException || iRecovery != 23)
+	{
+		std::fprintf(stderr, "blocking category failed blocked=%d thread=%d busy=%d reconfigure=%d file=%d rpc=%d mark=%d write=%d read=%d queued=%d runs=%d error=%d exception=%d recovery=%d\n",
+		    bBlocked, pProbe->bOtherThread.load(), iBusy, iReconfigure, iFile, iRpc, iMark, iWritten, iRead, iQueued, pQueuedRuns->load(), iError, bException, iRecovery);
+		++iBad;
+	}
+	LOG_TRACE("hold blocking categories bad=%d", iBad);
+	co_return iBad;
+}
+
 static OI::Coro::TaskResult<int> CheckBlockingWork()
 {
 	int iBad = 0;
+	iBad += co_await CheckBlockingCategories();
 	std::vector<OI::Coro::TaskResult<int>> vTasks;
 	constexpr uint32_t iSeed = 20261110;
 	std::mt19937 stRandom(iSeed);

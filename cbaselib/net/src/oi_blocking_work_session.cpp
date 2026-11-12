@@ -30,13 +30,13 @@ class BlockingWorkSessionManager::BlockingWorkSession : public Session
 	{
 		DetachChannel();
 	}
-	void Submit(uint64_t iOperation, std::function<void()> fnWork)
+	int32_t Submit(OI::Thread::BlockingType iType, uint64_t iOperation, std::function<void()> fnWork)
 	{
 		OI::RpcData::WorkCompleted stMessage;
 		stMessage.iOperation = iOperation;
 		OI::Base::BytesStream stPacket;
 		stPacket.WritePb(OI::RpcData::WORK_PROTOCOL_COMPLETED, stMessage);
-		m_stChannel.Submit(iOperation, std::move(fnWork), std::move(stPacket));
+		return m_stChannel.Submit(iType, iOperation, std::move(fnWork), std::move(stPacket));
 	}
 	void OnDataIn() override
 	{
@@ -91,6 +91,7 @@ class BlockingWorkSessionManager::BlockingWorkSession : public Session
 
 struct BlockingWorkSessionManager::Submission
 {
+	OI::Thread::BlockingType iType;
 	std::function<void()> fnWork;
 	std::function<void(int32_t, std::exception_ptr)> fnDone;
 	void Finish(int32_t iStatus, std::exception_ptr stError) noexcept
@@ -106,7 +107,10 @@ struct BlockingWorkSessionManager::Submission
 	}
 };
 
-BlockingWorkSessionManager::BlockingWorkSessionManager() = default;
+BlockingWorkSessionManager::BlockingWorkSessionManager()
+{
+	OI::Thread::InitializeBlockingPools();
+}
 
 BlockingWorkSessionManager::~BlockingWorkSessionManager()
 {
@@ -128,9 +132,9 @@ void BlockingWorkSessionManager::OnDelSession(const Session*)
 {
 }
 
-void BlockingWorkSessionManager::Submit(std::function<void()> fnWork, std::function<void(int32_t, std::exception_ptr)> fnDone)
+void BlockingWorkSessionManager::Submit(OI::Thread::BlockingType iType, std::function<void()> fnWork, std::function<void(int32_t, std::exception_ptr)> fnDone)
 {
-	auto pSubmission = std::make_unique<Submission>(Submission{std::move(fnWork), std::move(fnDone)});
+	auto pSubmission = std::make_unique<Submission>(Submission{iType, std::move(fnWork), std::move(fnDone)});
 	auto* pSubmitted = pSubmission.release();
 	try
 	{
@@ -151,9 +155,10 @@ void BlockingWorkSessionManager::SubmitOnLoop(Submission& stSubmission) noexcept
 {
 	uint64_t iOperation = 0;
 	// 与 RPC 一样，常规拒绝通过返回码交回；C++ 异常仍在等待处重抛。
+	const size_t iCapacity = OI::Thread::BlockingPoolCapacity(stSubmission.iType);
 	const int32_t iAdmission = m_bClosed || OI::Thread::ThreadPool::GetInstance().StopRequested()
 	                               ? OI_ERR_CONNECT
-	                               : (m_mPending.size() >= 1024 ? OI_ERR_BUSY : OI_OK);
+	                               : (iCapacity != 0 && m_mCounts.contains(stSubmission.iType) && m_mCounts.at(stSubmission.iType) >= iCapacity ? OI_ERR_BUSY : OI_OK);
 	try
 	{
 		if (iAdmission != OI_OK)
@@ -177,12 +182,23 @@ void BlockingWorkSessionManager::SubmitOnLoop(Submission& stSubmission) noexcept
 		{
 			iOperation = ++m_iNextOperation;
 		} while (iOperation == 0 || m_mPending.contains(iOperation));
-		m_mPending.emplace(iOperation, stSubmission.fnDone);
-		m_pSession->Submit(iOperation, std::move(stSubmission.fnWork));
+		auto& iCount = m_mCounts[stSubmission.iType];
+		m_mPending.emplace(iOperation, Pending{stSubmission.iType, stSubmission.fnDone});
+		++iCount;
+		const int32_t iStatus = m_pSession->Submit(stSubmission.iType, iOperation, std::move(stSubmission.fnWork));
+		if (iStatus != OI_OK)
+		{
+			m_mPending.erase(iOperation);
+			--iCount;
+			stSubmission.Finish(iStatus, nullptr);
+		}
 	}
 	catch (...)
 	{
-		m_mPending.erase(iOperation);
+		if (m_mPending.erase(iOperation) != 0)
+		{
+			--m_mCounts[stSubmission.iType];
+		}
 		stSubmission.Finish(OI_OK, std::current_exception());
 	}
 }
@@ -195,9 +211,10 @@ void BlockingWorkSessionManager::Complete(uint64_t iOperation, std::exception_pt
 	{
 		return;
 	}
+	--m_mCounts[stNode.mapped().iType];
 	try
 	{
-		stNode.mapped()(OI_OK, stError);
+		stNode.mapped().fnDone(OI_OK, stError);
 	}
 	catch (...)
 	{
@@ -208,10 +225,22 @@ void BlockingWorkSessionManager::Complete(uint64_t iOperation, std::exception_pt
 
 void BlockingWorkSessionManager::CheckDrained()
 {
-	if (m_mPending.empty() && m_fnDrained)
+	if (m_mPending.empty() && !m_vDrained.empty())
 	{
-		auto fnDone = std::exchange(m_fnDrained, nullptr);
-		fnDone(m_pDrainedArgument);
+		OI::Thread::StopBlockingPools();
+		auto vDrained = std::move(m_vDrained);
+		m_vDrained.clear();
+		for (const auto& [fnDone, pArgument] : vDrained)
+		{
+			try
+			{
+				fnDone(pArgument);
+			}
+			catch (...)
+			{
+				OI::Thread::ReportTaskError(std::current_exception());
+			}
+		}
 	}
 }
 
@@ -219,8 +248,10 @@ void BlockingWorkSessionManager::Drain(void (*fnDone)(void*), void* pArgument)
 {
 	assert(Poll::GetInstance().InLoopThread());
 	m_bClosed = true;
-	m_fnDrained = fnDone;
-	m_pDrainedArgument = pArgument;
+	if (fnDone)
+	{
+		m_vDrained.emplace_back(fnDone, pArgument);
+	}
 	CheckDrained();
 }
 }

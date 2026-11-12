@@ -23,6 +23,8 @@ rpcdata AllTypesData {
 
 基础库在 `framework.cmake`。它编三方库和 `cbaselib`，并生成 net 内部的工作协议，不加入进程模块。根目录 `CMakeLists.txt` include 它，再调用 `cbaselib/proto/proto_tool/main.py`。输入是上面三个文件，输出到 `modules/include`、`modules` 和 `deploy`，并在构建目录写出模块清单。修改任一输入会触发重新配置和生成；生成失败会终止配置。外部工程同样 include `openidea/framework.cmake`，换成自己的三个 xml 和输出目录，不再手写基础库列表。开发标准见 [开发标准](develop.md) 第 2 节。
 
+模块需要访问数据库时，见 [数据库客户端](database.md)。协议数据库映射和 schema migration 本轮尚未实现。
+
 ## 什么会重写
 
 `modules/include` 里的序列化头和 `rpc_ids.h` 每次 cmake 都重写。改这些文件无效。每条 `rpcdata` 写成 `oi_rpcdata_<名字>.h`，例如 `oi_rpcdata_alltypesdata.h`，都在 `OI::RpcData` 里。序列化基类仍在 `OI::Rpc`。`rpc` 不再另生成一层类，也不把函数体 `#include` 进类里。模块下不建 `protocol` 目录，生成时如果还在就删掉。

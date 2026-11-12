@@ -18,6 +18,7 @@ SOURCE = r'''
 #include "oi_coro.h"
 #include "oi_thread.h"
 #include "oi_poll.h"
+#include "oi_blocking_work_session.h"
 #include "oi_errno.h"
 #include "work_protocol/oi_rpcdata_workcompleted.h"
 #include "work_protocol/rpc_enums.h"
@@ -25,6 +26,7 @@ SOURCE = r'''
 #include <cstdio>
 #include <cstring>
 #include <thread>
+#include <array>
 #include <uv.h>
 static OI::Coro::TaskResult<int> Child(int iValueParam)
 {
@@ -47,6 +49,73 @@ static int32_t CopyBlocking(std::string sInput, std::string& sOutput)
     sOutput = std::move(sInput);
     return 0;
 }
+struct QueuedProbe
+{
+    OI::Net::Poll::QueuedCall stCall;
+    std::atomic<int> iRuns{0};
+    std::atomic<int>* pBad = nullptr;
+};
+static void QueuedProbeCallback(void* pArgument)
+{
+    auto* pProbe = static_cast<QueuedProbe*>(pArgument);
+    if (!OI::Net::Poll::GetInstance().InLoopThread() || pProbe->iRuns.fetch_add(1) != 0)
+    {
+        ++*pProbe->pBad;
+    }
+}
+struct BatchProbe
+{
+    OI::Net::Poll::QueuedCall stFirst;
+    OI::Net::Poll::QueuedCall stSentinel;
+    OI::Net::Poll::QueuedCall stReposted;
+    std::atomic<int> iStage{0};
+    std::atomic<int> iMarker{0};
+    std::atomic<int> iBad{0};
+};
+static void StartBatchProbe(void* pArgument)
+{
+    auto* pProbe = static_cast<BatchProbe*>(pArgument);
+    pProbe->stFirst.fnCall = [](void* pValue)
+    {
+        auto* pBatch = static_cast<BatchProbe*>(pValue);
+        if (!OI::Net::Poll::GetInstance().InLoopThread() || pBatch->iStage.exchange(1) != 0)
+        {
+            ++pBatch->iBad;
+        }
+        OI::Net::Poll::GetInstance().PostOnLoop([](void* pMarker)
+        {
+            auto* pBatchMarker = static_cast<BatchProbe*>(pMarker);
+            if (!OI::Net::Poll::GetInstance().InLoopThread() || pBatchMarker->iStage.load() != 2 ||
+                pBatchMarker->iMarker.fetch_add(1) != 0)
+            {
+                ++pBatchMarker->iBad;
+            }
+        }, pBatch);
+        OI::Net::Poll::GetInstance().PostOnLoop(pBatch->stReposted);
+    };
+    pProbe->stSentinel.fnCall = [](void* pValue)
+    {
+        auto* pBatch = static_cast<BatchProbe*>(pValue);
+        if (!OI::Net::Poll::GetInstance().InLoopThread() || pBatch->iStage.exchange(2) != 1)
+        {
+            ++pBatch->iBad;
+        }
+    };
+    pProbe->stReposted.fnCall = [](void* pValue)
+    {
+        auto* pBatch = static_cast<BatchProbe*>(pValue);
+        if (!OI::Net::Poll::GetInstance().InLoopThread() || pBatch->iMarker.load() != 1 ||
+            pBatch->iStage.exchange(3) != 2)
+        {
+            ++pBatch->iBad;
+        }
+    };
+    pProbe->stFirst.pArgument = pProbe;
+    pProbe->stSentinel.pArgument = pProbe;
+    pProbe->stReposted.pArgument = pProbe;
+    OI::Net::Poll::GetInstance().PostOnLoop(pProbe->stFirst);
+    OI::Net::Poll::GetInstance().PostOnLoop(pProbe->stSentinel);
+}
 int main(int iCountParam, char** vArgumentsParam)
 {
     if (iCountParam != 3 || OI::Base::StartFramework(vArgumentsParam[1]))
@@ -59,7 +128,14 @@ int main(int iCountParam, char** vArgumentsParam)
         auto pFinished = std::make_shared<std::atomic<bool>>(false);
         auto pRejected = std::make_shared<std::atomic<bool>>(false);
         auto pRelease = std::make_shared<std::atomic<bool>>(false);
-        OI::Coro::StartTask([pStarted, pFinished, pRejected, pRelease](OI::Coro::Token) -> OI::Coro::Task
+        auto pDrained = std::make_shared<std::atomic<int>>(0);
+        auto pRegistered = std::make_shared<std::atomic<bool>>(false);
+        auto pCloseBad = std::make_shared<std::atomic<int>>(0);
+        auto pCloseProbe = std::make_shared<QueuedProbe>();
+        pCloseProbe->pBad = pCloseBad.get();
+        pCloseProbe->stCall.fnCall = QueuedProbeCallback;
+        pCloseProbe->stCall.pArgument = pCloseProbe.get();
+        OI::Coro::StartTask([pStarted, pFinished, pRejected, pRelease, pDrained, pRegistered, pCloseProbe](OI::Coro::Token) -> OI::Coro::Task
         {
             auto stWork = OI::Coro::RunBlocking([pStarted, pFinished, pRelease]()
             {
@@ -79,11 +155,35 @@ int main(int iCountParam, char** vArgumentsParam)
             auto stRejected = OI::Coro::RunBlocking([]() { return int32_t{0}; });
             const int32_t iRejectedCode = co_await stRejected;
             pRejected->store(iRejectedCode == OI_ERR_CONNECT);
+            struct DrainProbe
+            {
+                std::atomic<int>* pCount;
+                std::atomic<bool>* pRegistered;
+            };
+            auto stProbe = std::make_shared<DrainProbe>(DrainProbe{pDrained.get(), pRegistered.get()});
+            OI::Net::Poll::GetInstance().CallOnLoop([](void* pArgument)
+            {
+                auto* pProbe = static_cast<DrainProbe*>(pArgument);
+                auto fnDone = [](void* pValue)
+                {
+                    ++*static_cast<std::atomic<int>*>(pValue);
+                };
+                OI::Net::BlockingWorkSessionManager::GetInstance().Drain(fnDone, pProbe->pCount);
+                OI::Net::BlockingWorkSessionManager::GetInstance().Drain(fnDone, pProbe->pCount);
+                pProbe->pRegistered->store(true);
+            }, stProbe.get());
+            while (!pRegistered->load())
+            {
+                co_await OI::Coro::yield(1);
+            }
+            OI::Net::Poll::GetInstance().PostOnLoop(pCloseProbe->stCall);
             pRelease->store(true);
         });
         const int iCode = OI::Base::RunFramework();
-        std::printf("blocking shutdown ret=%d finished=%d rejected=%d\n", iCode, pFinished->load(), pRejected->load());
-        return iCode == 0 && pFinished->load() && pRejected->load() ? 0 : 9;
+        std::printf("blocking shutdown ret=%d finished=%d rejected=%d drained=%d\n", iCode, pFinished->load(), pRejected->load(), pDrained->load());
+        std::printf("queued shutdown runs=%d bad=%d\n", pCloseProbe->iRuns.load(), pCloseBad->load());
+        return iCode == 0 && pFinished->load() && pRejected->load() && pDrained->load() == 2 &&
+            pCloseProbe->iRuns.load() == 1 && pCloseBad->load() == 0 ? 0 : 9;
     }
     OI::Base::BytesStream stFields;
     stFields.WritePb(0, uint64_t{42});
@@ -102,11 +202,54 @@ int main(int iCountParam, char** vArgumentsParam)
         return 9;
     }
     std::printf("work protocol extension unknown id ok\n");
+    auto pQueuedBad = std::make_shared<std::atomic<int>>(0);
+    auto pQueued = std::make_shared<std::array<QueuedProbe, 4096>>();
+    auto pBatch = std::make_shared<BatchProbe>();
     auto pLifetime = std::make_shared<int>(42);
     std::weak_ptr<int> pWeak = pLifetime;
-    OI::Coro::StartTask([pLifetime](OI::Coro::Token) -> OI::Coro::Task
+    OI::Coro::StartTask([pLifetime, pQueuedBad, pQueued, pBatch](OI::Coro::Token) -> OI::Coro::Task
     {
         int iBad = 0;
+        for (auto& stProbe : *pQueued)
+        {
+            stProbe.pBad = pQueuedBad.get();
+            stProbe.stCall.fnCall = QueuedProbeCallback;
+            stProbe.stCall.pArgument = &stProbe;
+        }
+        std::array<std::thread, 4> vPosters;
+        for (size_t iPoster = 0; iPoster < vPosters.size(); ++iPoster)
+        {
+            vPosters[iPoster] = std::thread([pQueued, iPoster]()
+            {
+                for (size_t iIndex = iPoster; iIndex < pQueued->size(); iIndex += 4)
+                {
+                    OI::Net::Poll::GetInstance().PostOnLoop((*pQueued)[iIndex].stCall);
+                }
+            });
+        }
+        for (auto& stPoster : vPosters)
+        {
+            stPoster.join();
+        }
+        OI::Net::Poll::GetInstance().PostOnLoop(StartBatchProbe, pBatch.get());
+        int iCompleted = 0;
+        for (int iWait = 0; iWait < 5000; ++iWait)
+        {
+            iCompleted = 0;
+            for (const auto& stProbe : *pQueued)
+            {
+                iCompleted += stProbe.iRuns.load() == 1;
+            }
+            if (iCompleted == static_cast<int>(pQueued->size()) && pBatch->iStage.load() == 3)
+            {
+                break;
+            }
+            co_await OI::Coro::yield(1);
+        }
+        const int iQueuedBad = pQueuedBad->load() + pBatch->iBad.load() +
+            (iCompleted != static_cast<int>(pQueued->size())) + (pBatch->iStage.load() != 3);
+        std::printf("queued calls completed=%d batch=%d bad=%d\n", iCompleted, pBatch->iStage.load(), iQueuedBad);
+        iBad += iQueuedBad;
         auto pThreadRuns = std::make_shared<std::atomic<int>>(0);
         auto pWrappers = std::make_shared<std::atomic<int>>(0);
         auto pRejected = std::make_shared<std::atomic<int>>(0);
@@ -336,11 +479,13 @@ def main():
             assert "blocking argument lifetime bad=0" in result.stdout
             assert "blocking capacity rejected=1 executed=1024" in result.stdout
             assert "work protocol extension unknown id ok" in result.stdout
+            assert "queued calls completed=4096 batch=3 bad=0" in result.stdout
             shutdown = subprocess.run([str(binary), str(config), "shutdown"], capture_output=True, text=True,
                                       timeout=15, env=env)
             print(mode, shutdown.stdout, shutdown.stderr, flush=True)
             shutdown.check_returncode()
-            assert "blocking shutdown ret=0 finished=1 rejected=1" in shutdown.stdout
+            assert "blocking shutdown ret=0 finished=1 rejected=1 drained=2" in shutdown.stdout
+            assert "queued shutdown runs=1 bad=0" in shutdown.stdout
 
 
 if __name__ == "__main__":

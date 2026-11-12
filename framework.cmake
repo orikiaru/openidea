@@ -34,8 +34,9 @@ else()
 	endforeach()
 endif()
 
-set(BASE_M_LIBS timer_m_static logger_m_static redis_m_static net_m_static proto_m_static base_m_static net_m_static timer_m_static hiredis_static)
-set(BASE_LIBS timer_static logger_static redis_static net_static proto_static base_static net_static timer_static hiredis_static)
+set(BASE_M_LIBS db_m_static timer_m_static logger_m_static redis_m_static net_m_static proto_m_static base_m_static net_m_static timer_m_static hiredis_static)
+set(BASE_LIBS db_static timer_static logger_static redis_static net_static proto_static base_static net_static timer_static hiredis_static)
+option(OI_ENABLE_MYSQL "Build the MySQL database driver" OFF)
 
 # libuv 只编静态库，跟工程一起编译
 set(LIBUV_BUILD_SHARED OFF CACHE BOOL "" FORCE)
@@ -56,6 +57,7 @@ include_directories(
 	${BASE_LIB_PATH}/timer/inc
 	${BASE_LIB_PATH}/logger/inc
 	${BASE_LIB_PATH}/redis/inc
+	${BASE_LIB_PATH}/db/inc
 	${BASE_LIB_PATH}/http/inc
 	${BASE_LIB_PATH}/proto/inc
 	${BASE_LIB_PATH}/port
@@ -97,6 +99,7 @@ add_subdirectory("${BASE_LIB_PATH}/timer" EXCLUDE_FROM_ALL)
 add_subdirectory("${BASE_LIB_PATH}/logger" EXCLUDE_FROM_ALL)
 add_subdirectory("${BASE_LIB_PATH}/redis" EXCLUDE_FROM_ALL)
 add_subdirectory("${BASE_LIB_PATH}/http" EXCLUDE_FROM_ALL)
+add_subdirectory("${BASE_LIB_PATH}/db" EXCLUDE_FROM_ALL)
 
 # 按这次配置的系统写 .clangd。Visual Studio 不产 compile_commands，编译时再刷一份 Ninja 数据库。
 function(oi_write_clangd_file clangd_dir db_dir)
@@ -146,7 +149,7 @@ if(OI_CLANGD_REFRESH AND NOT TARGET oi_clangd_db)
 	if(OI_NINJA)
 		# 和主构建共用 deploy 下的产物，开关要一致，否则会把 oi_test_hooks.txt 刷回默认值。
 		set(oi_clangd_options)
-		foreach(oi_option OI_IPC_SINGLE_THREAD OI_ENABLE_TEST_HOOKS)
+		foreach(oi_option OI_IPC_SINGLE_THREAD OI_ENABLE_TEST_HOOKS OI_ENABLE_MYSQL OI_MYSQL_INCLUDE_DIR OI_MYSQL_LIBRARY)
 			if(DEFINED ${oi_option})
 				list(APPEND oi_clangd_options "-D${oi_option}=${${oi_option}}")
 			endif()

@@ -30,6 +30,14 @@ class Poll
 	std::thread m_stThread;
 
   public:
+	// Caller owns the node until its callback runs; enqueue each node only once.
+	struct QueuedCall
+	{
+		QueuedCall* pNext = nullptr;
+		void (*fnCall)(void*) = nullptr;
+		void* pArgument = nullptr;
+	};
+
 	~Poll();
 
 	// 准备 loop。多线程拉起 poll 线程并等到就绪；线程创建失败返回 false。
@@ -48,6 +56,8 @@ class Poll
 	void CallOnLoop(void (*fnFunction)(void*), void* pArgument);
 	// 始终排队；本批回调中新投的调用留到下次唤醒，避免重入和饿死 IO。
 	void PostOnLoop(void (*fnFunction)(void*), void* pArgument);
+	// Preallocated completion path: no queue allocation after work has executed.
+	void PostOnLoop(QueuedCall& stCall) noexcept;
 
 	// 按读写开关把通道挂上 loop。真正改监视在 poll 线程完成。
 	void IOEventRegister(Channel* pChannel, bool bAllowRead = true, bool bAllowWrite = false);

@@ -12,7 +12,6 @@ namespace Net
 {
 struct BlockingWorkChannel::Request
 {
-	uv_work_t stWork;
 	BlockingWorkChannel* pChannel;
 	WorkCompletion stCompletion;
 	OI::Base::Bytes stPacket;
@@ -24,52 +23,52 @@ BlockingWorkChannel::BlockingWorkChannel(Session* pSessionLocal)
 {
 }
 
-void BlockingWorkChannel::Submit(uint64_t iOperation, std::function<void()> fnWork, OI::Base::Bytes stPacket)
+int32_t BlockingWorkChannel::Submit(OI::Thread::BlockingType iType, uint64_t iOperation, std::function<void()> fnWork, OI::Base::Bytes stPacket)
 {
 	assert(Poll::GetInstance().InLoopThread());
-	auto pRequest = std::make_unique<Request>();
+	auto pRequest = std::make_shared<Request>();
 	pRequest->pChannel = this;
 	pRequest->stCompletion.iOperation = iOperation;
 	pRequest->stPacket = std::move(stPacket);
 	pRequest->fnWork = std::move(fnWork);
-	pRequest->stWork.data = pRequest.get();
-	const int iStatus = uv_queue_work(Poll::GetInstance().Loop(), &pRequest->stWork, [](uv_work_t* pWork)
+	// 提前分配通知保活对象，避免执行完之后分配失败丢失完成通知。
+	struct Notification
 	{
-		auto* pRequestLocal = static_cast<Request*>(pWork->data);
-		try
-		{
-			pRequestLocal->fnWork();
-		}
-		catch (...)
-		{
-			pRequestLocal->stCompletion.stError = std::current_exception();
-		}
-	}, [](uv_work_t* pWork, int iStatusLocal)
+		Poll::QueuedCall stCall;
+		std::shared_ptr<Request> pRequest;
+	};
+	auto pNotification = std::make_unique<Notification>();
+	pNotification->pRequest = pRequest;
+	pNotification->stCall.pArgument = pNotification.get();
+	pNotification->stCall.fnCall = [](void* pValue)
 	{
-		std::unique_ptr<Request> pRequestLocal(static_cast<Request*>(pWork->data));
-		if (iStatusLocal != 0)
-		{
-			try
-			{
-				throw std::runtime_error(std::string("background work completion: ") + uv_strerror(iStatusLocal));
-			}
-			catch (...)
-			{
-				pRequestLocal->stCompletion.stError = std::current_exception();
-			}
-		}
+		std::unique_ptr<Notification> pOwned(static_cast<Notification*>(pValue));
+		auto& pRequestLocal = pOwned->pRequest;
 		auto* pChannelLocal = pRequestLocal->pChannel;
 		const auto* pPrevious = std::exchange(pChannelLocal->m_pCompletion, &pRequestLocal->stCompletion);
 		auto* pPreviousPacket = std::exchange(pChannelLocal->m_pPacket, &pRequestLocal->stPacket);
 		pChannelLocal->DataIn();
 		pChannelLocal->m_pPacket = pPreviousPacket;
 		pChannelLocal->m_pCompletion = pPrevious;
-	});
-	if (iStatus != 0)
+	};
+	auto* pArgument = pNotification.get();
+	const int32_t iStatus = OI::Thread::SubmitBlockingWork(iType, [pRequest, pArgument]()
 	{
-		throw std::runtime_error(std::string("background work submit: ") + uv_strerror(iStatus));
+		try
+		{
+			pRequest->fnWork();
+		}
+		catch (...)
+		{
+			pRequest->stCompletion.stError = std::current_exception();
+		}
+		Poll::GetInstance().PostOnLoop(pArgument->stCall);
+	});
+	if (iStatus == OI_OK)
+	{
+		pNotification.release();
 	}
-	pRequest.release();
+	return iStatus;
 }
 
 const WorkCompletion& BlockingWorkChannel::Completion() const

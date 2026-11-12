@@ -5,6 +5,7 @@ set(LIBRARY ${LIBNAME}_static)
 set(LIBRARY_M ${LIBNAME}_m_static)
 
 set(LIBSRC 	
+	src/oi_blocking_pool.cpp
 	src/oi_lock.cpp 
 	src/oi_bytes.cpp 
 	src/oi_thread.cpp 

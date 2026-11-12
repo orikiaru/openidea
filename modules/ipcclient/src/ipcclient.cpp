@@ -1,5 +1,6 @@
 #include "ipcclient.h"
 #include "echo_mgr.h"
+#include "db_mgr.h"
 #include "hold_mgr.h"
 #include "log_mgr.h"
 #include "multi_mgr.h"
@@ -17,6 +18,7 @@ bool IpcClient::Init()
 	{
 		return false;
 	}
+	DbMgr::GetInstance().Load();
 	EchoMgr::GetInstance().Load();
 	if (EchoMgr::GetInstance().StackOn())
 	{
@@ -70,6 +72,7 @@ void IpcClient::OnClientConnect(::OI::Net::Session* pSession)
 	EchoMgr::GetInstance().Start(pSession->GetSessionID());
 	LogMgr::GetInstance().Start();
 	HoldMgr::GetInstance().Start(pSession->GetSessionID());
+	DbMgr::GetInstance().Start();
 }
 
 void IpcClient::OnClientDisconnect(const ::OI::Net::Session* pSession)

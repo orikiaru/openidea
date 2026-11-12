@@ -29,8 +29,12 @@ def stop(proc):
     elif WINDOWS:
         try:
             subprocess.run([sys.executable, str(Path(__file__).resolve()), "--interrupt", str(proc.pid)],
-                           check=True, creationflags=subprocess.CREATE_NO_WINDOW, timeout=5)
-        except (OSError, subprocess.SubprocessError):
+                           check=True, creationflags=subprocess.CREATE_NO_WINDOW, timeout=5,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except (OSError, subprocess.SubprocessError) as error:
+            print("Windows interrupt helper failed pid=%s returncode=%s stdout=%r stderr=%r error=%r" % (
+                proc.pid, getattr(error, "returncode", None), getattr(error, "stdout", None),
+                getattr(error, "stderr", None), error), file=sys.stderr, flush=True)
             # AttachConsole can lose a race with normal exit. Never hide a live
             # process's helper failure or treat a forced kill as graceful exit.
             if proc.poll() is None:

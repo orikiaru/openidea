@@ -60,8 +60,10 @@ struct IoOp
 static uv_loop_t g_loop;
 static uv_async_t g_async;
 static uv_timer_t g_tick_timer;
-static ::OI::Thread::Mutex g_op_lock;
+static ::OI::Thread::NativeMutex g_op_lock;
 static std::deque<IoOp> g_ops;
+static Poll::QueuedCall* g_pCallHead = nullptr;
+static Poll::QueuedCall* g_pCallTail = nullptr;
 static bool g_loop_ready = false;
 static std::atomic<bool> g_poll_stop(false);
 static bool g_tick_armed = false;
@@ -205,23 +207,54 @@ static void ApplyOp(const IoOp& stOperation)
 static void DrainOps()
 {
 	size_t iRemaining;
+	Poll::QueuedCall* pCalls;
 	{
-		::OI::Thread::MutexGuard stGuard(g_op_lock);
+		::OI::Thread::NativeMutexGuard stGuard(g_op_lock);
 		iRemaining = g_ops.size();
+		pCalls = g_pCallHead;
+		g_pCallHead = nullptr;
+		g_pCallTail = nullptr;
 	}
 	while (iRemaining-- > 0)
 	{
 		IoOp stOperation;
 		{
-			::OI::Thread::MutexGuard stGuard(g_op_lock);
+			::OI::Thread::NativeMutexGuard stGuard(g_op_lock);
 			if (g_ops.empty())
 			{
-				return;
+				break;
 			}
 			stOperation = g_ops.front();
 			g_ops.pop_front();
 		}
 		ApplyOp(stOperation);
+	}
+	while (pCalls)
+	{
+		auto* pCall = pCalls;
+		pCalls = pCall->pNext;
+		pCall->pNext = nullptr;
+		// Callback may destroy the node. Never access it after invocation.
+		pCall->fnCall(pCall->pArgument);
+	}
+}
+
+void Poll::PostOnLoop(QueuedCall& stCall) noexcept
+{
+	::OI::Thread::NativeMutexGuard stGuard(g_op_lock);
+	stCall.pNext = nullptr;
+	if (g_pCallTail)
+	{
+		g_pCallTail->pNext = &stCall;
+	}
+	else
+	{
+		g_pCallHead = &stCall;
+	}
+	g_pCallTail = &stCall;
+	if (g_loop_ready)
+	{
+		uv_async_send(&g_async);
 	}
 }
 
@@ -256,7 +289,7 @@ static void StartQuitSignals()
 
 static void PostOp(const IoOp& stOperation)
 {
-	::OI::Thread::MutexGuard stGuard(g_op_lock);
+	::OI::Thread::NativeMutexGuard stGuard(g_op_lock);
 	g_ops.push_back(stOperation);
 	if (g_loop_ready)
 	{
@@ -270,7 +303,7 @@ static void PrepareLoop()
 	uv_async_init(&g_loop, &g_async, OnAsync);
 	StartQuitSignals();
 	{
-		::OI::Thread::MutexGuard stGuard(g_op_lock);
+		::OI::Thread::NativeMutexGuard stGuard(g_op_lock);
 		g_loop_ready = true;
 	}
 	DrainOps();
@@ -346,7 +379,7 @@ bool Poll::Init()
 	{
 		bool bReadyLocal = false;
 		{
-			::OI::Thread::MutexGuard stGuard(g_op_lock);
+			::OI::Thread::NativeMutexGuard stGuard(g_op_lock);
 			bReadyLocal = g_loop_ready;
 		}
 		if (bReadyLocal)

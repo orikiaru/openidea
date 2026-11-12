@@ -1,7 +1,10 @@
 #pragma once
+#include "oi_blocking_pool.h"
 #include "oi_session_manager.h"
 #include <exception>
 #include <functional>
+#include <vector>
+#include <utility>
 
 namespace OI
 {
@@ -16,11 +19,16 @@ class BlockingWorkSessionManager : public SessionManager
 	struct Submission;
 	BlockingWorkSessionManager();
 	std::unique_ptr<BlockingWorkSession> m_pSession;
-	std::map<uint64_t, std::function<void(int32_t, std::exception_ptr)>> m_mPending;
+	struct Pending
+	{
+		OI::Thread::BlockingType iType;
+		std::function<void(int32_t, std::exception_ptr)> fnDone;
+	};
+	std::map<uint64_t, Pending> m_mPending;
+	std::map<OI::Thread::BlockingType, size_t> m_mCounts;
 	uint64_t m_iNextOperation = 0;
 	bool m_bClosed = false;
-	void (*m_fnDrained)(void*) = nullptr;
-	void* m_pDrainedArgument = nullptr;
+	std::vector<std::pair<void (*)(void*), void*>> m_vDrained;
 	void SubmitOnLoop(Submission& stSubmission) noexcept;
 	void CheckDrained();
 	Session* CloneSession() override;
@@ -31,7 +39,7 @@ class BlockingWorkSessionManager : public SessionManager
 	~BlockingWorkSessionManager();
 	// 闭包按值保活，工作异常交给完成回调；完成回调不得抛异常或阻塞。
 	// 上限 1024 条；容量不足返回 BUSY，停止/会话关闭返回 CONNECT，函数异常单独交回。
-	void Submit(std::function<void()> fnWork, std::function<void(int32_t, std::exception_ptr)> fnDone);
+	void Submit(OI::Thread::BlockingType iType, std::function<void()> fnWork, std::function<void(int32_t, std::exception_ptr)> fnDone);
 	// Session 在 poll 线程交回操作号；同一操作只消费一次。
 	void Complete(uint64_t iOperation, std::exception_ptr stError);
 	// 仅 poll 线程调用。关闭入口，已接纳工作全部返回后调用 fnDone。

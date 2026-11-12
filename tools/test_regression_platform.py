@@ -1,5 +1,7 @@
 """Exercise owned process lifecycle on the current OS without application binaries."""
 import os
+import contextlib
+import io
 from pathlib import Path
 import subprocess
 import sys
@@ -72,6 +74,22 @@ class ProcessFixtureTests(unittest.TestCase):
 
 
 class StopHelperTests(unittest.TestCase):
+    def test_helper_failure_reports_captured_output(self):
+        proc = mock.Mock(pid=123)
+        proc.poll.return_value = None
+        error = subprocess.CalledProcessError(120, "helper", output=b"out", stderr=b"failure detail")
+        output = io.StringIO()
+        with mock.patch("regression_platform.WINDOWS", True), \
+             mock.patch("subprocess.CREATE_NO_WINDOW", 0, create=True), \
+             mock.patch("regression_platform.subprocess.run", side_effect=error) as helper, \
+             contextlib.redirect_stderr(output):
+            with self.assertRaises(subprocess.CalledProcessError):
+                stop(proc)
+        self.assertIn("returncode=120", output.getvalue())
+        self.assertIn("failure detail", output.getvalue())
+        self.assertEqual(helper.call_args.kwargs["stdout"], subprocess.PIPE)
+        self.assertEqual(helper.call_args.kwargs["stderr"], subprocess.PIPE)
+
     def test_helper_failures_remain_failures_for_live_process(self):
         for error in (subprocess.CalledProcessError(1, "helper"),
                       subprocess.TimeoutExpired("helper", 5), OSError("launch failed")):

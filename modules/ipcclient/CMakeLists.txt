@@ -6,6 +6,7 @@ cmake_minimum_required(VERSION 2.6)
 set(MODULE_SRCS
         src/main.cpp
         src/ipcclient.cpp
+        src/db_mgr.cpp
         src/test_board.cpp
         src/echo_mgr.cpp
         src/log_mgr.cpp

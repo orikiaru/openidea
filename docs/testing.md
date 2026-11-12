@@ -6,12 +6,14 @@
 
 - Windows 原生 MSVC x64 Release、Linux WSL GCC 13，各运行多线程 MT 和单线程 ST，共四组。
 - ST/MT 只切换 ipcclient、ipcserver；logd 固定多线程，redisserver/registry 按各自配置单线程。
-- `all` 包含 20 项：echo、log、log-backpressure、redis、redis-limit、redis-shutdown、redis-queue-timeout、rpc-ingress、redis-backpressure-bytes、redis-backpressure-count、redis-fairness、hold、rpc-admission-count、rpc-admission-bytes、reset、disk-full、registry、udp、multi、web。
+- `all` 包含 21 项：db、echo、log、log-backpressure、redis、redis-limit、redis-shutdown、redis-queue-timeout、rpc-ingress、redis-backpressure-bytes、redis-backpressure-count、redis-fairness、hold、rpc-admission-count、rpc-admission-bytes、reset、disk-full、registry、udp、multi、web。
 - Linux 可额外运行 clock-forward、clock-back，以及纯协程 ASan。校时故障只影响测试子进程，绝不调整宿主机时钟。
 - 必须全部返回 0；不能用删除断言、扩大超时、提高容量或重试掩盖失败。偶发失败保留日志，记录复测结果及根因是否确认。
 - 本次源码正在变化时不要声称覆盖了最新版本；核对结果目录的 environment.json、Git HEAD、diff 摘要后再报告。
 
-阻塞函数回归由 HoldMgr 覆盖：128 个后台工作及 64 个共享等待者，核对结果和单次执行。纯协程探针另检查 1024 项容量上限、超限拒绝以及停止时已接纳工作的完成。新增检查以实际矩阵结果为准，不代表四种构建模式已经通过。
+`db` 使用公共 fake 驱动覆盖数据库客户端，不依赖真实 MySQL，已列入 `--case all`。`mysql` 是显式运行的独立用例，不包含在 `all`：需启用 MySQL 驱动并提供可用的客户端库、测试数据库和测试环境配置；缺少依赖或配置时记录环境阻塞，不能算通过。新增用例以实际回归结果为准。
+
+阻塞函数回归由 HoldMgr 覆盖：128 个后台工作及 64 个共享等待者，核对结果和单次执行。阻塞池按类型隔离，Default 默认 4 个线程、1024 个排队项，并保留 1024 个在途工作的兼容限制；其他类型须显式配置，各自的队列上限独立。容量检查应区分在途工作与排队项，并覆盖超限拒绝、启动后配置拒绝及停止时排空已接纳工作。新增检查以实际矩阵结果为准，不代表四种构建模式已经通过。
 
 输出引用 RPC 的日常压力由 EchoMgr 使用 `Call(req, res)` 覆盖。HoldMgr 同时验证输出任务的请求保活、16 个等待者只提交一次、重复等待不重写响应、固定会话、业务错误保留原响应、超时后迟到回包不覆盖新响应，以及命名/分区调用。正常 Hold 必须输出 `hold output rpc shared waiters=16 submissions=1 bad=0`、`hold output rpc direct pinned error late bad=0`、`hold output rpc named any zone shared=8 bad=0`；它们已纳入脚本断言。底层单次等待器的重复等待和异常注入用例仍保留，与输出 Task 可重复等待的语义分开验证。
 

@@ -1,4 +1,5 @@
 #pragma once
+#include "oi_blocking_pool.h"
 #include "oi_lock.h"
 #include "oi_duration.h"
 #include <atomic>
@@ -122,6 +123,7 @@ namespace Detail
 // 后台线程只执行 Execute。完成门及 Schedule 由 poll 线程处理。
 struct BlockingOperation
 {
+	OI::Thread::BlockingType iType = OI::Thread::BlockingType::Default;
 	std::atomic<Gate> iGate{Gate::Idle};
 	std::coroutine_handle<> stWaiter;
 	std::exception_ptr stError;
@@ -490,9 +492,10 @@ using TaskResult = BasicTask<T>;
 namespace Detail
 {
 template <typename F>
-TaskResult<int32_t> RunBlockingTask(F fnFunction)
+TaskResult<int32_t> RunBlockingTask(OI::Thread::BlockingType iType, F fnFunction)
 {
 	auto pState = std::make_shared<Detail::BlockingState<F>>(std::move(fnFunction));
+	pState->iType = iType;
 	const int32_t iStatus = co_await Detail::BlockingAwaiter{pState};
 	co_return iStatus != 0 ? iStatus : pState->iResult;
 }
@@ -502,14 +505,21 @@ TaskResult<int32_t> RunBlockingTask(F fnFunction)
 // 左值参数借用，右值参数及函数对象按值保活；引用必须覆盖任务执行期。
 // 丢弃 Task 不取消工作；退出作用域/框架前必须 await/Join，不能后台访问单线程业务对象。
 template <typename F, typename... Args>
-[[nodiscard]] TaskResult<int32_t> RunBlocking(F fnFunction, Args&&... stArguments)
+[[nodiscard]] TaskResult<int32_t> RunBlocking(OI::Thread::BlockingType iType, F fnFunction, Args&&... stArguments)
 {
 	static_assert(std::is_same_v<std::invoke_result_t<F&, Args...>, int32_t>, "RunBlocking function must return int32_t status");
 	// 前端不做协程，先把右值放进闭包，避免转发引用跨挂起后悬空。
-	return Detail::RunBlockingTask([fnFunction = std::move(fnFunction), stArguments = std::tuple<Args...>(std::forward<Args>(stArguments)...)]() mutable -> int32_t
+	return Detail::RunBlockingTask(iType, [fnFunction = std::move(fnFunction), stArguments = std::tuple<Args...>(std::forward<Args>(stArguments)...)]() mutable -> int32_t
 	{
 		return std::apply(fnFunction, std::move(stArguments));
 	});
+}
+
+template <typename F, typename... Args>
+    requires(!std::is_same_v<std::decay_t<F>, OI::Thread::BlockingType>)
+[[nodiscard]] TaskResult<int32_t> RunBlocking(F fnFunction, Args&&... stArguments)
+{
+	return RunBlocking(OI::Thread::BlockingType::Default, std::move(fnFunction), std::forward<Args>(stArguments)...);
 }
 
 // 节点放在堆上。awaiter 被协程帧挪走时，已经链进任务的地址不能跟着变。
