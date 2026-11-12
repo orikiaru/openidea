@@ -67,6 +67,9 @@ def main():
     parser.add_argument("--windows-redis-binary", required=True)
     parser.add_argument("--redis-binary", help="Linux lanes; default: redis-server on WSL PATH")
     parser.add_argument("--case", default="all")
+    parser.add_argument("--mysqld", help="Linux lanes: build with MySQL and run the mysql case before each lane's tests")
+    parser.add_argument("--define", action="append", default=[], metavar="NAME=VALUE",
+                        help="Linux lanes: extra CMake cache entry passed to test_matrix.py")
     parser.add_argument("--jobs", type=int, default=8)
     parser.add_argument("--artifacts", type=Path, required=True)
     parser.add_argument("--lane", action="append", choices=["%s-%s" % (platform, mode) for platform, mode, _ in LANES],
@@ -96,6 +99,10 @@ def main():
                        "--build-dir", copy + "/build", "--artifacts", linux_path(args.wsl_user, output)] + common
             if args.redis_binary:
                 command += ["--redis-binary", args.redis_binary]
+            if args.mysqld:
+                command += ["--mysqld", args.mysqld]
+            for item in args.define:
+                command += ["--define", item]
             cwd = ROOT
         print("START", lane, "port_offset=%d" % offset, flush=True)
         processes.append((lane, subprocess.Popen(command, cwd=cwd, stdout=log, stderr=subprocess.STDOUT), log, time.monotonic()))

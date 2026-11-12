@@ -63,7 +63,7 @@
 
 有行为的改动，Linux 和 Windows 都要跑。默认还要单线程、多线程各跑一遍，缺一套不算测完。只有改动明确跟线程无关、并且是纯逻辑时，可以不切单线程和多线程；这种例外要在回复里写明。协程、挂起、调度、`Task`、`StartTask`、`co_await`、`yield` 一定涉及单线程和多线程，不能当成纯逻辑跳过。
 
-单线程和多线程指 `ipcclient` 和 `ipcserver`。`logd` 只能多线程。`redisserver` 按它自己的编译选项是单线程。Linux 优先用本机 `.local/linux-hosts.json` 里的远程机器，这个文件不进仓库：4 核那台编译 Release 并跑多线程，2 核那台跑单线程，用户名以文件为准，只走公钥，不把密码写进代码或命令。文件不存在，或里面缺 IP、用户名时，先问用户。用户选择不提供，就改用 WSL，构建目录 `~/openidea-build-gcc13`；之后一直用 WSL，直到用户再次明确说用远程机器。Windows 用 `build-win`（Visual Studio 17 2022，x64），同样两种线程模式各编一次。两边的可执行文件都在 `deploy/bin`，换平台或换线程模式之前先编出要跑的那一套。单线程测完把该平台切回多线程再编一次，不要把 `deploy/bin` 留在单线程。回归入口是 `python3 tools/run_regressions.py --case all`。Linux 无论在远程还是 WSL，都用 `-DOI_IPC_SINGLE_THREAD=ON` 和 `OFF` 各编一次。
+单线程和多线程指 `ipcclient` 和 `ipcserver`。`logd` 只能多线程。`redisserver` 按它自己的编译选项是单线程。Linux 优先用本机 `.local/linux-hosts.json` 里的远程机器，这个文件不进仓库：4 核那台编译 Release 并跑多线程，2 核那台跑单线程，用户名以文件为准，只走公钥，不把密码写进代码或命令。文件不存在，或里面缺 IP、用户名时，先问用户。用户选择不提供，就改用 WSL，构建目录 `~/openidea-build-gcc13`；之后一直用 WSL，直到用户再次明确说用远程机器。Windows 用 `build-win`（Visual Studio 17 2022，x64），同样两种线程模式各编一次。两边的可执行文件都在 `deploy/bin`，换平台或换线程模式之前先编出要跑的那一套。本机 Windows 和 WSL 单线程测完把该平台切回多线程再编一次，不要把 `deploy/bin` 留在单线程；2 核远程机器固定只跑单线程，矩阵加 `--no-restore`，不编回多线程。回归入口是 `python3 tools/run_regressions.py --case all`。Linux 无论在远程还是 WSL，都用 `-DOI_IPC_SINGLE_THREAD=ON` 和 `OFF` 各编一次。
 
 `ipcclient` 里四个 Mgr 都要跑到：`EchoMgr`、`LogMgr`、`RedisMgr`、`HoldMgr`。开关在 `deploy/config/ipcclient.toml` 的 `[Test]`：`echo`、`log`、`redis`、`hold`。一次只开一个。
 

@@ -5,6 +5,8 @@
 #include <map>
 #include <string>
 #include <string.h>
+#include <algorithm>
+#include <bit>
 #include <exception>
 #include <type_traits>
 #include <utility>
@@ -42,6 +44,36 @@ struct PbFixedTrait
 {
 	static const bool bValue = std::is_arithmetic<T>::value || std::is_enum<T>::value;
 };
+
+static_assert(std::endian::native == std::endian::little || std::endian::native == std::endian::big, "mixed-endian hosts are not supported");
+
+// 序列化统一小端：小端主机原样拷贝，大端主机翻转字节。
+template <typename T>
+void StoreLittleEndian(void* pDestination, const T& stValue)
+{
+	static_assert(PbFixedTrait<T>::bValue);
+	memcpy(pDestination, &stValue, sizeof(T));
+	if constexpr (std::endian::native == std::endian::big)
+	{
+		auto* pBytes = static_cast<unsigned char*>(pDestination);
+		std::reverse(pBytes, pBytes + sizeof(T));
+	}
+}
+
+template <typename T>
+T LoadLittleEndian(const void* pSource)
+{
+	static_assert(PbFixedTrait<T>::bValue);
+	unsigned char vBytes[sizeof(T)];
+	memcpy(vBytes, pSource, sizeof(T));
+	if constexpr (std::endian::native == std::endian::big)
+	{
+		std::reverse(vBytes, vBytes + sizeof(T));
+	}
+	T stValue;
+	memcpy(&stValue, vBytes, sizeof(T));
+	return stValue;
+}
 
 // 带读游标的字节流。编码往末尾追加，解码从游标往前读，字节不够抛 ParserException。
 class BytesStream : public Bytes
@@ -109,7 +141,9 @@ class BytesStream : public Bytes
 	typename std::enable_if<PbFixedTrait<T>::bValue, BytesStream&>::type
 	operator<<(const T& stValueLocal)
 	{
-		Append(&stValueLocal, sizeof(T));
+		unsigned char vBytes[sizeof(T)];
+		StoreLittleEndian(vBytes, stValueLocal);
+		Append(vBytes, sizeof(T));
 		return *this;
 	}
 	template <typename T>
@@ -131,7 +165,7 @@ class BytesStream : public Bytes
 		}
 		else
 		{
-			memcpy(&stValueLocal, GetCurPtr(), sizeof(T));
+			stValueLocal = LoadLittleEndian<T>(GetCurPtr());
 		}
 		m_iCurrentPosition += sizeof(T);
 		return *this;
@@ -182,7 +216,8 @@ class BytesStream : public Bytes
 	// totalsize 是后面所有 seqid+size+data 的总字节数。
 	// seqid 从 0 起，按字段声明顺序对应；允许缺号、乱序。
 	// 没出现的 seqid 保持字段原值，不认识的 seqid 按 size 跳过。
-	// vector 的每个元素单独一条，seqid 相同。均为 uint32 小端。
+	// vector 的每个元素单独一条，seqid 相同。
+	// 字段头、长度前缀、定宽整数、枚举、float、double 都是小端，不看主机字节序。
 	BytesStream& WritePbRaw(uint32_t iSequence, const void* pData, uint32_t iSize);
 	PbHeaderState PreparePbHeader(uint32_t& iSequence, uint32_t& iSize);
 	void ReadPbHeader(uint32_t& iSequence, uint32_t& iSize);
@@ -192,7 +227,9 @@ class BytesStream : public Bytes
 	typename std::enable_if<PbFixedTrait<T>::bValue, BytesStream&>::type
 	WritePb(uint32_t iSequence, const T& stValueLocal)
 	{
-		return WritePbRaw(iSequence, &stValueLocal, (uint32_t)sizeof(T));
+		unsigned char vBytes[sizeof(T)];
+		StoreLittleEndian(vBytes, stValueLocal);
+		return WritePbRaw(iSequence, vBytes, (uint32_t)sizeof(T));
 	}
 	BytesStream& WritePb(uint32_t iSequence, const std::string& sValue);
 	BytesStream& WritePb(uint32_t iSequence, const Bytes& stValueLocal);
@@ -226,7 +263,7 @@ class BytesStream : public Bytes
 		}
 		else
 		{
-			memcpy(&stValueLocal, GetCurPtr(), sizeof(T));
+			stValueLocal = LoadLittleEndian<T>(GetCurPtr());
 		}
 		m_iCurrentPosition += iSize;
 	}

@@ -37,7 +37,7 @@ def quoted_path(path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mysqld", help="mysqld executable in a persistent installation")
-    parser.add_argument("--mysql", help="mysql client executable; defaults to the mysqld directory")
+    parser.add_argument("--mysql", help="mysql client executable; defaults to the mysqld directory, then PATH")
     parser.add_argument("--bin-dir", type=Path, default=REPO / "deploy" / "bin")
     parser.add_argument("--artifacts", type=Path)
     parser.add_argument("--port-offset", type=int, default=0)
@@ -45,7 +45,9 @@ def main():
     if not args.mysqld:
         raise EnvironmentBlocked("--mysqld is required; install MySQL in a persistent directory")
     mysqld = executable(args.mysqld, "mysqld")
-    mysql = executable(args.mysql or mysqld.with_name("mysql.exe" if os.name == "nt" else "mysql"), "mysql client")
+    sibling = mysqld.with_name("mysql.exe" if os.name == "nt" else "mysql")
+    # 发行版包把 mysqld 放在 sbin、客户端放在 bin，同目录没有就用 PATH 里的。
+    mysql = executable(args.mysql or (sibling if sibling.is_file() else shutil.which("mysql") or sibling), "mysql client")
     env = os.environ.copy()
     env.pop("MYSQL_PWD", None)
     # Keep caller-provided SDK paths intact, adding the installation bin directory.
@@ -58,6 +60,11 @@ def main():
         write_owner(root, REPO, args.port_offset)
         data = root / "data"
         data.mkdir()
+        # 发行版包编译进的默认导入导出目录（/var/lib/mysql-files）可能不存在，不存在 mysqld 拒绝启动。
+        files = root / "files"
+        files.mkdir(mode=0o700)
+        # --no-defaults 仍会读 ~/.mylogin.cnf；8.0 客户端没有 --no-login-paths，改为指向不存在的文件。
+        env["MYSQL_TEST_LOGIN_FILE"] = str(root / "no-login.cnf")
         config = root / "my.cnf"
         log = root / "mysqld.log"
         with socket.socket() as probe:
@@ -69,6 +76,7 @@ def main():
                           "socket=" + quoted_path(root / "mysql.sock") + "\n" +
                           "pid-file=" + quoted_path(root / "mysqld.pid") + "\n" +
                           "log-error=" + quoted_path(log) + "\n" +
+                          "secure-file-priv=" + quoted_path(files) + "\n" +
                           "mysqlx=0\nbind-address=127.0.0.1\nport=" + str(port) + "\n", encoding="utf-8")
         server_args = [str(mysqld), "--defaults-file=" + str(config)]
         if os.name != "nt" and hasattr(os, "geteuid") and os.geteuid() == 0:
@@ -109,7 +117,7 @@ def main():
                 if time.monotonic() >= deadline:
                     raise RuntimeError("owned mysqld startup timed out:\n" + details)
                 time.sleep(0.1)
-            client = [str(mysql), "--no-defaults", "--no-login-paths", "--protocol=tcp", "--host=127.0.0.1",
+            client = [str(mysql), "--no-defaults", "--protocol=tcp", "--host=127.0.0.1",
                       "--port=" + str(port), "--user=root", "--execute=CREATE DATABASE oi_regression"]
             subprocess.run(client, env=env, check=True, timeout=30)
             env.update(OI_TEST_MYSQL_HOST="127.0.0.1", OI_TEST_MYSQL_PORT=str(port),

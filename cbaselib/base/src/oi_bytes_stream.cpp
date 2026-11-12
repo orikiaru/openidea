@@ -1,15 +1,12 @@
 #include "oi_bytes_stream.h"
 #include <string>
-#include <string.h>
 #include "oi_rpc.h"
 
 namespace OI
 {
 namespace Base
 {
-//暂不处理大小端问题，默认小端
-
-// 长度前缀是 4 字节，最高位为 1 的长度对端按非法处理。
+// 长度前缀是 4 字节小端，最高位为 1 的长度对端按非法处理。
 static void WriteLenPrefixed(BytesStream& stOutputStream, const void* pData, size_t iSize)
 {
 	if (iSize > (size_t)0x7FFFFFFF)
@@ -86,8 +83,12 @@ BytesStream& BytesStream::WritePbRaw(uint32_t iSequence, const void* pData, uint
 	{
 		throw ParserException();
 	}
-	Append(&iSequence, sizeof(iSequence));
-	Append(&iSize, sizeof(iSize));
+	unsigned char vSequence[sizeof(uint32_t)];
+	unsigned char vSizeBytes[sizeof(uint32_t)];
+	StoreLittleEndian(vSequence, iSequence);
+	StoreLittleEndian(vSizeBytes, iSize);
+	Append(vSequence, sizeof(vSequence));
+	Append(vSizeBytes, sizeof(vSizeBytes));
 	if (iSize > 0)
 	{
 		if (!pData)
@@ -105,10 +106,8 @@ PbHeaderState BytesStream::PreparePbHeader(uint32_t& iSequence, uint32_t& iSize)
 	{
 		return PB_HEADER_NEED_MORE;
 	}
-	uint32_t iSequenceValue = 0;
-	uint32_t iSizeValue = 0;
-	memcpy(&iSequenceValue, GetCurPtr(), sizeof(iSequenceValue));
-	memcpy(&iSizeValue, GetCurPtr() + sizeof(iSequenceValue), sizeof(iSizeValue));
+	uint32_t iSequenceValue = LoadLittleEndian<uint32_t>(GetCurPtr());
+	uint32_t iSizeValue = LoadLittleEndian<uint32_t>(GetCurPtr() + sizeof(uint32_t));
 	if ((int32_t)iSequenceValue < 0 || (int32_t)iSizeValue < 0)
 	{
 		return PB_HEADER_BAD;

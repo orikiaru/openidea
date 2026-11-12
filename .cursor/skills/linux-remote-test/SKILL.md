@@ -18,7 +18,7 @@ description: >-
 
 文件不存在，或某台机器缺 `ip`、`user` 时，先问用户。用户不提供，就改用 WSL（`docs/testing.md` 第 3 节），之后一直用 WSL，直到用户再次明确说用远程机器。
 
-`hosts[]` 里 `role` 为 `mt` 的机器编译 Release 并跑多线程，`jobs` 用记录值。`role` 为 `st` 的机器只跑单线程，测完必须由矩阵编回多线程。一台机器不要同时跑两种模式。两台机器可以同时各跑自己的模式，但不要共用构建目录。
+`hosts[]` 里 `role` 为 `mt` 的机器编译 Release 并跑多线程，`jobs` 用记录值。`role` 为 `st` 的机器固定只跑单线程，矩阵加 `--no-restore`，测完不编回多线程，构建目录一直是单线程。一台机器不要同时跑两种模式。两台机器可以同时各跑自己的模式，但不要共用构建目录。
 
 可选字段有则用，没有就按下面探测，不要猜另一台机器的路径：`identity`、`cmake`、`redis`、`source`、`build`。默认私钥是 `%USERPROFILE%\.ssh\id_rsa`，源码 `$HOME/openidea`，构建目录 `$HOME/openidea-build-gcc13`。
 
@@ -67,7 +67,7 @@ Windows 宿主上的 WSL 路仍用 `python tools/kill_test_procs.py`，见 `docs
 
 ## 跑矩阵
 
-同一构建目录上已有矩阵时不要再开。结果目录用新的 `$HOME/openidea-test-results/<lane>-<日期>`，不要覆盖上一轮失败目录。把标准输出追加到同级的 `runner.log`。
+同一构建目录上已有矩阵时不要再开。结果目录用新的 `$HOME/openidea-test-results/<lane>-<日期>`，不要覆盖上一轮失败目录。标准输出写到同级的 `runner.log`。
 
 ```sh
 export PATH="$HOME/opt/cmake/bin:$PATH"
@@ -81,16 +81,18 @@ python3 tools/test_matrix.py --platform native --mode <mt|st> --jobs <jobs> --ca
   --artifacts "$HOME/openidea-test-results/<lane>-<日期>"
 ```
 
-全量大约数分钟到二十分钟。SSH 等到进程结束，或 `setsid` 放到后台后只轮询结果文件，不要在编译或用例中途重开。
+全量大约数分钟到二十分钟。长任务只用 `setsid nohup python3 tools/test_matrix.py ... > runner.log 2>&1 &` 启动，判断结束只看 artifacts 里 `summary.json` 的 `completed` 字段或 `test_matrix` 进程是否还在，不要自己另造退出码文件。不要在编译或用例中途重开。
 
-`--mode st` 结束后读构建目录的 `CMakeCache.txt`，确认 `OI_IPC_SINGLE_THREAD:BOOL=OFF`，并且 `summary.json` 的 `restored` 为 true。恢复构建成功不等于用例通过。
+`st` 机器用 `--mode st --no-restore`，结束后 `summary.json` 的 `restore_skipped` 为 true，`CMakeCache.txt` 仍是 `OI_IPC_SINGLE_THREAD:BOOL=ON`。`mt` 机器结束后 `restored` 为 true。恢复构建成功不等于用例通过。
+
+只在显式要求时跑的用例（例如 `mysql`）直接加在上面的 `test_matrix.py` 命令上：`--mysqld "$MYSQL/bin/mysqld" --define OI_MYSQL_INCLUDE_DIR="$MYSQL/include" --define OI_MYSQL_LIBRARY="$MYSQL/lib/libmysqlclient.so"`。缺 `libaio` 时把已有兼容库目录加进 `LD_LIBRARY_PATH`。不要单独先编译再跑 mysql。
 
 ## 回报
 
 只写看到的证据：
 
 1. 退出码、起止时间。
-2. `summary.json` 的 `passed`、`completed`、`restored`。
+2. `summary.json` 的 `passed`、`completed`、`restored`、`restore_skipped`。
 3. `matrix.json` 每一步退出码。
 4. 每个用例通过、失败或环境阻塞，以及耗时。
 5. hold 日志里 `hold timer update` 那一行原文。

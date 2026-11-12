@@ -30,24 +30,26 @@ module IpcClient {
 
 ```
 rpcdata DbSample json db {
-    0 [db id] int64_t iId;
-    1 [db] string sName;
+    0 [db id] [dbkey] int64_t iId;
+    1 [db] [dbtype VARBINARY 64] string sName;
     2 [nojson] int32_t iSecret;
     3 [nodb] string sCache;
     8 vector<int32_t> vNumbers;
     10 DbChild stChild;
     13 [dbjson] vector<int32_t> vJsonNumbers;
-    14 [db notes] [dbjson] map<string, int32_t> mJsonFlags;
+    14 [db notes] [dbjson] [dbtype TEXT] map<string, int32_t> mJsonFlags;
 }
 ```
 
 整数字段写 `int8_t`、`int16_t`、`int32_t`、`int64_t` 和 `uint8_t`、`uint16_t`、`uint32_t`、`uint64_t`。`string` 就是 `std::string`。`map` 的键可以是这些标量、`string`，也可以是名字后面加了 `key` 的 `rpcdata`。`key` 会生成 `operator<`。嵌进别的 `key`，或者再当 `map` 键时，里层也必须有比较器，生成时会检查。`key` 不能再标 `json`。
 
-`json` 和 `db` 写在结构名后面，才生成对应方法。没标的结构不生成。标了以后字段默认都参加，序列化名就是字段名。字段标记各自写成 `[]`，可以连着写：`[json]`、`[json 键名]`、`[nojson]`、`[db]`、`[db 列名]`、`[nodb]`、`[dbjson]`。`[json]`、`[db]` 后面的名字可省略，省略就用字段名。同一字段不能既改名又排除。至少要留下一个参加的字段。`rpc` 不生成 JSON，也不生成数据库方法。库是 JsonCpp。
+`json` 和 `db` 写在结构名后面，才生成对应方法。没标的结构不生成。标了以后字段默认都参加，序列化名就是字段名。字段标记各自写成 `[]`，可以连着写：`[json]`、`[json 键名]`、`[nojson]`、`[db]`、`[db 列名]`、`[nodb]`、`[dbjson]`、`[dbkey]`、`[dbtype 类型 长度]`。`[json]`、`[db]` 后面的名字可省略，省略就用字段名。同一字段不能既改名又排除。至少要留下一个参加的字段。`rpc` 不生成 JSON，也不生成数据库方法。库是 JsonCpp。
 
 JSON 会穿透。嵌套的 `rpcdata`、`vector`、`map` 按内层继续生成，里层 `rpcdata` 自己也要标 `json`，否则外层字段无法生成 JSON。`[nojson]` 的字段不检查能不能表达成 JSON，所以不适合 JSON 的 `map` 可以留在同一个结构里，只要标 `[nojson]`。要沿用外部键就写 `[json 键名]`，例如 `0 [json count] int32_t iCount;`。不改名就写成 `0 [json] int32_t iCount;`，键名仍是 `iCount`，和什么都不写一样。
 
-`db` 不穿透，只映射头一层。整数、浮点、`bool`、`string`、`Bytes` 各是一列。`vector`、`map` 和嵌套 `rpcdata` 默认整段收成 PB blob：序号固定为 0，`vector` 每个元素一条，空 `vector` 是空 blob。写了 `[dbjson]` 才改用现有 JSON 文本入库，这时里面的 `rpcdata` 必须自己标 `json`，标量不能写 `[dbjson]`。没写 `[dbjson]` 就不做这套 JSON。blob 里的结构不用标 `db`。列名默认是字段名，`[db 列名]` 才换，只写 `[db]` 列名仍是字段名。结构没标 `db`，就不能写 `[db]`、`[nodb]`、`[dbjson]`。字段写了 `[nodb]` 就不再是数据库字段，不能再写 `[db]` 或 `[dbjson]`。读行时按列名匹配，缺列保持原值，NULL、类型不对、重复列和列数对不上都失败并保持原对象。schema migration 仍未实现。模块访问数据库见 [数据库客户端](database.md)。
+`db` 不穿透，只映射头一层。整数、浮点、`bool`、`string`、`Bytes` 各是一列。`vector`、`map` 和嵌套 `rpcdata` 默认整段收成 PB blob：序号固定为 0，`vector` 每个元素一条，空 `vector` 是空 blob。写了 `[dbjson]` 才改用现有 JSON 文本入库，这时里面的 `rpcdata` 必须自己标 `json`，标量不能写 `[dbjson]`。没写 `[dbjson]` 就不做这套 JSON。blob 里的结构不用标 `db`。列名默认是字段名，`[db 列名]` 才换，只写 `[db]` 列名仍是字段名。结构没标 `db`，就不能写 `[db]`、`[nodb]`、`[dbjson]`。字段写了 `[nodb]` 就不再是数据库字段，不能再写 `[db]`、`[dbjson]`、`[dbkey]`、`[dbtype]`。
+
+`[dbkey]` 标主键字段，可以标多个组成联合主键，`BuildCreateTable` 和按主键读改删的语句靠它，见 [数据库客户端](database.md) 的单表语句。主键只能是整数、`bool`、`string` 或 `Bytes`，`string`、`Bytes` 还必须写定长的 `[dbtype]`；浮点、`vector`、`map`、`rpcdata` 和 `[dbjson]` 不能做主键。`[dbtype]` 换建表时的列类型，类型名不分大小写，生成时统一成大写：`VARCHAR`、`VARBINARY` 后面跟 1 到 65535 的长度，`CHAR`、`BINARY` 跟 1 到 255 的长度，`TEXT`、`MEDIUMTEXT`、`LONGTEXT`、`BLOB`、`MEDIUMBLOB`、`LONGBLOB` 不带长度，例如 `[dbtype VARBINARY 64]`。`string` 可以用其中任何一种；`Bytes` 和 PB blob 只能用二进制类型；`[dbjson]` 只能用文本类型；数值字段不能写。读行时按列名匹配，缺列保持原值，NULL、类型不对、重复列和列数对不上都失败并保持原对象。schema migration 仍未实现。模块访问数据库见 [数据库客户端](database.md)。
 
 基础库在 `framework.cmake`。它编三方库和 `cbaselib`，并生成 net 内部的工作协议，不加入进程模块。工作协议同样可以多份，列表是 `OI_WORK_PROTO_FILES`。根目录 `CMakeLists.txt` include 它，再调用 `cbaselib/proto/proto_tool/main.py`。`--` 前面是 `module.proto`、`component.proto`、头文件目录、模块目录、部署目录和模块清单，后面是 `OI_PROTO_FILES`。输出到 `modules/include`、`modules` 和 `deploy`。修改任一输入会触发重新配置和生成；生成失败会终止配置。外部工程同样 include `openidea/framework.cmake`，换成自己的协议文件列表、模块和组件文本、输出目录，不再手写基础库列表。开发标准见 [开发标准](develop.md) 第 2 节。
 

@@ -9,6 +9,7 @@ from common import openxml
 from common import loginfo
 from common import openxml
 from serialize_data_parse import SerializeData, SerializeDataType
+from serialize_data_parse import DB_BINARY_TYPES, DB_SIZED_TYPES, DB_TEXT_TYPES, DbTypeBase
 from proto_text import ParseProtoText
 import re
 
@@ -270,6 +271,35 @@ class ProtocolGen:
             return self.TypeDbOk(parsed[1]) and self.TypeDbOk(parsed[2])
         return False
 
+    # [dbtype] 只换字节和文本列：string 任选；Bytes、PB blob 只能二进制类型；[dbjson] 只能文本类型；数值列不能换。
+    # [dbkey] 只标整数、bool、string、Bytes；string、Bytes 当主键必须写定长的 [dbtype]，BLOB / TEXT 不能做主键。
+    def CheckDbKeyAndType(self, data, member, parsed)->bool:
+        name = None
+        if parsed[0] == "name":
+            name = "std::string" if parsed[1] == "string" else parsed[1]
+        numeric = name in ORDERED_SCALARS and name != "std::string"
+        if member.db_type:
+            base = DbTypeBase(member.db_type)
+            if member.db_json:
+                allowed = base in DB_TEXT_TYPES
+            elif name == "std::string":
+                allowed = True
+            elif numeric:
+                allowed = False
+            else:
+                allowed = base in DB_BINARY_TYPES
+            if not allowed:
+                loginfo("dbtype does not fit field proto=", data.GetName(), ",field=", member.GetName(), ",type=", member.GetType(), ",dbtype=", member.db_type)
+                return False
+        if member.db_key:
+            if member.db_json or name is None or name in ("float", "double") or not self.IsDbScalar(parsed):
+                loginfo("dbkey needs an integer, bool, string or Bytes field proto=", data.GetName(), ",field=", member.GetName(), ",type=", member.GetType())
+                return False
+            if name in ("std::string", "Bytes") and (not member.db_type or DbTypeBase(member.db_type) not in DB_SIZED_TYPES):
+                loginfo("dbkey string needs [dbtype VARBINARY n] or another sized type proto=", data.GetName(), ",field=", member.GetName())
+                return False
+        return True
+
     def CheckKeyComparators(self)->bool:
         for data in self.serialize_datas:
             if data.GetType() != SerializeDataType.RPC_DATA:
@@ -310,6 +340,8 @@ class ProtocolGen:
                             return False
                     elif not self.TypeDbOk(parsed):
                         loginfo("db field is not representable name=", data.GetName(), ",field=", member.GetName(), ",type=", member.GetType())
+                        return False
+                    if not self.CheckDbKeyAndType(data, member, parsed):
                         return False
             data.json_ok = data.has_json
         return True

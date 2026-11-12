@@ -20,5 +20,5 @@
 ## 其他语言的序列化
 
 - 需求：序列化出去的标准数据结构统一为小端。非 C++ 的对端按这份标准读写 `modules/protoconfig` 里的协议。HTTP 对接先用已有 JSON；要做 RPC，或把 rpcdata 放进 Redis 的对端，必须用同一套二进制。先只生成一种真正要接的语言。现在的小端机器上，已经写出的包和 Redis 里的 rpcdata 字节必须保持不变。
-- 现状：二进制由 `proto_tool` 生成，不是标准 Protobuf，不能用 `protoc` 解析。一条字段是 `uint32` 字段号、`uint32` 长度、裸内容。`vector` 用同一个字段号重复多条。不认识的字段号按长度跳过，缺字段保持原值。`oi_bytes_stream.h` 写明是小端，`oi_bytes_stream.cpp` 仍注明暂不处理大小端、默认小端；`WritePbRaw`、`PreparePbHeader`、定宽整数的 `operator<<` / `operator>>` 和 `WritePb` 按主机字节序 `memcpy`。当前 Windows 和两台 Linux 都是小端，所以字节碰巧符合标准。MySQL 客户端已经接入，数据库行映射见 `docs/database.md`；schema migration 还没有。其余 rpcdata 已有 JSON；标了 `key` 的结构不生成 JSON。Web 的 TLS 不进框架，需要时在外面用 nginx 反代到现有 HTTP。
-- 方向：先让这套序列化真正按小端读写，不靠主机字节序，并用一组固定字节样例锁住现在小端机器上的输出。然后把这份标准写成不依赖 C++ 的说明。schema 仍是 `protoconfig`，在 `proto_tool` 上加一种语言的后端，不另起第二套协议。只做 Web 时先生成 JSON 编解码；要接 RPC 或 Redis 里的 rpcdata，再生成二进制。
+- 现状：二进制由 `proto_tool` 生成，不是标准 Protobuf，不能用 `protoc` 解析。一条字段是 `uint32` 字段号、`uint32` 长度、裸内容。`vector` 用同一个字段号重复多条。不认识的字段号按长度跳过，缺字段保持原值。序列化层已统一小端（字段头、长度前缀、定宽整数、枚举、float、double），大端主机按字节翻转，`mysql` 用例的离线行映射检查用固定字节样例锁住输出。MySQL 客户端已经接入，数据库行映射见 `docs/database.md`；schema migration 还没有。其余 rpcdata 已有 JSON；标了 `key` 的结构不生成 JSON。Web 的 TLS 不进框架，需要时在外面用 nginx 反代到现有 HTTP。
+- 方向：然后把这份标准写成不依赖 C++ 的说明。schema 仍是 `protoconfig`，在 `proto_tool` 上加一种语言的后端，不另起第二套协议。只做 Web 时先生成 JSON 编解码；要接 RPC 或 Redis 里的 rpcdata，再生成二进制。

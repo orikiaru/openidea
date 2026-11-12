@@ -87,8 +87,7 @@ void ProtoSession::OnDataIn()
 	{
 		if (stOutputStream.RemainSize() >= sizeof(uint32_t) * 2)
 		{
-			uint32_t iDeclaredSize = 0;
-			memcpy(&iDeclaredSize, stOutputStream.GetCurPtr() + sizeof(uint32_t), sizeof(iDeclaredSize));
+			uint32_t iDeclaredSize = ::OI::Base::LoadLittleEndian<uint32_t>(stOutputStream.GetCurPtr() + sizeof(uint32_t));
 			if (iDeclaredSize > m_iFrameBytes)
 			{
 				if (!m_bDatagram)

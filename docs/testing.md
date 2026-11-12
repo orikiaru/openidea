@@ -6,12 +6,12 @@
 
 - Windows 原生 MSVC x64 Release、Linux WSL GCC 13，各运行多线程 MT 和单线程 ST，共四组。
 - ST/MT 只切换 ipcclient、ipcserver；logd 固定多线程，redisserver/registry 按各自配置单线程。
-- `all` 包含 21 项：db、echo、log、log-backpressure、redis、redis-limit、redis-shutdown、redis-queue-timeout、rpc-ingress、redis-backpressure-bytes、redis-backpressure-count、redis-fairness、hold、rpc-admission-count、rpc-admission-bytes、reset、disk-full、registry、udp、multi、web。
+- `all` 包含 20 项：echo、log、log-backpressure、redis、redis-limit、redis-shutdown、redis-queue-timeout、rpc-ingress、redis-backpressure-bytes、redis-backpressure-count、redis-fairness、hold、rpc-admission-count、rpc-admission-bytes、reset、disk-full、registry、udp、multi、web。
 - Linux 可额外运行 clock-forward、clock-back，以及纯协程 ASan。校时故障只影响测试子进程，绝不调整宿主机时钟。
 - 必须全部返回 0；不能用删除断言、扩大超时、提高容量或重试掩盖失败。偶发失败保留日志，记录复测结果及根因是否确认。
 - 本次源码正在变化时不要声称覆盖了最新版本；核对结果目录的 environment.json、Git HEAD、diff 摘要后再报告。
 
-`db` 使用公共 fake 驱动覆盖数据库客户端，不依赖真实 MySQL，已列入 `--case all`。同一用例还检查标了 `db` 的协议行：标量、blob 字段和 `nojson` 的往返必须输出 `db proto map bad=0`。`mysql` 是显式运行的独立用例，不包含在 `all`：需启用 MySQL 驱动并提供可用的客户端库、测试数据库和测试环境配置；缺少依赖或配置时记录环境阻塞，不能算通过。新增用例以实际回归结果为准。
+数据库只有 `mysql` 一个用例，显式运行，不包含在 `all`。标准入口是矩阵参数 `--mysqld <mysqld>`（`tools/test_matrix.py`，或 `tools/parallel_matrix.py` 的 Linux 路）：每种线程模式编译完成后先跑 `<mode>-mysql`，再跑全量，不额外编译。非标准安装用 `--define OI_MYSQL_INCLUDE_DIR=... --define OI_MYSQL_LIBRARY=...`。单独复现仍可直接用 `tools/run_mysql_regression.py`。WSL 的 MySQL 来自 apt 包 `mysql-server-core-8.0`、`mysql-client-core-8.0`、`libmysqlclient-dev`，不起系统服务，`mysqld` 用 `/usr/sbin/mysqld`。需提供可用的客户端库；缺少依赖或配置时记录环境阻塞，不能算通过。Linux 上 `mysqld` 缺 `libaio.so.1` 时，把已有兼容库目录放进 `LD_LIBRARY_PATH`。用例先不连库检查 `DbSample` 的行映射：字段表、按成员指针取列、按列名的参数和单元格、拒绝 NULL 和坏值、生成的建表和增删改查语句逐字比对、坏表名和主键列拒绝、PB 往返和固定小端字节、JSON，输出 `mysql row mapping bad=0`；再用生成的语句建真表，整行写入读回、主键重复拒绝、按成员指针部分更新和部分读取、upsert 已有行和新行、改全部非主键列、按主键删，并用手写 SQL 注入 NULL 和坏 blob 验证读回拒绝，输出 `mysql rows bad=0`；最后是客户端本身的参数、连接复用、会话清理、事务回滚和结果上限，三项都通过才输出 `mysql done bad=0`。
 
 阻塞函数回归由 HoldMgr 覆盖：128 个后台工作及 64 个共享等待者，核对结果和单次执行。阻塞池按类型隔离，Default 默认 4 个线程、1024 个排队项，并保留 1024 个在途工作的兼容限制；其他类型须显式配置，各自的队列上限独立。容量检查应区分在途工作与排队项，并覆盖超限拒绝、启动后配置拒绝及停止时排空已接纳工作。新增检查以实际矩阵结果为准，不代表四种构建模式已经通过。
 
@@ -56,14 +56,14 @@ $redisBinary = Join-Path $redisTools 'Redis-8.10.3-Windows-x64-msys2/redis-serve
 python tools/diag/redis_link_probe.py --native $redisBinary
 ```
 
-本轮下载文件的 SHA256 为 `af16df340525b431e9ec8dabfd625d5e7a233f82805b5418819904ea909c447f`，用于复现文件身份，不代表发布方签名验证。探针仅操作自己启动的实例：核对启动日志、随机密码认证，并按进程句柄关闭；端口已占用就失败，不发送针对该端口的 `SHUTDOWN`。WSL 探针可用 `--wsl --wsl-user jxy --wsl-binary /usr/local/bin/redis-server`。
+本轮下载文件的 SHA256 为 `af16df340525b431e9ec8dabfd625d5e7a233f82805b5418819904ea909c447f`，用于复现文件身份，不代表发布方签名验证。探针仅操作自己启动的实例：核对启动日志、随机密码认证，并按进程句柄关闭；端口已占用就失败，不发送针对该端口的 `SHUTDOWN`。WSL 探针可用 `--wsl --wsl-user root --wsl-binary /usr/local/bin/redis-server`。
 
 ### 执行矩阵
 
 Windows 宿主 PowerShell，同一次调用顺序运行 Windows、Linux：
 
 ```powershell
-python tools/test_matrix.py --platform both --wsl-user jxy --windows-redis-binary C:/tools/redis/redis-server.exe --asan --clock-faults
+python tools/test_matrix.py --platform both --wsl-user root --windows-redis-binary C:/tools/redis/redis-server.exe --asan --clock-faults
 ```
 
 只跑 Windows：
@@ -81,7 +81,7 @@ python3 tools/test_matrix.py --build-dir "$HOME/openidea-build-gcc13" --asan --c
 自定义路径示例：
 
 ```powershell
-python tools/test_matrix.py --platform both --wsl-user jxy --linux-build-dir /home/jxy/openidea-build-gcc13 --redis-binary /usr/local/bin/redis-server --windows-redis-binary C:/tools/redis/redis-server.exe --artifacts C:/Users/Admin/openidea-test-results/manual-run
+python tools/test_matrix.py --platform both --wsl-user root --linux-build-dir /root/openidea-build-gcc13 --redis-binary /usr/local/bin/redis-server --windows-redis-binary C:/tools/redis/redis-server.exe --artifacts C:/Users/Admin/openidea-test-results/manual-run
 ```
 
 矩阵脚本会：记录源码身份 → 配置 MT → 编译所有模块 → 跑全部用例 → 配置 ST → 编译 → 跑同样用例 → 可选扩展测试 → 在 finally 中恢复 MT 且关闭测试注入并重新编译。任何一步失败，最终退出码非零。平台间串行运行。
@@ -148,7 +148,7 @@ git diff --check
 
 结果目录包含：environment.json（环境、HEAD、diff 摘要）、matrix.json（每一步命令和退出码）、每一步日志、每个用例的进程输出、results.json（逐例通过/失败）、summary.json（整体结果）。同时运行两端时还有 platforms.json。
 
-矩阵启动时先使旧汇总失效；只有本次所有步骤完成、恢复 MT 并关闭测试注入且重新构建成功，`summary.json` 才能标记 `passed: true`。中断、配置失败、恢复异常都算未通过，分别检查 `completed`、`restored` 和异常字段；不得把恢复构建成功当作测试通过。`tools/test_matrix_outcomes.py` 用模拟子进程覆盖这些异常分支，矩阵自动执行。
+矩阵启动时先使旧汇总失效；只有本次所有步骤完成、恢复 MT 并关闭测试注入且重新构建成功，`summary.json` 才能标记 `passed: true`。中断、配置失败、恢复异常都算未通过，分别检查 `completed`、`restored` 和异常字段；不得把恢复构建成功当作测试通过。固定只跑单线程的远程 Linux 机器用 `--mode st --no-restore`：不编回多线程，`restore_skipped` 为 true，用例全过即通过；Windows、`--platform both` 和其他模式拒绝这个开关，本机和 WSL 仍必须恢复。`tools/test_matrix_outcomes.py` 用模拟子进程覆盖这些异常分支，矩阵自动执行。
 
 进程收尾会逐一尝试正常退出；控制台通知失败或超时后，仅强制结束当前用例持有的进程，并继续回收其他进程、关闭输出和保留诊断日志。强制回收仍记为失败，不算正常退出；如果用例本身已有异常，保留原始异常，同时输出清理错误。正常 Hold 回归还会在选路后、发送前切换订阅管理器的分区，检查单次与批量目标不变，输出 `hold route target stability bad=0`。
 
@@ -172,22 +172,25 @@ git diff --check
 范本：
 
 ````text
-你在 Windows 宿主上为仓库 F:\openidea 跑回归矩阵的其中一路：**<LANE>**（端口偏移 <OFFSET>）。另外三路（<OTHERS>）正由别的 agent 同时跑，绝不能杀或动它们的进程和目录。WSL 里用户自己的 Redis 在 6379，绝不能杀。只跑测试和报告，不要改仓库任何文件，不要 git commit/push。用中文回报。
+你在 Windows 宿主上为仓库 F:\openidea2 跑回归矩阵的其中一路：**<LANE>**（端口偏移 <OFFSET>）。另外三路（<OTHERS>）正由别的 agent 同时跑，绝不能杀或动它们的进程和目录。WSL 里用户自己的 Redis 在 6379，绝不能杀。只跑测试和报告，不要改仓库任何文件，不要 git commit/push。用中文回报。
 
 ## 清理（开始前和结束后各做一次，只清自己这一路）
-在 F:\openidea 下执行 python tools/kill_test_procs.py --lane <LANE>，退出码非 0 表示还有残留，把输出报上来。
+在 F:\openidea2 下执行 python tools/kill_test_procs.py --lane <LANE>，退出码非 0 表示还有残留，把输出报上来。
 不要自己另写清理命令，不要按进程名杀任何东西（系统有个叫 Registry 的进程不能碰），不要 pkill redis-server，不要执行 wsl --shutdown。
 
 ## 运行
-在 F:\openidea 下执行（可能 30-60 分钟；放后台、定期轮询日志，不要中途打断或重启）：
+在 F:\openidea2 下用 Shell 把下面这一条命令放后台跑（可能 30-60 分钟）。等待只用 AwaitShell 匹配 `^(PASS|FAIL) <LANE> seconds=`，不要自己拼后台脚本或等待文件，不要中途打断或重启。
 python tools/parallel_matrix.py --lane <LANE> --jobs 4 --windows-redis-binary <WINDOWS_REDIS> --artifacts <ARTIFACTS>/par-<LANE>
+Linux 两路（linux-mt、linux-st）改跑：
+python tools/parallel_matrix.py --lane <LANE> --jobs 4 --windows-redis-binary <WINDOWS_REDIS> --artifacts <ARTIFACTS>/par-<LANE> --mysqld /usr/sbin/mysqld
 它会<MODE_NOTE>，跑 test_matrix.py（内部 run_regressions.py --case all）。总日志在 artifacts 目录的 <LANE>.log，结果在 parallel.json，子目录 <LANE> 里有 test_matrix 报告和各用例日志。环境问题导致失败就记录原因，不要改代码绕过。
 
 ## 回报
 1. 退出码、耗时；
 2. 每个用例：通过 / 失败 / 环境阻塞（用报告里的用例名）；
 3. 失败用例的日志关键行（bad=、mismatch=、rpc_fail=、超时、断言、崩溃、服务端报错）及日志路径；
-4. 前后清理是否完成、有无残留。
+4. 前后清理是否完成、有无残留；
+5. Linux 路 mysql 三行 bad= 原文：`mysql row mapping bad=`、`mysql rows bad=`、`mysql done bad=`。
 只报告看到的证据，不要猜。
 ````
 

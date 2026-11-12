@@ -45,10 +45,52 @@ if (iRet != OI_OK)
 
 ## 协议行
 
-`rpcdata` 在名字后面标 `db` 才生成行映射，见 [模块和协议](module.md)。生成三个方法：`DbColumnList` 是反引号列名，`DbPlaceholders` 是等量的 `?`，`AppendDbParameters` 按这个顺序追加参数。`FromDbRow` 用结果里的列名把一行填回来。
+`rpcdata` 在名字后面标 `db` 才生成行映射，见 [模块和协议](module.md)。生成的方法：
 
-头一层的整数、浮点、`bool`、`string`、`Bytes` 分别绑定成 `int64_t`、`uint64_t`、`double`、`string` 或 `Blob`。`bool` 写成 0 或 1。`vector`、`map` 和嵌套 `rpcdata` 默认不拆列，调用 `ToDbBlob` 收成一个 blob，读的时候用 `FromDbBlob`。blob 里是这条值自己的 PB，序号为 0。字段写了 `[dbjson]` 才改成 `ToJsonText` / `FromJsonText` 的 JSON 文本。数据库不穿透，blob 里的结构不用标 `db`。SQL 仍由调用方写，表名不从协议生成。schema migration 尚未实现。
+- `DbFields()`：字段表，每个数据库字段一项，记列名、成员指针和编解码函数，按列顺序排。其余方法都按它走。
+- `DbColumnList` 是反引号列名，`DbPlaceholders` 是等量的 `?`，`AppendDbParameters` 按这个顺序追加参数，用于整行写入。
+- `ToDbMap()` 返回「列名 → 参数」，`FromDbMap(CellMap)` 按「列名 → 单元格」写回，只写 map 里有的列。查询结果用 `OI::Db::RowCells(stResult, iRow, mCells)` 换成按列名的 map，列名重复时返回 false。
+- `FromDbRow(vColumns, vRow)` 直接按结果的列名写回。
+
+读回时不认识的列跳过；有 SQL NULL、重复列或某列解不开时整行返回 false，对象保持原值。
+
+按成员指针取列：`OI::Db::ColumnOf(&Row::iId)` 返回列名，`[nodb]` 字段返回 `nullptr`。`OI::Db::Pick(stRow, stPicked, &Row::sName, &Row::dScore)` 按传入顺序给出 `sColumns`、`sMarks`、`sAssignments`（`` `a`=?,`b`=? ``）、`sConditions`（`` `a`=? AND `b`=? ``）和对应参数，手写 SQL 时用；成员不是数据库字段或重复时返回 `OI_ERR_INVALID_ARGUMENT`，输出不变。
+
+成员指针反射目前只给标了 `db` 的结构生成。
+
+头一层的整数、浮点、`bool`、`string`、`Bytes` 分别绑定成 `int64_t`、`uint64_t`、`double`、`string` 或 `Blob`。`bool` 写成 0 或 1。`vector`、`map` 和嵌套 `rpcdata` 默认不拆列，调用 `ToDbBlob` 收成一个 blob，读的时候用 `FromDbBlob`。blob 里是这条值自己的 PB，序号为 0。字段写了 `[dbjson]` 才改成 `ToJsonText` / `FromJsonText` 的 JSON 文本。数据库不穿透，blob 里的结构不用标 `db`。
+
+## 单表语句
+
+`oi_db_table.h` 按字段表生成单表语句，只返回 `Statement`，执行和读回仍是 `Call` 加 `RowCells`、`FromDbMap`。表名由调用方传，只认字母、数字、下划线，最长 64。任何一步不合法都返回 `OI_ERR_INVALID_ARGUMENT`，`stStatement` 不变。
+
+| 函数 | 生成 |
+| --- | --- |
+| `BuildCreateTable<Row>(sTable, stStatement)` | `CREATE TABLE IF NOT EXISTS`，全部列 `NOT NULL`，主键是所有 `[dbkey]` 字段 |
+| `BuildInsert(sTable, stRow, stStatement)` | 整行 `INSERT`，主键冲突由库报错 |
+| `BuildUpsert(sTable, stRow, stStatement)` | 整行写入，主键已存在时改写其余列（`ON DUPLICATE KEY UPDATE`） |
+| `BuildSelectByKey(sTable, stRow, stStatement, 成员...)` | 按 `stRow` 的主键读；不传成员读整行，传了只读这几列 |
+| `BuildUpdateByKey(sTable, stRow, stStatement, 成员...)` | 按主键改；不传成员改全部非主键列，传了只改这几列，主键列不能改 |
+| `BuildDeleteByKey(sTable, stRow, stStatement)` | 按主键删 |
+
+除 `BuildInsert` 外都要求结构里至少有一个 `[dbkey]` 字段。列类型按字段类型推：整数按宽度和符号对应 `TINYINT` 到 `BIGINT UNSIGNED`，`bool` 是 `TINYINT`，`float`、`double` 都是 `DOUBLE`，`string`、`Bytes` 和 PB blob 是 `LONGBLOB`，`[dbjson]` 是 `LONGTEXT`。`[dbtype]` 可以换字节和文本列的类型，见 [模块和协议](module.md)。表的默认字符集是 `utf8mb4`。
+
+部分更新：
+
+```cpp
+OI::Db::Statement stUpdate;
+const int32_t iBuild = OI::Db::BuildUpdateByKey(sTable, stRow, stUpdate, &Row::sName, &Row::dScore);
+if (iBuild != OI_OK)
+{
+    co_return iBuild;
+}
+OI::Db::Result stResult;
+OI::Db::Error stError;
+const int32_t iStatus = co_await stMysql.Call(std::move(stUpdate), stResult, stError);
+```
+
+JOIN、任意条件、范围查询、跨表、`ALTER` 和 schema migration 不在这层，调用方用 `Pick` 或手写 SQL，表名用 `QuoteName` 加反引号前先自己校验。schema migration 尚未实现。
 
 ## 本轮范围
 
-行映射只覆盖头一层的打包和解包。文档里 MySQL 驱动的行为约束仍以接口为准；`db` 回归用假驱动覆盖客户端，并检查 `db proto map bad=0`。真实 MySQL 仍是单独的 `mysql` 用例。
+行映射只覆盖头一层的打包和解包。文档里 MySQL 驱动的行为约束仍以接口为准；回归只有真实 MySQL 的 `mysql` 用例，检查项见 [测试](testing.md)。

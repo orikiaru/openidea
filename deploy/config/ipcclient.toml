@@ -31,7 +31,6 @@ log = false
 redis = false
 hold = false
 db = false
-db_mysql = false
 udp = false
 multi = false
 

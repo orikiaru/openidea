@@ -381,7 +381,6 @@ def run(case, args):
                     text = replace(text, "tasks", "0")
                 for flag in ("echo", "log", "redis", "hold", "udp", "multi", "db"):
                     text = replace(text, flag, "true" if mode == flag else "false")
-                text = replace(text, "db_mysql", "true" if case == "mysql" else "false")
                 if mode == "hold":
                     text = replace(text, "max_pending_pulls", "16")
                     text = replace(text, "pull_ms", "60000")
@@ -714,10 +713,9 @@ def run(case, args):
                 samples = re.findall(r"redis pressure pause link=\d+ pending=(\d+) bytes=(\d+)", rsp.read_text(encoding="utf-8", errors="replace"))
                 assert samples and all(int(count) <= maximum_count and int(size) <= maximum_bytes for count, size in samples)
                 if case.endswith("count"): assert any(int(count) == maximum_count for count, size in samples)
-            elif case == "db":
-                assert "db fake done bad=0" in text
-                assert "db proto map bad=0" in text
             elif case == "mysql":
+                assert "mysql row mapping bad=0" in text
+                assert "mysql rows bad=0" in text
                 assert "mysql done bad=0" in text
             elif mode == "redis":
                 assert "redis integrity ok" in text
@@ -968,12 +966,12 @@ class EnvironmentBlocked(RuntimeError):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case", default="all", choices=("all", "db", "mysql", "echo", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "clock-forward", "clock-back", "registry", "udp", "multi", "web"))
+    parser.add_argument("--case", default="all", choices=("all", "mysql", "echo", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "clock-forward", "clock-back", "registry", "udp", "multi", "web"))
     parser.add_argument("--bin-dir", type=Path, default=REPO / "deploy/bin")
     parser.add_argument("--redis-binary", type=Path, help="default: redis-server on PATH")
     parser.add_argument("--clock-fault-so", type=Path)
     parser.add_argument("--redis-wsl", action="store_true", help="Windows: run only the owned Redis fixture in WSL")
-    parser.add_argument("--wsl-user", default="jxy")
+    parser.add_argument("--wsl-user", default="root")
     parser.add_argument("--artifacts", type=Path, help="retain process output and results.json, not bulk log payload")
     parser.add_argument("--redis-timeline", action="store_true", help="capture hold PING and BLPOP execution timestamps from the owned Redis fixture")
     parser.add_argument("--port-offset", type=int, default=0, help="shift every test port; parallel work copies need distinct offsets")
@@ -995,7 +993,7 @@ if __name__ == "__main__":
             probe.bind(("127.0.0.1", port))
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
         probe.bind(("127.0.0.1", UDP_PORT))
-    cases = ("db", "echo", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "registry", "udp", "multi", "web") if options.case == "all" else (options.case,)
+    cases = ("echo", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "registry", "udp", "multi", "web") if options.case == "all" else (options.case,)
     results = []
     for item in cases:
         started = time.monotonic()

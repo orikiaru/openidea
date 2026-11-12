@@ -97,6 +97,10 @@ struct ResultBind
 	BindFlag bNull = 0;
 	BindFlag bError = 0;
 	unsigned char iByte = 0;
+	// 客户端库把 FLOAT / DOUBLE 转文本时按缓冲长度决定位数，1 字节探测会把 1.5 转成 "2"。
+	// 浮点列直接用足够长的缓冲一次取完。
+	bool bReal = false;
+	char vRealText[64] = {};
 };
 
 void SetError(OI::Db::Error& stError, const char* pStage, unsigned int iCode, const char* pState)
@@ -308,8 +312,17 @@ class MysqlConnection final : public OI::Db::Connection
 				}
 				stOutput.vColumns.emplace_back(pFields[iIndex].name, pFields[iIndex].name_length);
 				vOutput[iIndex].buffer_type = MYSQL_TYPE_BLOB;
-				vOutput[iIndex].buffer = &vFields[iIndex].iByte;
-				vOutput[iIndex].buffer_length = 1;
+				vFields[iIndex].bReal = pFields[iIndex].type == MYSQL_TYPE_FLOAT || pFields[iIndex].type == MYSQL_TYPE_DOUBLE;
+				if (vFields[iIndex].bReal)
+				{
+					vOutput[iIndex].buffer = vFields[iIndex].vRealText;
+					vOutput[iIndex].buffer_length = sizeof(vFields[iIndex].vRealText);
+				}
+				else
+				{
+					vOutput[iIndex].buffer = &vFields[iIndex].iByte;
+					vOutput[iIndex].buffer_length = 1;
+				}
 				vOutput[iIndex].length = &vFields[iIndex].iLength;
 				vOutput[iIndex].is_null = &vFields[iIndex].bNull;
 				vOutput[iIndex].error = &vFields[iIndex].bError;
@@ -353,6 +366,16 @@ class MysqlConnection final : public OI::Db::Connection
 						m_bHealthy = false;
 						SetError(stError, "result_limit", 0, nullptr);
 						return OI_ERR_FAIL;
+					}
+					if (vFields[iIndex].bReal)
+					{
+						if (iLength > sizeof(vFields[iIndex].vRealText))
+						{
+							return fnFail("fetch_real");
+						}
+						const auto* pText = reinterpret_cast<const uint8_t*>(vFields[iIndex].vRealText);
+						vRow.emplace_back(OI::Db::Blob(pText, pText + iLength));
+						continue;
 					}
 					vRow.emplace_back(OI::Db::Blob(iLength));
 					if (iLength > 0)

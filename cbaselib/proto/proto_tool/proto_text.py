@@ -3,6 +3,7 @@ from common import loginfo
 from serialize_data_parse import ClassMember
 from serialize_data_parse import SerializeData
 from serialize_data_parse import SerializeDataType
+from serialize_data_parse import NormalizeDbType
 
 class ProtoLexer:
     def __init__(self, text):
@@ -115,7 +116,7 @@ def ParseType(lex):
         return lex.fail("only vector takes one type argument")
     return "std::vector<" + first + ">"
 
-FIELD_MARKERS = ("json", "nojson", "db", "nodb", "dbjson")
+FIELD_MARKERS = ("json", "nojson", "db", "nodb", "dbjson", "dbkey", "dbtype")
 
 # 名字可省略。省略时序列化名就是字段名，由后面的标记收尾补上。
 def ParseOptionalName(lex):
@@ -151,7 +152,7 @@ def ApplyFieldMarker(lex, member, word):
             member.db_name = name
         return True
     if word == "nodb":
-        if member.no_db or member.db_marked or member.db_name or member.db_json:
+        if member.no_db or member.db_marked or member.db_name or member.db_json or member.db_key or member.db_type:
             return lex.fail("db and nodb")
         member.no_db = True
         return True
@@ -159,6 +160,25 @@ def ApplyFieldMarker(lex, member, word):
         if member.no_db or member.db_json:
             return lex.fail("db and nodb" if member.no_db else "repeated dbjson marker")
         member.db_json = True
+        return True
+    if word == "dbkey":
+        if member.no_db or member.db_key:
+            return lex.fail("db and nodb" if member.no_db else "repeated dbkey marker")
+        member.db_key = True
+        return True
+    if word == "dbtype":
+        # [dbtype VARBINARY 64]、[dbtype LONGTEXT]：类型名，带长度的类型后面跟长度。
+        if member.no_db or member.db_type:
+            return lex.fail("db and nodb" if member.no_db else "repeated dbtype marker")
+        type_name = lex.ident()
+        if type_name is None:
+            return None
+        length = None
+        if lex.peek_char().isdigit():
+            length = lex.number()
+        member.db_type = NormalizeDbType(type_name, length)
+        if member.db_type is None:
+            return lex.fail("invalid dbtype " + type_name + ("" if length is None else " " + str(length)))
         return True
     return lex.fail("unknown field marker " + word)
 

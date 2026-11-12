@@ -5,6 +5,27 @@ from field_naming import ValidFieldName
 
 DB_COLUMN_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 JSON_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_:]*")
+# [dbtype] 只能换成下面这些列类型。带长度的必须写长度，其余不能写。
+DB_SIZED_TYPES = {"VARCHAR": 65535, "CHAR": 255, "VARBINARY": 65535, "BINARY": 255}
+DB_TEXT_TYPES = {"VARCHAR", "CHAR", "TEXT", "MEDIUMTEXT", "LONGTEXT"}
+DB_BINARY_TYPES = {"VARBINARY", "BINARY", "BLOB", "MEDIUMBLOB", "LONGBLOB"}
+DB_TYPE_TEXT = re.compile(r"([A-Za-z]+)(?:\((\d+)\))?")
+
+# 返回规范写法，例如 VARBINARY(64)、LONGTEXT；不合法返回 None。
+def NormalizeDbType(name, length):
+    upper = str(name).upper()
+    if upper not in DB_TEXT_TYPES and upper not in DB_BINARY_TYPES:
+        return None
+    if upper in DB_SIZED_TYPES:
+        if length is None or not 1 <= length <= DB_SIZED_TYPES[upper]:
+            return None
+        return "%s(%d)" % (upper, length)
+    if length is not None:
+        return None
+    return upper
+
+def DbTypeBase(db_type):
+    return db_type.split("(")[0]
 
 def ParseBoolAttr(text):
     if text is None or text == "":
@@ -37,6 +58,8 @@ class ClassMember:
         self.json_marked = False
         self.db_marked = False
         self.db_json = False
+        self.db_key = False
+        self.db_type = None
     def GetName(self):
         return self.name
     def GetType(self):
@@ -65,6 +88,18 @@ class ClassMember:
             loginfo("ParseMember dbjson flag invalid name=", self.name, ",dbjson=", member_xml.get("dbjson"))
             return False
         self.db_json = db_json
+        db_key = ParseBoolAttr(member_xml.get("dbkey"))
+        if db_key is None:
+            loginfo("ParseMember dbkey flag invalid name=", self.name, ",dbkey=", member_xml.get("dbkey"))
+            return False
+        self.db_key = db_key
+        db_type_text = member_xml.get("dbtype")
+        if db_type_text:
+            matched = DB_TYPE_TEXT.fullmatch(db_type_text.strip())
+            self.db_type = NormalizeDbType(matched.group(1), int(matched.group(2)) if matched.group(2) else None) if matched else None
+            if self.db_type is None:
+                loginfo("ParseMember dbtype invalid name=", self.name, ",dbtype=", db_type_text)
+                return False
         self.type = member_xml.get("type")
         self.value = member_xml.get("default")
         seq_text = member_xml.get("seq")
@@ -183,13 +218,13 @@ class SerializeData:
             if member.no_json and (member.json_name or member.json_marked):
                 loginfo("json and nojson proto=", self.name, ",field=", member.name)
                 return False
-            if member.no_db and (member.db_name or member.db_marked or member.db_json):
+            if member.no_db and (member.db_name or member.db_marked or member.db_json or member.db_key or member.db_type):
                 loginfo("db and nodb proto=", self.name, ",field=", member.name)
                 return False
             if not self.has_json and (member.no_json or member.json_name or member.json_marked):
                 loginfo("field json marker requires rpcdata json proto=", self.name, ",field=", member.name)
                 return False
-            if not self.has_db and (member.no_db or member.db_name or member.db_marked or member.db_json):
+            if not self.has_db and (member.no_db or member.db_name or member.db_marked or member.db_json or member.db_key or member.db_type):
                 loginfo("db marker requires db rpcdata proto=", self.name, ",field=", member.name)
                 return False
             if self.has_json and not member.no_json and not member.json_name:

@@ -35,13 +35,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--platform", choices=("native", "both"), default="native")
     parser.add_argument("--build-dir", type=Path)
-    parser.add_argument("--linux-build-dir", default="/home/jxy/openidea-build-gcc13")
+    parser.add_argument("--linux-build-dir", default="/root/openidea-build-gcc13")
     parser.add_argument("--cmake")
     parser.add_argument("--jobs", type=int, default=8)
     parser.add_argument("--redis-binary", help="default: redis-server on PATH")
     parser.add_argument("--windows-redis-binary", help="--platform both: native Windows redis-server.exe for the Windows side")
     parser.add_argument("--redis-wsl", action="store_true")
-    parser.add_argument("--wsl-user", default="jxy")
+    parser.add_argument("--wsl-user", default="root")
     parser.add_argument("--artifacts", type=Path)
     parser.add_argument("--case", default="all")
     parser.add_argument("--port-offset", type=int, default=0, help="passed to run_regressions.py; parallel work copies need distinct offsets")
@@ -49,7 +49,19 @@ def main():
     parser.add_argument("--asan", action="store_true", help="Linux pure coroutine ASan check")
     parser.add_argument("--clock-faults", action="store_true", help="Linux optional wall-clock fault cases")
     parser.add_argument("--vs-instance", help="Optional CMake generator instance: path[,version=x.y.z.w]")
+    parser.add_argument("--no-restore", action="store_true",
+                        help="dedicated remote single-thread Linux host only: keep the ST build, skip rebuilding MT")
+    parser.add_argument("--mysqld", help="Linux: build with OI_ENABLE_MYSQL=ON and run the mysql case before each mode's tests")
+    parser.add_argument("--define", action="append", default=[], metavar="NAME=VALUE",
+                        help="extra CMake cache entry for every configure, e.g. OI_MYSQL_LIBRARY=/opt/mysql/lib/libmysqlclient.so")
     args = parser.parse_args()
+    if args.mysqld and WINDOWS and args.platform == "native":
+        parser.error("--mysqld runs on the Linux side only")
+    if any("=" not in item for item in args.define):
+        parser.error("--define expects NAME=VALUE")
+    # 本机和 WSL 的 deploy/bin 还要给别的测试用，必须编回多线程；只有固定单线程的远程机器可以不编回。
+    if args.no_restore and (WINDOWS or args.platform != "native" or args.mode != "st"):
+        parser.error("--no-restore is only for --platform native --mode st on a dedicated Linux host")
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     output = (args.artifacts or Path.home() / "openidea-test-results" / stamp).resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -86,6 +98,10 @@ def main():
             linux.append("--asan")
         if args.clock_faults:
             linux.append("--clock-faults")
+        if args.mysqld:
+            linux += ["--mysqld", args.mysqld]
+        for item in args.define:
+            linux += ["--define", item]
         codes = [subprocess.run(command, cwd=ROOT).returncode for command in (native, linux)]
         (output / "platforms.json").write_text(json.dumps(dict(zip(("windows", "linux"), codes)), indent=2))
         summary["passed"] = not any(codes)
@@ -133,6 +149,9 @@ def main():
                 configure.append("-UCMAKE_GENERATOR_INSTANCE")
         else:
             configure += ["-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_C_COMPILER=gcc-13", "-DCMAKE_CXX_COMPILER=g++-13"]
+        if args.mysqld:
+            configure.append("-DOI_ENABLE_MYSQL=ON")
+        configure += ["-D" + item for item in args.define]
         build_command = [cmake, "--build", build, "--config", "Release", "-j", args.jobs]
         binary = ROOT / "deploy/bin/Release" if WINDOWS else ROOT / "deploy/bin"
         if run("field-names", [sys.executable, ROOT / "tools/test_field_names.py"]):
@@ -154,6 +173,11 @@ def main():
             if run(mode + "-configure", configure + flags) or run(mode + "-build", build_command):
                 failed = True
                 break
+            if args.mysqld:
+                failed |= bool(run(mode + "-mysql", [sys.executable, ROOT / "tools/run_mysql_regression.py",
+                                                     "--mysqld", args.mysqld, "--bin-dir", binary,
+                                                     "--artifacts", output / mode / "mysql",
+                                                     "--port-offset", args.port_offset]))
             test = [sys.executable, ROOT / "tools/run_regressions.py", "--case", args.case,
                     "--bin-dir", binary, "--redis-binary", args.redis_binary, "--artifacts", output / mode,
                     "--port-offset", args.port_offset]
@@ -180,7 +204,7 @@ def main():
         print("ERROR", repr(error), flush=True)
     finally:
         try:
-            if configured:
+            if configured and not args.no_restore:
                 code = run("restore-configure", configure + ["-DOI_IPC_SINGLE_THREAD=OFF", "-DOI_ENABLE_TEST_HOOKS=OFF"])
                 if not code:
                     restored = run("restore-build", build_command) == 0
@@ -190,7 +214,8 @@ def main():
             if pending is None:
                 pending = error
         finally:
-            summary.update(passed=completed and restored, completed=completed, restored=restored)
+            summary.update(passed=completed and (restored or args.no_restore), completed=completed, restored=restored,
+                           restore_skipped=args.no_restore)
             if pending is not None:
                 summary["error"] = repr(pending)
             summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
