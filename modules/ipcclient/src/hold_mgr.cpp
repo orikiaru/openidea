@@ -302,7 +302,14 @@ static int CheckJsonInteger()
 
 static int CheckJsonDecoding()
 {
-	int iBad = CheckJsonInteger<int8_t>() + CheckJsonInteger<uint8_t>() + CheckJsonInteger<int16_t>() + CheckJsonInteger<uint16_t>() + CheckJsonInteger<int32_t>() + CheckJsonInteger<uint32_t>() + CheckJsonInteger<int64_t>() + CheckJsonInteger<uint64_t>();
+	int iBad = CheckJsonInteger<int8_t>()
+		+ CheckJsonInteger<uint8_t>()
+		+ CheckJsonInteger<int16_t>()
+		+ CheckJsonInteger<uint16_t>()
+		+ CheckJsonInteger<int32_t>()
+		+ CheckJsonInteger<uint32_t>()
+		+ CheckJsonInteger<int64_t>()
+		+ CheckJsonInteger<uint64_t>();
 	Json::Value stInput(Json::objectValue);
 	stInput[std::string(40, '0') + "1"] = 1;
 	std::map<int32_t, int32_t> mSigned;
@@ -3326,7 +3333,27 @@ static OI::Coro::TaskResult<int> CheckHttpFraming(int32_t iHttpPort)
 		const char* pBody;
 	};
 	const std::vector<HttpCase> vCases{
-	    {"good", 200, false, "ok"}, {"interim", 200, false, "ok"}, {"fragmented", 200, false, "ok"}, {"204", 204, false, ""}, {"304", 304, false, ""}, {"chunk-good", 200, false, "ok"}, {"length-junk", 200, true, ""}, {"length-overflow", 200, true, ""}, {"length-conflict", 200, true, ""}, {"te-cl", 200, true, ""}, {"chunk-separator", 200, true, ""}, {"chunk-junk", 200, true, ""}, {"truncated", 200, true, ""}, {"only-interim", 100, true, ""}, {"tail", 200, false, "ok"}, {"good", 200, false, "ok"}, {"chunk-tail", 200, false, "ok"}, {"good", 200, false, "ok"}, {"empty-tail", 204, false, ""}, {"good", 200, false, "ok"}};
+		{"good", 200, false, "ok"},
+		{"interim", 200, false, "ok"},
+		{"fragmented", 200, false, "ok"},
+		{"204", 204, false, ""},
+		{"304", 304, false, ""},
+		{"chunk-good", 200, false, "ok"},
+		{"length-junk", 200, true, ""},
+		{"length-overflow", 200, true, ""},
+		{"length-conflict", 200, true, ""},
+		{"te-cl", 200, true, ""},
+		{"chunk-separator", 200, true, ""},
+		{"chunk-junk", 200, true, ""},
+		{"truncated", 200, true, ""},
+		{"only-interim", 100, true, ""},
+		{"tail", 200, false, "ok"},
+		{"good", 200, false, "ok"},
+		{"chunk-tail", 200, false, "ok"},
+		{"good", 200, false, "ok"},
+		{"empty-tail", 204, false, ""},
+		{"good", 200, false, "ok"},
+	};
 	for (const auto& stCase : vCases)
 	{
 		auto stResult = co_await stHttp.Get(std::string("/") + stCase.pPath, {});
@@ -3608,7 +3635,11 @@ struct PendingClient : OI::Rpc::ProtoClientManager
 static bool SameWaitStats(const OI::Rpc::RpcWaitStats& stBaseline)
 {
 	const auto stNow = OI::Rpc::GetRpcWaitStats();
-	return stNow.iCalls == stBaseline.iCalls && stNow.iExpirations == stBaseline.iExpirations && stNow.iBuckets == stBaseline.iBuckets && stNow.iSessionEntries == stBaseline.iSessionEntries && stNow.iSessionBuckets == stBaseline.iSessionBuckets;
+	return stNow.iCalls == stBaseline.iCalls
+		&& stNow.iExpirations == stBaseline.iExpirations
+		&& stNow.iBuckets == stBaseline.iBuckets
+		&& stNow.iSessionEntries == stBaseline.iSessionEntries
+		&& stNow.iSessionBuckets == stBaseline.iSessionBuckets;
 }
 
 static int CheckPreconnectSendBudget()

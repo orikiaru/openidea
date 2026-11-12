@@ -1,29 +1,55 @@
 # 模块和协议
 
-三个 xml 是生成输入，都在 `modules/xmlconfig`。
+生成输入在 `modules/protoconfig`。协议、模块、组件都是 `.proto` 文本，不是 XML。`db.proto`、`json.proto`、`rpc.proto` 写在根目录 `CMakeLists.txt` 的 `OI_PROTO_FILES` 里，按这个顺序读入。
 
 | 文件 | 作用 |
 | --- | --- |
-| `module.xml` | 一个 `<module>` 是一个进程 |
-| `module_component.xml` | 模块下的网络组件，`type` 为 `Client` 或 `Server`，上面挂 rpc |
-| `proto.xml` | 协议正文，写法像 protobuf：`字段号 类型 名字;`。不是 XML |
-
-字段号写在每一行前面，这就是线上的序号。缺了、重了，生成失败，不会按出现顺序补号。跳号直接写下一个数字，例如 `20 int32_t iGap json gap;`。
+| `module.proto` | 一个 `module` 是一个进程。空块表示不挂组件 |
+| `component.proto` | 网络组件。名字后面是 `Client` 或 `Server`，块里挂 `rpc` |
+| `db.proto` | 数据库行，`DbChild`、`DbSample` |
+| `json.proto` | JSON 样例，`Inner`、`JsonPlain`、`JsonDefault`、`JsonAll`。`Inner` 也给 `rpc.proto` 用。`JsonPlain` 写了 `[json]` 但不改名。`JsonDefault` 的字段不写标记，靠结构上的 `json` 默认参加 |
+| `rpc.proto` | 业务 RPC、枚举和错误码。每行是 `字段号 类型 名字;` |
 
 ```
-rpcdata AllTypesData {
-    0 int8_t iInt8 json c;
-    9 vector<int32_t> vNumbers json nums;
-    13 map<int32_t, string> mTable json table;
-    20 int32_t iGap json gap;
+component IpcClient Client {
+    rpc AllEcho;
+    rpc Hold;
+}
+
+module LogD {
+}
+
+module IpcClient {
+    component IpcClient;
 }
 ```
 
-整数字段写 `int8_t`、`int16_t`、`int32_t`、`int64_t` 和 `uint8_t`、`uint16_t`、`uint32_t`、`uint64_t`。`string` 就是 `std::string`。`map` 的键可以是这些标量、`string`，也可以是名字后面加了 `key` 的 `rpcdata`。`key` 会生成 `operator<`。嵌进别的 `key`，或者再当 `map` 键时，里层也必须有比较器，生成时会检查。标了 `key` 的结构不生成 JSON；谁的字段里放了这种 `map`，谁也不生成 JSON。其余 `rpcdata` 仍生成 `ToJson` / `FromJson`。`rpc` 不生成 JSON。库是 JsonCpp。
+生成器读完列表里的全部文件后，再检查类型引用、枚举和比较器。`rpcdata`、`enum`、`errordef`、`rpc` 的名字不能重复，协议号也不能重复。一份文件里的 `rpcdata` 可以被其他文件引用，不要求定义写在前面。`rpc` 的请求和回复也要能在这些文件里找到。
 
-基础库在 `framework.cmake`。它编三方库和 `cbaselib`，并生成 net 内部的工作协议，不加入进程模块。根目录 `CMakeLists.txt` include 它，再调用 `cbaselib/proto/proto_tool/main.py`。输入是上面三个文件，输出到 `modules/include`、`modules` 和 `deploy`，并在构建目录写出模块清单。修改任一输入会触发重新配置和生成；生成失败会终止配置。外部工程同样 include `openidea/framework.cmake`，换成自己的三个 xml 和输出目录，不再手写基础库列表。开发标准见 [开发标准](develop.md) 第 2 节。
+字段号写在每一行前面，这就是线上的序号。缺了、重了，生成失败，不会按出现顺序补号。跳号直接写下一个数字，例如 `20 [json gap] int32_t iGap;`。
 
-模块需要访问数据库时，见 [数据库客户端](database.md)。协议数据库映射和 schema migration 本轮尚未实现。
+```
+rpcdata DbSample json db {
+    0 [db id] int64_t iId;
+    1 [db] string sName;
+    2 [nojson] int32_t iSecret;
+    3 [nodb] string sCache;
+    8 vector<int32_t> vNumbers;
+    10 DbChild stChild;
+    13 [dbjson] vector<int32_t> vJsonNumbers;
+    14 [db notes] [dbjson] map<string, int32_t> mJsonFlags;
+}
+```
+
+整数字段写 `int8_t`、`int16_t`、`int32_t`、`int64_t` 和 `uint8_t`、`uint16_t`、`uint32_t`、`uint64_t`。`string` 就是 `std::string`。`map` 的键可以是这些标量、`string`，也可以是名字后面加了 `key` 的 `rpcdata`。`key` 会生成 `operator<`。嵌进别的 `key`，或者再当 `map` 键时，里层也必须有比较器，生成时会检查。`key` 不能再标 `json`。
+
+`json` 和 `db` 写在结构名后面，才生成对应方法。没标的结构不生成。标了以后字段默认都参加，序列化名就是字段名。字段标记各自写成 `[]`，可以连着写：`[json]`、`[json 键名]`、`[nojson]`、`[db]`、`[db 列名]`、`[nodb]`、`[dbjson]`。`[json]`、`[db]` 后面的名字可省略，省略就用字段名。同一字段不能既改名又排除。至少要留下一个参加的字段。`rpc` 不生成 JSON，也不生成数据库方法。库是 JsonCpp。
+
+JSON 会穿透。嵌套的 `rpcdata`、`vector`、`map` 按内层继续生成，里层 `rpcdata` 自己也要标 `json`，否则外层字段无法生成 JSON。`[nojson]` 的字段不检查能不能表达成 JSON，所以不适合 JSON 的 `map` 可以留在同一个结构里，只要标 `[nojson]`。要沿用外部键就写 `[json 键名]`，例如 `0 [json count] int32_t iCount;`。不改名就写成 `0 [json] int32_t iCount;`，键名仍是 `iCount`，和什么都不写一样。
+
+`db` 不穿透，只映射头一层。整数、浮点、`bool`、`string`、`Bytes` 各是一列。`vector`、`map` 和嵌套 `rpcdata` 默认整段收成 PB blob：序号固定为 0，`vector` 每个元素一条，空 `vector` 是空 blob。写了 `[dbjson]` 才改用现有 JSON 文本入库，这时里面的 `rpcdata` 必须自己标 `json`，标量不能写 `[dbjson]`。没写 `[dbjson]` 就不做这套 JSON。blob 里的结构不用标 `db`。列名默认是字段名，`[db 列名]` 才换，只写 `[db]` 列名仍是字段名。结构没标 `db`，就不能写 `[db]`、`[nodb]`、`[dbjson]`。字段写了 `[nodb]` 就不再是数据库字段，不能再写 `[db]` 或 `[dbjson]`。读行时按列名匹配，缺列保持原值，NULL、类型不对、重复列和列数对不上都失败并保持原对象。schema migration 仍未实现。模块访问数据库见 [数据库客户端](database.md)。
+
+基础库在 `framework.cmake`。它编三方库和 `cbaselib`，并生成 net 内部的工作协议，不加入进程模块。工作协议同样可以多份，列表是 `OI_WORK_PROTO_FILES`。根目录 `CMakeLists.txt` include 它，再调用 `cbaselib/proto/proto_tool/main.py`。`--` 前面是 `module.proto`、`component.proto`、头文件目录、模块目录、部署目录和模块清单，后面是 `OI_PROTO_FILES`。输出到 `modules/include`、`modules` 和 `deploy`。修改任一输入会触发重新配置和生成；生成失败会终止配置。外部工程同样 include `openidea/framework.cmake`，换成自己的协议文件列表、模块和组件文本、输出目录，不再手写基础库列表。开发标准见 [开发标准](develop.md) 第 2 节。
 
 ## 什么会重写
 
@@ -38,13 +64,13 @@ rpcdata AllTypesData {
 
 生成的组件都是单例（`DECLARE_SINGLETON`），带 `OI::Coro::Task OnSecondUpdate(time_t)`，默认函数体是 `co_return;`。日历秒变化时 `StartTask` 启动，只启动、不等待。Server 继承 `ProtoSessionManager`；Client 继承 `ProtoMultiClientManager`，配置段多一个 `service`，留空只连 ip/port 这一台，填了服务名就连注册表里的每一台，见 [服务注册](registry.md) 的“每台各连一条”。
 
-`module.xml` 是模块注册的唯一来源；CMake 使用生成的清单添加模块，不需要再维护一份手写列表。模块名必须匹配 ASCII 格式 `[A-Za-z0-9_][A-Za-z0-9_-]*`，忽略大小写后不能重复；生成目录及清单使用小写名称。
+`module.proto` 是模块注册的唯一来源；CMake 使用生成的清单添加模块，不需要再维护一份手写列表。模块名必须匹配 ASCII 格式 `[A-Za-z0-9_][A-Za-z0-9_-]*`，忽略大小写后不能重复；生成目录及清单使用小写名称。
 
 ## 加一个回声协议
 
-在 `proto.xml` 增加请求和回复两个 `rpcdata`，字段号自己写上。`rpc` 放在文件最后，一行一条，请求和回复共用一个协议号。调用号最高位是 1 表示请求，回包清掉这一位。
+在 `rpc.proto` 增加请求和回复两个 `rpcdata`，字段号自己写上。`rpc` 放在文件最后，一行一条，请求和回复共用一个协议号。调用号最高位是 1 表示请求，回包清掉这一位。数据库行写进 `db.proto`，JSON 样例写进 `json.proto`。
 
-在 `module_component.xml` 里把这条 rpc 挂到对应的 Client 和 Server 组件上。
+在 `component.proto` 里把这条 rpc 挂到对应的 Client 和 Server 组件上。
 
 服务端在组件 `Init` 里 `HandleRpc`，客户端在连上之后 `co_await RpcCall`。写法见 [协程](coroutine.md)。
 
@@ -60,7 +86,7 @@ rpcdata AllTypesData {
 
 `webserver` 和 `webclient` 是两个独立进程，只走 HTTP，不开 HTTPS。JSON 用 JsonCpp。body 若是 `rpcdata`，用它自己的 `FromJson` / `ToJson`。
 
-`webserver` 仍用 `cpp-httplib` 听 `WebServer.port`（默认 18080）。`GET /query` 回解码后的 query，`POST /json` 回 JSON，`POST /rpcjson` 用 `JsonAll` 的 `FromJson` / `ToJson` 走一遍全量字段并把 `gap` 加一，`POST /bin` 把 body 原样写回。这个进程自己的 listen 是阻塞的，不进协程。
+`webserver` 仍用 `cpp-httplib` 听 `WebServer.port`（默认 18080）。`GET /query` 回解码后的 query，`POST /json` 回 JSON，`POST /rpcjson` 用 `JsonAll` 的 `FromJson` / `ToJson` 走一遍全量字段并把 `gap` 加一，`POST /bin` 把 body 原样写回。这个进程自己的 listen 是阻塞的，不进协程。`c`、`gap` 这些是别名。`iPlain` 这些写了 `[json]` 但不改名。`iDefault`、`sDefault`、`vDefault`、`mDefault`、`stDefault` 连 `[json]` 都不写，结构标了 `json` 就默认参加，键名仍是字段名。`stDefault` 里的 `iNumber`、`sText` 同样不写标记。`iSkip` 和 `stDefault.iSkip` 标了 `[nojson]`，不进 JSON，读入时即使带了这个键也不改原值。客户端同时核对这几类。
 
 `webclient` 不直接调 `cpp-httplib`。它走基础库 `OI::Http::Client`：`Start` 用 `StartTask` 拉起 `Run`，四次请求都是 `co_await`。完成时 poll 线程 `Schedule` 协程句柄，不在回调里 `resume`。单线程模块链 `http_static`。退出码 0 表示四下都对上了。以后换 Go 或其他语言的 HTTP 服务时，仍用这个客户端，只改地址。
 
@@ -72,7 +98,7 @@ rpcdata AllTypesData {
 
 协议字段使用类型前缀 + 大驼峰名称，完整规则见项目 AGENTS.md。生成器同时检查文本协议和 XML 协议；名称不合规范会直接报错，不自动猜测业务名字。
 
-字段名与 JSON 键可以分开：`0 int32_t iCount json count;` 的 C++ 字段为 `iCount`，JSON 仍使用 `count`。省略 `json` 时 JSON 键就是字段名。XML 输入对应 `<member name="iCount" type="int32_t" seq="0" json="count"/>`。同一结构中 JSON 名称不能重复。
+字段名与 JSON 键可以分开：结构标了 `json` 之后，`0 [json count] int32_t iCount;` 的 C++ 字段为 `iCount`，JSON 仍使用 `count`。不写 `[json 键名]` 时 JSON 键就是字段名。XML 输入对应 `<rpcdata name="Example" json="true">` 和 `<member name="iCount" type="int32_t" seq="0" json="count"/>`。同一结构中参加 JSON 的名称不能重复。数据库列名同样不能重复。
 
 这次只修改 C++ 字段名：字段编号、类型、顺序和已有 JSON 键保持不变，配置键不改。生成后的头文件不要手工修；修改协议源后重新执行 cmake。
 
@@ -96,4 +122,4 @@ errordef UdpError {
 - 每项写成 `名字 = 值;`，值必须手写。名字是大写下划线，不带作用域，所有 `enum` 和 `errordef` 之间不能重名；同一个枚举里值不能重。
 - `errordef` 是业务错误码，取值范围为 1..2147483647，所有 `errordef` 之间值不能重；普通 `enum` 的取值规则不变。框架错误码在 `oi_errno.h`，是负数，0 是成功。处理函数直接 `co_return ::OI::RpcData::UDP_ERR_REJECTED;`，客户端 `RpcCall` 原样拿到这个值。
 - `rpcdata` 字段不能写枚举类型，用定宽整数（通常是 `int32_t`），比较和赋值时用枚举常量。
-- 只有文本协议支持，XML 协议不支持。用例是 `modules/xmlconfig/proto.xml` 的 `UdpProbe`、`UdpError`，由 `udp` 回归覆盖。
+- 只有文本协议支持，XML 协议不支持。用例是 `modules/protoconfig/rpc.proto` 的 `UdpProbe`、`UdpError`，由 `udp` 回归覆盖。

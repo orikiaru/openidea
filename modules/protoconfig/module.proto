@@ -1,0 +1,27 @@
+// 一个 module 是一个进程。目录名是模块名的小写。component 引用 component.proto。
+
+// LogD 是日志服，不挂组件。
+module LogD {
+}
+
+module IpcClient {
+    component IpcClient;
+}
+
+module IpcServer {
+    component IpcServer;
+}
+
+// 不挂协议组件。命令是 RESP，里面再调 hiredis。
+module RedisServer {
+}
+
+// HTTP，不走 rpc。
+module WebServer {
+}
+
+module WebClient {
+}
+
+module Registry {
+}

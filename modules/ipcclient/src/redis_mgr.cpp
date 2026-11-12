@@ -2093,15 +2093,29 @@ void RedisMgr::SyncStress(int iIdLocal)
 	{
 		++iTypedBad;
 	}
-	if (OI::Redis::RedisRPushSync(sListKey, stWritten) != OI_OK || OI::Redis::RedisLRangeSync(sListKey, 0, -1, vRecords) != OI_OK || vRecords.size() != 1 || vRecords[0].iId != iIdLocal)
+	if (OI::Redis::RedisRPushSync(sListKey, stWritten) != OI_OK
+		|| OI::Redis::RedisLRangeSync(sListKey, 0, -1, vRecords) != OI_OK
+		|| vRecords.size() != 1
+		|| vRecords[0].iId != iIdLocal)
 	{
 		++iTypedBad;
 	}
-	if (OI::Redis::RedisSAddSync(sSetKey, stWritten) != OI_OK || OI::Redis::RedisSIsMemberSync(sSetKey, stWritten, bMember) != OI_OK || !bMember || OI::Redis::RedisSMembersSync(sSetKey, vRecords) != OI_OK || vRecords.size() != 1 || vRecords[0].iId != iIdLocal)
+	if (OI::Redis::RedisSAddSync(sSetKey, stWritten) != OI_OK
+		|| OI::Redis::RedisSIsMemberSync(sSetKey, stWritten, bMember) != OI_OK
+		|| !bMember
+		|| OI::Redis::RedisSMembersSync(sSetKey, vRecords) != OI_OK
+		|| vRecords.size() != 1
+		|| vRecords[0].iId != iIdLocal)
 	{
 		++iTypedBad;
 	}
-	if (OI::Redis::RedisZAddSync(sZsetKey, 1.25, stWritten) != OI_OK || OI::Redis::RedisZScoreSync(sZsetKey, stWritten, dScore) != OI_OK || dScore != 1.25 || OI::Redis::RedisZRevRangeWithScoresSync(sZsetKey, 0, -1, vScores) != OI_OK || vScores.size() != 1 || vScores[0].stMember.iId != iIdLocal || vScores[0].dScore != 1.25)
+	if (OI::Redis::RedisZAddSync(sZsetKey, 1.25, stWritten) != OI_OK
+		|| OI::Redis::RedisZScoreSync(sZsetKey, stWritten, dScore) != OI_OK
+		|| dScore != 1.25
+		|| OI::Redis::RedisZRevRangeWithScoresSync(sZsetKey, 0, -1, vScores) != OI_OK
+		|| vScores.size() != 1
+		|| vScores[0].stMember.iId != iIdLocal
+		|| vScores[0].dScore != 1.25)
 	{
 		++iTypedBad;
 	}

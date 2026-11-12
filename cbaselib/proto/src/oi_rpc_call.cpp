@@ -467,7 +467,16 @@ bool ClaimRpcSend(uint64_t iCallIdLocal, sid_t iSessionIdLocal)
 	return true;
 }
 
-uint64_t BindRpcCall(::OI::Net::SessionManager* pManagerLocal, sid_t iSessionIdLocal, proto_type_t iResponseIdLocal, std::coroutine_handle<> stHandleLocal, int32_t* pResultLocal, int64_t iTimeoutMilliseconds, std::function<bool(::OI::Base::BytesStream&, sid_t)> fnDecodeLocal, std::function<void()> fnResumeLocal, std::shared_ptr<std::atomic<int32_t>> pGuardLocal, RpcSender* pSenderLocal)
+uint64_t BindRpcCall(::OI::Net::SessionManager* pManagerLocal,
+	sid_t iSessionIdLocal,
+	proto_type_t iResponseIdLocal,
+	std::coroutine_handle<> stHandleLocal,
+	int32_t* pResultLocal,
+	int64_t iTimeoutMilliseconds,
+	std::function<bool(::OI::Base::BytesStream&, sid_t)> fnDecodeLocal,
+	std::function<void()> fnResumeLocal,
+	std::shared_ptr<std::atomic<int32_t>> pGuardLocal,
+	RpcSender* pSenderLocal)
 {
 	std::call_once(g_sweep_once, []()
 	{

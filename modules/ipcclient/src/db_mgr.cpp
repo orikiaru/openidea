@@ -3,13 +3,16 @@
 #include "oi_config.h"
 #include "oi_db.h"
 #include "oi_errno.h"
+#include "oi_rpcdata_dbsample.h"
 #include "oi_mysql.h"
 #include "oi_lock.h"
 #include "oi_log.h"
 #include "test_board.h"
 #include <atomic>
+#include <cstring>
 #include <cstdlib>
 #include <memory>
+#include <variant>
 #include <limits>
 #include <random>
 #include <stdexcept>
@@ -91,6 +94,229 @@ void DbMgr::Start()
 	});
 }
 
+int32_t DbMgr::CheckProtoMap()
+{
+	int32_t iBad = 0;
+	::OI::RpcData::DbSample stRow;
+	stRow.iId = -5;
+	stRow.sName = std::string("a\0b", 3);
+	stRow.iSecret = 9;
+	stRow.sCache = "keep";
+	stRow.iToken = (std::numeric_limits<uint64_t>::max)();
+	stRow.dScore = 1.5;
+	stRow.fRatio = 1.5f;
+	stRow.stPayload = ::OI::Base::Bytes("xy", 2);
+	stRow.vNumbers = {1, 2};
+	stRow.mFlags = {{"on", 1}};
+	stRow.stChild.iNumber = 4;
+	stRow.stChild.sText = "child";
+	stRow.iFlag = -3;
+	stRow.bActive = true;
+	stRow.vJsonNumbers = {8, 9};
+	stRow.mJsonFlags = {{"k", 3}};
+	stRow.stJsonChild.iNumber = 6;
+	stRow.stJsonChild.sText = "json";
+	const std::string sColumns = ::OI::RpcData::DbSample::DbColumnList();
+	const std::string sMarks = ::OI::RpcData::DbSample::DbPlaceholders();
+	if (sColumns != "`id`,`sName`,`iSecret`,`iToken`,`dScore`,`fRatio`,`stPayload`,"
+			"`vNumbers`,`mFlags`,`stChild`,`iFlag`,`bActive`,`vJsonNumbers`,`notes`,`stJsonChild`"
+		|| sMarks != "?,?,?,?,?,?,?,?,?,?,?,?,?,?,?")
+	{
+		LOG_TRACE("db proto column list mismatch");
+		++iBad;
+	}
+	if (sColumns.find("sCache") != std::string::npos)
+	{
+		LOG_TRACE("db proto included nodb column");
+		++iBad;
+	}
+	std::vector<::OI::Db::Parameter> vParameters;
+	stRow.AppendDbParameters(vParameters);
+	const auto fnBlob = [](const std::string& sText)
+	{
+		return ::OI::Db::Blob(reinterpret_cast<const uint8_t*>(sText.data()), reinterpret_cast<const uint8_t*>(sText.data()) + sText.size());
+	};
+	const bool bShape = vParameters.size() == 15
+		&& std::holds_alternative<int64_t>(vParameters[0])
+		&& std::get<int64_t>(vParameters[0]) == -5
+		&& std::holds_alternative<std::string>(vParameters[1])
+		&& std::get<std::string>(vParameters[1]) == stRow.sName
+		&& std::holds_alternative<int64_t>(vParameters[2])
+		&& std::get<int64_t>(vParameters[2]) == 9
+		&& std::holds_alternative<uint64_t>(vParameters[3])
+		&& std::get<uint64_t>(vParameters[3]) == stRow.iToken
+		&& std::holds_alternative<double>(vParameters[4])
+		&& std::get<double>(vParameters[4]) == 1.5
+		&& std::holds_alternative<double>(vParameters[5])
+		&& std::get<double>(vParameters[5]) == 1.5
+		&& std::holds_alternative<::OI::Db::Blob>(vParameters[6])
+		&& std::holds_alternative<::OI::Db::Blob>(vParameters[7])
+		&& std::holds_alternative<::OI::Db::Blob>(vParameters[8])
+		&& std::holds_alternative<::OI::Db::Blob>(vParameters[9])
+		&& std::holds_alternative<int64_t>(vParameters[10])
+		&& std::get<int64_t>(vParameters[10]) == -3
+		&& std::holds_alternative<int64_t>(vParameters[11])
+		&& std::get<int64_t>(vParameters[11]) == 1
+		&& std::holds_alternative<std::string>(vParameters[12])
+		&& std::holds_alternative<std::string>(vParameters[13])
+		&& std::holds_alternative<std::string>(vParameters[14]);
+	if (!bShape)
+	{
+		LOG_TRACE("db proto parameter mismatch");
+		++iBad;
+	}
+	else
+	{
+		const ::OI::Db::Blob& stPayload = std::get<::OI::Db::Blob>(vParameters[6]);
+		if (stPayload.size() != 2 || stPayload[0] != static_cast<uint8_t>('x') || stPayload[1] != static_cast<uint8_t>('y'))
+		{
+			LOG_TRACE("db proto bytes payload mismatch");
+			++iBad;
+		}
+	}
+	::OI::RpcData::DbSample stLoaded;
+	stLoaded.sCache = "keep";
+	std::vector<std::string> vColumns = {
+		"stChild", "mFlags", "extra", "id", "sName", "iSecret", "iToken", "dScore",
+		"fRatio", "stPayload", "vNumbers", "iFlag", "bActive", "vJsonNumbers", "notes", "stJsonChild"
+	};
+	std::vector<std::optional<::OI::Db::Blob>> vRow;
+	if (bShape)
+	{
+		vRow.push_back(std::get<::OI::Db::Blob>(vParameters[9]));
+		vRow.push_back(std::get<::OI::Db::Blob>(vParameters[8]));
+		vRow.push_back(fnBlob("ignored"));
+		vRow.push_back(fnBlob("-5"));
+		vRow.push_back(fnBlob(std::string("a\0b", 3)));
+		vRow.push_back(fnBlob("9"));
+		vRow.push_back(fnBlob("18446744073709551615"));
+		vRow.push_back(fnBlob("1.5"));
+		vRow.push_back(fnBlob("1.5"));
+		vRow.push_back(std::get<::OI::Db::Blob>(vParameters[6]));
+		vRow.push_back(std::get<::OI::Db::Blob>(vParameters[7]));
+		vRow.push_back(fnBlob("-3"));
+		vRow.push_back(fnBlob("1"));
+		vRow.push_back(fnBlob(std::get<std::string>(vParameters[12])));
+		vRow.push_back(fnBlob(std::get<std::string>(vParameters[13])));
+		vRow.push_back(fnBlob(std::get<std::string>(vParameters[14])));
+	}
+	const bool bRound = vRow.size() == vColumns.size()
+		&& stLoaded.FromDbRow(vColumns, vRow)
+		&& stLoaded.iId == -5
+		&& stLoaded.sName == stRow.sName
+		&& stLoaded.iSecret == 9
+		&& stLoaded.sCache == "keep"
+		&& stLoaded.iToken == stRow.iToken
+		&& stLoaded.dScore == 1.5
+		&& stLoaded.fRatio == 1.5f
+		&& stLoaded.iFlag == -3
+		&& stLoaded.bActive
+		&& stLoaded.vNumbers == stRow.vNumbers
+		&& stLoaded.mFlags == stRow.mFlags
+		&& stLoaded.stChild.iNumber == 4
+		&& stLoaded.stChild.sText == "child"
+		&& stLoaded.stPayload.Size() == 2
+		&& std::memcmp(stLoaded.stPayload.Data(), "xy", 2) == 0
+		&& stLoaded.vJsonNumbers == stRow.vJsonNumbers
+		&& stLoaded.mJsonFlags == stRow.mJsonFlags
+		&& stLoaded.stJsonChild.iNumber == 6
+		&& stLoaded.stJsonChild.sText == "json";
+	if (!bRound)
+	{
+		LOG_TRACE("db proto row roundtrip mismatch");
+		++iBad;
+	}
+	::OI::RpcData::DbSample stKept = stLoaded;
+	std::vector<std::optional<::OI::Db::Blob>> vNull{std::nullopt};
+	if (stKept.FromDbRow({"id"}, vNull) || stKept.iId != stLoaded.iId)
+	{
+		LOG_TRACE("db proto null column changed row");
+		++iBad;
+	}
+	if (stKept.FromDbRow({"id"}, {}) || stKept.iId != stLoaded.iId)
+	{
+		LOG_TRACE("db proto column count changed row");
+		++iBad;
+	}
+	std::vector<std::optional<::OI::Db::Blob>> vDuplicate{fnBlob("1"), fnBlob("2")};
+	if (stKept.FromDbRow({"id", "id"}, vDuplicate) || stKept.iId != stLoaded.iId)
+	{
+		LOG_TRACE("db proto duplicate column changed row");
+		++iBad;
+	}
+	std::vector<std::optional<::OI::Db::Blob>> vRange{fnBlob("128")};
+	if (stKept.FromDbRow({"iFlag"}, vRange) || stKept.iFlag != stLoaded.iFlag)
+	{
+		LOG_TRACE("db proto integer range changed row");
+		++iBad;
+	}
+	if (bShape)
+	{
+		::OI::Db::Blob stBroken = std::get<::OI::Db::Blob>(vParameters[7]);
+		if (!stBroken.empty())
+		{
+			stBroken[0] ^= 0xff;
+		}
+		std::vector<std::optional<::OI::Db::Blob>> vBroken{stBroken};
+		if (stKept.FromDbRow({"vNumbers"}, vBroken) || stKept.vNumbers != stLoaded.vNumbers)
+		{
+			LOG_TRACE("db proto bad blob changed row");
+			++iBad;
+		}
+		::OI::RpcData::DbSample stEmpty;
+		std::vector<::OI::Db::Parameter> vEmpty;
+		stEmpty.AppendDbParameters(vEmpty);
+		::OI::RpcData::DbSample stRead;
+		stRead.vNumbers = {9};
+		std::vector<std::optional<::OI::Db::Blob>> vCell{std::get<::OI::Db::Blob>(vEmpty[7])};
+		if (!std::get<::OI::Db::Blob>(vEmpty[7]).empty()
+			|| !stRead.FromDbRow({"vNumbers"}, vCell)
+			|| !stRead.vNumbers.empty())
+		{
+			LOG_TRACE("db proto empty vector blob mismatch");
+			++iBad;
+		}
+	}
+	::OI::RpcData::DbSample stPartial = stLoaded;
+	std::vector<std::optional<::OI::Db::Blob>> vName{fnBlob("z")};
+	if (!stPartial.FromDbRow({"sName"}, vName)
+		|| stPartial.sName != "z"
+		|| stPartial.iId != stLoaded.iId
+		|| stPartial.sCache != "keep")
+	{
+		LOG_TRACE("db proto partial row mismatch");
+		++iBad;
+	}
+	::OI::RpcData::DbSample stJson;
+	const std::string sJson = stRow.ToJson();
+	if (sJson.find("\"iSecret\"") != std::string::npos
+		|| sJson.find("\"notes\"") != std::string::npos
+		|| sJson.find("\"mJsonFlags\"") == std::string::npos
+		|| sJson.find("\"sCache\"") == std::string::npos
+		|| !stJson.FromJson(sJson)
+		|| stJson.iSecret != 0
+		|| stJson.sCache != "keep"
+		|| stJson.iId != -5
+		|| stJson.vNumbers != stRow.vNumbers
+		|| stJson.stChild.iNumber != 4
+		|| stJson.stChild.sText != "child"
+		|| stJson.vJsonNumbers != stRow.vJsonNumbers
+		|| stJson.mJsonFlags != stRow.mJsonFlags
+		|| stJson.stJsonChild.iNumber != 6)
+	{
+		LOG_TRACE("db proto json skip mismatch");
+		++iBad;
+	}
+	stJson.iSecret = 3;
+	if (!stJson.FromJson(std::string("{\"iSecret\":8}")) || stJson.iSecret != 3)
+	{
+		LOG_TRACE("db proto nojson field changed");
+		++iBad;
+	}
+	LOG_TRACE("db proto map bad=%d", iBad);
+	return iBad;
+}
+
 OI::Coro::Task DbMgr::Run()
 {
 	int32_t iBad = 0;
@@ -106,6 +332,7 @@ OI::Coro::Task DbMgr::Run()
 	int32_t iStatus = OI_OK;
 	if (!m_bMysql)
 	{
+		iBad += CheckProtoMap();
 		auto pDriver = std::make_shared<FakeDriver>();
 		OI::Db::Client stClient(pDriver, 1);
 		try

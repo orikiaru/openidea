@@ -74,7 +74,11 @@ class ProtocolGen:
     def __init__(self, xml_path):
         self.proto_id_map = {}      #type:Dict[str,SerializeData] 
         self.type_name_map = {}     #type:Dict[str,SerializeData]
-        self.xml_path = xml_path
+        if isinstance(xml_path, (str, os.PathLike)):
+            self.xml_paths = [os.fspath(xml_path)]
+        else:
+            self.xml_paths = [os.fspath(path) for path in xml_path]
+        self.xml_path = self.xml_paths[0] if self.xml_paths else ""
         self.serialize_datas = []   #type:List[SerializeData]
         self.GenDefaultProtocol()
     
@@ -87,10 +91,19 @@ class ProtocolGen:
         return None
         
     def Gen(self)->bool:
-        path=self.xml_path
+        if not self.xml_paths:
+            loginfo("ERROR: no proto file")
+            return False
+        for path in self.xml_paths:
+            if not self.LoadFile(path):
+                return False
+        return self.CheckEnums() and self.CheckRpcPayloads() and self.CheckKeyComparators()
+
+    def LoadFile(self, path)->bool:
         if not os.path.exists(path):
             loginfo("ERROR: not find:" + path)
             exit(-2)
+        loginfo("open proto file path:" + path)
         with open(path, "r", encoding="utf-8-sig") as fp:
             text = fp.read()
         if text.lstrip().startswith("<"):
@@ -98,22 +111,19 @@ class ProtocolGen:
             if tree is None:
                 exit(-2)
             root=tree.getroot()
-            ret = self.GenRpcData(root)
-            if(not ret):
-                return False
-            ret = self.GenRpc(root)
-            if(not ret):
+            if not self.GenRpcData(root) or not self.GenRpc(root):
                 return False
             return True
-        loginfo("open proto file path:" + path)
         datas = ParseProtoText(text)
         if datas is None:
+            loginfo("proto file failed path:" + path)
             return False
         for p in datas:
             if not self.CheckSerializeData(p.GetType(), p):
+                loginfo("proto file failed path:" + path)
                 return False
             self.serialize_datas.append(p)
-        return self.CheckEnums() and self.CheckKeyComparators()
+        return True
 
     # 枚举项不带作用域，名字全局唯一；错误码在所有 errordef 之间也不能重。
     # 枚举不参与序列化，rpcdata 字段用定宽整数，不能直接写枚举类型。
@@ -145,6 +155,16 @@ class ProtocolGen:
                     loginfo("rpcdata field cannot use enum type, use a fixed-width integer proto=", data.GetName(), ",field=", member.GetName(), ",enum=", sorted(used)[0])
                     return False
         return True
+
+    def CheckRpcPayloads(self)->bool:
+        for data in self.serialize_datas:
+            if data.GetType() != SerializeDataType.RPC:
+                continue
+            for name in (data.GetReq(), data.GetRes()):
+                if self.RpcDataByName(name) is None:
+                    loginfo("rpc payload is not an rpcdata rpc=", data.GetName(), ",type=", name)
+                    return False
+        return True
     
     def GenRpc(self,root)->bool:
         rpcs=root.findall("rpc")
@@ -166,7 +186,7 @@ class ProtocolGen:
             if(not self.CheckSerializeData(SerializeDataType.RPC_DATA, p)):
                 return False
             self.serialize_datas.append(p)
-        return self.CheckKeyComparators()
+        return True
 
     def RpcDataByName(self, name):
         data = self.type_name_map.get(name)
@@ -206,10 +226,12 @@ class ProtocolGen:
             if parsed[1] in JSON_SCALARS:
                 return True
             data = self.RpcDataByName(parsed[1])
-            if data is None or data.is_key or parsed[1] in stack:
+            if data is None or not data.has_json or data.is_key or parsed[1] in stack:
                 return False
             stack.add(parsed[1])
             for member in data.members:
+                if not member.json_name:
+                    continue
                 if not self.TypeJsonOk(ParseType(member.GetType()), stack):
                     stack.remove(parsed[1])
                     return False
@@ -222,6 +244,30 @@ class ProtocolGen:
             if key[0] != "name" or key[1] not in JSON_MAP_KEYS:
                 return False
             return self.TypeJsonOk(parsed[2], stack)
+        return False
+
+    def IsDbScalar(self, parsed):
+        if parsed[0] != "name":
+            return False
+        name = "std::string" if parsed[1] == "string" else parsed[1]
+        return name in JSON_SCALARS
+
+    # db 不穿透。标量按列读写。vector、map、rpcdata 整段当 blob，只检查能不能序列化，不要求里层标 db。
+    def TypeDbOk(self, parsed):
+        if parsed[0] == "bad":
+            return False
+        if parsed[0] == "name":
+            name = "std::string" if parsed[1] == "string" else parsed[1]
+            if name in JSON_SCALARS:
+                return True
+            data = self.RpcDataByName(name)
+            return data is not None
+        if parsed[0] == "vector":
+            if parsed[1] == ("name", "bool"):
+                return False
+            return self.TypeDbOk(parsed[1])
+        if parsed[0] == "map":
+            return self.TypeDbOk(parsed[1]) and self.TypeDbOk(parsed[2])
         return False
 
     def CheckKeyComparators(self)->bool:
@@ -242,7 +288,30 @@ class ProtocolGen:
                     if not self.TypeOrdered(ParseType(member.GetType()), set([data.GetName()])):
                         loginfo("key rpcdata nested comparator missing name=", data.GetName(), ",field=", member.GetName(), ",type=", member.GetType())
                         return False
-            data.json_ok = (not data.is_key) and all(self.TypeJsonOk(ParseType(member.GetType()), set()) for member in data.members)
+            if data.has_json:
+                for member in data.members:
+                    if not member.json_name:
+                        continue
+                    if not self.TypeJsonOk(ParseType(member.GetType()), set()):
+                        loginfo("json field is not representable name=", data.GetName(), ",field=", member.GetName(), ",type=", member.GetType())
+                        return False
+            if data.has_db:
+                for member in data.members:
+                    if not member.db_name:
+                        continue
+                    parsed = ParseType(member.GetType())
+                    if member.db_json:
+                        # 只有真正入库的 vector、map、rpcdata 才能 dbjson，并且必须能写成 JSON。
+                        blob = parsed[0] in ("vector", "map") or (parsed[0] == "name" and not self.IsDbScalar(parsed))
+                        if parsed[0] == "vector" and parsed[1] == ("name", "bool"):
+                            blob = False
+                        if not blob or not self.TypeJsonOk(parsed, set()):
+                            loginfo("dbjson needs a json vector, map or rpcdata proto=", data.GetName(), ",field=", member.GetName(), ",type=", member.GetType())
+                            return False
+                    elif not self.TypeDbOk(parsed):
+                        loginfo("db field is not representable name=", data.GetName(), ",field=", member.GetName(), ",type=", member.GetType())
+                        return False
+            data.json_ok = data.has_json
         return True
     
     def GenProtocols(self,root)->bool:

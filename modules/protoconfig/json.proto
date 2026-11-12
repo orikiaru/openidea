@@ -1,0 +1,59 @@
+// JSON 样例。Inner 也被 rpc.proto 的 AllTypesData 引用。
+// Inner 的键是别名。JsonPlain 写了 [json] 但不改名。
+// JsonDefault 的字段什么标记都不写：结构标了 json，字段默认就参加，键名是字段名。
+
+rpcdata Inner json {
+    0 [json n] int32_t iNumber;
+    1 [json s] string sText;
+}
+
+rpcdata JsonPlain json {
+    0 [json] int32_t iNumber;
+    1 [json] string sText;
+}
+
+rpcdata JsonDefault json {
+    0 int32_t iNumber;
+    1 string sText;
+    2 [nojson] int32_t iSkip;
+}
+
+// JSON 能表达的全量结构。结构当 map 键的字段不在这里。
+rpcdata JsonAll json {
+    0 [json c] int8_t iInt8;
+    1 [json s] int16_t iInt16;
+    2 [json i] int32_t iInt32;
+    3 [json l] int64_t iInt64;
+    4 [json i64] int64_t iAlternateInt64;
+    5 [json f] float fFloat;
+    6 [json d] double dDouble;
+    7 [json raw] Bytes stRawData;
+    8 [json msg] string sMessage;
+    9 [json nums] vector<int32_t> vNumbers;
+    10 [json words] vector<string> vWords;
+    11 [json child] Inner stChild;
+    12 [json children] vector<Inner> vChildren;
+    13 [json table] map<int32_t, string> mTable;
+    14 [json named] map<string, Inner> mNamed;
+    15 [json u8] uint8_t iUnsigned8;
+    16 [json u16] uint16_t iUnsigned16;
+    17 [json u32] uint32_t iUnsigned32;
+    18 [json u64] uint64_t iUnsigned64;
+    19 [json unums] vector<uint64_t> vUnsignedNumbers;
+    20 [json gap] int32_t iGap;
+    21 [json utable] map<uint32_t, string> mUnsignedTable;
+    22 [json ubig] map<uint64_t, string> mLargeUnsignedTable;
+    // 写了 [json]，不改名。键就是字段名。
+    23 [json] int32_t iPlain;
+    24 [json] string sPlain;
+    25 [json] vector<int32_t> vPlain;
+    26 [json] map<string, int32_t> mPlain;
+    27 [json] JsonPlain stPlain;
+    // 结构已经标了 json。字段不再写 [json]，默认参加，键名仍是字段名。
+    28 int32_t iDefault;
+    29 string sDefault;
+    30 vector<int32_t> vDefault;
+    31 map<string, int32_t> mDefault;
+    32 JsonDefault stDefault;
+    33 [nojson] int32_t iSkip;
+}

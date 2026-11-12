@@ -80,12 +80,12 @@ find_program(PYTHON_BIN NAMES python3 python)
 if(NOT PYTHON_BIN)
 	message(FATAL_ERROR "Python 3 is required to generate protocols")
 endif()
-set(OI_WORK_PROTOCOL "${BASE_LIB_PATH}/net/protocol/proto.xml")
+set(OI_WORK_PROTO_FILES "${BASE_LIB_PATH}/net/protocol/work.proto")
 file(GLOB OI_PROTO_TOOL_SOURCES "${PROTO_TOOL_DIR}/*.py")
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${OI_WORK_PROTOCOL}" ${OI_PROTO_TOOL_SOURCES})
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${OI_WORK_PROTO_FILES} ${OI_PROTO_TOOL_SOURCES})
 execute_process(
 	COMMAND "${PYTHON_BIN}" "${PROTO_TOOL_DIR}/main.py" --data-only
-		"${OI_WORK_PROTOCOL}" "${BASE_LIB_PATH}/net/inc/work_protocol"
+		"${BASE_LIB_PATH}/net/inc/work_protocol" -- ${OI_WORK_PROTO_FILES}
 	RESULT_VARIABLE OI_WORK_PROTO_GEN
 )
 if(NOT OI_WORK_PROTO_GEN EQUAL 0)

@@ -134,7 +134,7 @@ Redis 也单独测。开关是 `[Test] redis`。先起本机 Redis（`maxmemory 
 | RPC、RpcCall、HandleRpc、回包、调用号 | `docs/coroutine.md` 的服务端和客户端 | 同上，推迟回包用同文件的 `Hold` |
 | Redis、redisserver、RESP | `docs/cbaselib.md` 的 redis 段 | `modules/ipcclient/src/redis_mgr.cpp` 的 `Check` |
 | 定时器、时间轮、AddTimer | `docs/timer.md` | `Hold` 里的 `co_await OI::Coro::yield` |
-| 协议、proto.xml、rpcdata、模块 | `docs/module.md` | `modules/xmlconfig/proto.xml` 的 `AllEcho`、`Hold` |
+| 协议、proto.xml、.proto、rpcdata、模块 | `docs/module.md` | `modules/protoconfig/rpc.proto` 的 `AllEcho`、`Hold` |
 | 端口、复用、bind、TIME_WAIT、监听 | `docs/cbaselib.md` 的 net 段 | `cbaselib/port/oi_net_os.cpp` 的 `NetOs_Bind` |
 | Web、HTTP、JSON、urlencode、二进制 body | `docs/module.md` 的 Web 段 | `modules/webserver` 的四个路径；`modules/webclient` 的 `Run` |
 | 分层、Channel、Session、会话管理器、逻辑 mgr、裸包、转发、CloneSession | `docs/develop.md` 第 1 节 | `modules/ipcserver/src/ipcudp.cpp` 的 `IpcUdp` |
@@ -157,7 +157,7 @@ Redis 也单独测。开关是 `[Test] redis`。先起本机 Redis（`maxmemory 
 - 见名知意，避免单字母和不明确缩写；时间字段写出单位（如 `iTimeoutMilliseconds`），业务词汇沿用项目约定，阵容统一使用 `Arrange`。
 - 开发和修改代码前阅读并遵守 [关键规则](docs/09-key-rules.md)，业务词汇按其中第 9 节执行。
 - 修改字段时同步修改定义、构造初始化、访问点、协议源文件、生成器和文档；不要只改生成产物。
-- 二进制协议字段号不随命名变化。已有配置键和外部 JSON 键保持兼容，协议可用 `json 原键名` 指定 JSON 名称。
+- 二进制协议字段号不随命名变化。已有配置键和外部 JSON 键保持兼容，协议可用 `[json 原键名]` 指定 JSON 名称。
 - 去掉旧下划线后检查参数/局部变量遮蔽成员，尤其 setter 不能变成自赋值。构造函数初始化列表里，冒号左边是成员、括号里是同名参数，这是允许的。函数体里不能靠同名自赋值，改名区分，不用 `this->` 掩盖。重命名必须跑真实收发回归，不能只看编译。
 - 命名检查：`python3 tools/test_field_names.py`；C++ 成员/参数/局部变量扫描使用安装了 libclang 的 Python 运行 `tools/check_field_names.py --build-dir ~/openidea-build-gcc13`。完整回归使用 `python3 tools/run_regressions.py --case all`，按上面的平台和线程要求跑，包含原四类测试以及注册发现、Web 收发。
 

@@ -1,4 +1,4 @@
-/* 由 proto 工具生成后拷进 base，不进 proto.xml。rpc 号只是 req/res 的映射。 */
+/* 由 proto 工具生成后拷进 base，不进 .proto 协议正文。rpc 号只是 req/res 的映射。 */
 #pragma once
 #include "oi_rpc.h"
 #include "oi_rpcdata_reginstance.h"

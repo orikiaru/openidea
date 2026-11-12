@@ -43,6 +43,12 @@ if (iRet != OI_OK)
 
 返回值是统一的 `int32_t` 状态码。驱动错误通过 `Error` 的 `sStage`、`iNativeCode`、`sSqlState` 和 `sMessage` 提供阶段及原生诊断；原生码和 SQLSTATE 可能因失败阶段不存在而为空或零。`stCleanup` 可记录连接清理失败或异常及其独立的诊断字段，调用成功时也应按需检查。MySQL 的文本使用简短安全描述，不直接输出 SDK 或服务端原始错误文本，避免泄露 SQL、参数、地址和凭据。记录诊断时只记录必要的阶段、状态码和安全文本，不记录完整请求或敏感值。
 
+## 协议行
+
+`rpcdata` 在名字后面标 `db` 才生成行映射，见 [模块和协议](module.md)。生成三个方法：`DbColumnList` 是反引号列名，`DbPlaceholders` 是等量的 `?`，`AppendDbParameters` 按这个顺序追加参数。`FromDbRow` 用结果里的列名把一行填回来。
+
+头一层的整数、浮点、`bool`、`string`、`Bytes` 分别绑定成 `int64_t`、`uint64_t`、`double`、`string` 或 `Blob`。`bool` 写成 0 或 1。`vector`、`map` 和嵌套 `rpcdata` 默认不拆列，调用 `ToDbBlob` 收成一个 blob，读的时候用 `FromDbBlob`。blob 里是这条值自己的 PB，序号为 0。字段写了 `[dbjson]` 才改成 `ToJsonText` / `FromJsonText` 的 JSON 文本。数据库不穿透，blob 里的结构不用标 `db`。SQL 仍由调用方写，表名不从协议生成。schema migration 尚未实现。
+
 ## 本轮范围
 
-当前接口使用显式 SQL、参数和结果，不提供 proto 的数据库字段映射或数据库 schema migration；两项均尚未实现。文档描述接口与使用约束，不代表已通过编译或回归。
+行映射只覆盖头一层的打包和解包。文档里 MySQL 驱动的行为约束仍以接口为准；`db` 回归用假驱动覆盖客户端，并检查 `db proto map bad=0`。真实 MySQL 仍是单独的 `mysql` 用例。

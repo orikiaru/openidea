@@ -1,6 +1,6 @@
 # openidea
 
-C++20 的模块化网络进程。基础库在 `cbaselib`，业务进程从 `modules/xmlconfig` 生成骨架。同一条协程任务可以跑在单线程，也可以跑在多线程。
+C++20 的模块化网络进程。基础库在 `cbaselib`，业务进程从 `modules/protoconfig` 生成骨架。同一条协程任务可以跑在单线程，也可以跑在多线程。
 
 ## 目录
 
@@ -8,9 +8,9 @@ C++20 的模块化网络进程。基础库在 `cbaselib`，业务进程从 `modu
 | --- | --- |
 | `framework.cmake` | 基础库。不含进程模块，根 `CMakeLists.txt` 和外部工程都 include 它 |
 | `cbaselib` | 线程池、网络、协议、定时器、日志客户端 |
-| `modules/xmlconfig` | 模块、组件、协议的生成输入 |
+| `modules/protoconfig` | 模块、组件、协议的生成输入 |
 | `modules/include` | 每次 cmake 重写的序列化代码 |
-| `modules/<name>` | 一个进程。名单在 `module.xml`：`logd`、`ipcclient`、`ipcserver`、`redisserver`、`webserver`、`webclient`、`registry` |
+| `modules/<name>` | 一个进程。名单在 `module.proto`：`logd`、`ipcclient`、`ipcserver`、`redisserver`、`webserver`、`webclient`、`registry` |
 | `deploy/bin` | 可执行文件 |
 | `deploy/config` | 与可执行文件同名的 toml |
 | `docs` | 说明 |

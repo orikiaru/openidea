@@ -1,0 +1,28 @@
+// 数据库行。头一层标量进列。vector、map、rpcdata 默认收成 PB blob。
+// [db 列名] 改列名，只写 [db] 列名仍是字段名，什么都不写也一样。
+// [nodb] 不进库。[nojson] 不进 JSON。[dbjson] 才把复杂字段存成 JSON 文本。
+// DbChild 给嵌套字段用。JSON 会穿透，所以它自己标 json；库不穿透，blob 里不必标 db。
+
+rpcdata DbChild json {
+    0 int32_t iNumber;
+    1 string sText;
+}
+
+rpcdata DbSample json db {
+    0 [db id] int64_t iId;
+    1 [db] string sName;
+    2 [nojson] int32_t iSecret;
+    3 [nodb] string sCache;
+    4 uint64_t iToken;
+    5 double dScore;
+    6 float fRatio;
+    7 Bytes stPayload;
+    8 vector<int32_t> vNumbers;
+    9 map<string, int32_t> mFlags;
+    10 DbChild stChild;
+    11 int8_t iFlag;
+    12 bool bActive;
+    13 [dbjson] vector<int32_t> vJsonNumbers;
+    14 [db notes] [dbjson] map<string, int32_t> mJsonFlags;
+    15 [dbjson] DbChild stJsonChild;
+}

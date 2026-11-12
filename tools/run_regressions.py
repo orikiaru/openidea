@@ -716,6 +716,7 @@ def run(case, args):
                 if case.endswith("count"): assert any(int(count) == maximum_count for count, size in samples)
             elif case == "db":
                 assert "db fake done bad=0" in text
+                assert "db proto map bad=0" in text
             elif case == "mysql":
                 assert "mysql done bad=0" in text
             elif mode == "redis":
@@ -905,7 +906,7 @@ class IPv6HttpServer(http.server.ThreadingHTTPServer):
 
 
 def run_web(args):
-    # 仍使用模块自带的 WebClient 用例，验证字段改名后的 HTTP/JSON/二进制收发。
+    # 仍使用模块自带的 WebClient 用例，验证别名键和未改名键的 HTTP/JSON/二进制收发。
     with regression_directory(prefix="oi-regression-web-p%d-" % PORT_OFFSET) as tmp:
         root = Path(tmp)
         write_owner(root, REPO, PORT_OFFSET)

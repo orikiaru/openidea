@@ -19,18 +19,26 @@ set(MODULES_PATH ${CMAKE_SOURCE_DIR}/modules)
 set(DEPOLY_PATH ${CMAKE_SOURCE_DIR}/deploy)
 include_directories(${MODULES_PATH}/include)
 
-set(PROTO_XML_PATH ${MODULES_PATH}/xmlconfig)
+set(OI_PROTO_CONFIG ${MODULES_PATH}/protoconfig)
+# 协议正文可以有多份，按这个列表的顺序读入。名字和协议号在全部文件里不能重复。
+set(OI_PROTO_FILES
+    ${OI_PROTO_CONFIG}/db.proto
+    ${OI_PROTO_CONFIG}/json.proto
+    ${OI_PROTO_CONFIG}/rpc.proto
+)
 set(PROTO_INPUTS
-    ${PROTO_XML_PATH}/proto.xml
-    ${PROTO_XML_PATH}/module.xml
-    ${PROTO_XML_PATH}/module_component.xml
+    ${OI_PROTO_FILES}
+    ${OI_PROTO_CONFIG}/module.proto
+    ${OI_PROTO_CONFIG}/component.proto
 )
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${PROTO_INPUTS})
 
 set(OI_MODULE_MANIFEST "${CMAKE_CURRENT_BINARY_DIR}/oi_modules.cmake")
 execute_process(
-    COMMAND "${PYTHON_BIN}" "${PROTO_TOOL_DIR}/main.py" ${PROTO_INPUTS}
+    COMMAND "${PYTHON_BIN}" "${PROTO_TOOL_DIR}/main.py"
+        "${OI_PROTO_CONFIG}/module.proto" "${OI_PROTO_CONFIG}/component.proto"
         "${MODULES_PATH}/include" "${MODULES_PATH}" "${DEPOLY_PATH}" "${OI_MODULE_MANIFEST}"
+        -- ${OI_PROTO_FILES}
     RESULT_VARIABLE PROTO_GEN_RESULT
 )
 if(NOT "${PROTO_GEN_RESULT}" STREQUAL "0")
@@ -44,7 +52,7 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${DEPOLY_PATH}/lib)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${DEPOLY_PATH}/bin)
 set(LIBRARY_OUTPUT_PATH ${DEPOLY_PATH}/path)
 
-# 模块名单由 module.xml 生成。
+# 模块名单由 module.proto 生成。
 foreach(_mod IN LISTS OI_MODULES)
     add_subdirectory("${MODULES_PATH}/${_mod}")
     if(TARGET oi_clangd_db AND TARGET ${_mod})

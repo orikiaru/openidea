@@ -1,0 +1,124 @@
+// 每行是：字段号 类型 名字。字段号写在协议里，生成器不补、不重排。
+// 容器写成 vector<T>、map<K, V>。string 就是 std::string。
+// rpcdata 名字后面加 key，才生成比较器，才能当 map 键。key 不能再标 json。
+// json、db 标在结构名后面才生成对应方法。字段默认都参加，不改名就用字段名。
+// 特殊标记各自用 [] 写在类型前面，可以连着写。[json]、[db] 的名字可省略，省略就是字段名。
+// [nojson]、[nodb] 表示不参加。JSON 会穿透，里层 rpcdata 也要标 json。
+// db 不穿透。vector、map、rpcdata 默认收成 PB blob；写了 [dbjson] 才改存 JSON 文本。
+
+rpcdata EchoKeyPart key {
+    0 int32_t iNumber;
+}
+
+rpcdata EchoKey key {
+    0 EchoKeyPart stPart;
+    1 string sName;
+}
+
+rpcdata AllTypesData {
+    0 int8_t iInt8;
+    1 int16_t iInt16;
+    2 int32_t iInt32;
+    3 int64_t iInt64;
+    4 int64_t iAlternateInt64;
+    5 float fFloat;
+    6 double dDouble;
+    7 Bytes stRawData;
+    8 string sMessage;
+    9 vector<int32_t> vNumbers;
+    10 vector<string> vWords;
+    11 Inner stChild;
+    12 vector<Inner> vChildren;
+    13 map<int32_t, string> mTable;
+    14 map<string, Inner> mNamed;
+    15 uint8_t iUnsigned8;
+    16 uint16_t iUnsigned16;
+    17 uint32_t iUnsigned32;
+    18 uint64_t iUnsigned64;
+    19 vector<uint64_t> vUnsignedNumbers;
+    20 int32_t iGap;
+    21 map<uint32_t, string> mUnsignedTable;
+    22 map<uint64_t, string> mLargeUnsignedTable;
+    23 map<EchoKey, string> mKeyed;
+}
+
+rpcdata AllEchoReq {
+    0 AllTypesData stData;
+}
+
+rpcdata AllEchoRes {
+    0 AllTypesData stData;
+    1 int32_t iCode;
+}
+
+rpcdata HoldReq json {
+    0 [json delay_ms] int32_t iDelayMilliseconds;
+    1 [json mark] int32_t iMark;
+}
+
+rpcdata HoldRes json {
+    0 [json mark] int32_t iMark;
+}
+
+// UdpEchoReq.iSeq 取这些值时服务端回诊断，不回显。
+enum UdpProbe {
+    UDP_PROBE_PEER_ADDR = -1;
+    UDP_PROBE_SESSIONS = -2;
+    UDP_PROBE_REJECT = -3;
+}
+
+// 业务错误码用正数，框架错误码是负数。处理函数直接 co_return。
+errordef UdpError {
+    UDP_ERR_REJECTED = 1001;
+}
+
+// UDP 上的 RPC。iSeq 是 UdpProbe 时回诊断：对端地址、建过的会话数，或者回 UDP_ERR_REJECTED。
+rpcdata UdpEchoReq json {
+    0 [json seq] int32_t iSeq;
+    1 [json data] string sData;
+}
+
+rpcdata UdpEchoRes json {
+    0 [json seq] int32_t iSeq;
+    1 [json data] string sData;
+}
+
+// UDP 上的单向消息。服务端收到后原样单向发回。
+rpcdata UdpNoteReq json {
+    0 [json seq] int32_t iSeq;
+}
+
+// 单向消息不回包，生成器要求成对才留着。
+rpcdata UdpNoteRes json {
+    0 [json seq] int32_t iSeq;
+}
+
+// 多连接回归。服务端回自己的 [Service] id；iNotify 非 0 时先顺着这条连接推一条 PeerNote 再回包。
+rpcdata PeerProbeReq json {
+    0 [json tag] int32_t iTag;
+    1 [json notify] int32_t iNotify;
+}
+
+rpcdata PeerProbeRes json {
+    0 [json tag] int32_t iTag;
+    1 [json service_id] int32_t iServiceId;
+}
+
+// 服务端推给客户端的单向消息。
+rpcdata PeerNoteReq json {
+    0 [json tag] int32_t iTag;
+    1 [json service_id] int32_t iServiceId;
+}
+
+// 单向消息不回包，生成器要求成对才留着。
+rpcdata PeerNoteRes json {
+    0 [json tag] int32_t iTag;
+}
+
+// 请求和回复共用一个协议号。调用号最高位区分请求和回包，调用号 0 是单向消息。
+rpc AllEcho { id 3001; request AllEchoReq; response AllEchoRes; timeout 25; }
+rpc Hold { id 3002; request HoldReq; response HoldRes; timeout 25; }
+rpc UdpEcho { id 3003; request UdpEchoReq; response UdpEchoRes; timeout 25; }
+rpc UdpNote { id 3004; request UdpNoteReq; response UdpNoteRes; timeout 25; }
+rpc PeerProbe { id 3005; request PeerProbeReq; response PeerProbeRes; timeout 25; }
+rpc PeerNote { id 3006; request PeerNoteReq; response PeerNoteRes; timeout 25; }

@@ -6,6 +6,7 @@
 #include <type_traits>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -346,6 +347,38 @@ template <typename T>
 auto ToJsonValue(Json::Value& stOutput, const T& stInput) -> decltype(stInput.ToJson(stOutput))
 {
 	stInput.ToJson(stOutput);
+}
+
+// 数据库 [dbjson] 用这套把一条 vector、map 或 rpcdata 收成 JSON 文本。
+template <typename T>
+std::string ToJsonText(const T& stValue)
+{
+	Json::Value stJson;
+	ToJsonValue(stJson, stValue);
+	Json::StreamWriterBuilder stBuilder;
+	stBuilder["indentation"] = "";
+	return Json::writeString(stBuilder, stJson);
+}
+
+template <typename T>
+bool FromJsonText(const std::string& sText, T& stOutput)
+{
+	Json::CharReaderBuilder stBuilder;
+	const std::unique_ptr<Json::CharReader> pReader(stBuilder.newCharReader());
+	Json::Value stJson;
+	std::string sError;
+	const char* pBegin = sText.data();
+	if (!pReader->parse(pBegin, pBegin + sText.size(), &stJson, &sError))
+	{
+		return false;
+	}
+	T stDecoded{};
+	if (!FromJsonValue(stJson, stDecoded))
+	{
+		return false;
+	}
+	stOutput = std::move(stDecoded);
+	return true;
 }
 
 }

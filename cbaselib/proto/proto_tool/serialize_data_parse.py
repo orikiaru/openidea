@@ -1,6 +1,20 @@
 from enum import Enum
+import re
 from common import loginfo
 from field_naming import ValidFieldName
+
+DB_COLUMN_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+JSON_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_:]*")
+
+def ParseBoolAttr(text):
+    if text is None or text == "":
+        return False
+    lowered = str(text).lower()
+    if lowered in ("true", "1"):
+        return True
+    if lowered in ("false", "0"):
+        return False
+    return None
 
 class SerializeDataType(Enum):
     PROTOCOL = 1
@@ -17,6 +31,12 @@ class ClassMember:
         self.value = None
         self.seq = None
         self.json_name = None
+        self.db_name = None
+        self.no_json = False
+        self.no_db = False
+        self.json_marked = False
+        self.db_marked = False
+        self.db_json = False
     def GetName(self):
         return self.name
     def GetType(self):
@@ -27,7 +47,24 @@ class ClassMember:
         return self.seq
     def ParseMember(self, member_xml):
         self.name = member_xml.get("name")
-        self.json_name = member_xml.get("json") or self.name
+        json_text = member_xml.get("json")
+        if json_text:
+            self.json_name = json_text
+        db_text = member_xml.get("db")
+        if db_text:
+            self.db_name = db_text
+        no_json = ParseBoolAttr(member_xml.get("nojson"))
+        no_db = ParseBoolAttr(member_xml.get("nodb"))
+        if no_json is None or no_db is None:
+            loginfo("ParseMember codec flag invalid name=", self.name, ",nojson=", member_xml.get("nojson"), ",nodb=", member_xml.get("nodb"))
+            return False
+        self.no_json = no_json
+        self.no_db = no_db
+        db_json = ParseBoolAttr(member_xml.get("dbjson"))
+        if db_json is None:
+            loginfo("ParseMember dbjson flag invalid name=", self.name, ",dbjson=", member_xml.get("dbjson"))
+            return False
+        self.db_json = db_json
         self.type = member_xml.get("type")
         self.value = member_xml.get("default")
         seq_text = member_xml.get("seq")
@@ -53,7 +90,9 @@ class SerializeData:
         self.timeout = "30"
         self.res_id = ""
         self.is_key = False
-        self.json_ok = True
+        self.has_json = False
+        self.has_db = False
+        self.json_ok = False
 
     def GenLogHeader(self):
         log = 'type={},id={},name={},type_enum={}'.format(SerializeDataType(self.type), self.id, self.name, self.GetProtoType())
@@ -130,19 +169,69 @@ class SerializeData:
             self.members.append(member)
         return self.AssignFieldSeq()
 
+    # json / db 标在结构上。没标的结构不生成对应方法。
+    # 字段默认都参加，序列化名就是字段名。[json]、[db] 的名字可省略。
+    # JSON 穿透。[dbjson] 才把 vector、map、rpcdata 按 JSON 存进库，否则仍是 PB blob。
+    def ApplyCodecMarkers(self):
+        if self.has_json and self.is_key:
+            loginfo("key rpcdata cannot generate json name=", self.name)
+            return False
+        json_names = set()
+        db_names = set()
+        for member in self.members:
+            # 没标 json 的结构不能出现 json 标记。nodb 字段不再是数据库字段，不能再带 db / dbjson。
+            if member.no_json and (member.json_name or member.json_marked):
+                loginfo("json and nojson proto=", self.name, ",field=", member.name)
+                return False
+            if member.no_db and (member.db_name or member.db_marked or member.db_json):
+                loginfo("db and nodb proto=", self.name, ",field=", member.name)
+                return False
+            if not self.has_json and (member.no_json or member.json_name or member.json_marked):
+                loginfo("field json marker requires rpcdata json proto=", self.name, ",field=", member.name)
+                return False
+            if not self.has_db and (member.no_db or member.db_name or member.db_marked or member.db_json):
+                loginfo("db marker requires db rpcdata proto=", self.name, ",field=", member.name)
+                return False
+            if self.has_json and not member.no_json and not member.json_name:
+                member.json_name = member.name
+            if not self.has_json or member.no_json:
+                member.json_name = None
+            if self.has_db and not member.no_db and not member.db_name:
+                member.db_name = member.name
+            if not self.has_db or member.no_db:
+                member.db_name = None
+            if member.json_name:
+                if not JSON_NAME.fullmatch(member.json_name):
+                    loginfo("invalid json name proto=", self.name, ",field=", member.name, ",json=", member.json_name)
+                    return False
+                if member.json_name in json_names:
+                    loginfo("duplicate JSON name proto=", self.name, ",json=", member.json_name)
+                    return False
+                json_names.add(member.json_name)
+            if member.db_name:
+                if not DB_COLUMN_NAME.fullmatch(member.db_name):
+                    loginfo("invalid db column proto=", self.name, ",field=", member.name, ",db=", member.db_name)
+                    return False
+                if member.db_name in db_names:
+                    loginfo("duplicate db column proto=", self.name, ",db=", member.db_name)
+                    return False
+                db_names.add(member.db_name)
+        if self.has_json and not json_names:
+            loginfo("json rpcdata has no json field name=", self.name)
+            return False
+        if self.has_db and not db_names:
+            loginfo("db rpcdata has no db field name=", self.name)
+            return False
+        self.json_ok = self.has_json
+        return True
+
     # 字段号必须写在协议里。缺号、重号都是协议错，生成器不补。
     def AssignFieldSeq(self):
         used = set()
-        json_names = set()
         for member in self.members:
             if not ValidFieldName(member.type, member.name):
                 loginfo("invalid field name proto=", self.name, ",field=", member.name, ",type=", member.type)
                 return False
-            json_name = member.json_name or member.name
-            if json_name in json_names:
-                loginfo("duplicate JSON name proto=", self.name, ",json=", json_name)
-                return False
-            json_names.add(json_name)
             if member.seq is None:
                 loginfo("field number required proto=", self.name, ",field=", member.GetName())
                 return False
@@ -150,7 +239,7 @@ class SerializeData:
                 loginfo("duplicate field number proto=", self.name, ",field=", member.GetName(), ",seq=", member.seq)
                 return False
             used.add(member.seq)
-        return True  
+        return self.ApplyCodecMarkers()  
     #解析Rpc的Req和Res
     def ParseRpcMember(self)->bool:
         if(self.type != SerializeDataType.RPC):
@@ -216,6 +305,13 @@ class SerializeData:
         else:
             loginfo("ParseRpcData key invalid name=", self.name, ",key=", key_text)
             return False
+        has_json = ParseBoolAttr(self.xml_data.get("json"))
+        has_db = ParseBoolAttr(self.xml_data.get("db"))
+        if has_json is None or has_db is None:
+            loginfo("ParseRpcData codec flag invalid name=", self.name, ",json=", self.xml_data.get("json"), ",db=", self.xml_data.get("db"))
+            return False
+        self.has_json = has_json
+        self.has_db = has_db
         return self.ParseMember()
 
     #解析RPC

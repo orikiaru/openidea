@@ -118,7 +118,7 @@ class SerializeDataFileGen:
     def GenRpcDataFile(self):
         assert(self.data.GetType() == SerializeDataType.RPC_DATA)
         file_data = ""
-        file_data += '#pragma once\n#include "oi_rpc.h"\n__JSON_INCLUDE__'
+        file_data += '#pragma once\n#include "oi_rpc.h"\n__JSON_INCLUDE____DB_INCLUDE__'
         file_data += '''
 namespace OI { namespace RpcData {
 class __CLASS_NAME__ : public ::OI::Rpc::RpcData
@@ -137,16 +137,25 @@ __PB_SERIALIZE__        return os;
     virtual ::OI::Base::BytesStream& deserialize(::OI::Base::BytesStream& os)
     {
 __PB_DESERIALIZE__    }
-__COMPARE____JSON_METHODS__};
+__COMPARE____JSON_METHODS____DB_METHODS__};
 }}
 '''
         file_data = self.DoReplace(file_data)
-        if self.data.json_ok:
+        if self.data.has_json:
             file_data = file_data.replace("__JSON_INCLUDE__", '#include "oi_json.h"\n#include <memory>\n#include <string>\n')
             file_data = file_data.replace("__JSON_METHODS__", self.GetJsonMethods())
         else:
             file_data = file_data.replace("__JSON_INCLUDE__", "")
             file_data = file_data.replace("__JSON_METHODS__", "")
+        if self.data.has_db:
+            db_include = '#include "oi_db_row.h"\n'
+            if any(member.db_json for member in self.data.members):
+                db_include = '#include "oi_json.h"\n' + db_include
+            file_data = file_data.replace("__DB_INCLUDE__", db_include)
+            file_data = file_data.replace("__DB_METHODS__", self.GetDbMethods())
+        else:
+            file_data = file_data.replace("__DB_INCLUDE__", "")
+            file_data = file_data.replace("__DB_METHODS__", "")
         file_data = file_data.replace("__COMPARE__", self.GetCompareMethod())
         return file_data
 
@@ -170,7 +179,9 @@ __COMPARE____JSON_METHODS__};
         lines.append("        if (!in.isObject()) return false;")
         lines.append("        %s decoded(*this);" % self.class_name)
         for m in self.data.members:
-            lines.append('        if (in.isMember("%s") && !::OI::Rpc::FromJsonValue(in["%s"], decoded.%s)) return false;' % (m.json_name or m.name, m.json_name or m.name, m.name))
+            if not m.json_name:
+                continue
+            lines.append('        if (in.isMember("%s") && !::OI::Rpc::FromJsonValue(in["%s"], decoded.%s)) return false;' % (m.json_name, m.json_name, m.name))
         lines.append("        *this = std::move(decoded);")
         lines.append("        return true;")
         lines.append("    }")
@@ -188,7 +199,9 @@ __COMPARE____JSON_METHODS__};
         lines.append("    {")
         lines.append("        out = Json::Value(Json::objectValue);")
         for m in self.data.members:
-            lines.append('        ::OI::Rpc::ToJsonValue(out["%s"], %s);' % (m.json_name or m.name, m.name))
+            if not m.json_name:
+                continue
+            lines.append('        ::OI::Rpc::ToJsonValue(out["%s"], %s);' % (m.json_name, m.name))
         lines.append("    }")
         lines.append("    std::string ToJson() const")
         lines.append("    {")
@@ -197,5 +210,106 @@ __COMPARE____JSON_METHODS__};
         lines.append("        Json::StreamWriterBuilder builder;")
         lines.append('        builder["indentation"] = "";')
         lines.append("        return Json::writeString(builder, out);")
+        lines.append("    }")
+        return "\n".join(lines) + "\n"
+
+    def DbValueKind(self, member):
+        if member.db_json:
+            return "dbjson"
+        name = re.sub(r"\s+", "", member.type or "")
+        if name in ("string", "std::string"):
+            return "string"
+        if name == "Bytes":
+            return "bytes"
+        if name in ("int8_t", "int16_t", "int32_t", "int64_t"):
+            return "signed"
+        if name in ("uint8_t", "uint16_t", "uint32_t", "uint64_t"):
+            return "unsigned"
+        if name == "bool":
+            return "bool"
+        if name == "float":
+            return "float"
+        if name == "double":
+            return "double"
+        # 头一层剩下的就是 vector、map、rpcdata，整段收成 blob。
+        return "blob"
+
+    def DbReadCall(self, member):
+        kind = self.DbValueKind(member)
+        if kind == "bool":
+            return "::OI::Db::FromDbBool(*stCell, stDecoded.%s)" % member.name
+        if kind in ("float", "double"):
+            return "::OI::Db::FromDbReal(*stCell, stDecoded.%s)" % member.name
+        if kind in ("string", "bytes"):
+            return "::OI::Db::FromDbText(*stCell, stDecoded.%s)" % member.name
+        if kind == "dbjson":
+            return "::OI::Rpc::FromJsonText(std::string(reinterpret_cast<const char*>(stCell->data()), stCell->size()), stDecoded.%s)" % member.name
+        if kind == "blob":
+            return "::OI::Db::FromDbBlob(*stCell, stDecoded.%s)" % member.name
+        if kind == "signed" or kind == "unsigned":
+            return "::OI::Db::FromDbInteger(*stCell, stDecoded.%s)" % member.name
+        raise RuntimeError("db field is not a scalar or blob: " + member.name)
+
+    def DbWriteLine(self, member):
+        kind = self.DbValueKind(member)
+        if kind == "signed" or kind == "bool":
+            value = member.name if kind == "signed" else "(%s ? 1 : 0)" % member.name
+            return "        vParameters.emplace_back(static_cast<int64_t>(%s));" % value
+        if kind == "unsigned":
+            return "        vParameters.emplace_back(static_cast<uint64_t>(%s));" % member.name
+        if kind == "float":
+            return "        vParameters.emplace_back(static_cast<double>(%s));" % member.name
+        if kind == "double" or kind == "string":
+            return "        vParameters.emplace_back(%s);" % member.name
+        if kind == "bytes":
+            return "        vParameters.emplace_back(::OI::Db::Blob(reinterpret_cast<const uint8_t*>(%s.Data()), reinterpret_cast<const uint8_t*>(%s.Data()) + %s.Size()));" % (member.name, member.name, member.name)
+        if kind == "dbjson":
+            return "        vParameters.emplace_back(::OI::Rpc::ToJsonText(%s));" % member.name
+        if kind == "blob":
+            return "        vParameters.emplace_back(::OI::Db::ToDbBlob(%s));" % member.name
+        raise RuntimeError("db field is not a scalar or blob: " + member.name)
+
+    def GetDbMethods(self):
+        members = [member for member in self.data.members if member.db_name]
+        lines = []
+        lines.append("    static const char* DbColumnList()")
+        lines.append("    {")
+        lines.append('        return "%s";' % ",".join("`%s`" % member.db_name for member in members))
+        lines.append("    }")
+        lines.append("    static const char* DbPlaceholders()")
+        lines.append("    {")
+        lines.append('        return "%s";' % ",".join(["?"] * len(members)))
+        lines.append("    }")
+        lines.append("    void AppendDbParameters(std::vector<::OI::Db::Parameter>& vParameters) const")
+        lines.append("    {")
+        for member in members:
+            lines.append(self.DbWriteLine(member))
+        lines.append("    }")
+        lines.append("    bool FromDbRow(const std::vector<std::string>& vColumns, const std::vector<std::optional<::OI::Db::Blob>>& vRow)")
+        lines.append("    {")
+        lines.append("        if (vColumns.size() != vRow.size())")
+        lines.append("        {")
+        lines.append("            return false;")
+        lines.append("        }")
+        lines.append("        %s stDecoded(*this);" % self.class_name)
+        lines.append("        bool vSeen[%d] = {};" % len(members))
+        lines.append("        for (size_t iIndex = 0; iIndex < vColumns.size(); ++iIndex)")
+        lines.append("        {")
+        lines.append("            const std::string& sColumn = vColumns[iIndex];")
+        lines.append("            const std::optional<::OI::Db::Blob>& stCell = vRow[iIndex];")
+        opener = "if"
+        for index, member in enumerate(members):
+            lines.append('            %s (sColumn == "%s")' % (opener, member.db_name))
+            lines.append("            {")
+            lines.append("                if (vSeen[%d] || !stCell || !%s)" % (index, self.DbReadCall(member)))
+            lines.append("                {")
+            lines.append("                    return false;")
+            lines.append("                }")
+            lines.append("                vSeen[%d] = true;" % index)
+            lines.append("            }")
+            opener = "else if"
+        lines.append("        }")
+        lines.append("        *this = std::move(stDecoded);")
+        lines.append("        return true;")
         lines.append("    }")
         return "\n".join(lines) + "\n"

@@ -30,7 +30,18 @@ std::string EncodeQuery(const std::string& sValue)
 	for (size_t iIndexLocal = 0; iIndexLocal < sValue.size(); ++iIndexLocal)
 	{
 		unsigned char iCharacter = (unsigned char)sValue[iIndexLocal];
-		bool bPlain = (iCharacter >= 'a' && iCharacter <= 'z') || (iCharacter >= 'A' && iCharacter <= 'Z') || (iCharacter >= '0' && iCharacter <= '9') || iCharacter == '-' || iCharacter == '_' || iCharacter == '.' || iCharacter == '!' || iCharacter == '~' || iCharacter == '*' || iCharacter == '\'' || iCharacter == '(' || iCharacter == ')';
+		bool bPlain = (iCharacter >= 'a' && iCharacter <= 'z')
+			|| (iCharacter >= 'A' && iCharacter <= 'Z')
+			|| (iCharacter >= '0' && iCharacter <= '9')
+			|| iCharacter == '-'
+			|| iCharacter == '_'
+			|| iCharacter == '.'
+			|| iCharacter == '!'
+			|| iCharacter == '~'
+			|| iCharacter == '*'
+			|| iCharacter == '\''
+			|| iCharacter == '('
+			|| iCharacter == ')';
 		if (bPlain)
 		{
 			sOutput.push_back((char)iCharacter);

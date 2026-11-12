@@ -115,36 +115,113 @@ def ParseType(lex):
         return lex.fail("only vector takes one type argument")
     return "std::vector<" + first + ">"
 
+FIELD_MARKERS = ("json", "nojson", "db", "nodb", "dbjson")
+
+# 名字可省略。省略时序列化名就是字段名，由后面的标记收尾补上。
+def ParseOptionalName(lex):
+    word = lex.peek_ident()
+    if word is None or word in FIELD_MARKERS:
+        return ""
+    return lex.ident()
+
+def ApplyFieldMarker(lex, member, word):
+    if word == "json":
+        if member.no_json or member.json_marked or member.json_name:
+            return lex.fail("repeated json marker")
+        member.json_marked = True
+        name = ParseOptionalName(lex)
+        if name is None:
+            return None
+        if name:
+            member.json_name = name
+        return True
+    if word == "nojson":
+        if member.no_json or member.json_marked or member.json_name:
+            return lex.fail("json and nojson")
+        member.no_json = True
+        return True
+    if word == "db":
+        if member.no_db or member.db_marked or member.db_name:
+            return lex.fail("db and nodb" if member.no_db else "repeated db marker")
+        member.db_marked = True
+        name = ParseOptionalName(lex)
+        if name is None:
+            return None
+        if name:
+            member.db_name = name
+        return True
+    if word == "nodb":
+        if member.no_db or member.db_marked or member.db_name or member.db_json:
+            return lex.fail("db and nodb")
+        member.no_db = True
+        return True
+    if word == "dbjson":
+        if member.no_db or member.db_json:
+            return lex.fail("db and nodb" if member.no_db else "repeated dbjson marker")
+        member.db_json = True
+        return True
+    return lex.fail("unknown field marker " + word)
+
+def ParseMarkerGroup(lex, member):
+    if not lex.punct("["):
+        return None
+    if lex.peek_char() == "]":
+        return lex.fail("empty field markers")
+    while True:
+        word = lex.ident()
+        if word is None:
+            return None
+        if word not in FIELD_MARKERS:
+            return lex.fail("unknown field marker " + word)
+        if not ApplyFieldMarker(lex, member, word):
+            return None
+        if lex.peek_char() == ",":
+            lex.punct(",")
+            continue
+        break
+    return lex.punct("]")
+
+# 每个 [] 是一组标记，可以连着写。json、db 后面的名字可省略。
+def ParseFieldMarkers(lex, member):
+    while lex.peek_char() == "[":
+        if not ParseMarkerGroup(lex, member):
+            return None
+    return True
+
 def ParseRpcData(lex):
     name = lex.ident()
     if name is None:
         return None
-    is_key = False
-    if lex.peek_ident() == "key":
-        lex.ident()
-        is_key = True
+    flags = set()
+    while lex.peek_ident() in ("key", "json", "db"):
+        flag = lex.ident()
+        if flag in flags:
+            return lex.fail("duplicate rpcdata flag " + flag)
+        flags.add(flag)
     if not lex.punct("{"):
         return None
     data = SerializeData(SerializeDataType.RPC_DATA, None)
     data.name = name
-    data.is_key = is_key
+    data.is_key = "key" in flags
+    data.has_json = "json" in flags
+    data.has_db = "db" in flags
     while not lex.eof() and lex.peek_char() != "}":
         seq = lex.number()
         if seq is None:
             return None
-        typ = ParseType(lex)
-        field = lex.ident()
-        json_name = field
-        if lex.peek_ident() == "json":
-            lex.ident()
-            json_name = lex.ident()
-        if typ is None or field is None or json_name is None or not lex.punct(";"):
-            return None
         member = ClassMember()
-        member.name = field
-        member.json_name = json_name
-        member.type = typ
         member.seq = seq
+        if ParseFieldMarkers(lex, member) is None:
+            return None
+        member.type = ParseType(lex)
+        if member.type is None:
+            return None
+        field = lex.ident()
+        if field is None:
+            return None
+        member.name = field
+        if not lex.punct(";"):
+            return None
         for old in data.members:
             if old.GetName() == field:
                 loginfo("duplicate field proto=", name, ",field=", field)

@@ -35,6 +35,92 @@ static bool OkStatus(const ::OI::Http::Response& stResponse)
 	return !stResponse.bFail && stResponse.iStatus == 200;
 }
 
+// 别名键仍是 c、gap。
+// [json] 不写名字，或者结构标了 json 而字段什么都不写，键都是字段名。
+static bool PlainJsonKeys(const std::string& sText)
+{
+	Json::Value stWire;
+	if (!ParseJson(sText, stWire) || !stWire.isObject())
+	{
+		return false;
+	}
+	if (!stWire.isMember("iPlain") || !stWire["iPlain"].isInt() || stWire["iPlain"].asInt() != 11)
+	{
+		return false;
+	}
+	if (!stWire.isMember("sPlain") || !stWire["sPlain"].isString() || stWire["sPlain"].asString() != "plain")
+	{
+		return false;
+	}
+	if (!stWire.isMember("vPlain")
+		|| !stWire["vPlain"].isArray()
+		|| stWire["vPlain"].size() != 1
+		|| !stWire["vPlain"][0].isInt()
+		|| stWire["vPlain"][0].asInt() != 5)
+	{
+		return false;
+	}
+	if (!stWire.isMember("mPlain")
+		|| !stWire["mPlain"].isObject()
+		|| !stWire["mPlain"].isMember("k")
+		|| !stWire["mPlain"]["k"].isInt()
+		|| stWire["mPlain"]["k"].asInt() != 6)
+	{
+		return false;
+	}
+	if (!stWire.isMember("stPlain")
+		|| !stWire["stPlain"].isObject()
+		|| !stWire["stPlain"].isMember("iNumber")
+		|| stWire["stPlain"]["iNumber"].asInt() != 8
+		|| !stWire["stPlain"].isMember("sText")
+		|| stWire["stPlain"]["sText"].asString() != "same")
+	{
+		return false;
+	}
+	if (!stWire.isMember("iDefault") || !stWire["iDefault"].isInt() || stWire["iDefault"].asInt() != 12)
+	{
+		return false;
+	}
+	if (!stWire.isMember("sDefault") || !stWire["sDefault"].isString() || stWire["sDefault"].asString() != "def")
+	{
+		return false;
+	}
+	if (!stWire.isMember("vDefault")
+		|| !stWire["vDefault"].isArray()
+		|| stWire["vDefault"].size() != 1
+		|| !stWire["vDefault"][0].isInt()
+		|| stWire["vDefault"][0].asInt() != 7)
+	{
+		return false;
+	}
+	if (!stWire.isMember("mDefault")
+		|| !stWire["mDefault"].isObject()
+		|| !stWire["mDefault"].isMember("d")
+		|| !stWire["mDefault"]["d"].isInt()
+		|| stWire["mDefault"]["d"].asInt() != 8)
+	{
+		return false;
+	}
+	if (!stWire.isMember("stDefault")
+		|| !stWire["stDefault"].isObject()
+		|| !stWire["stDefault"].isMember("iNumber")
+		|| stWire["stDefault"]["iNumber"].asInt() != 9
+		|| !stWire["stDefault"].isMember("sText")
+		|| stWire["stDefault"]["sText"].asString() != "bare")
+	{
+		return false;
+	}
+	if (stWire["stDefault"].isMember("iSkip") || stWire.isMember("iSkip") || stWire.isMember("plain"))
+	{
+		return false;
+	}
+	if (!stWire.isMember("c") || !stWire.isMember("gap"))
+	{
+		return false;
+	}
+	return true;
+}
+
 static OI::Coro::Task Run()
 {
 	std::string sIpLocal = "127.0.0.1";
@@ -135,7 +221,32 @@ static OI::Coro::Task Run()
 	stSent.iGap = 20;
 	stSent.mUnsignedTable[stSent.iUnsigned32] = "u";
 	stSent.mLargeUnsignedTable[stSent.iUnsigned64] = "b";
-	::OI::Http::Response stRpc = co_await stCli.Post("/rpcjson", stSent.ToJson(), "application/json");
+	stSent.iPlain = 11;
+	stSent.sPlain = "plain";
+	stSent.vPlain.push_back(5);
+	stSent.mPlain["k"] = 6;
+	stSent.stPlain.iNumber = 8;
+	stSent.stPlain.sText = "same";
+	stSent.iDefault = 12;
+	stSent.sDefault = "def";
+	stSent.vDefault.push_back(7);
+	stSent.mDefault["d"] = 8;
+	stSent.stDefault.iNumber = 9;
+	stSent.stDefault.sText = "bare";
+	stSent.stDefault.iSkip = 77;
+	stSent.iSkip = 99;
+	::OI::RpcData::JsonAll stKept;
+	stKept.iSkip = 99;
+	stKept.stDefault.iSkip = 77;
+	if (!stKept.FromJson(std::string("{\"iSkip\":1,\"stDefault\":{\"iNumber\":9,\"sText\":\"bare\",\"iSkip\":2}}"))
+		|| stKept.iSkip != 99
+		|| stKept.stDefault.iSkip != 77
+		|| stKept.stDefault.iNumber != 9)
+	{
+		iBadLocal += 1;
+	}
+	const std::string sRpcJson = stSent.ToJson();
+	::OI::Http::Response stRpc = co_await stCli.Post("/rpcjson", sRpcJson, "application/json");
 	int iRpcOk = 0;
 	if (!OkStatus(stRpc))
 	{
@@ -144,12 +255,54 @@ static OI::Coro::Task Run()
 	else
 	{
 		::OI::RpcData::JsonAll stBack;
-		bool bSame = stBack.FromJson(stRpc.sBody) && stBack.iInt8 == stSent.iInt8 && stBack.iInt16 == stSent.iInt16 && stBack.iInt32 == stSent.iInt32 && stBack.iInt64 == stSent.iInt64 && stBack.iAlternateInt64 == stSent.iAlternateInt64 && stBack.fFloat == stSent.fFloat && stBack.dDouble == stSent.dDouble && stBack.stRawData.Size() == stSent.stRawData.Size() && (stSent.stRawData.Size() == 0 || std::memcmp(stBack.stRawData.Data(), stSent.stRawData.Data(), stSent.stRawData.Size()) == 0) && stBack.sMessage == stSent.sMessage && stBack.vNumbers == stSent.vNumbers && stBack.vWords == stSent.vWords && stBack.stChild.iNumber == stSent.stChild.iNumber && stBack.stChild.sText == stSent.stChild.sText && stBack.vChildren.size() == stSent.vChildren.size() && stBack.mTable == stSent.mTable && stBack.mNamed.size() == stSent.mNamed.size() && stBack.iUnsigned8 == stSent.iUnsigned8 && stBack.iUnsigned16 == stSent.iUnsigned16 && stBack.iUnsigned32 == stSent.iUnsigned32 && stBack.iUnsigned64 == stSent.iUnsigned64 && stBack.vUnsignedNumbers == stSent.vUnsignedNumbers && stBack.iGap == stSent.iGap + 1 && stBack.mUnsignedTable == stSent.mUnsignedTable && stBack.mLargeUnsignedTable == stSent.mLargeUnsignedTable;
+		bool bSame = PlainJsonKeys(sRpcJson)
+			&& PlainJsonKeys(stRpc.sBody)
+			&& stBack.FromJson(stRpc.sBody)
+			&& stBack.iInt8 == stSent.iInt8
+			&& stBack.iInt16 == stSent.iInt16
+			&& stBack.iInt32 == stSent.iInt32
+			&& stBack.iInt64 == stSent.iInt64
+			&& stBack.iAlternateInt64 == stSent.iAlternateInt64
+			&& stBack.fFloat == stSent.fFloat
+			&& stBack.dDouble == stSent.dDouble
+			&& stBack.stRawData.Size() == stSent.stRawData.Size()
+			&& (stSent.stRawData.Size() == 0 || std::memcmp(stBack.stRawData.Data(), stSent.stRawData.Data(), stSent.stRawData.Size()) == 0)
+			&& stBack.sMessage == stSent.sMessage
+			&& stBack.vNumbers == stSent.vNumbers
+			&& stBack.vWords == stSent.vWords
+			&& stBack.stChild.iNumber == stSent.stChild.iNumber
+			&& stBack.stChild.sText == stSent.stChild.sText
+			&& stBack.vChildren.size() == stSent.vChildren.size()
+			&& stBack.mTable == stSent.mTable
+			&& stBack.mNamed.size() == stSent.mNamed.size()
+			&& stBack.iUnsigned8 == stSent.iUnsigned8
+			&& stBack.iUnsigned16 == stSent.iUnsigned16
+			&& stBack.iUnsigned32 == stSent.iUnsigned32
+			&& stBack.iUnsigned64 == stSent.iUnsigned64
+			&& stBack.vUnsignedNumbers == stSent.vUnsignedNumbers
+			&& stBack.iGap == stSent.iGap + 1
+			&& stBack.mUnsignedTable == stSent.mUnsignedTable
+			&& stBack.mLargeUnsignedTable == stSent.mLargeUnsignedTable
+			&& stBack.iPlain == stSent.iPlain
+			&& stBack.sPlain == stSent.sPlain
+			&& stBack.vPlain == stSent.vPlain
+			&& stBack.mPlain == stSent.mPlain
+			&& stBack.stPlain.iNumber == stSent.stPlain.iNumber
+			&& stBack.stPlain.sText == stSent.stPlain.sText
+			&& stBack.iDefault == stSent.iDefault
+			&& stBack.sDefault == stSent.sDefault
+			&& stBack.vDefault == stSent.vDefault
+			&& stBack.mDefault == stSent.mDefault
+			&& stBack.stDefault.iNumber == stSent.stDefault.iNumber
+			&& stBack.stDefault.sText == stSent.stDefault.sText
+			&& stBack.iSkip == 0
+			&& stBack.stDefault.iSkip == 0;
 		if (bSame)
 		{
 			for (size_t iIndexLocal = 0; iIndexLocal < stSent.vChildren.size(); ++iIndexLocal)
 			{
-				if (stBack.vChildren[iIndexLocal].iNumber != stSent.vChildren[iIndexLocal].iNumber || stBack.vChildren[iIndexLocal].sText != stSent.vChildren[iIndexLocal].sText)
+				if (stBack.vChildren[iIndexLocal].iNumber != stSent.vChildren[iIndexLocal].iNumber
+					|| stBack.vChildren[iIndexLocal].sText != stSent.vChildren[iIndexLocal].sText)
 				{
 					bSame = false;
 					break;
