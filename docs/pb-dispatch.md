@@ -1,6 +1,8 @@
 # 协议字段分发：switch、map、宏
 
-2026-11-13，远程 4 核机器，g++-13，`-O2 -std=c++20`。决定先用宏字段表。
+首页只给两套写法。这里是为什么这样分，以及测出来的数。
+
+2026-11-13，远程 4 核 Intel Xeon Platinum 8255C，标称 2.50 GHz，实测 2494 MHz。g++-13，`-O2 -std=c++20`。
 
 ## 测什么
 
@@ -10,7 +12,7 @@
 - map：`OI_PB_MAP_FIELD` 放进 `std::map`，`ReadFieldsByMap` 按字段号查找。
 - switch：生成 `switch (field_seq)`，每个 case 调用 `ReadPb`。
 
-运行是单线程。先把一千条各解一次，让 map 的静态表建完。然后对第一条做 1000 万次编码、1000 万次解码。报文只建一份，解码前 `RollBack` 回到开头。生成器是 `tools/gen_dispatch_bench.py`，不进默认回归。
+运行是单线程。先把一千条各解一次，让 map 的静态表建完。然后对第一条做 1000 万次编码、1000 万次解码。报文只建一份，解码前 `RollBack` 回到开头。生成器是 `tools/gen_dispatch_bench.py`，第一个参数是 `array`、`switch` 或 `map`，不进默认回归。
 
 ## 结果
 

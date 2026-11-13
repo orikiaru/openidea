@@ -63,13 +63,13 @@
 
 编译和回归一律交给 subagent 跑，主对话不直接跑矩阵。Cursor 里 subagent 固定用 `grok-4.7-high`（Grok 4.7）。Codex 里固定用 Terra，不用 Astra。这是已确认的长期偏好，不用每轮再问；只有用户要求更换时再确认。默认四路并行，按 `docs/testing.md` 第 7 节的范本同时派四个 subagent；subagent 回报每个平台、线程模式和用例的通过、失败、环境阻塞，以及失败日志的关键行。
 
-完整操作规程统一维护在 `docs/testing.md`，跨平台构建/测试/恢复使用 `tools/test_matrix.py`，原生用例入口为 `tools/run_regressions.py`。测试脚本必须留在工程内；报告中区分实际通过、失败和环境阻塞。
+完整操作规程统一维护在 `docs/testing.md`，跨平台构建/测试/恢复使用 `tools/test_matrix.py`，原生用例入口为 `tools/run_regressions.py`。测试脚本必须留在工程内；报告中区分实际通过、失败和环境阻塞。每次全量四组都通过，把日期、平台、线程模式、通过项数、机器 CPU 型号和实测频率写进 `docs/lasttesting.md` 的「全量」，替换上一次全量记录。不要写进 `docs/testing.md`。只跑了部分用例不要写成全量通过。
 
 有行为的改动，Linux 和 Windows 都要跑。默认还要单线程、多线程各跑一遍，缺一套不算测完。只有改动明确跟线程无关、并且是纯逻辑时，可以不切单线程和多线程；这种例外要在回复里写明。协程、挂起、调度、`Task`、`StartTask`、`co_await`、`yield` 一定涉及单线程和多线程，不能当成纯逻辑跳过。
 
 单线程和多线程指 `ipcclient` 和 `ipcserver`。`logd` 只能多线程。`redisserver` 按它自己的编译选项是单线程。Linux 优先用本机 `.local/linux-hosts.json` 里的远程机器，这个文件不进仓库：4 核那台编译 Release 并跑多线程，2 核那台跑单线程，用户名以文件为准，只走公钥，不把密码写进代码或命令。文件不存在，或里面缺 IP、用户名时，先问用户。用户选择不提供，就改用 WSL，构建目录 `~/openidea-build-gcc13`；之后一直用 WSL，直到用户再次明确说用远程机器。Windows 用 `build-win`（Visual Studio 17 2022，x64），同样两种线程模式各编一次。两边的可执行文件都在 `deploy/bin`，换平台或换线程模式之前先编出要跑的那一套。本机 Windows 和 WSL 单线程测完把该平台切回多线程再编一次，不要把 `deploy/bin` 留在单线程；2 核远程机器固定只跑单线程，矩阵加 `--no-restore`，不编回多线程。回归入口是 `python3 tools/run_regressions.py --case all`。Linux 无论在远程还是 WSL，都用 `-DOI_IPC_SINGLE_THREAD=ON` 和 `OFF` 各编一次。
 
-`ipcclient` 里四个 Mgr 都要跑到：`EchoMgr`、`LogMgr`、`RedisMgr`、`HoldMgr`。开关在 `deploy/config/ipcclient.toml` 的 `[Test]`：`echo`、`log`、`redis`、`hold`。一次只开一个。
+`ipcclient` 里四个 Mgr 都要跑到：`EchoMgr`、`LogMgr`、`RedisMgr`、`HoldMgr`。开关在 `deploy/config/ipcclient.toml` 的 `[Test]`：`echo`、`log`、`redis`、`hold`。一次只开一个。`CoroMgr` 的 `coro` 和 `tools/gen_dispatch_bench.py` 的序列化压力不进 `--case all`。一个月测一次，同一台机器上一次只跑一个，不要并排占满 CPU。结果写进 `docs/lasttesting.md`。
 
 测的是 `logd`、`ipcserver`、`ipcclient` 这三个进程。不要另写一个日志客户端。日志从 `LogMgr` 发出，回声从 `EchoMgr` 发出。
 
@@ -123,6 +123,12 @@ Redis 也单独测。开关是 `[Test] redis`。先起本机 Redis（`maxmemory 
 | `OI::RpcData` | 生成出来的 rpcdata |
 
 头文件名跟着功能走，框架头和对应的 cpp 都用 `oi_` 前缀，例如 `oi_rpc.h`、`oi_file.h`、`oi_thread.h`。三方库和 `port/win` 里的系统兼容头不用这个前缀。
+
+# 单次 RPC 用带回复的那套
+
+单次调用的主力是把回复对象传进去、`co_await` 得到 `int32_t` 的 `RpcCall`、`Call`、`CallAny`。先看返回码，再读回复。非 `0` 时回复保持调用前的值。
+
+只传请求、用模板参数指定回复类型、得到 `RpcResult` 的重载先留着。`CallMany`、`CallAll` 还用这套返回方式，已有调用也不必立刻改。范例、新代码和文档不要把它当主力。
 
 # 应用层不要睡线程
 

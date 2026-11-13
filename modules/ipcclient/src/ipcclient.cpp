@@ -1,5 +1,6 @@
 #include "ipcclient.h"
 #include "echo_mgr.h"
+#include "coro_mgr.h"
 #include "db_mgr.h"
 #include "hold_mgr.h"
 #include "log_mgr.h"
@@ -23,6 +24,7 @@ int32_t IpcClient::Init()
 	}
 	DbMgr::GetInstance().Load();
 	EchoMgr::GetInstance().Load();
+	CoroMgr::GetInstance().Load();
 	if (EchoMgr::GetInstance().StackOn())
 	{
 		OI::Coro::StartTask([](OI::Coro::Token)
@@ -79,6 +81,7 @@ void IpcClient::OnClientConnect(::OI::Net::Session* pSession)
 	EchoMgr::GetInstance().Load();
 	LogMgr::GetInstance().Load();
 	EchoMgr::GetInstance().Start(pSession->GetSessionID());
+	CoroMgr::GetInstance().Start();
 	LogMgr::GetInstance().Start();
 	HoldMgr::GetInstance().Start(pSession->GetSessionID());
 	DbMgr::GetInstance().Start();

@@ -1,6 +1,6 @@
 # 跨平台全量测试操作规程
 
-面向维护者与 AI：按本文件执行，不要另写客户端，不要跳过失败，不要把只编译、WSL 运行或强杀退出算成 Windows 原生测试通过。
+面向维护者与 AI：按本文件执行，不要另写客户端，不要跳过失败，不要把只编译、WSL 运行或强杀退出算成 Windows 原生测试通过。最近一次结果写在 [lasttesting.md](lasttesting.md)，不要写进本文件。
 
 ## 1. 范围与通过条件
 
@@ -10,6 +10,8 @@
 - Linux 可额外运行 clock-forward、clock-back，以及纯协程 ASan。校时故障只影响测试子进程，绝不调整宿主机时钟。
 - 必须全部返回 0；不能用删除断言、扩大超时、提高容量或重试掩盖失败。偶发失败保留日志，记录复测结果及根因是否确认。
 - 本次源码正在变化时不要声称覆盖了最新版本；核对结果目录的 environment.json、Git HEAD、diff 摘要后再报告。
+
+协程压力和序列化压力不包含在 `all`。一个月测一次，同一台机器上一次只跑一个，不要并排，它们会占满 CPU。协程压力是 `python3 tools/run_regressions.py --case coro`，开关是 `ipcclient` 的 `[Test] coro`，量级在 `[TestCoro]`，默认 10 万条同时挂起、100 万条创建后立即结束。序列化压力是 `python3 tools/gen_dispatch_bench.py array` 或 `switch`，不进回归进程。结果写进 [lasttesting.md](lasttesting.md)，不要写进本文件。
 
 数据库只有 `mysql` 一个用例，显式运行，不包含在 `all`。标准入口是矩阵参数 `--mysqld <mysqld>`（`tools/test_matrix.py`，或 `tools/parallel_matrix.py` 的 Linux 路）：每种线程模式编译完成后先跑 `<mode>-mysql`，再跑全量，不额外编译。非标准安装用 `--define OI_MYSQL_INCLUDE_DIR=... --define OI_MYSQL_LIBRARY=...`。单独复现仍可直接用 `tools/run_mysql_regression.py`。WSL 的 MySQL 来自 apt 包 `mysql-server-core-8.0`、`mysql-client-core-8.0`、`libmysqlclient-dev`，不起系统服务，`mysqld` 用 `/usr/sbin/mysqld`。需提供可用的客户端库；缺少依赖或配置时记录环境阻塞，不能算通过。Linux 上 `mysqld` 缺 `libaio.so.1` 时，把已有兼容库目录放进 `LD_LIBRARY_PATH`。用例先不连库检查 `DbSample` 的行映射：字段表、按成员指针取列、按列名的参数和单元格、拒绝 NULL 和坏值、生成的建表和增删改查语句逐字比对、坏表名和主键列拒绝、PB 往返和固定小端字节、JSON，输出 `mysql row mapping bad=0`；再用生成的语句建真表，整行写入读回、主键重复拒绝、按成员指针部分更新和部分读取、upsert 已有行和新行、改全部非主键列、按主键删，并用手写 SQL 注入 NULL 和坏 blob 验证读回拒绝，输出 `mysql rows bad=0`；最后是客户端本身的参数、连接复用、会话清理、事务回滚和结果上限，三项都通过才输出 `mysql done bad=0`。
 
@@ -31,7 +33,7 @@
 
 Windows：Python 3.10+、Visual Studio 2022 的“使用 C++ 的桌面开发”（MSVC v143 x64、MSBuild、Windows SDK）、CMake。仅有 cl.exe 不够，还要有 MSVC include/lib 与 SDK include/lib。脚本会寻找 PATH 中的 CMake，也能找到 VS 附带的 CMake。配置前检查这几项；缺 CMake、MSVC、MSBuild 或 Windows SDK 时，终端写明缺哪一项和安装步骤，并停止编译。CMake 配置或编译日志里出现找不到生成器、编译器或 v143 工具集时，同样把这段说明打到终端并追加进该步日志。
 
-Linux：优先用仓库根目录 `.local/linux-hosts.json` 里的远程机器。该文件只留在本机，不进仓库，记录每台机器的 IP、用户名、核数和职责。4 核机器编译 Release 并跑多线程，2 核机器跑单线程，登录只用公钥，不把密码写进代码或命令。文件不存在，或缺少 IP、用户名时，先问用户。用户选择不提供，就改用 WSL，直到用户再次明确说用远程机器。从 Windows 登上去跑的步骤见 `.cursor/skills/linux-remote-test/SKILL.md`。WSL 和远程都要有 Python 3.8+、cmake、gcc-13/g++-13、make、已编译的 Redis 服务端。缺 CMake、gcc-13 或 g++-13 时，终端写明缺哪一个以及 apt 安装命令，并停止编译。源码编译 Redis 应使用持久外部依赖目录（例如 `~/opt/redis-7.4.12`），通过 `/usr/local/bin/redis-server` 安装入口复用；默认路径为该入口。禁止把工具装到 `/tmp` 或测试临时目录，停止测试进程时不删除工具安装或源码。路径不存在必须提供 `--redis-binary`，脚本不会下载不明 Redis 二进制。
+Linux：优先用仓库根目录 `.local/linux-hosts.json` 里的远程机器。该文件只留在本机，不进仓库，记录每台机器的 IP、用户名、核数和职责。4 核机器编译 Release 并跑多线程，2 核机器跑单线程，登录只用公钥，不把密码写进代码或命令。文件不存在，或缺少 IP、用户名时，先问用户。用户选择不提供，就改用 WSL，直到用户再次明确说用远程机器。从 Windows 同步源码只用 `python tools/sync_linux_remote.py --role mt|st|all`，不要手写 tar/scp；远程登录与矩阵步骤见 `.cursor/skills/linux-remote-test/SKILL.md`。WSL 和远程都要有 Python 3.8+、cmake、gcc-13/g++-13、make、已编译的 Redis 服务端。缺 CMake、gcc-13 或 g++-13 时，终端写明缺哪一个以及 apt 安装命令，并停止编译。源码编译 Redis 应使用持久外部依赖目录（例如 `~/opt/redis-7.4.12`），通过 `/usr/local/bin/redis-server` 安装入口复用；默认路径为该入口。禁止把工具装到 `/tmp` 或测试临时目录，停止测试进程时不删除工具安装或源码。路径不存在必须提供 `--redis-binary`，脚本不会下载不明 Redis 二进制。
 
 测试占用本机端口 19995、17981、16379、16380、17990、17992、17993，另有 UDP 17983。测试 Redis 用 16380，不用 6379：Windows 动态端口段可能被 Hyper-V/WinNAT 保留，本机已有的 6379 Redis 也不会和测试冲突。复制出的 `redisserver.toml`、`registry.toml` 由脚本改到 16380，仓库里的配置仍是 6379。运行前脚本探测占用；不杀其他人的服务。同一份工作目录内不要并行；要并行就用 `tools/parallel_matrix.py`，它把工作目录同步成四份（Windows 在 `F:/oi-par`，Linux 在 WSL 的 `/root/oi-par`），Windows MT/ST、Linux MT/ST 各用一份，`--port-offset` 依次为 0、1000、2000、3000，所有测试端口整体平移，互不抢占：
 

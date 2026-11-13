@@ -36,9 +36,17 @@ ssh -i <identity> -o IdentitiesOnly=yes -o BatchMode=yes -o PreferredAuthenticat
 
 ## 同步源码
 
-远程已有 `test_matrix.py` 或 `run_regressions.py` 在跑时，不要同步，也不要再开一轮。
+**只准用**仓库根下的标准入口，禁止手写 `tar`/`scp`/PowerShell 管道解包：
 
-从仓库根打 tar，包含 `.git`，排除 `.local`、`build-win`、`build-clangd`、`build-clangd-win`、`build-clangd-linux`、`deploy/bin`、`.vs`、`__pycache__`。解到 `$HOME/openidea`。不要删除 `$HOME/opt`、已有 Redis/CMake 安装，或 `$HOME/openidea-test-results`。
+```powershell
+python tools/sync_linux_remote.py --role mt
+python tools/sync_linux_remote.py --role st
+python tools/sync_linux_remote.py --role all
+```
+
+可选：`--require-text modules/ipcclient/src/coro_mgr.cpp:live_ns=` 同步后校验远端文件内容；`--identity` 覆盖私钥；`--force` 才在远端看似忙碌时仍同步（默认拒绝）。
+
+脚本会读 `.local/linux-hosts.json`，打 tar（含 `.git`，排除 `.local`、`build-win`、`build-clangd*`、`deploy/bin`、`.vs`、`__pycache__`），公钥 `scp` 后在远端解到临时目录再原子替换 `source`（默认 `$HOME/openidea`）。远端已有 `test_matrix.py` 或 `run_regressions.py` 时默认不同步、也不要再开矩阵。不要删除 `$HOME/opt`、已有 Redis/CMake 安装，或 `$HOME/openidea-test-results`。单测：`python tools/test_sync_linux_remote.py`。
 
 ## 远程预检
 

@@ -28,7 +28,12 @@
 
 - 需求：`ProtoClientManager::Call`、`CallAny` 里只靠模板参数指定 `Res`、返回 `RpcResult` 的重载，和带响应引用、返回 `int32_t` 的重载重复。原先考虑删掉按值这一路，调用改成输出引用。
 - 现状：按值重载留着。`CallMany`、`CallAll` 一次返回每格的 `RpcResult`，调用方不用自己准备一排输出对象。单次 `Call`、`CallAny` 和它们是同一套返回方式，一起保留。声明在 `cbaselib/proto/inc/oi_rpc_session_manager.h`，定义在 `cbaselib/proto/inc/oi_rpc_coro.h`。
-- 方向：暂不清理，也不把现有按值调用改成输出引用。以后如果 `CallMany`、`CallAll` 改成别的返回方式，再一起看单次接口要不要收掉。
+- 方向：单次调用的主力是带回复对象、返回 `int32_t` 的那套。只传请求、得到 `RpcResult` 的重载先留着，范例和新代码不要用它当主力。`CallMany`、`CallAll` 仍用 `RpcResult`。以后这两条批量接口如果改返回方式，再一起看单次按值重载要不要收掉。
+
+## 多线程协程批量创建/入队偏慢（2026-11-14）
+
+- 现状：协程压力改成端到端 `live` / `wake` / `churn` 后，本机 WSL 单线程 `live` 约 69 纳秒/条（约 1450 万条/秒），多线程 3 工人约 4339 纳秒/条（约 23 万条/秒），大约慢 60 倍。`churn` 单线程约 1299 万条/秒，多线程约 373 万条/秒，也明显掉。数字在 `docs/lasttesting.md`。多线程 `StartTask` 经 `PostCoroutine` 进共享队列，工人抢同一把 `stMutex`，`Hold` 挂起列表还有一把锁；批量创建时入队和执行叠在一起。
+- 方向：回头优化多线程任务队列与挂起登记，减少批量 `StartTask` 的锁竞争；可考虑分片队列、批量入队或挂起列表无锁/分片。先用现有 `coro` 用例锁住单线程数字，再比多线程 `live`/`churn`。不先改语义。
 
 ## 其他语言的序列化
 

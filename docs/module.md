@@ -73,7 +73,7 @@ JSON 会穿透。嵌套的 `rpcdata`、`vector`、`map` 按内层继续生成，
 
 ## ipcclient 的测试开关
 
-`deploy/config/ipcclient.toml` 的 `[Test]` 里 `echo`、`log`、`redis`、`hold` 各管一个测试，默认只开回声。一次只开一个。
+`deploy/config/ipcclient.toml` 的 `[Test]` 里 `echo`、`log`、`redis`、`hold` 各管一个测试，默认只开回声。一次只开一个。`coro` 是协程压力，默认关掉，不进 `--case all`。
 
 `log = true` 时日志服必须已经在听，`ipcserver` 也要起：`LogMgr` 是在连上 `ipcserver` 之后才开始发的，连不上就一直不发，CPU 是 0。`SendLog` 失败后测试会立刻再排一次发送，字节数加了又减，到不了目标，进程也不会退出。
 

@@ -9,6 +9,7 @@ set(MODULE_SRCS
         src/db_mgr.cpp
         src/test_board.cpp
         src/echo_mgr.cpp
+        src/coro_mgr.cpp
         src/log_mgr.cpp
         src/redis_mgr.cpp
         src/hold_mgr.cpp

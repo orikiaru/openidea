@@ -33,6 +33,12 @@ hold = false
 db = false
 udp = false
 multi = false
+coro = false
+
+# 协程压力。默认关掉，不进 --case all。要测时把 coro 改成 true，或跑 --case coro。
+[TestCoro]
+live = 100000
+churn = 1000000
 
 # 多连接回归。不配 service 就是写死地址的一台，实例号 0。
 [IpcMultiFixed]
