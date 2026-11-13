@@ -157,6 +157,33 @@ BytesStream& BytesStream::ReadFields(void* pObject, std::span<const PbField> vFi
 	return *this;
 }
 
+BytesStream& BytesStream::ReadFieldsByMap(void* pObject, const std::map<uint32_t, PbReadFn>& mFields, std::span<uint8_t> vSeen)
+{
+	if (!pObject && !mFields.empty())
+	{
+		throw ParserException();
+	}
+	while (RemainSize() > 0)
+	{
+		uint32_t iSequence = 0;
+		uint32_t iSize = 0;
+		ReadPbHeader(iSequence, iSize);
+		const auto it = mFields.find(iSequence);
+		if (it == mFields.end())
+		{
+			SkipPb(iSize);
+			continue;
+		}
+		if (it->first >= vSeen.size() || vSeen[it->first] != 0)
+		{
+			throw ParserException();
+		}
+		it->second(*this, iSize, pObject);
+		vSeen[it->first] = 1;
+	}
+	return *this;
+}
+
 void BytesStream::ReadPbHeader(uint32_t& iSequence, uint32_t& iSize)
 {
 	if (PreparePbHeader(iSequence, iSize) != PB_HEADER_OK)

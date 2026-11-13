@@ -280,14 +280,12 @@ class ModuleGeneratorTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             temp = Path(temp)
             module_file = temp / "module.proto"
-            component_file = temp / "component.proto"
             manifest = temp / "modules.cmake"
             module_file.write_text(modules, encoding="utf-8")
-            component_file.write_text("", encoding="utf-8")
             proto_dir = root / "modules/protoconfig"
             proto_files = [str(proto_dir / name) for name in ("db.proto", "json.proto", "rpc.proto")]
             command = [sys.executable, str(root / "cbaselib/proto/proto_tool/main.py")]
-            tail = [str(module_file), str(component_file), str(temp / "include"),
+            tail = [str(module_file), str(temp / "include"),
                     str(temp / "modules"), str(temp / "deploy"), str(manifest)]
             if split_proto:
                 command.extend(tail + ["--"] + proto_files)

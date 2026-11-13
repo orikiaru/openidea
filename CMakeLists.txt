@@ -29,14 +29,13 @@ set(OI_PROTO_FILES
 set(PROTO_INPUTS
     ${OI_PROTO_FILES}
     ${OI_PROTO_CONFIG}/module.proto
-    ${OI_PROTO_CONFIG}/component.proto
 )
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${PROTO_INPUTS})
 
 set(OI_MODULE_MANIFEST "${CMAKE_CURRENT_BINARY_DIR}/oi_modules.cmake")
 execute_process(
     COMMAND "${PYTHON_BIN}" "${PROTO_TOOL_DIR}/main.py"
-        "${OI_PROTO_CONFIG}/module.proto" "${OI_PROTO_CONFIG}/component.proto"
+        "${OI_PROTO_CONFIG}/module.proto"
         "${MODULES_PATH}/include" "${MODULES_PATH}" "${DEPOLY_PATH}" "${OI_MODULE_MANIFEST}"
         -- ${OI_PROTO_FILES}
     RESULT_VARIABLE PROTO_GEN_RESULT

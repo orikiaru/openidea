@@ -5,9 +5,9 @@ alwaysApply: false
 
 # 模块和协议
 
-先读 `docs/module.md`。生成输入是 `modules/protoconfig` 的 `module.proto`、`component.proto`，以及 `db.proto`、`json.proto`、`rpc.proto`。`modules/include` 每次 cmake 重写，改了无效。
+先读 `docs/module.md`。生成输入是 `modules/protoconfig` 的 `module.proto`，以及 `db.proto`、`json.proto`、`rpc.proto`。`modules/include` 每次 cmake 重写，改了无效。
 
-加协议：`rpc.proto` 里每行是 `字段号 类型 名字;`，字段号必须手写。请求和回复各一个 `rpcdata`，再写一条 `rpc`（`id`、`res_id`、`request`、`response`）。整数字段用 `stdint` 定宽类型，不用 `char`、`short`、`int`、`long`。`map` 键若是 `rpcdata`，该结构名字后写 `key` 才会生成比较器，嵌套的 `rpcdata` 也要有比较器。标了 `key` 的结构不能再标 `json`。两边组件都挂上这条 rpc。服务端 `Init` 里 `HandleRpc`，客户端连上后 `co_await RpcCall`。新模块只写进 `module.proto`。根 `CMakeLists.txt` include `framework.cmake` 后按生成的清单加入，不用再改名单。数据库行写 `db.proto`，JSON 样例写 `json.proto`。
+加协议：`rpc.proto` 里每行是 `字段号 类型 名字;`，字段号必须手写。请求和回复各一个 `rpcdata`，再写一条 `rpc`（`id`、`res_id`、`request`、`response`）。整数字段用 `stdint` 定宽类型，不用 `char`、`short`、`int`、`long`。`map` 键若是 `rpcdata`，该结构名字后写 `key` 才会生成比较器，嵌套的 `rpcdata` 也要有比较器。标了 `key` 的结构不能再标 `json`。服务端 `Init` 里 `HandleRpc`，客户端连上后 `co_await RpcCall`。新模块只写进 `module.proto`。根 `CMakeLists.txt` include `framework.cmake` 后按生成的清单加入，不用再改名单。数据库行写 `db.proto`，JSON 样例写 `json.proto`。
 
 标准用例是 `AllEcho` 和 `Hold`，都在 `modules/protoconfig/rpc.proto`。`Hold` 的服务端实现在 `modules/ipcserver/src/ipcserver.cpp`。
 

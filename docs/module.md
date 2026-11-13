@@ -1,26 +1,19 @@
 # 模块和协议
 
-生成输入在 `modules/protoconfig`。协议、模块、组件都是 `.proto` 文本，不是 XML。`db.proto`、`json.proto`、`rpc.proto` 写在根目录 `CMakeLists.txt` 的 `OI_PROTO_FILES` 里，按这个顺序读入。
+生成输入在 `modules/protoconfig`。协议和模块都是 `.proto` 文本，不是 XML。`db.proto`、`json.proto`、`rpc.proto` 写在根目录 `CMakeLists.txt` 的 `OI_PROTO_FILES` 里，按这个顺序读入。
 
 | 文件 | 作用 |
 | --- | --- |
-| `module.proto` | 一个 `module` 是一个进程。空块表示不挂组件 |
-| `component.proto` | 网络组件。名字后面是 `Client` 或 `Server`，块里挂 `rpc` |
+| `module.proto` | 一个 `module` 是一个进程 |
 | `db.proto` | 数据库行，`DbChild`、`DbSample` |
 | `json.proto` | JSON 样例，`Inner`、`JsonPlain`、`JsonDefault`、`JsonAll`。`Inner` 也给 `rpc.proto` 用。`JsonPlain` 写了 `[json]` 但不改名。`JsonDefault` 的字段不写标记，靠结构上的 `json` 默认参加 |
 | `rpc.proto` | 业务 RPC、枚举和错误码。每行是 `字段号 类型 名字;` |
 
 ```
-component IpcClient Client {
-    rpc AllEcho;
-    rpc Hold;
-}
-
 module LogD {
 }
 
 module IpcClient {
-    component IpcClient;
 }
 ```
 
@@ -51,7 +44,7 @@ JSON 会穿透。嵌套的 `rpcdata`、`vector`、`map` 按内层继续生成，
 
 `[dbkey]` 标主键字段，可以标多个组成联合主键，`BuildCreateTable` 和按主键读改删的语句靠它，见 [数据库客户端](database.md) 的单表语句。主键只能是整数、`bool`、`string` 或 `Bytes`，`string`、`Bytes` 还必须写定长的 `[dbtype]`；浮点、`vector`、`map`、`rpcdata` 和 `[dbjson]` 不能做主键。`[dbtype]` 换建表时的列类型，类型名不分大小写，生成时统一成大写：`VARCHAR`、`VARBINARY` 后面跟 1 到 65535 的长度，`CHAR`、`BINARY` 跟 1 到 255 的长度，`TEXT`、`MEDIUMTEXT`、`LONGTEXT`、`BLOB`、`MEDIUMBLOB`、`LONGBLOB` 不带长度，例如 `[dbtype VARBINARY 64]`。`string` 可以用其中任何一种；`Bytes` 和 PB blob 只能用二进制类型；`[dbjson]` 只能用文本类型；数值字段不能写。读行时按列名匹配，缺列保持原值，NULL、类型不对、重复列和列数对不上都失败并保持原对象。schema migration 仍未实现。模块访问数据库见 [数据库客户端](database.md)。
 
-基础库在 `framework.cmake`。它编三方库和 `cbaselib`，并生成 net 内部的工作协议，不加入进程模块。工作协议同样可以多份，列表是 `OI_WORK_PROTO_FILES`。根目录 `CMakeLists.txt` include 它，再调用 `cbaselib/proto/proto_tool/main.py`。`--` 前面是 `module.proto`、`component.proto`、头文件目录、模块目录、部署目录和模块清单，后面是 `OI_PROTO_FILES`。输出到 `modules/include`、`modules` 和 `deploy`。修改任一输入会触发重新配置和生成；生成失败会终止配置。外部工程同样 include `openidea/framework.cmake`，换成自己的协议文件列表、模块和组件文本、输出目录，不再手写基础库列表。开发标准见 [开发标准](develop.md) 第 2 节。
+基础库在 `framework.cmake`。它编三方库和 `cbaselib`，并生成 net 内部的工作协议，不加入进程模块。工作协议同样可以多份，列表是 `OI_WORK_PROTO_FILES`。根目录 `CMakeLists.txt` include 它，再调用 `cbaselib/proto/proto_tool/main.py`。`--` 前面是 `module.proto`、头文件目录、模块目录、部署目录和模块清单，后面是 `OI_PROTO_FILES`。输出到 `modules/include`、`modules` 和 `deploy`。修改任一输入会触发重新配置和生成；生成失败会终止配置。外部工程同样 include `openidea/framework.cmake`，换成自己的协议文件列表、模块文本、输出目录，不再手写基础库列表。开发标准见 [开发标准](develop.md) 第 2 节。
 
 ## 什么会重写
 
@@ -68,11 +61,11 @@ JSON 会穿透。嵌套的 `rpcdata`、`vector`、`map` 按内层继续生成，
 
 `module.proto` 是模块注册的唯一来源；CMake 使用生成的清单添加模块，不需要再维护一份手写列表。模块名必须匹配 ASCII 格式 `[A-Za-z0-9_][A-Za-z0-9_-]*`，忽略大小写后不能重复；生成目录及清单使用小写名称。
 
+协议解码目前生成宏字段表，编译更便宜。运行更快的是 `switch`，同一条 128 字段的包大约少 1 微秒，编译大约慢到 6 倍。两套都提供给使用方，按自己的协议规模选择。测量和取舍见 [字段分发](pb-dispatch.md)。
+
 ## 加一个回声协议
 
 在 `rpc.proto` 增加请求和回复两个 `rpcdata`，字段号自己写上。`rpc` 放在文件最后，一行一条，请求和回复共用一个协议号。调用号最高位是 1 表示请求，回包清掉这一位。数据库行写进 `db.proto`，JSON 样例写进 `json.proto`。
-
-在 `component.proto` 里把这条 rpc 挂到对应的 Client 和 Server 组件上。
 
 服务端在组件 `Init` 里 `HandleRpc`，客户端在连上之后 `co_await RpcCall`。写法见 [协程](coroutine.md)。
 

@@ -80,10 +80,11 @@ T LoadLittleEndian(const void* pSource)
 class BytesStream;
 
 // 按字段号升序排列，大小只与实际字段数有关。
+using PbReadFn = void (*)(BytesStream&, uint32_t, void*);
 struct PbField
 {
 	uint32_t iSequence;
-	void (*fnRead)(BytesStream&, uint32_t, void*);
+	PbReadFn fnRead;
 };
 
 // 带读游标的字节流。编码往末尾追加，解码从游标往前读，字节不够抛 ParserException。
@@ -346,6 +347,8 @@ class BytesStream : public Bytes
 	}
 
 	BytesStream& ReadFields(void* pObject, std::span<const PbField> vFields, std::span<uint8_t> vSeen);
+	// mFields 按字段号索引，一个进程一份。vSeen 用字段号当下标，长度要盖住最大字段号。
+	BytesStream& ReadFieldsByMap(void* pObject, const std::map<uint32_t, PbReadFn>& mFields, std::span<uint8_t> vSeen);
 
   private:
 	template <typename T>
@@ -372,6 +375,15 @@ class BytesStream : public Bytes
 // 表项直接生成对应成员的解码函数，不引入成员指针模板实例。
 #define OI_PB_FIELD(Type, Sequence, Member)                                             \
 	::OI::Base::PbField                                                                 \
+	{                                                                                   \
+		Sequence, +[](::OI::Base::BytesStream& stStream, uint32_t iSize, void* pObject) \
+		{                                                                               \
+			stStream.ReadPb(iSize, static_cast<Type*>(pObject)->Member);                \
+		}                                                                               \
+	}
+
+// 和 OI_PB_FIELD 同一条读函数，收进按字段号索引的 map。没人调用就不会实例化到调用方里。
+#define OI_PB_MAP_FIELD(Type, Sequence, Member)                                         \
 	{                                                                                   \
 		Sequence, +[](::OI::Base::BytesStream& stStream, uint32_t iSize, void* pObject) \
 		{                                                                               \

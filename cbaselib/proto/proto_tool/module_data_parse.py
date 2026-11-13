@@ -134,12 +134,11 @@ class Module:
 
 
 class ModuleGen:
-    def __init__(self, proto_gen: ProtocolGen, module_path:str, component_path:str) -> None:
+    def __init__(self, proto_gen: ProtocolGen, module_path:str) -> None:
         self.proto_gen = proto_gen
         self.modules = {}       #type:Dict[str,Module]
         self.components = {}    #type:Dict[str,Component]
         self.module_path = module_path
-        self.component_path = component_path
 
     def Gen(self):
         if(not self.Parse()):
@@ -148,19 +147,11 @@ class ModuleGen:
 
     def Parse(self):
         try:
-            with open(self.component_path, encoding="utf-8") as fp:
-                component_text = fp.read()
             with open(self.module_path, encoding="utf-8") as fp:
                 module_text = fp.read()
         except OSError as exc:
             loginfo("ParseModule Error", exc)
             return False
-        components = ParseComponentText(component_text)
-        if components is None:
-            return False
-        for name, type_name, rpc_names in components:
-            if(not self.ParseComponent(name, type_name, rpc_names)):
-                return False
         modules = ParseModuleText(module_text)
         if modules is None:
             return False

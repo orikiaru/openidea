@@ -7,7 +7,7 @@ alwaysApply: false
 
 先读 `docs/develop.md` 第 2、6 节。
 
-一个 module 对应一个进程，业务代码都放在 `modules/<进程>/inc`、`src` 里。共用的东西放 `modules/include`，或者单独建目录，不放仓库根下的 `src`。组件由 `module.proto`、`component.proto` 生成骨架。
+一个 module 对应一个进程，业务代码都放在 `modules/<进程>/inc`、`src` 里。共用的东西放 `modules/include`，或者单独建目录，不放仓库根下的 `src`。进程在 `module.proto` 里声明，骨架只在文件不存在时生成。
 
 不写类外的 C 风格函数，不用全局状态和静态变量。处理函数是组件的成员，用 `OI_RPC_BIND_SELF` / `OI_NOTIFY_BIND_SELF` 注册，不用友元。不在会话或 mgr 里随手 `StartTask`。
 
