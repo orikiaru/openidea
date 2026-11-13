@@ -4,7 +4,7 @@
 
 ## 怎么写
 
-调用协程函数就开始执行。要结果就 `co_await` 它返回的 Task。想并发，先调用拿到几个 Task，再 `co_await OI::Coro::WhenAll(std::move(vTasks))`：无返回值等到全部结束，有返回值得到按原顺序排列的 `std::vector<T>`。全部结束前不返回；其中一条失败时，其余任务仍跑完，再按序号抛出第一条异常。空列表直接完成。`std::vector<bool>` 是标准库的特化，不是装 `bool` 的普通数组，`operator[]` 返回代理引用，不能拿引用、不能当普通元素用，模板里一实例化就踩坑。因此凡是模板参数为 `bool`、结果却是 `vector<T>` 的接口都必须拦住，禁止返回这个特化。`TaskResult<bool>` 单独等待仍得到 `bool`；交给 `WhenAll` 时得到按原顺序排列的 `vector<int32_t>`，1 为真，0 为假。Redis 的整数回执是 64 位，0/1 标记数组用 `vector<int64_t>`，和原生整数同一条解码，不是因为这个标志位需要 64 位；`int32_t` 装得下 0/1，但更大的整数数组会越界失败。有前后依赖的步骤仍逐个 `co_await`。不要用原子计数加 `yield` 轮询，也不要只为汇合去开 `TaskScope`。`ipcclient` 的 `HoldMgr::Pump` 按这个写法把每个测试项拆成一个返回失败数的函数。带捕获的协程 lambda 和要在独立调用号下运行的任务用 `OI::Coro::StartTask`。让出一段时间用 `co_await OI::Coro::yield(毫秒)`。
+调用协程函数就开始执行。要结果就 `co_await` 它返回的 Task。想并发，先调用拿到几个 Task，再 `co_await OI::Coro::WhenAll(std::move(vTasks))`：无返回值等到全部结束，有返回值得到按原顺序排列的 `std::vector<T>`。全部结束前不返回；其中一条失败时，其余任务仍跑完，再按序号抛出第一条异常。空列表直接完成。`std::vector<bool>` 是标准库的特化，不是装 `bool` 的普通数组，`operator[]` 返回代理引用，不能拿引用、不能当普通元素用，模板里一实例化就踩坑。因此凡是模板参数为 `bool`、结果却是 `vector<T>` 的接口都必须拦住，禁止返回这个特化。`TaskResult<bool>` 单独等待仍得到 `bool`；交给 `WhenAll` 时得到按原顺序排列的 `vector<int32_t>`，1 为真，0 为假。Redis 的整数回执是 64 位，0/1 标记数组用 `vector<int64_t>`，和原生整数同一条解码，不是因为这个标志位需要 64 位；`int32_t` 装得下 0/1，但更大的整数数组会越界失败。有前后依赖的步骤仍逐个 `co_await`。不要用原子计数加 `yield` 轮询，也不要只为汇合去开 `TaskScope`。`ipcclient` 的 `HoldMgr::Pump` 按这个写法依次调用各主题 mgr，每项返回失败数。带捕获的协程 lambda 和要在独立调用号下运行的任务用 `OI::Coro::StartTask`。让出一段时间用 `co_await OI::Coro::yield(毫秒)`。
 
 - `yield(ms)` 在 `ms > 0` 时进时间轮，到点再跑，等待期间不占 CPU
 - `ms <= 0` 只把句柄放回队列，这一轮不再碰它。主循环会先去 poll，再跑新挂上的
@@ -286,7 +286,7 @@ if (!(co_await client.StartClient())) co_return; // 等建连成功，再处理�
 
 管理器必须覆盖网络操作和等待者的生命周期；全局停止前仍按 TaskScope 约定 Join。接口不提供单独连接超时参数，失败时间由网络连接结果决定。旧 `StartClient(false)` 同步入口和独立 `Connect()` 入口已移除，应用等待建连统一使用 `co_await StartClient()`。
 
-建连等待在启动 socket 前登记；完成时先摘取该代等待者，再执行连接成功回调。成功回调内关闭旧连接并再次 StartClient，新一代不会收到旧连接的成功结果。HoldMgr 覆盖该重入场景，要求首次 true、下一次连接拒绝 false。
+建连等待在启动 socket 前登记；完成时先摘取该代等待者，再执行连接成功回调。成功回调内关闭旧连接并再次 StartClient，新一代不会收到旧连接的成功结果。`ConnectMgr` 覆盖该重入场景，要求首次 true、下一次连接拒绝 false。
 
 ## 请求消费与服务端容量
 
@@ -296,7 +296,7 @@ if (!(co_await client.StartClient())) co_return; // 等建连成功，再处理�
 
 超限立即回标准 `OI_ERR_BUSY`，不创建业务协程；错误回执无法发送时关闭会话。额度由原有根协程闭包中的可移动 RAII 对象持有，额度凭证不新增包装协程或单独堆分配；正常完成、业务异常、响应编码失败都自动归还。断连不提前释放仍在执行的业务额度，避免借助重连绕过进程限额。业务端收到 Busy 后自行决定退避，框架不自动重放写请求。
 
-`HoldMgr` 保留共享建连、请求重复/并发/移后使用、首次连接前固定 sid 的回归。`python3 tools/run_regressions.py --case rpc-admission-count` 和 `rpc-admission-bytes` 用临时限额验证多连接过载、标准 Busy 回执、额度恢复与错误路径；均已纳入 `--case all`。
+`RpcAwaitMgr` 保留共享建连、请求重复、并发和移后使用的回归，`RpcOutputMgr` 覆盖首次连接前固定 sid。`python3 tools/run_regressions.py --case rpc-admission-count` 和 `rpc-admission-bytes` 用临时限额验证多连接过载、标准 Busy 回执、额度恢复与错误路径；均已纳入 `--case all`。
 
 
 ### 直连发送错误与回包诊断

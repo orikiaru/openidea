@@ -23,6 +23,12 @@
 - 现状：生成器已经按字段写出直线调用，但每个调用都落到头文件模板上。`GetPbSerialize` 写出 `os.WritePb(序号, 字段)`，`GetPbDeserialize` 写出 `os.ReadPb`。定宽类型走 `enable_if<PbFixedTrait<T>>`，`vector<T>` 和 `map<K, V>` 再递归实例化元素类型；JSON 的整数用 `enable_if_t`，rpcdata 用 `decltype(FromJson)` 做 SFINAE，`vector` / `map` 同样递归。字段每多一层容器或嵌套结构，就多一套实例。数据库字段表使用 `Field<行>` 数组，编码解码回调接收整行，成员指针查找由生成的 `DbFindField` 单独处理。样例在 `modules/include/oi_rpcdata_dbsample.h` 的 `serialize`、`FromJson` 和 `DbFields`。对应实现在 `cbaselib/base/inc/oi_bytes_stream.h`、`cbaselib/proto/inc/oi_json.h`、`cbaselib/db/inc/oi_db_row.h`、`cbaselib/db/inc/oi_db_table.h`，生成在 `cbaselib/proto/proto_tool/serialize_data_file_gen.py`。
 - 方向：生成器已经知道每个字段的具体类型，按标量、string、Bytes、vector、map、嵌套 rpcdata 直接写出读写，容器在生成代码里展开。框架侧对这几种类型留普通重载，不再每个字段做 `enable_if`、`decltype` 和递归模板。其余框架新增和改动按同一条来，不靠再套一层类型推断复用。改生成器和对应头，生成头不要手改。字节、JSON 和 mysql 行映射用现有回归锁住。
 
+## 不带响应输出的 Call 暂时保留（2026-11-13）
+
+- 需求：`ProtoClientManager::Call`、`CallAny` 里只靠模板参数指定 `Res`、返回 `RpcResult` 的重载，和带响应引用、返回 `int32_t` 的重载重复。原先考虑删掉按值这一路，调用改成输出引用。
+- 现状：按值重载留着。`CallMany`、`CallAll` 一次返回每格的 `RpcResult`，调用方不用自己准备一排输出对象。单次 `Call`、`CallAny` 和它们是同一套返回方式，一起保留。声明在 `cbaselib/proto/inc/oi_rpc_session_manager.h`，定义在 `cbaselib/proto/inc/oi_rpc_coro.h`。
+- 方向：暂不清理，也不把现有按值调用改成输出引用。以后如果 `CallMany`、`CallAll` 改成别的返回方式，再一起看单次接口要不要收掉。
+
 ## 其他语言的序列化
 
 - 需求：序列化出去的标准数据结构统一为小端。非 C++ 的对端按这份标准读写 `modules/protoconfig` 里的协议。HTTP 对接先用已有 JSON；要做 RPC，或把 rpcdata 放进 Redis 的对端，必须用同一套二进制。先只生成一种真正要接的语言。现在的小端机器上，已经写出的包和 Redis 里的 rpcdata 字节必须保持不变。

@@ -12,6 +12,28 @@ set(MODULE_SRCS
         src/log_mgr.cpp
         src/redis_mgr.cpp
         src/hold_mgr.cpp
+        src/timer_mgr.cpp
+        src/nested_result_mgr.cpp
+        src/task_start_mgr.cpp
+        src/task_share_mgr.cpp
+        src/blocking_mgr.cpp
+        src/connect_mgr.cpp
+        src/address_mgr.cpp
+        src/isolation_mgr.cpp
+        src/backpressure_mgr.cpp
+        src/rpc_output_mgr.cpp
+        src/rpc_await_mgr.cpp
+        src/rpc_admission_mgr.cpp
+        src/route_mgr.cpp
+        src/registry_mgr.cpp
+        src/rpc_service_mgr.cpp
+        src/json_mgr.cpp
+        src/binary_mgr.cpp
+        src/encode_mgr.cpp
+        src/http_mgr.cpp
+        src/budget_mgr.cpp
+        src/schedule_mgr.cpp
+        src/rpc_pending_mgr.cpp
         src/udp_mgr.cpp
         src/multi_mgr.cpp
     )

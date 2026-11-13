@@ -40,6 +40,7 @@ class MatrixOutcomeTests(unittest.TestCase):
             with patch.object(sys, "argv", ["matrix", "--artifacts", str(output), *extra_args]), \
                  patch.object(matrix, "WINDOWS", windows), \
                  patch.object(matrix, "find_cmake", return_value="cmake"), \
+                 patch.object(matrix, "missing_toolset", return_value=""), \
                  patch.object(matrix.subprocess, "check_output", side_effect=metadata), \
                  patch.object(matrix.subprocess, "run", side_effect=run), \
                  contextlib.redirect_stdout(io.StringIO()):
@@ -141,6 +142,15 @@ class MatrixOutcomeTests(unittest.TestCase):
         self.assertEqual(["mt-configure", "st-configure", "restore-configure"], configure_steps)
         for step in configure_steps:
             self.assertIn("-DA=B", self.commands[step])
+
+    def test_missing_toolset_names_the_gap_and_the_install(self):
+        with patch.object(matrix.shutil, "which", return_value=None):
+            text = matrix.missing_toolset(False)
+        self.assertIn("缺少编译工具集：gcc-13、g++-13", text)
+        self.assertIn("sudo apt-get install -y gcc-13 g++-13", text)
+        log = "CMake Error: No CMAKE_CXX_COMPILER could be found."
+        self.assertIn("gcc-13", matrix.explain_configure_failure(log, False))
+        self.assertEqual("", matrix.explain_configure_failure("error: unused variable", False))
 
     def test_bad_define_and_windows_mysqld_rejected(self):
         with self.subTest(case="define"):

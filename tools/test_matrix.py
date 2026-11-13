@@ -14,6 +14,102 @@ ROOT = Path(__file__).resolve().parents[1]
 WINDOWS = os.name == "nt"
 
 
+def windows_install_text():
+    return (
+        "安装：打开 Visual Studio Installer，修改 Visual Studio 2022，勾选工作负载「使用 C++ 的桌面开发」。\n"
+        "该工作负载包含 MSVC v143、MSBuild、Windows SDK 和 CMake。\n"
+        "只有 cl.exe、没有 SDK 的 include/lib 时，CMake 仍会失败。"
+    )
+
+
+def linux_install_text():
+    return (
+        "安装：\n"
+        "  sudo apt-get update\n"
+        "  sudo apt-get install -y gcc-13 g++-13\n"
+        "若源里没有 gcc-13：\n"
+        "  sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test\n"
+        "  sudo apt-get update\n"
+        "  sudo apt-get install -y gcc-13 g++-13"
+    )
+
+
+def cmake_missing_message():
+    if WINDOWS:
+        return "缺少：CMake\n" + windows_install_text() + "\n也可以单独安装 CMake 并加入 PATH，或给矩阵传 --cmake <cmake.exe>。"
+    return (
+        "缺少：CMake\n"
+        "安装：sudo apt-get install -y cmake\n"
+        "或把已有 cmake 放到 PATH，或 $HOME/opt/cmake/bin，或给矩阵传 --cmake。"
+    )
+
+
+def missing_toolset(windows):
+    # 配置前就能确定的缺口。CMake 自己报出来的缺口由 explain_configure_failure 再补一句。
+    if windows:
+        base = Path("C:/Program Files/Microsoft Visual Studio/2022")
+        roots = [path for path in base.iterdir() if path.is_dir()] if base.is_dir() else []
+        has_msvc = False
+        has_msbuild = False
+        for root in roots:
+            tools = root / "VC" / "Tools" / "MSVC"
+            if tools.is_dir() and any(tools.iterdir()):
+                has_msvc = True
+            if (root / "MSBuild" / "Current" / "Bin" / "MSBuild.exe").is_file():
+                has_msbuild = True
+        has_sdk = Path("C:/Program Files (x86)/Windows Kits/10/Include").is_dir()
+        missing = []
+        if not has_msvc:
+            missing.append("MSVC v143（VC/Tools/MSVC）")
+        if not has_msbuild:
+            missing.append("MSBuild")
+        if not has_sdk:
+            missing.append("Windows SDK（Windows Kits 10）")
+        if not missing:
+            return ""
+        return (
+            "缺少编译工具集：" + "、".join(missing) + "\n"
+            "CMake 使用生成器 Visual Studio 17 2022、平台 x64。\n"
+            + windows_install_text()
+        )
+    missing = [name for name in ("gcc-13", "g++-13") if not shutil.which(name)]
+    if not missing:
+        return ""
+    return (
+        "缺少编译工具集：" + "、".join(missing) + "\n"
+        "CMake 配置指定 -DCMAKE_C_COMPILER=gcc-13 -DCMAKE_CXX_COMPILER=g++-13。\n"
+        + linux_install_text()
+    )
+
+
+def explain_configure_failure(log_text, windows):
+    lowered = log_text.lower()
+    markers = (
+        "could not find any instance of visual studio",
+        "no cmake_c_compiler could be found",
+        "no cmake_cxx_compiler could be found",
+        "cmake_cxx_compiler-notfound",
+        "cmake_c_compiler-notfound",
+        "compiler identification is unknown",
+        "missing toolset",
+        "the build tools for v143",
+        "msb8020",
+        "was not found in the path",
+        "gcc-13: not found",
+        "g++-13: not found",
+        "gcc-13: no such file",
+        "g++-13: no such file",
+    )
+    if not any(marker in lowered for marker in markers):
+        return ""
+    detail = missing_toolset(windows)
+    if detail:
+        return detail
+    if windows:
+        return "CMake 没有找到 Visual Studio 17 2022 的 C++ 工具集。\n" + windows_install_text()
+    return "CMake 没有找到 gcc-13/g++-13。\n" + linux_install_text()
+
+
 def find_cmake(explicit):
     if explicit:
         return explicit
@@ -23,7 +119,9 @@ def find_cmake(explicit):
         "*/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe")) if WINDOWS else []
     if candidates:
         return str(candidates[0])
-    raise RuntimeError("CMake not found; pass --cmake or install the C++ toolchain")
+    message = cmake_missing_message()
+    print(message, flush=True)
+    raise RuntimeError(message)
 
 
 def find_redis(explicit):
@@ -121,7 +219,14 @@ def main():
                                   stderr=subprocess.STDOUT, env=env).returncode
         records.append({"step": name, "command": [str(part) for part in command], "exit_code": code})
         (output / "matrix.json").write_text(json.dumps(records, indent=2), encoding="utf-8")
-        print("PASS" if code == 0 else "FAIL", name, "log=", output / (name + ".log"), flush=True)
+        log_path = output / (name + ".log")
+        if code != 0 and (name.endswith("-configure") or name.endswith("-build")):
+            hint = explain_configure_failure(log_path.read_text(encoding="utf-8", errors="replace"), WINDOWS)
+            if hint:
+                print(hint, flush=True)
+                with log_path.open("a", encoding="utf-8") as log:
+                    log.write("\n" + hint + "\n")
+        print("PASS" if code == 0 else "FAIL", name, "log=", log_path, flush=True)
         return code
 
     metadata = {"platform": platform.platform(), "python": sys.version, "root": str(ROOT)}
@@ -166,7 +271,12 @@ def main():
             failed = True
         if run("matrix-outcomes", [sys.executable, ROOT / "tools/test_matrix_outcomes.py"]):
             failed = True
-        for mode in (("mt", "st") if args.mode == "all" else (args.mode,)):
+        gap = missing_toolset(WINDOWS)
+        if gap:
+            print(gap, flush=True)
+            (output / "toolchain.txt").write_text(gap, encoding="utf-8")
+            failed = True
+        for mode in () if gap else (("mt", "st") if args.mode == "all" else (args.mode,)):
             configured = True
             flags = ["-DOI_IPC_SINGLE_THREAD=" + ("ON" if mode == "st" else "OFF"),
                      "-DOI_ENABLE_TEST_HOOKS=" + ("ON" if WINDOWS else "OFF")]
