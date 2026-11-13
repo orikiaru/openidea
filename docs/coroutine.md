@@ -44,6 +44,8 @@ if (iRet == 0)
 
 直接传入同步函数及其参数；函数必须返回 `int32_t`，接口返回 `TaskResult<int32_t>`。非零状态码原样返回，不自动转换成异常；函数抛出的异常在 `co_await` 时重抛。左值参数借用原对象，包括输出引用；右值参数和可调用对象按值保活。输出对象及其他借用对象必须活到工作结束，丢弃 Task 不会取消工作。同步函数自行决定何时写入输出，失败时输出是否保持原值取决于该函数。同一个任务可重复或并发等待，函数只执行一次，不需要应用管理文件描述符或任务 ID。
 
+传给 `RunBlocking` 的 lambda 只能按值捕获临时变量。初始化捕获把临时对象移进闭包，这份对象活到任务结束。不要写 `[&]`、引用捕获、裸 `this` 或成员，也不要捕获指向调用方栈上局部对象的指针或引用。具名局部变量要带进后台时，先做成临时对象再捕获，或作为右值参数传入。输出继续用左值引用参数，调用方保证活到 `co_await` 结束。
+
 阻塞工作按 `OI::Thread::BlockingType` 分类，由各自的固定线程池执行。省略类型时使用 `Default`，默认 4 个线程、1024 个排队项，各类别的在途上限为线程数加队列上限，Default 取该值与 1024 的较小值；在途包含排队、执行中以及完成通知尚未消费的工作，队列上限单独计算且不包含正在执行的工作。其他类型必须在首次使用前调用 `OI::Thread::ConfigureBlockingPool(type, threads, queueLimit)` 显式配置。每个类型第一次启动后再配置返回 `OI_ERR_BUSY`；线程数须为 1–256，队列上限须大于 0。未配置的类型返回 `OI_ERR_NOT_FOUND`，队列已满返回 `OI_ERR_BUSY`，关闭后返回 `OI_ERR_CONNECT`。例如可先配置 `OI::Thread::BlockingType::File`，再用 `co_await OI::Coro::RunBlocking(OI::Thread::BlockingType::File, ReadFile, sPath, sData)` 指定类型；配置返回码须由调用方检查。
 
 工作线程使用项目封装的 `NativeMutex`、`NativeMutexGuard` 和 `NativeMutexCond` 同步，单线程构建中也是真实的线程同步。完成通知使用预分配的内嵌队列节点，通过 poll 的 `PostOnLoop` 无需额外分配地回到事件循环，结果和异常保留在进程内存中，不经过网络传输。阻塞池不使用 `uv_queue_work`，不受 `UV_THREADPOOL_SIZE` 控制。执行顺序和线程亲和性没有保证；后台函数不能访问非线程安全的单线程业务管理器，借用对象的并发访问由应用同步。同步回调及其自有调用链禁止调用 `co_await`、`yield`、`StartTask`、`TaskScope` 和 RPC、Redis、HTTP 异步接口。
@@ -111,6 +113,10 @@ auto& res = result.GetRes();
 ```
 
 协程帧只记着 lambda 对象的地址，不复制捕获。直接调用临时的带捕获协程 lambda，lambda 在这一行结束时销毁，第一次挂起之后再读捕获就是悬空访问。带捕获的协程 lambda 必须经 `StartTask` 或 `TaskScope::Start` 启动，它们持有闭包直到任务结束。普通函数和成员函数的参数按值复制进帧，可以直接调用；引用参数要保证对方活到任务结束。
+
+挂起期间别的协程会运行，多线程恢复还可能换工人。迭代器、容器元素的引用或指针、`string_view`、`span` 跨过 `co_await` 或 `yield` 再使用时，容器在这段时间里不能被插入、删除、重分配、重哈希、移动或销毁。本协程帧独占、挂起期间没有代码修改的局部容器可以跨挂起遍历，例如 `WhenAll` 按值持有的任务列表。范围 for 延长临时对象寿命到整个循环，循环里不改这个容器时也稳定。成员和共享容器不稳定：先拷出 key、下标或值，恢复后再查找。`vector<bool>` 的代理引用和 JSON 迭代器同样不能跨挂起。`RpcContext` 的寿命覆盖整段处理协程，处理函数里可以跨挂起使用。
+
+`MutexGuard`、`SpinLockGuard`、`NativeMutexGuard` 在挂起前结束。多线程 `Mutex` 记在加锁的那条线程上，协程恢复时可能已经换了工人，锁却仍被守卫占着。单线程的 `Mutex` 和 `SpinLock` 是空实现，挡不住挂起期间运行的其他协程。`NativeMutex` 在单线程构建里仍是真锁。放开守卫后再挂起，恢复后重新加锁并再查条件。
 
 应用层时长参数统一是 `OI::Timer::MS`。`Milliseconds(n)`、`Seconds(n)`、`Minutes(n)`、`Hours(n)`、`Days(n)` 在构造时换成毫秒，可以直接传给 `yield` 和 RPC。
 

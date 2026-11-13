@@ -24,3 +24,5 @@ while (!bReady)
 > **注意：** `MutexCond` 不带条件参数。等待写成 `while (条件不满足) { Wait(...); }`。带超时的用 `WaitUntil` 的返回值离开循环。
 
 > **注意：** 单线程下锁不会真的阻塞。要等网络或定时器，改走 poll，不要靠锁空等。
+
+> **注意：** `MutexGuard`、`SpinLockGuard`、`NativeMutexGuard` 在 `co_await` 或 `yield` 之前结束。多线程 `Mutex` 由加锁线程持有，协程恢复时可能换工人。单线程的 `Mutex` 和 `SpinLock` 是空实现，挂起期间别的协程仍会改数据。`NativeMutex` 在单线程构建里也是真锁。恢复后重新加锁，再查条件。

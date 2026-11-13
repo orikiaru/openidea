@@ -11,6 +11,8 @@ alwaysApply: false
 
 任务创建即运行：协程里调用协程函数，会在调用方栈上跑到第一次挂起再返回。不要在第一次挂起前层层调用子任务。带捕获的协程 lambda 必须经 `StartTask` 或 `TaskScope::Start` 启动。没有 `YieldToPool`、`Park`、`Wake`。
 
+迭代器、元素引用、`string_view`、`span` 跨 `co_await` 或 `yield` 时，容器必须稳定：本协程独占且挂起期间不被修改。成员和共享容器先拷出 key、下标或值。`MutexGuard`、`SpinLockGuard`、`NativeMutexGuard` 在挂起前结束。细则在 `docs/coroutine.md`。
+
 等一批任务：在协程里直接调用协程函数拿到 Task，放进 vector，再 `co_await OI::Coro::WhenAll(std::move(vTasks))`。无返回值等到全部结束；有返回值按原顺序得到 `std::vector<T>`。`TaskResult<bool>` 汇合后是 `vector<int32_t>` 的 0/1。有前后依赖的步骤仍逐个 `co_await`。不要用原子计数加 `yield` 轮询等子任务，也不要只为汇合去开 `TaskScope`。一个测试项写成一个函数，返回自己的失败数。
 
 标准用例是服务端原样回包，以及客户端在根任务里起固定数量的工作协程，每个循环领编号、发一次、等回包，在途数量不超过服务端额度，全部结束后统一汇报：
