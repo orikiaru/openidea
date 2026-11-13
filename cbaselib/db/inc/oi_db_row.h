@@ -9,7 +9,6 @@
 #include <limits>
 #include <map>
 #include <system_error>
-#include <tuple>
 #include <type_traits>
 #include <utility>
 
@@ -283,71 +282,33 @@ constexpr const char* DefaultSqlType()
 	}
 }
 
-// 标了 db 的 rpcdata 生成 DbFields()：每个数据库字段一项，按列顺序排。
-// pSqlType 是建表用的列类型，bKey 表示属于主键（协议里的 [dbkey]）。
-template <typename C, typename M>
+// 同一行的字段使用统一描述，遍历不再展开异构 tuple。
+template <typename C>
 struct Field
 {
 	const char* pColumn;
-	M C::*pMember;
-	Parameter (*fnEncode)(const M&);
-	bool (*fnDecode)(const Blob&, M&);
+	Parameter (*fnEncode)(const C&);
+	bool (*fnDecode)(const Blob&, C&);
 	const char* pSqlType;
 	bool bKey;
 };
 
-template <typename C, typename M>
-constexpr Field<C, M> ValueField(const char* pColumn, M C::*pMember, bool bKey = false, const char* pSqlType = nullptr)
-{
-	return Field<C, M>{pColumn, pMember, &EncodeDbValue<M>, &DecodeDbValue<M>, pSqlType ? pSqlType : DefaultSqlType<M>(), bKey};
-}
-
 template <typename C>
 constexpr size_t FieldCount()
 {
-	return std::tuple_size_v<std::remove_cv_t<std::remove_reference_t<decltype(C::DbFields())>>>;
+	return C::DbFieldCount;
 }
 
-template <typename C, size_t... iIndex>
-void AppendRowParametersAt(const C& stRow, std::vector<Parameter>& vParameters, std::index_sequence<iIndex...>)
-{
-	const auto& stFields = C::DbFields();
-	(vParameters.push_back(std::get<iIndex>(stFields).fnEncode(stRow.*(std::get<iIndex>(stFields).pMember))), ...);
-}
-
-// 按 DbFields 的顺序追加整行参数，和 DbColumnList、DbPlaceholders 对应。
 template <typename C>
 void AppendRowParameters(const C& stRow, std::vector<Parameter>& vParameters)
 {
-	AppendRowParametersAt(stRow, vParameters, std::make_index_sequence<FieldCount<C>()>{});
-}
-
-// 返回 1 表示这一列归这个字段且已写入，0 表示不是这一列，-1 表示归它但不能写入。
-template <typename C, typename M>
-int32_t DecodeColumn(C& stRow, const Field<C, M>& stField, const std::string& sColumn, const std::optional<Blob>& stCell, bool& bSeen)
-{
-	if (sColumn != stField.pColumn)
+	for (const auto& stField : C::DbFields())
 	{
-		return 0;
+		vParameters.push_back(stField.fnEncode(stRow));
 	}
-	if (bSeen || !stCell || !stField.fnDecode(*stCell, stRow.*(stField.pMember)))
-	{
-		return -1;
-	}
-	bSeen = true;
-	return 1;
 }
 
-template <typename C, size_t... iIndex>
-int32_t DecodeColumnAt(C& stRow, const std::string& sColumn, const std::optional<Blob>& stCell, std::array<bool, sizeof...(iIndex)>& vSeen, std::index_sequence<iIndex...>)
-{
-	const auto& stFields = C::DbFields();
-	int32_t iResult = 0;
-	(void)(((iResult = DecodeColumn(stRow, std::get<iIndex>(stFields), sColumn, stCell, vSeen[iIndex])) != 0) || ...);
-	return iResult;
-}
-
-// 按列名把一行写回。不认识的列跳过；SQL NULL、重复列或解不开时返回 false，stRow 不变。
+// 未知列跳过；已知列重复、NULL 或解码失败时保持原对象。
 template <typename C>
 bool FromRow(C& stRow, const std::vector<std::string>& vColumns, const std::vector<std::optional<Blob>>& vRow)
 {
@@ -355,65 +316,55 @@ bool FromRow(C& stRow, const std::vector<std::string>& vColumns, const std::vect
 	{
 		return false;
 	}
-	constexpr size_t iCount = FieldCount<C>();
 	C stDecoded(stRow);
-	std::array<bool, iCount> vSeen{};
-	for (size_t iIndex = 0; iIndex < vColumns.size(); ++iIndex)
+	std::vector<uint8_t> vSeen(C::DbFields().size(), 0);
+	for (size_t iColumn = 0; iColumn < vColumns.size(); ++iColumn)
 	{
-		if (DecodeColumnAt(stDecoded, vColumns[iIndex], vRow[iIndex], vSeen, std::make_index_sequence<iCount>{}) < 0)
+		size_t iField = 0;
+		for (const auto& stField : C::DbFields())
 		{
-			return false;
+			if (vColumns[iColumn] == stField.pColumn)
+			{
+				if (vSeen[iField] || !vRow[iColumn] || !stField.fnDecode(*vRow[iColumn], stDecoded))
+				{
+					return false;
+				}
+				vSeen[iField] = 1;
+				break;
+			}
+			++iField;
 		}
 	}
 	stRow = std::move(stDecoded);
 	return true;
 }
 
-// 按列名的一行。参数和结果单元格分开：写入用 ParameterMap，读回用 CellMap。
 using ParameterMap = std::map<std::string, Parameter>;
 using CellMap = std::map<std::string, std::optional<Blob>>;
-
-template <typename C, size_t... iIndex>
-void ToParameterMapAt(const C& stRow, ParameterMap& mParameters, std::index_sequence<iIndex...>)
-{
-	const auto& stFields = C::DbFields();
-	((mParameters[std::get<iIndex>(stFields).pColumn] = std::get<iIndex>(stFields).fnEncode(stRow.*(std::get<iIndex>(stFields).pMember))), ...);
-}
 
 template <typename C>
 ParameterMap ToParameterMap(const C& stRow)
 {
 	ParameterMap mParameters;
-	ToParameterMapAt(stRow, mParameters, std::make_index_sequence<FieldCount<C>()>{});
+	for (const auto& stField : C::DbFields())
+	{
+		mParameters[stField.pColumn] = stField.fnEncode(stRow);
+	}
 	return mParameters;
 }
 
-template <typename C, typename M>
-bool DecodeCell(C& stRow, const Field<C, M>& stField, const CellMap& mCells)
-{
-	const auto it = mCells.find(stField.pColumn);
-	if (it == mCells.end())
-	{
-		return true;
-	}
-	return it->second && stField.fnDecode(*it->second, stRow.*(stField.pMember));
-}
-
-template <typename C, size_t... iIndex>
-bool FromCellMapAt(C& stRow, const CellMap& mCells, std::index_sequence<iIndex...>)
-{
-	const auto& stFields = C::DbFields();
-	return (DecodeCell(stRow, std::get<iIndex>(stFields), mCells) && ...);
-}
-
-// 只写 map 里有的列，不认识的列跳过。SQL NULL 或解不开时返回 false，stRow 不变。
+// 只更新提供的数据库列，全部成功后再提交。
 template <typename C>
 bool FromCellMap(C& stRow, const CellMap& mCells)
 {
 	C stDecoded(stRow);
-	if (!FromCellMapAt(stDecoded, mCells, std::make_index_sequence<FieldCount<C>()>{}))
+	for (const auto& stField : C::DbFields())
 	{
-		return false;
+		const auto it = mCells.find(stField.pColumn);
+		if (it != mCells.end() && (!it->second || !stField.fnDecode(*it->second, stDecoded)))
+		{
+			return false;
+		}
 	}
 	stRow = std::move(stDecoded);
 	return true;
@@ -438,39 +389,16 @@ inline bool RowCells(const Result& stResult, size_t iRow, CellMap& mCells)
 	return true;
 }
 
-template <typename C, typename M, typename F>
-const Field<C, M>* SameField(M C::*pMember, const F& stField)
-{
-	if constexpr (std::is_same_v<F, Field<C, M>>)
-	{
-		if (stField.pMember == pMember)
-		{
-			return &stField;
-		}
-	}
-	return nullptr;
-}
-
-template <typename C, typename M, size_t... iIndex>
-const Field<C, M>* FindFieldAt(M C::*pMember, std::index_sequence<iIndex...>)
-{
-	const auto& stFields = C::DbFields();
-	const Field<C, M>* pField = nullptr;
-	(void)(((pField = SameField(pMember, std::get<iIndex>(stFields))) != nullptr) || ...);
-	return pField;
-}
-
-// 成员指针对应的数据库字段。[nodb] 字段或别的结构的成员返回 nullptr。
 template <typename C, typename M>
-const Field<C, M>* FindField(M C::*pMember)
+const Field<C>* FindField(M C::*pMember)
 {
-	return FindFieldAt(pMember, std::make_index_sequence<FieldCount<C>()>{});
+	return C::DbFindField(pMember);
 }
 
 template <typename C, typename M>
 const char* ColumnOf(M C::*pMember)
 {
-	const Field<C, M>* pField = FindField(pMember);
+	const Field<C>* pField = FindField(pMember);
 	return pField ? pField->pColumn : nullptr;
 }
 
@@ -488,7 +416,7 @@ struct Picked
 template <typename C, typename M>
 int32_t PickOne(const C& stRow, Picked& stPicked, M C::*pMember)
 {
-	const Field<C, M>* pField = FindField(pMember);
+	const Field<C>* pField = FindField(pMember);
 	if (!pField)
 	{
 		return OI_ERR_INVALID_ARGUMENT;
@@ -505,7 +433,7 @@ int32_t PickOne(const C& stRow, Picked& stPicked, M C::*pMember)
 	stPicked.sAssignments += (bFirst ? "" : ",") + sQuoted + "=?";
 	stPicked.sConditions += (bFirst ? "" : " AND ") + sQuoted + "=?";
 	stPicked.vColumns.push_back(sColumn);
-	stPicked.vParameters.push_back(pField->fnEncode(stRow.*pMember));
+	stPicked.vParameters.push_back(pField->fnEncode(stRow));
 	return OI_OK;
 }
 

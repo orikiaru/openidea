@@ -17,21 +17,16 @@ struct ColumnSpec
 	Parameter stValue;
 };
 
-template <typename C, size_t... iIndex>
-void DescribeRowAt(const C& stRow, std::vector<ColumnSpec>& vColumns, std::index_sequence<iIndex...>)
-{
-	const auto& stFields = C::DbFields();
-	(vColumns.push_back(ColumnSpec{std::get<iIndex>(stFields).pColumn, std::get<iIndex>(stFields).pSqlType, std::get<iIndex>(stFields).bKey,
-		 std::get<iIndex>(stFields).fnEncode(stRow.*(std::get<iIndex>(stFields).pMember))}),
-		...);
-}
-
 template <typename C>
 std::vector<ColumnSpec> DescribeRow(const C& stRow)
 {
 	std::vector<ColumnSpec> vColumns;
-	vColumns.reserve(FieldCount<C>());
-	DescribeRowAt(stRow, vColumns, std::make_index_sequence<FieldCount<C>()>{});
+	vColumns.reserve(C::DbFields().size());
+	for (const auto& stField : C::DbFields())
+	{
+		vColumns.push_back(ColumnSpec{stField.pColumn, stField.pSqlType,
+		    stField.bKey, stField.fnEncode(stRow)});
+	}
 	return vColumns;
 }
 
@@ -96,7 +91,7 @@ inline const ColumnSpec* FindColumn(const std::vector<ColumnSpec>& vColumns, con
 template <typename C, typename M>
 bool AppendPickedName(std::vector<std::string>& vNames, M C::*pMember)
 {
-	const Field<C, M>* pField = FindField(pMember);
+	const Field<C>* pField = FindField(pMember);
 	if (!pField)
 	{
 		return false;
@@ -208,7 +203,7 @@ int32_t BuildUpsert(const std::string& sTable, const C& stRow, Statement& stStat
 	}
 	vParameters.insert(vParameters.end(), vUpdates.begin(), vUpdates.end());
 	stStatement = Statement{"INSERT INTO " + QuoteName(sTable) + " (" + sNames + ") VALUES (" + sMarks + ") ON DUPLICATE KEY UPDATE " + sUpdates,
-		std::move(vParameters)};
+	    std::move(vParameters)};
 	return OI_OK;
 }
 

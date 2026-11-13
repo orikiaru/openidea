@@ -213,27 +213,50 @@ __COMPARE____JSON_METHODS____DB_METHODS__};
         lines.append("    }")
         return "\n".join(lines) + "\n"
 
-    # 头一层标量按类型绑定，vector、map、rpcdata 收成 PB blob，都由 ValueField 按 C++ 类型决定。
-    # [dbjson] 改用 JsonField 存 JSON 文本。[dbkey] 和 [dbtype] 只在写了时多传参数。
+    # 生成整行回调，字段表的元素类型只依赖行类型。
     def DbFieldEntry(self, member):
-        if member.db_json:
-            extra = ', "%s"' % member.db_type if member.db_type else ""
-            return '::OI::Db::JsonField("%s", &%s::%s%s)' % (member.db_name, self.class_name, member.name, extra)
-        extra = ""
-        if member.db_key or member.db_type:
-            extra = ", %s" % ("true" if member.db_key else "false")
+        codec = "Json" if member.db_json else "Value"
         if member.db_type:
-            extra += ', "%s"' % member.db_type
-        return '::OI::Db::ValueField("%s", &%s::%s%s)' % (member.db_name, self.class_name, member.name, extra)
+            sql_type = '"%s"' % member.db_type
+        elif member.db_json:
+            sql_type = '"LONGTEXT"'
+        else:
+            sql_type = '::OI::Db::DefaultSqlType<%s>()' % QualType(member.GetType())
+        return ('{"%s",\n'
+                '                +[](const %s& stRow) -> ::OI::Db::Parameter\n'
+                '                {\n'
+                '                    return ::OI::Db::EncodeDb%s(stRow.%s);\n'
+                '                },\n'
+                '                +[](const ::OI::Db::Blob& stBlob, %s& stRow) -> bool\n'
+                '                {\n'
+                '                    return ::OI::Db::DecodeDb%s(stBlob, stRow.%s);\n'
+                '                }, %s, %s}' %
+                (member.db_name, self.class_name, codec, member.name,
+                 self.class_name, codec, member.name, sql_type,
+                 "true" if member.db_key else "false"))
 
     def GetDbMethods(self):
         members = [member for member in self.data.members if member.db_name]
         lines = []
-        lines.append("    static const auto& DbFields()")
+        lines.append("    static constexpr size_t DbFieldCount = %d;" % len(members))
+        lines.append("    static const std::array<::OI::Db::Field<%s>, %d>& DbFields()" % (self.class_name, len(members)))
         lines.append("    {")
-        lines.append("        static const auto stFields = std::make_tuple(")
-        lines.append(",\n".join("            " + self.DbFieldEntry(member) for member in members) + ");")
+        lines.append("        static const std::array<::OI::Db::Field<%s>, %d> stFields{{" % (self.class_name, len(members)))
+        lines.append(",\n".join("            " + self.DbFieldEntry(member) for member in members) + "}};")
         lines.append("        return stFields;")
+        lines.append("    }")
+        lines.append("    template <typename M>")
+        lines.append("    static const ::OI::Db::Field<%s>* DbFindField(M %s::*pMember)" % (self.class_name, self.class_name))
+        lines.append("    {")
+        for index, member in enumerate(members):
+            lines.append("        if constexpr (std::is_same_v<M, %s>)" % QualType(member.GetType()))
+            lines.append("        {")
+            lines.append("            if (pMember == &%s::%s)" % (self.class_name, member.name))
+            lines.append("            {")
+            lines.append("                return &DbFields()[%d];" % index)
+            lines.append("            }")
+            lines.append("        }")
+        lines.append("        return nullptr;")
         lines.append("    }")
         lines.append("    static const char* DbColumnList()")
         lines.append("    {")

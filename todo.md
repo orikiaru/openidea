@@ -19,9 +19,9 @@
 
 ## 底层框架少用嵌套模板，协议生成优先（2026-11-13）
 
-- 需求：底层框架能不用多层嵌套模板的地方不用。协议生成是大头：每条 rpcdata 的每个字段都要做一次重载决议和模板实例化，容器和嵌套结构再往下套一层。协议越多，编译量越大。数据库字段表是同一类问题，一起改。对外字节、JSON、列顺序、主键、`[dbtype]`、`[dbjson]`、NULL 和按成员取列的结果保持不变。
-- 现状：生成器已经按字段写出直线调用，但每个调用都落到头文件模板上。`GetPbSerialize` 写出 `os.WritePb(序号, 字段)`，`GetPbDeserialize` 写出 `os.ReadPb`。定宽类型走 `enable_if<PbFixedTrait<T>>`，`vector<T>` 和 `map<K, V>` 再递归实例化元素类型；JSON 的整数用 `enable_if_t`，rpcdata 用 `decltype(FromJson)` 做 SFINAE，`vector` / `map` 同样递归。字段每多一层容器或嵌套结构，就多一套实例。数据库更重：`GetDbMethods` 把 `ValueField` / `JsonField` 收进异构 `tuple<Field<行, 成员类型>...>`，`AppendRowParameters`、`FromRow`、`ToParameterMap`、`FromCellMap`、`FindField` 和 `DescribeRow` 再用 `index_sequence` 展开。编码解码进 `Field` 之后已经是函数指针。样例在 `modules/include/oi_rpcdata_dbsample.h` 的 `serialize`、`FromJson` 和 `DbFields`。对应实现在 `cbaselib/base/inc/oi_bytes_stream.h`、`cbaselib/proto/inc/oi_json.h`、`cbaselib/db/inc/oi_db_row.h`、`cbaselib/db/inc/oi_db_table.h`，生成在 `cbaselib/proto/proto_tool/serialize_data_file_gen.py`。
-- 方向：生成器已经知道每个字段的具体类型，按标量、string、Bytes、vector、map、嵌套 rpcdata 直接写出读写，容器在生成代码里展开。框架侧对这几种类型留普通重载，不再每个字段做 `enable_if`、`decltype` 和递归模板。数据库字段表改成同一种描述后用普通循环，或者同样由生成器按字段直接写函数；`FindField` / `Pick` / `ColumnOf` 若仍按成员指针取列，单独做，不要再实例化整张异构表。其余框架新增和改动按同一条来，不靠再套一层类型推断复用。改生成器和对应头，生成头不要手改。字节、JSON 和 mysql 行映射用现有回归锁住。
+- 需求：底层框架能不用多层嵌套模板的地方不用。协议生成是大头：每条 rpcdata 的每个字段都要做一次重载决议和模板实例化，容器和嵌套结构再往下套一层。协议越多，编译量越大。数据库字段表已改为同类型描述及普通循环。对外字节、JSON、列顺序、主键、`[dbtype]`、`[dbjson]`、NULL 和按成员取列的结果保持不变。
+- 现状：生成器已经按字段写出直线调用，但每个调用都落到头文件模板上。`GetPbSerialize` 写出 `os.WritePb(序号, 字段)`，`GetPbDeserialize` 写出 `os.ReadPb`。定宽类型走 `enable_if<PbFixedTrait<T>>`，`vector<T>` 和 `map<K, V>` 再递归实例化元素类型；JSON 的整数用 `enable_if_t`，rpcdata 用 `decltype(FromJson)` 做 SFINAE，`vector` / `map` 同样递归。字段每多一层容器或嵌套结构，就多一套实例。数据库字段表使用 `Field<行>` 数组，编码解码回调接收整行，成员指针查找由生成的 `DbFindField` 单独处理。样例在 `modules/include/oi_rpcdata_dbsample.h` 的 `serialize`、`FromJson` 和 `DbFields`。对应实现在 `cbaselib/base/inc/oi_bytes_stream.h`、`cbaselib/proto/inc/oi_json.h`、`cbaselib/db/inc/oi_db_row.h`、`cbaselib/db/inc/oi_db_table.h`，生成在 `cbaselib/proto/proto_tool/serialize_data_file_gen.py`。
+- 方向：生成器已经知道每个字段的具体类型，按标量、string、Bytes、vector、map、嵌套 rpcdata 直接写出读写，容器在生成代码里展开。框架侧对这几种类型留普通重载，不再每个字段做 `enable_if`、`decltype` 和递归模板。其余框架新增和改动按同一条来，不靠再套一层类型推断复用。改生成器和对应头，生成头不要手改。字节、JSON 和 mysql 行映射用现有回归锁住。
 
 ## 其他语言的序列化
 

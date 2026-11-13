@@ -47,7 +47,7 @@ if (iRet != OI_OK)
 
 `rpcdata` 在名字后面标 `db` 才生成行映射，见 [模块和协议](module.md)。生成的方法：
 
-- `DbFields()`：字段表，每个数据库字段一项，记列名、成员指针和编解码函数，按列顺序排。其余方法都按它走。
+- `DbFields()`：按列顺序排列的同类型字段数组，每项包含列信息和以整行为参数的编解码回调。字段操作遍历数组；成员指针查列由生成的 `DbFindField` 单独处理。
 - `DbColumnList` 是反引号列名，`DbPlaceholders` 是等量的 `?`，`AppendDbParameters` 按这个顺序追加参数，用于整行写入。
 - `ToDbMap()` 返回「列名 → 参数」，`FromDbMap(CellMap)` 按「列名 → 单元格」写回，只写 map 里有的列。查询结果用 `OI::Db::RowCells(stResult, iRow, mCells)` 换成按列名的 map，列名重复时返回 false。
 - `FromDbRow(vColumns, vRow)` 直接按结果的列名写回。
