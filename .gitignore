@@ -4,7 +4,7 @@
 /CMakeSettings.json
 /out
 /modules/include
-/cbaselib/net/inc/work_protocol
+/cbaselib/base/inc/framework_protocol
 /deploy/bin
 /*.obj
 /build-win

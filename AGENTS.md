@@ -134,6 +134,10 @@ Redis 也单独测。开关是 `[Test] redis`。先起本机 Redis（`maxmemory 
 
 应用层要空等，先打开 `docs/coroutine.md` 和 `modules/ipcclient/src/log_mgr.cpp` 的 `Pump`，确认写法是 `co_await OI::Coro::yield(毫秒)`，对上了再写。不要换成 `sleep`、`sleep_for`、`Sleep`、`usleep`。单线程只有一条线程，睡下去 poll 停转。
 
+# 单例周期任务走 Update
+
+单例要周期干活（心跳、定时拉取、过期清理），在类里写公有的 `OI::Coro::Task OnSecondUpdate(time_t)`，要比秒更细才用 `OnTickUpdate(uint64_t)`，两个只能写一个。框架按时间轮启动协程，上一次没 `co_return` 就跳过这一轮，所以函数体里直接顺序 `co_await` RPC、Redis，不用在途标志。不要自己挂 `BaseTimer`、`AddTimer` 循环、`CallOnLoop` 催促或回调链来做周期任务。到点判断用 `GetTime`/`SteadyMilliseconds` 记下次时间；别的线程要催一轮，只置一个原子标志，等下一次 Update 处理。
+
 # 关键词对上文档
 
 请求里出现下表的词时，先读对应文档，再按标准用例改。不要另写一套挂起、配对或绑定。
@@ -144,6 +148,7 @@ Redis 也单独测。开关是 `[Test] redis`。先起本机 Redis（`maxmemory 
 | RPC、RpcCall、HandleRpc、回包、调用号 | `docs/coroutine.md` 的服务端和客户端 | 同上，推迟回包用同文件的 `Hold` |
 | Redis、redisserver、RESP | `docs/cbaselib.md` 的 redis 段 | `modules/ipcclient/src/redis_mgr.cpp` 的 `Check` |
 | 定时器、时间轮、AddTimer | `docs/timer.md` | `Hold` 里的 `co_await OI::Coro::yield` |
+| 周期任务、Update、心跳、定时拉取、单例循环、OnSecondUpdate、OnTickUpdate | `docs/timer.md` 的单例更新段 | `cbaselib/proto/src/oi_registry_client.cpp` 的 `RegistryClient::OnSecondUpdate`；`modules/ipcclient/src/timer_mgr.cpp` 的 `OnTickUpdate` |
 | 协议、proto.xml、.proto、rpcdata、模块 | `docs/module.md` | `modules/protoconfig/rpc.proto` 的 `AllEcho`、`Hold` |
 | 端口、复用、bind、TIME_WAIT、监听 | `docs/cbaselib.md` 的 net 段 | `cbaselib/port/oi_net_os.cpp` 的 `NetOs_Bind` |
 | Web、HTTP、JSON、urlencode、二进制 body | `docs/module.md` 的 Web 段 | `modules/webserver` 的四个路径；`modules/webclient` 的 `Run` |

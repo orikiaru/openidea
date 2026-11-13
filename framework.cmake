@@ -80,17 +80,51 @@ find_program(PYTHON_BIN NAMES python3 python)
 if(NOT PYTHON_BIN)
 	message(FATAL_ERROR "Python 3 is required to generate protocols")
 endif()
-set(OI_WORK_PROTO_FILES "${BASE_LIB_PATH}/net/protocol/work.proto")
+set(OI_FRAMEWORK_PROTO_FILES "${BASE_LIB_PATH}/proto/protocol/framework.proto")
 file(GLOB OI_PROTO_TOOL_SOURCES "${PROTO_TOOL_DIR}/*.py")
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${OI_WORK_PROTO_FILES} ${OI_PROTO_TOOL_SOURCES})
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${OI_FRAMEWORK_PROTO_FILES} ${OI_PROTO_TOOL_SOURCES})
 execute_process(
 	COMMAND "${PYTHON_BIN}" "${PROTO_TOOL_DIR}/main.py" --data-only
-		"${BASE_LIB_PATH}/net/inc/work_protocol" -- ${OI_WORK_PROTO_FILES}
-	RESULT_VARIABLE OI_WORK_PROTO_GEN
+		"${BASE_LIB_PATH}/base/inc/framework_protocol" -- ${OI_FRAMEWORK_PROTO_FILES}
+	RESULT_VARIABLE OI_FRAMEWORK_PROTO_GEN
 )
-if(NOT OI_WORK_PROTO_GEN EQUAL 0)
-	message(FATAL_ERROR "Internal work protocol generation failed: ${OI_WORK_PROTO_GEN}")
+if(NOT OI_FRAMEWORK_PROTO_GEN EQUAL 0)
+	message(FATAL_ERROR "Framework protocol generation failed: ${OI_FRAMEWORK_PROTO_GEN}")
 endif()
+
+# runtime_dir 由最外层 CMake 传入，框架不自己决定二进制放哪。logd 固定多线程，registry 固定单线程。
+function(oi_add_framework_programs runtime_dir)
+	if(NOT runtime_dir)
+		message(FATAL_ERROR "oi_add_framework_programs requires the runtime output directory from the top-level CMakeLists")
+	endif()
+	add_executable(logd
+		${BASE_LIB_PATH}/logd/src/main.cpp
+		${BASE_LIB_PATH}/logd/src/log_server.cpp
+		${BASE_LIB_PATH}/logd/src/log_server_session.cpp
+		${BASE_LIB_PATH}/logd/src/log_manager.cpp
+		${BASE_LIB_PATH}/logd/src/log_file_instance.cpp
+	)
+	target_include_directories(logd PRIVATE ${BASE_LIB_PATH}/logd/inc)
+	if(MSVC)
+		target_link_libraries(logd PUBLIC ${BASE_M_LIBS})
+	else()
+		target_link_libraries(logd PUBLIC -Wl,--start-group ${BASE_M_LIBS} -Wl,--end-group)
+		target_link_libraries(logd PUBLIC pthread)
+	endif()
+
+	add_executable(registry
+		${BASE_LIB_PATH}/registry/src/main.cpp
+		${BASE_LIB_PATH}/registry/src/registry_server.cpp
+	)
+	target_include_directories(registry PRIVATE ${BASE_LIB_PATH}/registry/src)
+	target_compile_definitions(registry PRIVATE _SINGLE_THREAD_)
+	if(MSVC)
+		target_link_libraries(registry PUBLIC ${BASE_LIBS})
+	else()
+		target_link_libraries(registry PUBLIC -Wl,--start-group ${BASE_LIBS} -Wl,--end-group)
+	endif()
+	set_target_properties(logd registry PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${runtime_dir}")
+endfunction()
 
 add_subdirectory("${BASE_LIB_PATH}/base" EXCLUDE_FROM_ALL)
 add_subdirectory("${BASE_LIB_PATH}/net" EXCLUDE_FROM_ALL)

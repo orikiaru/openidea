@@ -1,0 +1,65 @@
+// 框架自己的协议。协议号从 -1000 起，正数留给业务 rpc。
+// 只生成 rpcdata 和协议号，不生成进程模块。
+// 进程内工作通知和日志、注册表共用这一份，协议号就是消息类型。
+
+enum FrameworkProto {
+    WORK_PROTOCOL_COMPLETED = -1000;
+    PROTO_LOG_REMOTE = -1001;
+    PROTO_LOG_CLIENT_REGISTER = -1002;
+    PROTO_REDIS = -1003;
+    PROTO_REG_REGISTER = -1004;
+    PROTO_REG_HEARTBEAT = -1006;
+    PROTO_REG_PULL = -1008;
+}
+
+rpcdata WorkCompleted {
+    0 uint64_t iOperation;
+}
+
+rpcdata LogRecord {
+    0 int32_t iLevel;
+    1 string sText;
+}
+
+rpcdata LogAck {
+}
+
+rpcdata RegRegister {
+    0 string sName;
+    1 int32_t iId;
+    2 string sIp;
+    3 string sPort;
+    4 string sZone;
+}
+
+rpcdata RegRegisterRes {
+}
+
+rpcdata RegHeartbeat {
+    0 string sName;
+    1 int32_t iId;
+}
+
+rpcdata RegHeartbeatRes {
+}
+
+rpcdata RegInstance {
+    0 string sName;
+    1 int32_t iId;
+    2 string sIp;
+    3 string sPort;
+    4 string sZone;
+}
+
+rpcdata RegPull {
+    0 vector<string> vNames;
+}
+
+rpcdata RegPullRes {
+    0 vector<RegInstance> vList;
+}
+
+rpc LogRemote { id -1001; request LogRecord; response LogAck; }
+rpc RegRegisterRpc { id -1004; request RegRegister; response RegRegisterRes; }
+rpc RegHeartbeatRpc { id -1006; request RegHeartbeat; response RegHeartbeatRes; }
+rpc RegPullRpc { id -1008; request RegPull; response RegPullRes; }

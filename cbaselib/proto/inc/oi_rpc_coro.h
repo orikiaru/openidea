@@ -818,8 +818,8 @@ struct RouteAwaiter
 	std::string sTarget;
 	bool bBatch = false;
 	bool bResolved = false;
-	int32_t iCode = OI_ERR_CONNECT;                 // 注册表回包码。exchange(Ready) 之前写完。
-	std::vector<::OI::Base::ServiceInstance> vList; // 回包名单。和 iCode 一起在认领完成前写完。
+	int32_t iCode = OI_ERR_CONNECT;                 // 读缓存的结果。exchange(Ready) 之前写完。
+	std::vector<::OI::Base::ServiceInstance> vList; // 缓存里的名单。和 iCode 一起在认领完成前写完。
 	std::vector<std::string> vZoneNames;
 	ServiceRoute stRoute;
 	std::coroutine_handle<> stHandle{}; // 调用方句柄。门已经是 Waiting 才 Schedule。
@@ -846,8 +846,12 @@ struct RouteAwaiter
 			return false;
 		}
 		const int64_t iRemaining = stDeadline.Remaining().iMilliseconds;
-		Pull(iRemaining > 0 ? (std::min)(iRemaining, int64_t(1000)) : 1000);
-		// 看见 Ready 表示回包已经写完，不挂起。
+		// 注册表每秒拉一次，没拉到过的名字最多等两轮。
+		if (ReadCache(iRemaining > 0 ? (std::min)(iRemaining, int64_t(3000)) : 3000))
+		{
+			return false;
+		}
+		// 看见 Ready 表示名单已经写完，不挂起。
 		return iGate.exchange(OI::Coro::Gate::Waiting, std::memory_order_acq_rel) != OI::Coro::Gate::Ready;
 	}
 	ServiceRoute await_resume()
@@ -855,11 +859,6 @@ struct RouteAwaiter
 		if (stDeadline.Expired() || iCode == OI_ERR_TIMEOUT)
 		{
 			stRoute.iStatus = ServiceRouteStatus::Timeout;
-			return std::move(stRoute);
-		}
-		if (iCode == OI_ERR_BUSY)
-		{
-			stRoute.iStatus = ServiceRouteStatus::Busy;
 			return std::move(stRoute);
 		}
 		if (bResolved)
@@ -881,8 +880,10 @@ struct RouteAwaiter
 	// pManager 不带分区且自己就在看这个名字时，直接用它，不再另连。
 	bool PrepareNamed();
 	bool PrepareZones();
-	// 拉取不占线程。回包写进 iCode、vList 后过完成门。
-	void Pull(int64_t iTimeoutMilliseconds);
+	// 读 RegistryClient 的本地缓存，不发请求。命中返回 true；没拉到过就挂定时器复查，到点写 iCode、vList 后过完成门。
+	bool ReadCache(int64_t iTimeoutMilliseconds);
+	void Recheck(int64_t iDeadlineMilliseconds);
+	void Finish();
 	static bool ValidToken(const std::string& sText);
 };
 

@@ -152,7 +152,7 @@ struct BlockingAccessResult
 	sid_t iPeerOutput = INVALID_SID;
 	int32_t iReconnect = 0;
 	int32_t iRegistrySync = 0;
-	int32_t iRegistryAsync = 0;
+	int32_t iRegistryWatch = 0;
 	int32_t iRemoveTimer = 0;
 	int32_t iNotify = 0;
 	int32_t iRedis = 0;
@@ -204,12 +204,7 @@ static int32_t CheckBlockingAccess(BlockingAccessSession& stSession, BlockingAcc
 	stResult.iRedis = OI::Redis::RedisClient::GetInstance().CallSync({"PING"}).GetRet();
 	std::vector<OI::Base::ServiceInstance> vServices;
 	stResult.iRegistrySync = OI::Base::RegistryClient::GetInstance().PullSync("blocking-probe", vServices);
-	auto pRegistryCode = std::make_shared<std::atomic<int32_t>>(OI_OK);
-	OI::Base::RegistryClient::GetInstance().PullAsync("blocking-probe", [pRegistryCode](int32_t iCode, const std::vector<OI::Base::ServiceInstance>&)
-	{
-		pRegistryCode->store(iCode);
-	});
-	stResult.iRegistryAsync = pRegistryCode->load();
+	stResult.iRegistryWatch = OI::Base::RegistryClient::GetInstance().Watch(&stClient, "blocking-probe");
 	auto& stTimers = OI::Timer::BaseTimerManager::GetInstance();
 	stResult.iTimer = stTimers.AddTimer(&stNewTimer, 60000);
 	auto pClosure = std::make_shared<int>(1);
@@ -456,7 +451,7 @@ OI::Coro::TaskResult<int> BlockingMgr::CheckBlockingWork()
 	                       stAccessResult.iConnect == OI_ERR_WRONG_THREAD && stAccessResult.iServer == OI_ERR_WRONG_THREAD &&
 	                       stAccessResult.iOpenPeer == OI_ERR_WRONG_THREAD && stAccessResult.iPeerOutput == 12345 && stAccessResult.iReconnect == OI_ERR_WRONG_THREAD &&
 	                       stAccessResult.iClose == OI_ERR_WRONG_THREAD && stAccessResult.iCloseAll == OI_ERR_WRONG_THREAD &&
-	                       stAccessResult.iRegistrySync == OI_ERR_WRONG_THREAD && stAccessResult.iRegistryAsync == OI_ERR_WRONG_THREAD &&
+	                       stAccessResult.iRegistrySync == OI_ERR_WRONG_THREAD && stAccessResult.iRegistryWatch == OI_ERR_WRONG_THREAD &&
 	                       stAccessResult.iRemoveTimer == OI_ERR_WRONG_THREAD && stAccessResult.iRedis == OI_ERR_WRONG_THREAD && stAccessResult.iTimer == OI_ERR_WRONG_THREAD &&
 	                       stAccessResult.iClosureTimer == OI_ERR_WRONG_THREAD && stAccessResult.bClosureReleased && stAccessResult.iRemoved == OI_ERR_WRONG_THREAD && iTimerSetup == OI_OK;
 	if (stAccessResult.iTimer == OI_OK)

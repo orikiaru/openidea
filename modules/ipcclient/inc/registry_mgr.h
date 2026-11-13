@@ -8,7 +8,7 @@ class RegistryMgr
 	RegistryMgr() = default;
 	// 通过故障文件让 registry 暂停、恢复或收紧预算，并等它确认。
 	OI::Coro::TaskResult<bool> RegistryFaultHandshake(std::string sPath, std::string sCommand);
-	// 暂停制造忙和超时，恢复后回包仍配对。非法分区不改变结果条数。查询加上处理可以超过端到端预算。
+	// 暂停期间已缓存路由仍成功。未拉到过的名字超时，或在恢复后得到空名单。非法分区不改变结果条数。短暂停后未缓存名字等后台拉取。
 	OI::Coro::TaskResult<int> CheckRegistryBoundsAndBudget();
 	// 拉取和查找交错，地址和端口都要对上。
 	OI::Coro::TaskResult<int> RegistryLookups();
@@ -18,6 +18,6 @@ class RegistryMgr
   public:
 	// 8 路并发查 ipcserver，地址和端口都对上。
 	OI::Coro::TaskResult<int> RunPairing();
-	// 暂停 registry 制造忙和超时，恢复后回包仍配对。批量里夹非法分区时结果条数不变。查询加上处理可以超过端到端预算。
+	// 暂停期间已缓存路由仍成功。未拉到过的名字超时，或在恢复后得到空名单。非法分区不改变结果条数。短暂停后未缓存名字等后台拉取。
 	OI::Coro::TaskResult<int> RunBounds();
 };

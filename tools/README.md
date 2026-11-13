@@ -4,6 +4,8 @@
 
 远程 Linux 源码同步只用 `python tools/sync_linux_remote.py --role mt|st|all`（读 `.local/linux-hosts.json`），不要手写 tar/scp。单测：`python tools/test_sync_linux_remote.py`。
 
+只编译用 `python tools/build.py`（`--mode mt|st`，默认吃满逻辑核），不要手写 cmake。单测：`python tools/test_build.py`。
+
 下文为单项测试的补充说明，平台环境、完整用例清单和结果判定以统一规程为准。
 
 在 WSL 中执行，复用 `ipcclient` 的四个 Mgr。每个用例创建自己的临时配置和日志目录，退出时清理本次进程和目录。已有端口被占用时直接报错，不终止其他进程。日志超过 2GiB 立即失败，Redis 内存上限为 1536MiB。

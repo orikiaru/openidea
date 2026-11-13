@@ -20,14 +20,14 @@
 | 数据库 | [数据库](database.md) | 连接池、参数绑定与事务 |
 | HTTP 客户端 | [HTTP](cbaselib/http.md) | [`Client::Get`](../cbaselib/http/inc/oi_http.h#L80) |
 | 时间 | [时间](cbaselib/time.md) | [`AddTimer`](../cbaselib/timer/inc/oi_timer_manager.h#L95) |
-| 服务名 | [服务注册](cbaselib/registry.md) | [`Lookup`](../cbaselib/base/inc/oi_registry.h#L109) |
+| 服务名 | [服务注册](cbaselib/registry.md) | [`Lookup`](../cbaselib/base/inc/oi_registry.h#L115) |
 | 锁 | [锁](cbaselib/lock.md) | [`Mutex`](../cbaselib/base/inc/oi_lock.h#L120) |
 
 ## 目录
 
 `base` 是进程里的公共件。`Bytes` 是二进制缓冲，`BytesStream` 做序列化，线上整数和浮点统一小端，不看主机字节序。`Config` 读 toml。`ThreadPool` 只有一条协程句柄队列：多线程工人只 `resume` 协程，单线程由 `PumpOnce` 推进协程和 IO。协程任务、`WhenAll`、`yield` 在 `OI::Coro`（`oi_coro.h`），RPC、Redis、HTTP 复用它，不把协程运行时放在协议头里。应用层写协程。`DECLARE_SINGLETON(T)` 提供 `T::GetInstance()`，返回唯一实例的引用，不进入继承链。`FilePath` 检查路径在不在，并补齐中间目录。锁在 `oi_lock.h`，自有代码用 `OI::Thread::Mutex`、`MutexGuard`、`SpinLock`、`SpinLockGuard`、`MutexCond`。`MutexCond::WaitUntil(Mutex&, steady_clock::time_point)` 到截止时间返回 false，不带条件参数，等待要自己写 while 循环。单线程编译下这些加锁和等待都是空实现，`WaitUntil` 直接返回 false。
 
-`net` 是网络，类型在 `OI::Net`。`Poll` 包 libuv 的事件循环。文件读写改走 Linux io_uring、Windows IOCP 已排期，套接字和文件共用这条完成队列，见 [异步 IO](async-io.md)，现在还没改。`NetSocket`、`AcceptChannel`、`ConnectChannel`、`TcpChannel` 负责监听、连接和收发。`Session` 和 `SessionManager` 管一类连接，组件配置里的 ip、port、type 从这里读。ip 可以是 IPv4、IPv6 或域名。监听只认字面地址。客户端连接域名时在 poll 线程解析，有 IPv4 用 IPv4，否则用 IPv6。`SendBytes` 只在查会话表时持管理器锁，拷贝数据在锁外、持会话锁做；会话带引用计数，通道销毁时先断开会话到通道的指针再释放引用。创建套接字、绑定地址和启动监听失败分别返回 `OI_ERR_SOCKET`、`OI_ERR_BIND`、`OI_ERR_LISTEN`，原始系统原因保留在日志。监听口在 `bind` 之前打开 `SO_REUSEADDR`。进程退出后旧连接还会在 `TIME_WAIT` 里待一会儿，但不再挡住下一次监听。客户端连出去不走 `bind`。按服务名发现地址在 [服务注册](registry.md)。表由 `registry` 进程管，存在 Redis，应用只连 registry。配置里写了 `<名字>.service` 时，`SessionManager::Init` 先向 registry 查，查不到再用同一段的 ip/port。监听方在 `StartServer` 成功后登记并定时报告在线。空间按 registry 的 `[Registry] project/env` 分开。
+`net` 是网络，类型在 `OI::Net`。`Poll` 包 libuv 的事件循环。文件读写改走 Linux io_uring、Windows IOCP 已排期，套接字和文件共用这条完成队列，见 [异步 IO](async-io.md)，现在还没改。`NetSocket`、`AcceptChannel`、`ConnectChannel`、`TcpChannel` 负责监听、连接和收发。`Session` 和 `SessionManager` 管一类连接，组件配置里的 ip、port、type 从这里读。ip 可以是 IPv4、IPv6 或域名。监听只认字面地址。客户端连接域名时在 poll 线程解析，有 IPv4 用 IPv4，否则用 IPv6。`SendBytes` 只在查会话表时持管理器锁，拷贝数据在锁外、持会话锁做；会话带引用计数，通道销毁时先断开会话到通道的指针再释放引用。创建套接字、绑定地址和启动监听失败分别返回 `OI_ERR_SOCKET`、`OI_ERR_BIND`、`OI_ERR_LISTEN`，原始系统原因保留在日志。监听口在 `bind` 之前打开 `SO_REUSEADDR`。进程退出后旧连接还会在 `TIME_WAIT` 里待一会儿，但不再挡住下一次监听。客户端连出去不走 `bind`。按服务名发现地址在 [服务注册](registry.md)。表由 `registry` 进程管，存在 Redis，应用只连 registry。配置里写了 `<名字>.service` 时，`SessionManager::Init` 先向 registry 查，查不到再用同一段的 ip/port。监听方在 `StartServer` 成功后登记，在线心跳由 `RegistryClient` 的单例秒更新 `OnSecondUpdate` 报告。空间按 registry 的 `[Registry] project/env` 分开。
 
 `type = "udp"` 的组件是 `UDP_Channel`：`StartServer` 绑一个口，按对端地址各开一条会话，会话从 `CloneSession` 克隆，业务照常走 `Session` 和 RPC，不碰裸包。端口填 `"0"` 由系统分配，`LocalPort()` 取实际端口。没有 `StartClient`；主动发用 `OpenPeer(ip, port, sid)` 输出会话号，成功返回 `OI_OK`，失败保留原输出，同一地址重复打开返回同一条，地址只认字面 IPv4/IPv6。`GetPeerAddr(sid, addr)` 取对端地址。每次 `Send` 立即发成一个数据报，一个数据报必须装下整帧。数据报超过 IPv4 的 65507 字节或 IPv6 的 65527 字节时返回 `OI_ERR_INVALID_ARGUMENT`；本地 `sendto` 失败返回 `OI_ERR_FAIL`。这两种都把该数据报从队列丢掉，不自动重发，也不调用 `OnBytesSend`；只有 `sendto` 接受整包才扣发送额度并刷新活跃时间。成功只表示本地套接字已接受数据报；收到的数据报按整帧解析，坏包只丢这一个，不断会话、不起残包计时。`idle_timeout_ms` 默认 60000，期间没收没发就关会话并走 `OnDelSession`，之后再来包或再 `OpenPeer` 会建新会话。UDP 绑定不开 `SO_REUSEADDR`，两个进程抢不到同一个口；Windows 关掉了 ICMP 端口不可达导致的 `WSAECONNRESET`。UDP 口不向 registry 登记。
 
@@ -35,7 +35,7 @@
 
 `timer` 是分层时间轮，类型在 `OI::Timer`，见 [定时器](timer.md)。应用层时长是 `MS`，由 `Milliseconds`、`Seconds`、`Minutes`、`Hours`、`Days` 构造。
 
-`logger` 是日志客户端，类型在 `OI::Log`。业务进程用它把日志发到 `logd`。`logd` 自己的服务端在 `modules/logd`。`SendLog` 在日志服还没连上时先攒着，待发超过 4MB 就返回 `OI_ERR_BUSY`，调用方自己决定要不要再试。
+`logger` 是日志客户端，类型在 `OI::Log`。业务进程用它把日志发到 `logd`。`logd` 自己的服务端在 `cbaselib/logd`。`SendLog` 在日志服还没连上时先攒着，待发超过 4MB 就返回 `OI_ERR_BUSY`，调用方自己决定要不要再试。
 
 logd 的 `[Log] max_pending_bytes` 默认 64MiB，所有日志级别共享，包含排队和正在写入、尚未 fflush 的批次及时间前缀。满时保留完整输入帧并暂停该连接读取，写线程完成后通过 poll 恢复；连接关闭后仍排空已读取的完整帧。进程正常退出先排空等待会话，再 join 写线程。本地日志返回 `OI_ERR_BUSY` 表示当前不能接纳，仍已按原规则输出到 stdout；不能在 poll 中阻塞等待磁盘。此限额不含接收缓冲、内核缓冲及分配器开销，不是 RSS 上限。
 
@@ -137,13 +137,13 @@ Redis 超时扫描直接运行在 poll 的 200ms 周期计时器上，工人上�
 
 连接已关闭或容量不足时 `SendBytes` 分别返回 `OI_ERR_CONNECT` 或 `OI_ERR_BUSY`，不追加半条消息。客户端 RPC 按发送失败结束等待；日志调用方可让出后重试，框架不自动重放写请求。服务端 RPC、Redis 和注册服务若无法排入回复，会关闭该连接，避免无声丢回复或 RESP 配对错位。会话关闭状态通过原子变量发布，缓冲仍由框架 Mutex 保护，单线程下该锁为空操作。
 
-`CallRedisSync`、`RegistryClient::Lookup`、`PullSync`、`Publish` 不能在 poll 回调（含定时器回调）里调，适合在启动阶段调用。Redis 运行期用 `co_await` 版本。`Lookup`、`PullSync`、`Publish` 在 poll 回调里且需要真正等待（已配置 `[Registry]`）时会抛 `logic_error`，协程里用 `PullAsync`。`CallRedisSync` 在 poll 回调里两种线程模式都抛 `logic_error`。在协程里直接调这些同步接口：多线程会占住一个工人；单线程的 `CallRedisSync` 先扫一次超时，再在当前协程里转 `PumpOnce`，等待期间会跑其他协程和 IO。注册表这几个在单线程里只转 `PollWait(1)`，不跑协程队列。只建议测试或特殊场景使用。
+`CallRedisSync`、`RegistryClient::Lookup`、`PullSync`、`Publish` 不能在 poll 回调（含定时器回调）里调，适合在启动阶段调用。Redis 运行期用 `co_await` 版本。`Lookup`、`PullSync`、`Publish` 在 poll 回调里且需要真正等待（已配置 `[Registry]`）时会抛 `logic_error`。运行期选路读 `Snapshot` 的本地缓存。登记、心跳和整量拉取由 `RegistryClient` 的单例秒更新 `OnSecondUpdate` 协程做：每秒一次，上一次没结束就跳过；`Snapshot` 未命中不立刻拉取，由下一次秒更新拉。路由缓存未命中最多再等 min(剩余预算, 3000ms)。`CallRedisSync` 在 poll 回调里两种线程模式都抛 `logic_error`。在协程里直接调这些同步接口：多线程会占住一个工人；单线程的 `CallRedisSync` 先扫一次超时，再在当前协程里转 `PumpOnce`，等待期间会跑其他协程和 IO。注册表这几个在单线程里只转 `PollWait(1)`，不跑协程队列。只建议测试或特殊场景使用。
 
 HTTP 客户端忽略临时 1xx 响应并继续读最终响应（最多 16 个，101 升级不支持）；204/304 在头部完成后结束，不等待 EOF。长度字段必须是完整十进制数；冲突 Content-Length、同时出现 Transfer-Encoding 和 Content-Length、未支持的传输编码、损坏的 chunk 长度及数据分隔符均按协议失败处理。chunked 支持扩展和 trailer。
 
 客户端建连和服务地址切换统一在 poll 线程执行。`StartClient()` 调用即发起非阻塞连接，返回可等待对象；忽略对象为异步启动，`co_await StartClient()` 等结果（成功为 `OI_OK`，失败、地址切换或停止入口时返回对应错误码）。没有同步布尔开关。已有连接时成功，建连中的并发调用共享同一代连接；旧代次迟到的成功或失败不能改变当前状态。等待不占线程，管理器须覆盖网络操作生命周期。
 
-Redis 入队、发送、解析和断连处理都在 poll 线程，等待项与实际发送使用同一个 sid；收包必须携带 sid，旧会话的数据直接丢弃。新连接会先结束旧等待再重建解析器。注册发现的 FIFO 请求入队和发送共用框架锁，发送失败/异常在锁内回滚，旧会话的回复和断连回调不影响新连接。
+Redis 入队、发送、解析和断连处理都在 poll 线程，等待项与实际发送使用同一个 sid；收包必须携带 sid，旧会话的数据直接丢弃。新连接会先结束旧等待再重建解析器。注册发现走标准 RPC，调用号和会话号共同匹配回包；发送失败、超时和断连独立完成对应调用，不因单条超时重置连接。
 
 二进制 bool 字段只接受字节 0 和 1，其他值抛 ParserException，保留输出值及读取位置；普通流和字段格式都做相同校验。HTTP 在完成、失败或超时时先释放请求和原始响应缓冲容量，再唤醒调用方；晚到的超时仅持有轻量状态，不保留大包。
 

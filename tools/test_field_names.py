@@ -304,7 +304,7 @@ class ModuleGeneratorTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             output = Path(temp) / "generated"
             command = [sys.executable, str(root / "cbaselib/proto/proto_tool/main.py"),
-                       "--data-only", str(root / "cbaselib/net/protocol/work.proto"), str(output)]
+                       "--data-only", str(root / "cbaselib/proto/protocol/framework.proto"), str(output)]
             result = subprocess.run(command, cwd=root, capture_output=True, text=True, errors="replace")
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             generated = output / "oi_rpcdata_workcompleted.h"

@@ -1,6 +1,6 @@
 #include "redis_mgr.h"
 #include "oi_redis_cmd.h"
-#include "oi_rpcdata_reginstance.h"
+#include "framework_protocol/oi_rpcdata_reginstance.h"
 #include "oi_log.h"
 #include "oi_poll.h"
 #include "oi_config.h"

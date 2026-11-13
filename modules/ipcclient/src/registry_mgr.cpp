@@ -72,161 +72,148 @@ OI::Coro::TaskResult<int> RegistryMgr::CheckRegistryBoundsAndBudget()
 	}
 	int iBad = 0;
 	auto& stRegistry = OI::Base::RegistryClient::GetInstance();
-	const auto stBefore = stRegistry.GetPullStats();
 	if (!(co_await RegistryFaultHandshake(sFaultPath, "pause")))
 	{
 		co_return 1;
 	}
-	int iBusy = 0, iTimeout = 0;
-	static ZoneService stManyProbe("gameserver");
-	OI::RpcData::HoldReq stManyRequest;
+	// 暂停期间，已在缓存里的 gameserver 不访问注册表。
+	int iPauseCachedBad = 0;
+	static ZoneService stGames("gameserver");
+	OI::RpcData::HoldReq stRequest;
+	stRequest.iMark = 831;
 	const std::vector<int32_t> vManyZones{1001, 1002, 1001};
-	const auto vTimedOut = co_await stManyProbe.CallMany<OI::RpcData::HoldRes>(vManyZones, stManyRequest, OI::Timer::Milliseconds(100));
-	int iManyBad = vTimedOut.size() == vManyZones.size() ? 0 : 1;
-	for (const auto& stResult : vTimedOut)
+	const auto vMany = co_await stGames.CallMany<OI::RpcData::HoldRes>(vManyZones, stRequest, OI::Timer::Seconds(3));
+	int iManyOk = 0;
+	const int iManyCount = static_cast<int>(vMany.size());
+	if (iManyCount == static_cast<int>(vManyZones.size()))
 	{
-		iManyBad += stResult.GetRet() != OI_ERR_TIMEOUT;
-	}
-	struct PullProbe
-	{
-		std::atomic<int> iCompleted{0};
-		std::atomic<int> iDuplicates{0};
-		std::atomic<int> iBusy{0};
-		std::atomic<int> iTimeout{0};
-		std::atomic<int> iUnexpected{0};
-	};
-	std::vector<std::shared_ptr<PullProbe>> vProbes;
-	for (int iRound = 0; iRound < 3; ++iRound)
-	{
-		auto pProbe = std::make_shared<PullProbe>();
-		vProbes.push_back(pProbe);
-		for (int iIndex = 0; iIndex < 64; ++iIndex)
+		for (const auto& stResult : vMany)
 		{
-			auto pSeen = std::make_shared<std::atomic<bool>>(false);
-			stRegistry.PullAsync("missing_timeout_" + std::to_string(iIndex), [pProbe, pSeen](int32_t iCode, const std::vector<OI::Base::ServiceInstance>&)
+			if (stResult.GetRet() == OI_OK)
 			{
-				if (pSeen->exchange(true))
-				{
-					++pProbe->iDuplicates;
-					return;
-				}
-				if (iCode == OI_ERR_BUSY)
-				{
-					++pProbe->iBusy;
-				}
-				else if (iCode == OI_ERR_TIMEOUT)
-				{
-					++pProbe->iTimeout;
-				}
-				else if (iCode != OI_ERR_CONNECT)
-				{
-					++pProbe->iUnexpected;
-				}
-				++pProbe->iCompleted;
-			}, 200);
-			const auto stStats = stRegistry.GetPullStats();
-			if (stStats.iLiveCount > static_cast<size_t>(stStats.iMaxPendingPulls) ||
-			    stStats.iLiveCount != stStats.iSentCount + stStats.iDeferredCount)
-			{
-				++iBad;
+				++iManyOk;
 			}
 		}
-		if (iRound == 0)
-		{
-			const auto vBusy = co_await stManyProbe.CallMany<OI::RpcData::HoldRes>(vManyZones, stManyRequest, OI::Timer::Seconds(3));
-			iManyBad += vBusy.size() != vManyZones.size();
-			for (const auto& stResult : vBusy)
-			{
-				iManyBad += stResult.GetRet() != OI_ERR_BUSY;
-			}
-		}
-		const int64_t iDeadlineMilliseconds = OI::Timer::SteadyMilliseconds() + 3000;
-		while (pProbe->iCompleted.load() < 64 && OI::Timer::SteadyMilliseconds() < iDeadlineMilliseconds)
-		{
-			co_await OI::Coro::yield(10);
-		}
-		co_await OI::Coro::yield(100);
-		if (pProbe->iCompleted.load() != 64 || pProbe->iDuplicates.load() != 0 || pProbe->iUnexpected.load() != 0 ||
-		    stRegistry.GetPendingPullCount() != 0)
-		{
-			++iBad;
-		}
-		iBusy += pProbe->iBusy.load();
-		iTimeout += pProbe->iTimeout.load();
 	}
-	if (iBusy == 0 || iTimeout == 0 || stRegistry.GetPullStats().iResetCount <= stBefore.iResetCount)
+	if (iManyOk != static_cast<int>(vManyZones.size()))
 	{
-		++iBad;
+		++iPauseCachedBad;
 	}
+	OI::RpcData::HoldRes stOutput;
+	stOutput.iMark = -831;
+	const int32_t iCallCode = co_await stGames.Call(1001, stRequest, stOutput, OI::Timer::Seconds(3));
+	if (iCallCode != OI_OK || stOutput.iMark != 831)
+	{
+		++iPauseCachedBad;
+	}
+	LOG_TRACE("hold registry pause cached many=%d/%d call=%d mark=%d bad=%d",
+	    iManyOk, iManyCount, iCallCode, stOutput.iMark, iPauseCachedBad);
+	fflush(stdout);
+	iBad += iPauseCachedBad;
+	// 从没拉到过的名字：缓存未命中，短预算超时，输出保持原值。
+	int iPauseMissingBad = 0;
+	std::vector<OI::Base::ServiceInstance> vMissing;
+	const bool bMissingKnown = stRegistry.Snapshot("missing_paused", vMissing);
+	if (bMissingKnown)
+	{
+		++iPauseMissingBad;
+	}
+	OI::RpcData::HoldReq stMissingRequest;
+	OI::RpcData::HoldRes stMissingOutput;
+	stMissingOutput.iMark = -731;
+	const int64_t iMissingStartMilliseconds = OI::Timer::SteadyMilliseconds();
+	const int32_t iMissingCode = co_await OI::Rpc::RpcCall(std::string("missing_paused.1"), stMissingRequest, stMissingOutput, OI::Timer::Milliseconds(300));
+	const long long iMissingElapsedMilliseconds = OI::Timer::SteadyMilliseconds() - iMissingStartMilliseconds;
+	if (iMissingCode != OI_ERR_TIMEOUT || iMissingElapsedMilliseconds >= 450 || stMissingOutput.iMark != -731)
+	{
+		++iPauseMissingBad;
+	}
+	LOG_TRACE("hold registry pause missing snapshot=%d code=%d elapsed_ms=%lld mark=%d bad=%d",
+	    bMissingKnown ? 1 : 0, iMissingCode, iMissingElapsedMilliseconds, stMissingOutput.iMark, iPauseMissingBad);
+	fflush(stdout);
+	iBad += iPauseMissingBad;
 	if (!(co_await RegistryFaultHandshake(sFaultPath, "resume")))
 	{
 		co_return iBad + 1;
 	}
-	// 让后台订阅拉取完成，再用真实已知分区验证恢复后回包配对。
-	co_await OI::Coro::yield(1200);
-	static ZoneService stGames("gameserver");
-	OI::RpcData::HoldReq stRequest;
-	stRequest.iMark = 831;
-	OI::RpcData::HoldRes stOutput;
-	if (co_await stGames.Call(1001, stRequest, stOutput, OI::Timer::Seconds(3)) != 0 || stOutput.iMark != 831)
+	// 恢复后后台拉取写入空名单。空名单在 Resolve 里记 Offline，RouteError 默认返回 OI_ERR_CONNECT。
+	int iResumeBad = 0;
+	bool bResumedKnown = false;
+	std::vector<OI::Base::ServiceInstance> vResumed;
+	const int64_t iResumeDeadlineMilliseconds = OI::Timer::SteadyMilliseconds() + 3500;
+	while (OI::Timer::SteadyMilliseconds() < iResumeDeadlineMilliseconds)
 	{
-		++iBad;
-	}
-	for (const auto& pProbe : vProbes)
-	{
-		if (pProbe->iCompleted.load() != 64 || pProbe->iDuplicates.load() != 0 || pProbe->iUnexpected.load() != 0)
+		bResumedKnown = stRegistry.Snapshot("missing_paused", vResumed);
+		if (bResumedKnown)
 		{
-			++iBad;
+			break;
 		}
+		co_await OI::Coro::yield(10);
 	}
-	const auto vInvalid = co_await stManyProbe.CallMany<OI::RpcData::HoldRes>({1001, -1, 1002}, stManyRequest, OI::Timer::Seconds(3));
-	iManyBad += vInvalid.size() != 3;
+	const bool bResumedEmpty = bResumedKnown && vResumed.empty();
+	if (!bResumedKnown || !bResumedEmpty)
+	{
+		++iResumeBad;
+	}
+	stMissingOutput.iMark = -732;
+	const int32_t iOfflineCode = co_await OI::Rpc::RpcCall(std::string("missing_paused.1"), stMissingRequest, stMissingOutput, OI::Timer::Milliseconds(1000));
+	if (iOfflineCode != OI_ERR_CONNECT)
+	{
+		++iResumeBad;
+	}
+	LOG_TRACE("hold registry resume missing snapshot=%d empty=%d code=%d bad=%d",
+	    bResumedKnown ? 1 : 0, bResumedEmpty ? 1 : 0, iOfflineCode, iResumeBad);
+	fflush(stdout);
+	iBad += iResumeBad;
+	// 批量里夹非法分区，结果条数不变，每条失败。
+	int iSlotsBad = 0;
+	const auto vInvalid = co_await stGames.CallMany<OI::RpcData::HoldRes>({1001, -1, 1002}, stRequest, OI::Timer::Seconds(3));
+	if (vInvalid.size() != 3)
+	{
+		++iSlotsBad;
+	}
 	for (const auto& stResult : vInvalid)
 	{
-		iManyBad += stResult.GetRet() != OI_ERR_FAIL;
+		if (stResult.GetRet() != OI_ERR_FAIL)
+		{
+			++iSlotsBad;
+		}
 	}
-	iBad += iManyBad;
-	LOG_TRACE("hold batch failure slots bad=%d", iManyBad);
-	LOG_TRACE("hold registry bounded recovery busy=%d timeout=%d bad=%d", iBusy, iTimeout, iBad);
+	LOG_TRACE("hold batch failure slots bad=%d", iSlotsBad);
 	fflush(stdout);
+	iBad += iSlotsBad;
 	if (!(co_await RegistryFaultHandshake(sFaultPath, "budget")))
 	{
 		co_return iBad + 1;
 	}
-	// runner 在确认暂停后600ms恢复；查询+900ms服务处理超过1000ms总预算。
-	stRequest.iDelayMilliseconds = 900;
-	stOutput.iMark = -831;
-	OI::RpcData::HoldRes stStringOutput;
-	stStringOutput.iMark = -831;
+	// 注册表短暂停后再恢复。未缓存名字等后台拉取；已缓存调用按自己的预算完成。
+	int iBudgetBad = 0;
+	OI::RpcData::HoldReq stBudgetRequest;
+	stBudgetRequest.iDelayMilliseconds = 900;
+	stBudgetRequest.iMark = 841;
+	OI::RpcData::HoldRes stBudgetOutput;
+	stBudgetOutput.iMark = -841;
+	OI::RpcData::HoldReq stBudgetMissingRequest;
+	OI::RpcData::HoldRes stBudgetMissingOutput;
+	stBudgetMissingOutput.iMark = -842;
 	const int64_t iBudgetStartMilliseconds = OI::Timer::SteadyMilliseconds();
-	auto stNamed = stGames.Call(1001, stRequest, stOutput, OI::Timer::Milliseconds(1000));
-	auto stString = OI::Rpc::RpcCall(std::string("gameserver.1002"), stRequest, stStringOutput, OI::Timer::Milliseconds(1000));
-	auto stValue = stGames.Call<OI::RpcData::HoldRes>(1001, stRequest, OI::Timer::Milliseconds(1000));
-	auto stBatch = stGames.CallAll<OI::RpcData::HoldRes>(stRequest, OI::Timer::Milliseconds(1000));
-	const auto iNamedCode = co_await stNamed;
-	const auto iStringCode = co_await stString;
-	const auto stValueResult = co_await stValue;
-	const auto vBatchResults = co_await stBatch;
+	auto stCachedCall = stGames.Call(1001, stBudgetRequest, stBudgetOutput, OI::Timer::Milliseconds(1000));
+	auto stMissingCall = OI::Rpc::RpcCall(std::string("missing_budget.1"), stBudgetMissingRequest, stBudgetMissingOutput, OI::Timer::Milliseconds(2500));
+	const int32_t iBudgetMissingCode = co_await stMissingCall;
 	const long long iBudgetElapsedMilliseconds = OI::Timer::SteadyMilliseconds() - iBudgetStartMilliseconds;
-	if (iNamedCode != OI_ERR_TIMEOUT || iStringCode != OI_ERR_TIMEOUT || stValueResult.GetRet() != OI_ERR_TIMEOUT ||
-	    stOutput.iMark != -831 || stStringOutput.iMark != -831 || vBatchResults.size() != 2 || iBudgetElapsedMilliseconds >= 1450)
+	const int32_t iBudgetCachedCode = co_await stCachedCall;
+	if (iBudgetMissingCode != OI_ERR_CONNECT || iBudgetElapsedMilliseconds < 500 || iBudgetElapsedMilliseconds >= 2450)
 	{
-		++iBad;
+		++iBudgetBad;
 	}
-	for (const auto& stResult : vBatchResults)
+	if (iBudgetCachedCode != OI_OK || stBudgetOutput.iMark != 841)
 	{
-		if (stResult.GetRet() != OI_ERR_TIMEOUT)
-		{
-			++iBad;
-		}
+		++iBudgetBad;
 	}
-	co_await OI::Coro::yield(1000);
-	if (stOutput.iMark != -831 || stStringOutput.iMark != -831)
-	{
-		++iBad;
-	}
-	LOG_TRACE("hold named rpc end to end budget elapsed_ms=%lld bad=%d", iBudgetElapsedMilliseconds, iBad);
+	LOG_TRACE("hold registry budget miss code=%d elapsed_ms=%lld cached=%d mark=%d bad=%d",
+	    iBudgetMissingCode, iBudgetElapsedMilliseconds, iBudgetCachedCode, stBudgetOutput.iMark, iBudgetBad);
 	fflush(stdout);
+	iBad += iBudgetBad;
 	co_return iBad;
 }
 
@@ -235,8 +222,9 @@ OI::Coro::TaskResult<int> RegistryMgr::RegistryLookups()
 	int iBad = 0;
 	for (int iRound = 0; iRound < 8; ++iRound)
 	{
-		// 周期拉取与同步查询交错，队列顺序必须和线上顺序一致。
-		OI::Base::RegistryClient::GetInstance().Pull();
+		// 读缓存会催一次后台拉取，和同步查询交错，回包按调用号配对。
+		std::vector<OI::Base::ServiceInstance> vCached;
+		OI::Base::RegistryClient::GetInstance().Snapshot("ipcserver_pairing_" + std::to_string(iRound), vCached);
 		std::string sIp, sPort;
 		if (OI::Base::RegistryClient::GetInstance().Lookup("ipcserver", sIp, sPort) != OI_OK || sIp != "127.0.0.1" || sPort != HoldTest::IpcServerPort())
 		{
@@ -269,7 +257,7 @@ OI::Coro::TaskResult<int> RegistryMgr::RunPairing()
 	co_return co_await CheckRegistryPairing();
 }
 
-// 暂停 registry 制造忙和超时，恢复后回包仍配对。批量里夹非法分区时结果条数不变。查询加上处理可以超过端到端预算。
+// 暂停期间已缓存路由仍成功。未拉到过的名字超时，或在恢复后得到空名单。非法分区不改变结果条数。短暂停后未缓存名字等后台拉取。
 OI::Coro::TaskResult<int> RegistryMgr::RunBounds()
 {
 	co_return co_await CheckRegistryBoundsAndBudget();

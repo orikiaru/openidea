@@ -1,8 +1,5 @@
 // 一个 module 是一个进程。目录名是模块名的小写。
-
-// LogD 是日志服。
-module LogD {
-}
+// logd 和 registry 在框架里，不在这里声明。
 
 module IpcClient {
 }
@@ -19,7 +16,4 @@ module WebServer {
 }
 
 module WebClient {
-}
-
-module Registry {
 }

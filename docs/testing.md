@@ -21,7 +21,9 @@
 
 正常 Hold 的二进制容器检查覆盖空和非空容器、嵌套容器与 rpcdata、连续流式对象、后续字段、固定黄金字节，以及畸形数量、截断、尾随字节和重复 key 拒绝并保持输出；同时检查数据库 blob 的格式和严格解码。脚本要求 `hold binary container bad=0`。
 
-路由与请求生命周期回归也集成在正常 Hold 中：容量策略隔离与真实大包收发、持有租约时不回收/释放后连接状态销毁及重新获取、注册查询限流和超时清空后的恢复、查询与回包共用端到端预算，以及保留已完成任务时请求资源仍被销毁。路由管理器固定为常驻单例，测试同时断言不同策略的连接共用管理器。脚本只在临时配置缩短池空闲时限、降低查询容量；通过暂停本次启动的 registry 进程制造有连接无回包和慢查询，finally 中恢复暂停状态再清理。应用请求仍从 ipcclient 发出，不新增测试客户端。
+路由与请求生命周期回归也集成在正常 Hold 中：容量策略隔离与真实大包收发、持有租约时不回收/释放后连接状态销毁及重新获取、暂停期间已缓存路由仍可用、未缓存名字超时或在恢复后得到空名单、短暂停后未缓存名字等后台拉取，以及保留已完成任务时请求资源仍被销毁。路由管理器固定为常驻单例，测试同时断言不同策略的连接共用管理器。脚本只在临时配置缩短池空闲时限，并把 `pull_ms` 拉长，避免周期拉取打断用例；通过暂停本次启动的 registry 进程覆盖上述缓存语义，finally 中恢复暂停状态再清理。应用请求仍从 ipcclient 发出，不新增测试客户端。
+
+暂停期间已缓存路由要求 `hold registry pause cached many=3/3 call=0 mark=831 bad=0`。未缓存名字要求 `hold registry pause missing snapshot=0 code=-2 elapsed_ms=` 小于 450 且 `mark=-731 bad=0`。恢复后空名单要求 `hold registry resume missing snapshot=1 empty=1 code=-3 bad=0`（`OI_ERR_CONNECT`）。短暂停预算要求 `hold registry budget miss code=-3 elapsed_ms=` 落在 [500, 2450) 且 `cached=0 mark=841 bad=0`。
 
 `[Test] hold` 仍是一个开关、一次进程。`HoldMgr::Pump` 按固定顺序调用各主题 mgr，日志标记不变，不另开用例。代码在 `modules/ipcclient`：`TimerMgr`、`NestedResultMgr`、`TaskStartMgr`、`TaskShareMgr`、`BlockingMgr`、`ScheduleMgr`、`ConnectMgr`、`AddressMgr`、`IsolationMgr`、`BackpressureMgr`、`RpcOutputMgr`、`RpcAwaitMgr`、`RpcAdmissionMgr`、`RpcPendingMgr`、`RpcServiceMgr`、`RouteMgr`、`RegistryMgr`、`JsonMgr`、`BinaryMgr`、`EncodeMgr`、`HttpMgr`、`BudgetMgr`。超时、回包撞车和 Redis 迟到回包留在 `HoldMgr`。
 
@@ -45,7 +47,18 @@ python tools/parallel_matrix.py --windows-redis-binary C:/tools/redis/redis-serv
 
 Windows 侧测试 Redis 用 Windows 原生 `redis-server.exe`（[redis-windows](https://github.com/redis-windows/redis-windows/releases) 的 msys2 便携包，解压即用，不装服务），`--platform both` 用 `--windows-redis-binary` 指定，直接跑 `run_regressions.py` 时用 `--redis-binary`。不要再用 `--redis-wsl`：WSL 的 localhost 转发和 NAT 内网地址在大块双向流量下都会卡死（纯 Python 收发也复现，64MB 下行只收到 3.6MB 就停住），Redis 回压、hold、registry 会假失败。怀疑链路时先用不经被测代码的探针：`tools/diag/redis_link_probe.py --native <exe>` 或 `--wsl [--host <WSL 地址>]` 测大块 ECHO 和 BLPOP 后 PING；`tools/diag/tcp_bulk.py` 测纯 TCP 下行、上行、双向各 64MiB，输出 `STALL` 即链路问题。Redis 为脚本独立启动的临时实例，内存上限 1536MiB、关闭持久化，绝不借用现有数据库。
 
-## 3. 推荐的一键矩阵
+## 3. 只编译
+
+不要手写 `cmake`。并行度默认是本机逻辑核数。
+
+```powershell
+python tools/build.py
+python tools/build.py --mode st
+```
+
+Windows 用 `build-win`、Visual Studio 17 2022、x64、Release。Linux 用 `$HOME/openidea-build-gcc13`、gcc-13。`--mode st` 只把 ipcclient/ipcserver 编成单线程，不会自动编回多线程。产物仍由最外层 `CMakeLists.txt` 放到 `deploy/bin`。
+
+## 3.1 推荐的一键矩阵
 
 ### Windows 原生 Redis 下载
 

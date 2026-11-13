@@ -3,18 +3,20 @@
 #include "oi_session_manager.h"
 #include "oi_singleton.h"
 #include <atomic>
-#include <condition_variable>
 #include <cstdint>
-#include <deque>
 #include <functional>
 #include <map>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <vector>
 
 namespace OI
 {
+namespace Rpc
+{
+template <typename T>
+struct RpcProtoId;
+}
 namespace Base
 {
 
@@ -36,11 +38,6 @@ struct ServiceInstance
 	}
 };
 
-// registry 和客户端之间的帧：PB 头里是协议号和包体长度。
-::OI::Base::Bytes EncodeRegFrame(uint32_t iId, const ::OI::Rpc::Serialize& stMessage);
-// 把 in 里完整的帧逐个交给 on_frame，剩下的半帧留在 in。坏帧关掉会话，返回 false。
-bool ReadRegFrames(::OI::Base::Bytes& stInput, ::OI::Net::Session* pSession, const std::function<void(uint32_t, ::OI::Base::BytesStream&)>& fnOnFrame);
-
 // 本进程关心的服务。一个名字下面可能有多份实例，选 id 最小的固定走，它下线了再换。
 class ServiceTable
 {
@@ -55,10 +52,14 @@ class ServiceTable
 	int32_t WatchList(::OI::Net::SessionManager* pManager, const std::string& sName, const std::vector<ServiceInstance>& vInitial);
 	// 当前关心这个名字的管理器。只含跟着单台切换的，不含收整份名单的。
 	std::vector<::OI::Net::SessionManager*> Watchers(const std::string& sName);
-	// 正在关心的服务名。
+	// 周期拉取要带上的服务名：有观察者的，或者查过缓存的。
 	std::vector<std::string> Names();
-	// names 是这次拉取问过的名字，list 里没有的就是下线了。
+	// names 是这次拉取问过的名字，list 里没有的就是下线了。更新缓存并通知观察者。
 	void Apply(const std::vector<std::string>& vNames, const std::vector<ServiceInstance>& vList);
+	// 起服同步拉取的结果写进缓存，不通知观察者。vList 里只取这个名字的实例。
+	void Store(const std::string& sName, const std::vector<ServiceInstance>& vList);
+	// 读缓存，按实例号升序。还没拉到过返回 false，并记下这个名字，之后的周期拉取会带上它。
+	bool Snapshot(const std::string& sName, std::vector<ServiceInstance>& vList);
 	static bool Pick(const std::vector<ServiceInstance>& vList, const std::string& sName, int32_t iCurrent, ServiceInstance& stOutput);
 
   private:
@@ -70,6 +71,12 @@ class ServiceTable
 		std::string sPort;
 		// 最近一次拉取里还在。
 		bool bOnline;
+		// 拉到过至少一次，vCache 可用。
+		bool bKnown;
+		// 查过缓存，没有观察者也要周期拉取。
+		bool bWanted;
+		// 最近一次拉到的这个名字下的全部实例，按实例号升序。
+		std::vector<ServiceInstance> vCache;
 		// 关心这个名字的会话管理器。地址变化时通知它们。
 		std::vector<::OI::Net::SessionManager*> vWatchers;
 		// 上次下发的整份名单，按实例号升序。
@@ -79,7 +86,7 @@ class ServiceTable
 		// 新订阅者必须收到下一次成功拉取，即使共享名单没有变化。
 		std::vector<::OI::Net::SessionManager*> vPendingListWatchers;
 		State()
-		    : iId(0), bOnline(false)
+		    : iId(0), bOnline(false), bKnown(false), bWanted(false)
 		{
 		}
 	};
@@ -89,23 +96,9 @@ class ServiceTable
 	std::map<std::string, State> m_mServices;
 };
 
-struct RegPullState;
-
-struct RegistryPullStats
-{
-	// 已经发出、还没回的拉取数。
-	size_t iSentCount;
-	// 还没连上、先记下来的拉取数。
-	size_t iDeferredCount;
-	// 上面两项之和，不含已完成的回调。
-	size_t iLiveCount;
-	// 允许同时占住的拉取数。
-	int64_t iMaxPendingPulls;
-	// 因超时整条连接被作废的次数。
-	uint64_t iResetCount;
-};
-
-// 连 registry 的客户端。登记、心跳、拉取都在这里，应用层只在配置里写 service。
+// 连 registry 的客户端。应用层只在配置里写 service。
+// 起服时同步登记、同步拉取一次，之后连接、补登记、心跳、整量拉取都由内部 Update 周期处理，结果写进 ServiceTable。
+// 运行期选路只读本地缓存，不向 registry 发请求。
 class RegistryClient : public ::OI::Net::SessionManager
 {
 	DECLARE_SINGLETON(RegistryClient)
@@ -113,128 +106,85 @@ class RegistryClient : public ::OI::Net::SessionManager
 
   public:
 	virtual ~RegistryClient();
-	// 没配 [Registry] 或查不到时返回错误码，调用方继续用配置里的 ip/port。
-	int32_t Lookup(const std::string& sName, std::string& sIp, std::string& sPort);
-	// 同步拉这个名字下的全部分区。会占住调用线程。协程里用 PullAsync。
-	// Lookup、PullSync、Publish 要真正等待时，在 poll 回调里（含定时器回调）调用会抛 logic_error。
-	int32_t PullSync(const std::string& sName, std::vector<ServiceInstance>& vList);
-	// 超时毫秒必须为正；默认 1000ms，超时返回 OI_ERR_TIMEOUT，积压满返回 OI_ERR_BUSY。
-	// 发出拉取后立刻返回。回包、连不上或超时时调用 fnDone，只调用一次，可能在 poll 线程或定时器线程上。fnDone 里不能再等注册表。
-	int32_t PullAsync(const std::string& sName, std::function<void(int32_t, const std::vector<ServiceInstance>&)> fnDone, int64_t iTimeoutMilliseconds = 1000);
-	// 未发送和已发送查询的合计占位数，不包含已完成的回调。
-	size_t GetPendingPullCount();
-	RegistryPullStats GetPullStats();
-	// 统一周期扫描；已发送查询过期时失效整条连接，防止 FIFO 回包错配。
-	void ExpirePulls();
-	// StartServer 成功后登记本进程。返回框架错误码，无须登记时返回 OI_OK。
+	// 起服：StartServer 成功后由框架调用，同步登记本进程。无须登记时返回 OI_OK。
 	int32_t Publish(const std::string& sSection, const std::string& sIp, const std::string& sPort);
+	// 起服：同步强制拉一次这个名字下的全部实例，写进本地缓存，之后由周期拉取维护。会占住调用线程。
+	// Publish、PullSync、Lookup 要真正等待时，在 poll 回调里（含定时器回调）调用会抛 logic_error。
+	int32_t PullSync(const std::string& sName, std::vector<ServiceInstance>& vList);
+	// 起服：PullSync 后按实例号最小选一台。没配 [Registry] 或查不到返回错误码，调用方继续用配置里的 ip/port。
+	int32_t Lookup(const std::string& sName, std::string& sIp, std::string& sPort);
+	// 运行期：读本地缓存，不发请求。还没拉到过返回 false，名字会加进周期拉取，下一次秒更新就拉。
+	bool Snapshot(const std::string& sName, std::vector<ServiceInstance>& vList);
+	// 会话管理器跟着这个名字的单台走。没配 [Registry] 时什么都不做。
 	int32_t Watch(::OI::Net::SessionManager* pManager, const std::string& sName);
-	// 收整份名单，vInitial 是调用方已经拿到的那份。新订阅者在下一次成功拉取时收到名单，即使名单未变化。
-	// 没配 [Registry] 时什么都不做。
+	// 会话管理器收整份名单，vInitial 是它已经拿到的那份。新订阅者在下一次成功拉取时收到名单，即使名单未变化。
 	int32_t WatchList(::OI::Net::SessionManager* pManager, const std::string& sName, const std::vector<ServiceInstance>& vInitial);
-	// 按 heartbeat_ms 报一次在线。没连上就去连，连上了还没登记就补登记。
-	void Touch();
-	// 按 pull_ms 把关心的名字整量拉一次。
-	void Pull();
+	// 配置里有 registry 地址。
+	bool Configured();
+	// 每秒一次，上一次没结束就跳过：没连就连，没登记就登记，到点心跳，到点或被催促时整量拉取。
+	::OI::Coro::Task OnSecondUpdate(time_t iNow);
 	virtual const std::string GetIDString();
-	void OnFrame(sid_t iSessionId, uint32_t iId, ::OI::Base::BytesStream& stBody);
 
   protected:
 	virtual ::OI::Net::Session* CloneSession();
 	virtual void OnAddSession(::OI::Net::Session* pSession);
 	virtual void OnDelSession(const ::OI::Net::Session* pSession);
 	virtual void OnConnectFailed();
-	// 配置里有 registry 地址。
-	bool Configured();
+	void OnSessionClosed(sid_t iSessionIdLocal) override;
+
+  private:
+	// 读心跳和拉取间隔，打开 OnTickUpdate。用过注册表才打开。
+	void Activate();
 	// 没连上就去连，然后等到连上或超时。
 	int32_t Ensure();
 	// 按配置地址发起连接。
 	int32_t Connect();
 	// 等到标志为真、连接失败或超时。单线程靠 PollWait 收包，多线程睡在条件变量上。
 	int32_t WaitFlag(const std::atomic<bool>& bFlag);
+	int32_t WaitDone(const std::atomic<bool>& bFlag);
 	// 唤醒等在条件变量上的同步调用。
 	void Notify();
-	// 组一帧发给当前会话，原样返回发送错误码。
-	int32_t Send(uint32_t iId, const ::OI::Rpc::Serialize& stMessage);
-	// 发送本进程的登记包。
-	int32_t SendRegister();
-	// 按心跳间隔挂周期定时器。只挂一次。
-	void ArmHeartbeat();
-	// 按拉取间隔挂周期定时器。只挂一次。
-	void ArmPull();
+	// 起服同步接口用：发一次带调用号的请求。完成回调只调用一次：回包、超时、发送失败或连接关闭。
+	template <typename Req>
+	void CallRegistry(const Req& stRequest, int64_t iTimeoutMilliseconds,
+	    std::function<void(int32_t, typename ::OI::Rpc::RpcProtoId<Req>::Response&)> fnDone);
 
-	// 同步 Lookup、Publish 在这里等连接和回包。
-	::OI::Thread::Mutex stMutex;
-	::OI::Thread::MutexCond stConditionVariable;
-	// 当前 registry 会话可用。
-	std::atomic<bool> bConnected;
-	// 正在连，避免重复发起。
-	std::atomic<bool> bConnecting;
+	// 同步 Publish、PullSync 在这里等连接和回包。
+	::OI::Thread::Mutex m_stMutex;
+	::OI::Thread::MutexCond m_stCondition;
+	// 保护连接状态切换。持有时不发包、不关会话、不调回调。
+	::OI::Thread::Mutex m_stStateMutex;
+	::OI::Thread::Mutex m_stPublishMutex;
+	std::atomic<bool> m_bConnected;
+	std::atomic<bool> m_bConnecting;
 	// 最近一次连接失败。
-	std::atomic<bool> bFailed;
-	// 当前 registry 会话号。
-	std::atomic<sid_t> iSessionId;
-	// 配置里的 registry 地址已经读到。
-	bool bAddressReady;
+	std::atomic<bool> m_bFailed;
+	std::atomic<sid_t> m_iSessionId;
+	bool m_bAddressReady;
 
 	// 本进程要登记的身份。
-	std::string sServiceName;
-	int32_t iServiceId;
-	std::string sServiceIp;
-	std::string sServicePort;
-	std::string sServiceZone;
-	// Publish 已经成功。
-	std::atomic<bool> bPublished;
+	std::string m_sServiceName;
+	int32_t m_iServiceId;
+	std::string m_sServiceIp;
+	std::string m_sServicePort;
+	std::string m_sServiceZone;
+	std::atomic<bool> m_bPublished;
 	// 登记回包已经确认。
-	std::atomic<bool> bRegistered;
-	// 登记之后连接断过，需要补登记。
-	std::atomic<bool> bLost;
-	// 心跳间隔，毫秒。
-	int32_t iHeartbeatMilliseconds;
-	// 心跳定时器已经挂上。
-	bool bHeartbeatArmed;
-	// 拉取间隔，毫秒。
-	int32_t iPullMilliseconds;
-	// 拉取定时器已经挂上。
-	bool bPullArmed;
+	std::atomic<bool> m_bRegistered;
+	// 被别的进程占了，停止登记和心跳。
+	std::atomic<bool> m_bLost;
 
-	// 回包按发出的顺序回来。同步等的那一份在 Lookup / Publish 里等。
-	struct PendingPull
-	{
-		int32_t iSendStatus = OI_ERR_CONNECT;
-		// 真表示 Lookup 或 Publish 在等这一份，回包要叫醒等待线程。
-		bool bSynchronous;
-		// 超时的单调毫秒。0 表示不单独计时。
-		int64_t iDeadlineMilliseconds = 0;
-		// 这一次问的服务名。
-		std::vector<std::string> vNames;
-		// 异步完成回调，和只调用一次的标记。
-		std::shared_ptr<RegPullState> pState;
-	};
-	// 调用方持有 stPendingMutex，且已经连上。发送失败时不留在队列里。
-	int32_t EnqueueSentPull(const PendingPull& stPending);
-	bool CanEnqueuePull();
-	void ArmPullTimeout();
-	// 拉取超时定时器已经挂上。
-	bool bPullTimeoutArmed = false;
-	// 整条连接因超时被作废的次数。
-	uint64_t iPullResetCount = 0;
-	// 保护两条拉取队列。
-	::OI::Thread::Mutex stPendingMutex;
-	// 同时只允许一个同步等待，避免回包叫醒错的调用。
-	::OI::Thread::Mutex stSyncMutex;
-	// 已发送、按发出顺序等回包。
-	std::deque<PendingPull> vPendingPulls;
-	// 还没连上，连上再发。
-	std::deque<PendingPull> vDeferredPulls;
-	// Publish 正在等登记回包。
-	std::atomic<bool> bRegistrationWaiting;
-	// 同步拉取的回包已经到了。
-	std::atomic<bool> bGot;
-	// 最近一次同步拉取的返回码。
-	int32_t iCode;
-	// 最近一次同步拉取的实例列表。
-	std::vector<ServiceInstance> vResponseList;
+	std::atomic<bool> m_bActive;
+	// 有新名字要拉，下一次 OnTickUpdate 不等 pull_ms。
+	std::atomic<bool> m_bPullWanted;
+	// 刚连上，下一次 OnTickUpdate 马上登记和拉取。
+	std::atomic<bool> m_bRefresh;
+	// Activate 写完再打开 m_bActive，之后只读。
+	int32_t m_iHeartbeatMilliseconds;
+	int32_t m_iPullMilliseconds;
+	// 只在 OnTickUpdate 里读写，同一时刻只有一条在跑。
+	int64_t m_iNextHeartbeatMilliseconds;
+	int64_t m_iNextPullMilliseconds;
 };
 
 }

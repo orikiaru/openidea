@@ -20,8 +20,8 @@ SOURCE = r'''
 #include "oi_poll.h"
 #include "oi_blocking_work_session.h"
 #include "oi_errno.h"
-#include "work_protocol/oi_rpcdata_workcompleted.h"
-#include "work_protocol/rpc_enums.h"
+#include "framework_protocol/oi_rpcdata_workcompleted.h"
+#include "framework_protocol/rpc_enums.h"
 #include <memory>
 #include <cstdio>
 #include <cstring>

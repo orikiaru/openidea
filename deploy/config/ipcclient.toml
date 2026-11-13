@@ -10,8 +10,6 @@ port = "17990"
 type = "tcp"
 heartbeat_ms = 1000
 pull_ms = 1000
-# 未发送和已发送的注册查询总上限；满时返回 OI_ERR_BUSY。
-max_pending_pulls = 4096
 
 # 命名 RPC 的连接池：相同地址、相同容量策略才共用连接。
 [RpcRoute]

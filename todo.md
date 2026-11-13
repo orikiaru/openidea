@@ -38,5 +38,19 @@
 ## 其他语言的序列化
 
 - 需求：序列化出去的标准数据结构统一为小端。非 C++ 的对端按这份标准读写 `modules/protoconfig` 里的协议。HTTP 对接先用已有 JSON；要做 RPC，或把 rpcdata 放进 Redis 的对端，必须用同一套二进制。先只生成一种真正要接的语言。现在的小端机器上，已经写出的包和 Redis 里的 rpcdata 字节必须保持不变。
-- 现状：二进制由 `proto_tool` 生成，不是标准 Protobuf，不能用 `protoc` 解析。一条字段是 `uint32` 字段号、`uint32` 长度、裸内容。`vector` 用同一个字段号重复多条。不认识的字段号按长度跳过，缺字段保持原值。序列化层已统一小端（字段头、长度前缀、定宽整数、枚举、float、double），大端主机按字节翻转，`mysql` 用例的离线行映射检查用固定字节样例锁住输出。MySQL 客户端已经接入，数据库行映射见 `docs/database.md`；schema migration 还没有。其余 rpcdata 已有 JSON；标了 `key` 的结构不生成 JSON。Web 的 TLS 不进框架，需要时在外面用 nginx 反代到现有 HTTP。
+- 现状：二进制由 `proto_tool` 生成，不是标准 Protobuf，不能用 `protoc` 解析。一条字段是 `uint32` 字段号、`uint32` 长度、裸内容，每个字段只占一条，重复字段号拒绝。`vector`/`map` 的字段体是数量加元素，嵌套 rpcdata 的字段体是自己的整段序列化。不认识的字段号按长度跳过，缺字段保持原值。序列化层已统一小端（字段头、长度前缀、定宽整数、枚举、float、double），大端主机按字节翻转，`mysql` 用例的离线行映射检查和 `hold` 的 binary container 用固定字节样例锁住输出。MySQL 客户端已经接入，数据库行映射见 `docs/database.md`；schema migration 还没有。其余 rpcdata 已有 JSON；标了 `key` 的结构不生成 JSON。Web 的 TLS 不进框架，需要时在外面用 nginx 反代到现有 HTTP。
 - 方向：然后把这份标准写成不依赖 C++ 的说明。schema 仍是 `protoconfig`，在 `proto_tool` 上加一种语言的后端，不另起第二套协议。只做 Web 时先生成 JSON 编解码；要接 RPC 或 Redis 里的 rpcdata，再生成二进制。
+
+## 异步 webserver / 其他语言接入的转发层（2026-11-14）
+
+- 需求：做一个异步的 webserver，或者等其他语言的对端按协议接入，由它做转发层：外部请求进来，转成框架内的 RPC 发给后端服务，回包再转回去。
+- 现状：`modules/webserver` 接不了协程，不能用于业务。它用 `cpp-httplib` 阻塞 listen，处理函数跑在 httplib 自己的线程上，不能 `co_await` 框架的 RPC、Redis 调用，见 `docs/module.md` 的 Web 段。框架里只有 HTTP 客户端（`cbaselib/http`，跑在 poll 上），没有服务端。其他语言的二进制序列化还没生成，见上面「其他语言的序列化」。
+- 方向：HTTP 服务端换成框架自己的实现：挂在 poll 上的 SessionManager 收发，处理函数是协程，里面直接 `co_await` 命名 RPC 转发，单线程、多线程都能跑；cpp-httplib 服务端不再作为范例。其他语言按 `protoconfig` 的二进制协议直接接入时，转发层只做协议转换和路由。先确认要接的对端和协议，再定。
+
+- 序列化格式变更要写明：`b269fb7` 起 vector/map 改为每字段一条、字段体为数量加元素，裸 `<<`/`>>` rpcdata 加长度前缀，`ReadFields` 对重复字段号抛 `ParserException`。旧版编出的报文和旧版存进 Redis / MySQL 的 PB blob 全部读不回来，`FromDbBlob` 显式拒绝多条目。项目尚无跨语言对端时可以接受，要在文档里记成不兼容变更，避免误以为平滑升级。
+- `db` 用例从 `all` 移除后连接池异常路径无覆盖：fake 驱动能注入的驱动抛异常→不健康连接剔除、失败调用不改输出、事务回滚语义，现在没有任何用例跑；Windows 端也没有任何 DB 行映射检查（`mysql` 只在 Linux 显式跑）。决定是补回一个轻量 fake 用例，还是在 `docs/testing.md` 记成有意取舍。PB 编码黄金字节已由 `hold binary container` 补进 `all`，DB 特有部分仍只在 mysql。
+- 单线程下 `Poll::CheckThreadAccess` 依赖 `Poll::Init` 先跑：`m_stLoopThread` 在 Init 里才记录，Init 前任何带守卫的调用（`SessionManager::Init`、`AddTimer`、`AddStopHandler` 等）一律返回 `OI_ERR_WRONG_THREAD`。把「ST 下守卫接口必须在 `Poll::Init` 之后调用」写进 `docs/`，或在 `CheckThreadAccess` 里区分「poll 未启动」与「确实跨线程」。
+- `ThreadPool::AddStopHandler` 停止后返回 `OI_ERR_CONNECT` 语义不准，换个对得上的错误码或加注释。
+- `[dbkey]` 的 `VARCHAR`/`VARBINARY` 长度生成期不设上限：utf8mb4 InnoDB 主键索引限 3072 字节，`VARCHAR(65535)`/`VARBINARY(65535)` 建表必然失败。在 `CheckDbKeyAndType` 或 `NormalizeDbType` 按主键列收紧到 VARBINARY 3072、utf8mb4 VARCHAR 768 以内。
+- `OI::Db::EncodeDbValue` 对空 `Bytes` 走 `Blob(pData, pData + 0)`，`Data()` 为 nullptr 时是理论 UB；补空值特判，和 `FromDbText` 的空 blob 特判对齐。
+- `vector<bool>` 现在靠 `BytesStream` 的 `static_assert` 在编译期炸模板错误，生成器不挡；在 `proto_tool` 里提前拒绝，报错更直观。

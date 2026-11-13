@@ -2,8 +2,8 @@
 #include "oi_blocking_work_channel.h"
 #include "oi_thread.h"
 #include "oi_bytes_stream.h"
-#include "work_protocol/oi_rpcdata_workcompleted.h"
-#include "work_protocol/rpc_enums.h"
+#include "framework_protocol/oi_rpcdata_workcompleted.h"
+#include "framework_protocol/rpc_enums.h"
 #include <stdexcept>
 
 namespace OI
@@ -35,7 +35,7 @@ class BlockingWorkSessionManager::BlockingWorkSession : public Session
 		OI::RpcData::WorkCompleted stMessage;
 		stMessage.iOperation = iOperation;
 		OI::Base::BytesStream stPacket;
-		stPacket.WritePb(OI::RpcData::WORK_PROTOCOL_COMPLETED, stMessage);
+		stPacket.WritePb((uint32_t)OI::RpcData::WORK_PROTOCOL_COMPLETED, stMessage);
 		return m_stChannel.Submit(iType, iOperation, std::move(fnWork), std::move(stPacket));
 	}
 	void OnDataIn() override
@@ -52,7 +52,7 @@ class BlockingWorkSessionManager::BlockingWorkSession : public Session
 				throw OI::Base::ParserException();
 			}
 			// 协议 ID 就是通知类型。新增协议只加生成结构与对应分发，不改通道。
-			switch (iProtocol)
+			switch ((proto_type_t)iProtocol)
 			{
 			case OI::RpcData::WORK_PROTOCOL_COMPLETED:
 			{
@@ -66,7 +66,7 @@ class BlockingWorkSessionManager::BlockingWorkSession : public Session
 				break;
 			}
 			default:
-				throw std::runtime_error("unknown work protocol id=" + std::to_string(iProtocol));
+				throw std::runtime_error("unknown work protocol id=" + std::to_string((proto_type_t)iProtocol));
 			}
 		}
 		catch (...)

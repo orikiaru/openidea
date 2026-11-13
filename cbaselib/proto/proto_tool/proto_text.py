@@ -263,7 +263,7 @@ def ParseRpc(lex):
         if key is None:
             return None
         if key in ("id", "res_id", "timeout"):
-            num = lex.number()
+            num = lex.signed_number() if key != "timeout" else lex.number()
             if num is None:
                 return None
             fields[key] = str(num)

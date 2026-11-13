@@ -70,14 +70,6 @@ if __name__ == "__main__":
         loginfo("we need module_header_path")
         loginfo("we need module_path")
         loginfo("we need deploy_path")
-        
-        if(len(sys.argv) == 1 or sys.argv[1] == 'test'):
-            work_path += "/cbaselib/proto"
-            command_params.append(work_path+"/config/proto.xml")
-            command_params.append(work_path+"/config/module.xml")
-            command_params.append(work_path+"/module_gen_test/include/proto_header")
-            command_params.append(work_path+'/module_gen_test')
-            command_params.append(work_path+'/module_gen_test/deploy')
         exit(-2)
     else:
         for index in range(1,6):

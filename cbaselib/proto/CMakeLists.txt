@@ -6,6 +6,7 @@ set(LIBRARY_M ${LIBNAME}_m_static)
 
 set(LIBSRC 	
 	src/oi_rpc_call.cpp
+	src/oi_registry_client.cpp
 	src/oi_rpc_peer.cpp
 	src/oi_rpc_route.cpp
 	src/oi_parser.cpp

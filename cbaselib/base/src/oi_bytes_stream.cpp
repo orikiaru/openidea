@@ -82,7 +82,7 @@ BytesStream& BytesStream::operator>>(::OI::Rpc::Serialize& stFirst)
 
 BytesStream& BytesStream::WritePbRaw(uint32_t iSequence, const void* pData, uint32_t iSize)
 {
-	if ((int32_t)iSequence < 0 || (int32_t)iSize < 0)
+	if ((int32_t)iSize < 0)
 	{
 		throw ParserException();
 	}
@@ -111,7 +111,7 @@ PbHeaderState BytesStream::PreparePbHeader(uint32_t& iSequence, uint32_t& iSize)
 	}
 	uint32_t iSequenceValue = LoadLittleEndian<uint32_t>(GetCurPtr());
 	uint32_t iSizeValue = LoadLittleEndian<uint32_t>(GetCurPtr() + sizeof(uint32_t));
-	if ((int32_t)iSequenceValue < 0 || (int32_t)iSizeValue < 0)
+	if ((int32_t)iSizeValue < 0)
 	{
 		return PB_HEADER_BAD;
 	}

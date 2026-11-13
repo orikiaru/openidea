@@ -174,26 +174,26 @@ OI::Coro::TaskResult<int32_t> MultiMgr::SwapFixed()
 	{
 		std::string sIp;
 		std::string sPort;
-		std::atomic<bool> bDone{false};
 	};
 	auto pFound = std::make_shared<Found>();
-	::OI::Base::RegistryClient::GetInstance().PullAsync("peerserver", [pFound](int32_t iCode, const std::vector<::OI::Base::ServiceInstance>& vList)
+	const bool bListed = co_await WaitFor([pFound]()
 	{
+		std::vector<::OI::Base::ServiceInstance> vList;
+		if (!::OI::Base::RegistryClient::GetInstance().Snapshot("peerserver", vList))
+		{
+			return false;
+		}
 		for (const auto& stInst : vList)
 		{
-			if (iCode == OI_OK && stInst.iId == 2)
+			if (stInst.iId == 2)
 			{
 				pFound->sIp = stInst.sIp;
 				pFound->sPort = stInst.sPort;
+				return true;
 			}
 		}
-		pFound->bDone.store(true, std::memory_order_release);
-	});
-	const bool bPulled = co_await WaitFor([pFound]()
-	{
-		return pFound->bDone.load(std::memory_order_acquire);
+		return false;
 	}, 3000);
-	const bool bListed = bPulled && !pFound->sPort.empty();
 
 	const std::string sOldIp = m_stFixed.GetStrIP();
 	const std::string sOldPort = m_stFixed.GetStrPort();

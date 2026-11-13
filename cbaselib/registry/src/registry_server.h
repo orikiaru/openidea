@@ -1,7 +1,8 @@
 #pragma once
 #include "oi_registry.h"
+#include "framework_protocol/rpc_ids.h"
 #include "oi_rpc_coro.h"
-#include "oi_session_manager.h"
+#include "oi_rpc_session_manager.h"
 #include "oi_singleton.h"
 #include <map>
 #include <set>
@@ -12,7 +13,7 @@
 // Redis 走 RedisClient 协程，等 Redis 的时候 poll 照转。
 // 所有键都在 oi:{project.env}: 下面，不同项目、不同环境互不可见。
 // svc 是名字集合，svc:<name> 是这个名字的 id 集合，svc:<name>:<id> 是一份实例，值是 "ip port" 或 "ip port 分区"。
-class RegistryServer : public ::OI::Net::SessionManager
+class RegistryServer : public ::OI::Rpc::ProtoSessionManager
 {
 	DECLARE_SINGLETON(RegistryServer)
 	RegistryServer();
@@ -21,11 +22,9 @@ class RegistryServer : public ::OI::Net::SessionManager
 	virtual ~RegistryServer();
 	int32_t Init();
 	virtual const std::string GetIDString();
-	void Handle(::OI::Net::Session* pSession, uint32_t iId, ::OI::Base::BytesStream& stBody);
 	void StartReload();
 
   protected:
-	virtual ::OI::Net::Session* CloneSession();
 	virtual void OnAddSession(::OI::Net::Session* pSession);
 	virtual void OnDelSession(const ::OI::Net::Session* pSession);
 
@@ -48,13 +47,13 @@ class RegistryServer : public ::OI::Net::SessionManager
 	};
 	OI::Coro::Task Boot();
 	OI::Coro::Task Reload();
-	OI::Coro::Task Register(sid_t iSessionId, Binding stSecond);
-	OI::Coro::Task Refresh(sid_t iSessionId, Binding stSecond);
+	::OI::Rpc::RpcTask Register(sid_t iSessionId, ::OI::RpcData::RegRegister stRequest);
+	::OI::Rpc::RpcTask Refresh(sid_t iSessionId, ::OI::RpcData::RegHeartbeat stRequest);
+	int32_t Pull(::OI::RpcData::RegPull& stRequest, ::OI::RpcData::RegPullRes& stResponse);
 	OI::Coro::Task Withdraw(Binding stSecond);
 	bool LoadSpace();
 	std::string Key(const std::string& sTail) const;
 	std::vector<std::string> EvalArgs(const char* pLua, const Binding& stSecond) const;
-	void Reply(sid_t iSessionId, uint32_t iId, const ::OI::Rpc::Serialize& stMessage);
 	Binding* FindBinding(sid_t iSessionId, const std::string& sName, int32_t iId);
 	void PutSnapshot(const Binding& stSecond);
 	void DropSnapshot(const std::string& sName, int32_t iId);

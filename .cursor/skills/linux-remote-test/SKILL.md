@@ -73,6 +73,10 @@ python3 tools/cleanup_linux_tests.py --root "$HOME/openidea"
 
 Windows 宿主上的 WSL 路仍用 `python tools/kill_test_procs.py`，见 `docs/testing.md` 第 7 节。
 
+## 只编译
+
+不要手写 `cmake`。在要编的那台机器上执行 `python3 tools/build.py --mode mt|st`。并行度默认是该机逻辑核数。Windows 宿主用 `python tools/build.py`。
+
 ## 跑矩阵
 
 同一构建目录上已有矩阵时不要再开。结果目录用新的 `$HOME/openidea-test-results/<lane>-<日期>`，不要覆盖上一轮失败目录。标准输出写到同级的 `runner.log`。

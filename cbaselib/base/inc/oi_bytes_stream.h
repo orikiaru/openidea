@@ -33,7 +33,7 @@ struct ParserException : public std::exception
 	}
 };
 
-// PreparePbHeader 的结果。BAD 表示 seq/size 最高位为 1（与原先有符号 int 头不兼容）。
+// PreparePbHeader 的结果。序号允许为负，框架协议号用负数。长度最高位为 1 是 BAD。
 enum PbHeaderState
 {
 	PB_HEADER_OK = 0,

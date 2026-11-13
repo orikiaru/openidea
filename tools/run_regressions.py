@@ -382,7 +382,6 @@ def run(case, args):
                 for flag in ("echo", "log", "redis", "hold", "udp", "multi", "db", "coro"):
                     text = replace(text, flag, "true" if mode == flag else "false")
                 if mode == "hold":
-                    text = replace(text, "max_pending_pulls", "16")
                     text = replace(text, "pull_ms", "60000")
                     text = replace(text, "max_clients", "8")
                     text = replace(text, "idle_ms", "200")
@@ -422,7 +421,7 @@ def run(case, args):
             while time.monotonic() < deadline:
                 text = path.read_text(encoding="utf-8", errors="replace")
                 if proc.poll() is not None:
-                    raise RuntimeError(text)
+                    raise RuntimeError("%s exited code=%s\n%s" % (path.name, proc.returncode, text))
                 if marker in text:
                     return
                 time.sleep(0.05)
@@ -775,9 +774,13 @@ def run(case, args):
                 assert "hold batch failure slots bad=0" in text
                 assert re.search(r"hold absolute deadline buckets calls=4096 buckets=\d+ fired=32 bad=0", text)
                 assert "hold route pool capacity busy=1 bad=0" in text
-                assert re.search(r"hold registry bounded recovery busy=[1-9]\d* timeout=[1-9]\d* bad=0", text)
-                budget = re.search(r"hold named rpc end to end budget elapsed_ms=(\d+) bad=0", text)
-                assert budget and int(budget.group(1)) < 1450, budget.group(0) if budget else "missing budget marker"
+                assert "hold registry pause cached many=3/3 call=0 mark=831 bad=0" in text
+                paused_missing = re.search(r"hold registry pause missing snapshot=0 code=-2 elapsed_ms=(\d+) mark=-731 bad=0", text)
+                assert paused_missing and int(paused_missing.group(1)) < 450, paused_missing.group(0) if paused_missing else "missing pause-missing marker"
+                # 空名单：Resolve 记 Offline，RouteError 默认返回 OI_ERR_CONNECT（-3）。
+                assert "hold registry resume missing snapshot=1 empty=1 code=-3 bad=0" in text
+                budget = re.search(r"hold registry budget miss code=-3 elapsed_ms=(\d+) cached=0 mark=841 bad=0", text)
+                assert budget and 500 <= int(budget.group(1)) < 2450, budget.group(0) if budget else "missing budget marker"
                 assert "hold binary bool bad=0" in text
                 assert "hold binary container bad=0" in text
                 assert "hold connection isolation bad=0" in text

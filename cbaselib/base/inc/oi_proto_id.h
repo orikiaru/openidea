@@ -1,24 +1,18 @@
 #pragma once
-#include <stdint.h>
+#include "framework_protocol/rpc_ids.h"
 
 namespace OI
 {
 namespace Base
 {
 
-// 定制协议的号。生成出来的 rpc 号只做 req/res 映射，和这里撞了也不是同一条协议。
-enum ProtoId
-{
-	PROTO_LOG_REMOTE = 1,
-	PROTO_LOG_CLIENT_REGISTER = 2,
-	PROTO_REDIS = 3,
-	PROTO_REG_REGISTER = 4,
-	PROTO_REG_REGISTER_RES = 5,
-	PROTO_REG_HEARTBEAT = 6,
-	PROTO_REG_HEARTBEAT_RES = 7,
-	PROTO_REG_PULL = 8,
-	PROTO_REG_PULL_RES = 9,
-};
+// 框架协议号。定义在 cbaselib/proto/protocol/framework.proto，从 -1000 起。
+using ::OI::RpcData::PROTO_LOG_REMOTE;
+using ::OI::RpcData::PROTO_LOG_CLIENT_REGISTER;
+using ::OI::RpcData::PROTO_REDIS;
+using ::OI::RpcData::PROTO_REG_REGISTER;
+using ::OI::RpcData::PROTO_REG_HEARTBEAT;
+using ::OI::RpcData::PROTO_REG_PULL;
 
 }
 }

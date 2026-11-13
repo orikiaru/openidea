@@ -1,12 +1,12 @@
 #include "registry_server.h"
 #include "oi_proto_id.h"
-#include "oi_rpcdata_regregister.h"
-#include "oi_rpcdata_regregisterres.h"
-#include "oi_rpcdata_regheartbeat.h"
-#include "oi_rpcdata_regheartbeatres.h"
-#include "oi_rpcdata_reginstance.h"
-#include "oi_rpcdata_regpull.h"
-#include "oi_rpcdata_regpullres.h"
+#include "framework_protocol/oi_rpcdata_regregister.h"
+#include "framework_protocol/oi_rpcdata_regregisterres.h"
+#include "framework_protocol/oi_rpcdata_regheartbeat.h"
+#include "framework_protocol/oi_rpcdata_regheartbeatres.h"
+#include "framework_protocol/oi_rpcdata_reginstance.h"
+#include "framework_protocol/oi_rpcdata_regpull.h"
+#include "framework_protocol/oi_rpcdata_regpullres.h"
 #include "oi_net_session.h"
 #include "oi_redis.h"
 #include "oi_config.h"
@@ -113,26 +113,6 @@ std::string StrOf(const redisReply* pR)
 	return std::string(pR->str, (size_t)pR->len);
 }
 
-class RegistryServerSession : public ::OI::Net::NetSession
-{
-  public:
-	explicit RegistryServerSession(::OI::Net::SessionManager* pManager)
-	    : ::OI::Net::NetSession(pManager)
-	{
-	}
-
-	virtual void OnDataOut()
-	{
-	}
-	virtual void OnDataIn()
-	{
-		::OI::Base::ReadRegFrames(stInputBuffer, this, [this](uint32_t iIdLocal, ::OI::Base::BytesStream& stBody)
-		{
-			RegistryServer::GetInstance().Handle(this, iIdLocal, stBody);
-		});
-	}
-};
-
 class ReloadTimer : public ::OI::Timer::BaseTimer
 {
   public:
@@ -189,7 +169,7 @@ std::vector<std::string> RegistryServer::EvalArgs(const char* pLua, const Bindin
 
 int32_t RegistryServer::Init()
 {
-	int32_t iCode = ::OI::Net::SessionManager::Init();
+	int32_t iCode = ::OI::Rpc::ProtoSessionManager::Init();
 	if (iCode != OI_OK)
 	{
 		return iCode;
@@ -198,6 +178,18 @@ int32_t RegistryServer::Init()
 	{
 		return OI_ERR_INVALID_ARGUMENT;
 	}
+	::OI::Rpc::HandleRpc<::OI::RpcData::RegRegister>([](const ::OI::Rpc::RpcContext& stContext, ::OI::RpcData::RegRegister& stRequest, ::OI::RpcData::RegRegisterRes&)
+	{
+		return RegistryServer::GetInstance().Register(stContext.iSessionId, stRequest);
+	});
+	::OI::Rpc::HandleRpc<::OI::RpcData::RegHeartbeat>([](const ::OI::Rpc::RpcContext& stContext, ::OI::RpcData::RegHeartbeat& stRequest, ::OI::RpcData::RegHeartbeatRes&)
+	{
+		return RegistryServer::GetInstance().Refresh(stContext.iSessionId, stRequest);
+	});
+	::OI::Rpc::HandleRpc<::OI::RpcData::RegPull>([](::OI::RpcData::RegPull& stRequest, ::OI::RpcData::RegPullRes& stResponse)
+	{
+		return RegistryServer::GetInstance().Pull(stRequest, stResponse);
+	});
 	TryGetConfig("Registry.pull_ms", m_iPullMilliseconds);
 	if (m_iPullMilliseconds <= 0)
 	{
@@ -237,11 +229,6 @@ OI::Coro::Task RegistryServer::Boot()
 	}
 	StartReload();
 	::OI::Timer::BaseTimerManager::GetInstance().AddTimer(new ReloadTimer(), m_iPullMilliseconds);
-}
-
-::OI::Net::Session* RegistryServer::CloneSession()
-{
-	return new RegistryServerSession(this);
 }
 
 void RegistryServer::OnAddSession(::OI::Net::Session* pSession)
@@ -316,14 +303,6 @@ void RegistryServer::PutSnapshot(const Binding& stSecond)
 	m_vSnapshot.push_back(stInst);
 }
 
-void RegistryServer::Reply(sid_t iSessionId, uint32_t iIdLocal, const ::OI::Rpc::Serialize& stMessage)
-{
-	if (SendBytes(iSessionId, ::OI::Base::EncodeRegFrame(iIdLocal, stMessage)) != OI_OK)
-	{
-		CloseSession(iSessionId);
-	}
-}
-
 void RegistryServer::StartReload()
 {
 	if (m_bReloading)
@@ -374,8 +353,23 @@ OI::Coro::Task RegistryServer::Reload()
 	m_bSnapshotOk = true;
 }
 
-OI::Coro::Task RegistryServer::Register(sid_t iSessionId, Binding stSecond)
+::OI::Rpc::RpcTask RegistryServer::Register(sid_t iSessionId, ::OI::RpcData::RegRegister stRequest)
 {
+	if (!ValidSpacePart(stRequest.sName) || stRequest.iId <= 0 || stRequest.sIp.empty() || stRequest.sPort.empty() || (!stRequest.sZone.empty() && !ValidSpacePart(stRequest.sZone)))
+	{
+		co_return OI_ERR_FAIL;
+	}
+	Binding stSecond;
+	stSecond.sName = stRequest.sName;
+	stSecond.iId = stRequest.iId;
+	stSecond.sIp = stRequest.sIp;
+	stSecond.sPort = stRequest.sPort;
+	stSecond.sZone = stRequest.sZone;
+	stSecond.sValue = stRequest.sIp + " " + stRequest.sPort;
+	if (!stSecond.sZone.empty())
+	{
+		stSecond.sValue += " " + stSecond.sZone;
+	}
 	std::vector<std::string> vArgumentsLocal = EvalArgs(kRegisterLua, stSecond);
 	::OI::Redis::RedisResult stR = co_await ::OI::Redis::CallRedis(std::move(vArgumentsLocal));
 	int iReturnCodeLocal = ReplyInt(stR);
@@ -386,10 +380,8 @@ OI::Coro::Task RegistryServer::Register(sid_t iSessionId, Binding stSecond)
 		{
 			co_await Withdraw(stSecond);
 		}
-		co_return;
+		co_return OI_ERR_CONNECT;
 	}
-	::OI::RpcData::RegRegisterRes stResponseLocal;
-	stResponseLocal.iCode = OI_ERR_FAIL;
 	if (iReturnCodeLocal == REG_OK)
 	{
 		Binding* pFound = FindBinding(iSessionId, stSecond.sName, stSecond.iId);
@@ -402,40 +394,51 @@ OI::Coro::Task RegistryServer::Register(sid_t iSessionId, Binding stSecond)
 			*pFound = stSecond;
 		}
 		PutSnapshot(stSecond);
-		stResponseLocal.iCode = OI_OK;
 		LOG_TRACE("registry online %s id=%d %s:%s", stSecond.sName.c_str(), stSecond.iId, stSecond.sIp.c_str(), stSecond.sPort.c_str());
 		fflush(stdout);
+		co_return OI_OK;
 	}
 	else if (iReturnCodeLocal == REG_TAKEN)
 	{
-		stResponseLocal.iCode = OI_ERR_EXIST;
 		LOG_TRACE("registry %s id=%d already online, refuse sid=%d", stSecond.sName.c_str(), stSecond.iId, iSessionId);
 		fflush(stdout);
+		co_return OI_ERR_EXIST;
 	}
 	else
 	{
 		LOG_TRACE("registry register %s id=%d redis failed status=%d", stSecond.sName.c_str(), stSecond.iId, (int)stR.iStatus);
 	}
-	Reply(iSessionId, ::OI::Base::PROTO_REG_REGISTER_RES, stResponseLocal);
+	co_return OI_ERR_FAIL;
 }
 
-OI::Coro::Task RegistryServer::Refresh(sid_t iSessionId, Binding stSecond)
+::OI::Rpc::RpcTask RegistryServer::Refresh(sid_t iSessionId, ::OI::RpcData::RegHeartbeat stRequest)
 {
+	Binding stSecond;
+	{
+		Binding* pBinding = FindBinding(iSessionId, stRequest.sName, stRequest.iId);
+		if (!pBinding)
+		{
+			co_return OI_ERR_FAIL;
+		}
+		stSecond = *pBinding;
+	}
 	std::vector<std::string> vArgumentsLocal = EvalArgs(kRefreshLua, stSecond);
 	::OI::Redis::RedisResult stR = co_await ::OI::Redis::CallRedis(std::move(vArgumentsLocal));
 	int iReturnCodeLocal = ReplyInt(stR);
-	Binding* pFound = m_vAlive.count(iSessionId) ? FindBinding(iSessionId, stSecond.sName, stSecond.iId) : NULL;
-	if (!pFound || pFound->sValue != stSecond.sValue)
+	bool bValid = false;
+	{
+		Binding* pFound = m_vAlive.count(iSessionId) ? FindBinding(iSessionId, stSecond.sName, stSecond.iId) : NULL;
+		bValid = pFound && pFound->sValue == stSecond.sValue;
+	}
+	if (!bValid)
 	{
 		// 续期过程中连接断了或换了登记。续期可能把键又写回去了，按这份值删掉。
 		if (iReturnCodeLocal == REG_OK || iReturnCodeLocal == REG_RENEWED)
 		{
 			co_await Withdraw(stSecond);
 		}
-		co_return;
+		co_return OI_ERR_CONNECT;
 	}
-	::OI::RpcData::RegHeartbeatRes stResponseLocal;
-	stResponseLocal.iCode = OI_ERR_FAIL;
 	if (iReturnCodeLocal == REG_OK || iReturnCodeLocal == REG_RENEWED)
 	{
 		if (iReturnCodeLocal == REG_RENEWED)
@@ -444,7 +447,7 @@ OI::Coro::Task RegistryServer::Refresh(sid_t iSessionId, Binding stSecond)
 			LOG_TRACE("registry %s id=%d registered again", stSecond.sName.c_str(), stSecond.iId);
 			fflush(stdout);
 		}
-		stResponseLocal.iCode = OI_OK;
+		co_return OI_OK;
 	}
 	else if (iReturnCodeLocal == REG_TAKEN)
 	{
@@ -467,11 +470,11 @@ OI::Coro::Task RegistryServer::Refresh(sid_t iSessionId, Binding stSecond)
 				break;
 			}
 		}
-		stResponseLocal.iCode = OI_ERR_EXIST;
 		LOG_TRACE("registry %s id=%d taken by another process", stSecond.sName.c_str(), stSecond.iId);
 		fflush(stdout);
+		co_return OI_ERR_EXIST;
 	}
-	Reply(iSessionId, ::OI::Base::PROTO_REG_HEARTBEAT_RES, stResponseLocal);
+	co_return OI_ERR_FAIL;
 }
 
 OI::Coro::Task RegistryServer::Withdraw(Binding stSecond)
@@ -492,81 +495,27 @@ OI::Coro::Task RegistryServer::Withdraw(Binding stSecond)
 	DropSnapshot(stSecond.sName, stSecond.iId);
 }
 
-void RegistryServer::Handle(::OI::Net::Session* pSession, uint32_t iIdLocal, ::OI::Base::BytesStream& stBody)
+int32_t RegistryServer::Pull(::OI::RpcData::RegPull& stRequest, ::OI::RpcData::RegPullRes& stResponse)
 {
-	sid_t iSessionIdLocal = pSession->GetSessionID();
-	if (iIdLocal == ::OI::Base::PROTO_REG_REGISTER)
+	if (!m_bSnapshotOk)
 	{
-		::OI::RpcData::RegRegister stRequestLocal;
-		stRequestLocal.deserialize(stBody);
-		if (!ValidSpacePart(stRequestLocal.sName) || stRequestLocal.iId <= 0 || stRequestLocal.sIp.empty() || stRequestLocal.sPort.empty() || (!stRequestLocal.sZone.empty() && !ValidSpacePart(stRequestLocal.sZone)))
-		{
-			::OI::RpcData::RegRegisterRes stResponseLocal;
-			stResponseLocal.iCode = OI_ERR_FAIL;
-			Reply(iSessionIdLocal, ::OI::Base::PROTO_REG_REGISTER_RES, stResponseLocal);
-			return;
-		}
-		Binding stSecond;
-		stSecond.sName = stRequestLocal.sName;
-		stSecond.iId = stRequestLocal.iId;
-		stSecond.sIp = stRequestLocal.sIp;
-		stSecond.sPort = stRequestLocal.sPort;
-		stSecond.sZone = stRequestLocal.sZone;
-		stSecond.sValue = stRequestLocal.sIp + " " + stRequestLocal.sPort;
-		if (!stSecond.sZone.empty())
-		{
-			stSecond.sValue += " " + stSecond.sZone;
-		}
-		OI::Coro::StartTask([this, iSessionIdLocal, stSecond](OI::Coro::Token)
-		{
-			return Register(iSessionIdLocal, stSecond);
-		});
-		return;
+		return OI_ERR_FAIL;
 	}
-	if (iIdLocal == ::OI::Base::PROTO_REG_HEARTBEAT)
+	for (const auto& stInst : m_vSnapshot)
 	{
-		::OI::RpcData::RegHeartbeat stRequestLocal;
-		stRequestLocal.deserialize(stBody);
-		Binding* pFound = FindBinding(iSessionIdLocal, stRequestLocal.sName, stRequestLocal.iId);
-		if (!pFound)
+		bool bWant = stRequest.vNames.empty();
+		for (const auto& sName : stRequest.vNames)
 		{
-			// registry 重启过，或之前的登记没成。客户端收到失败会重新登记。
-			::OI::RpcData::RegHeartbeatRes stResponseLocal;
-			stResponseLocal.iCode = OI_ERR_FAIL;
-			Reply(iSessionIdLocal, ::OI::Base::PROTO_REG_HEARTBEAT_RES, stResponseLocal);
-			return;
-		}
-		Binding stSecond = *pFound;
-		OI::Coro::StartTask([this, iSessionIdLocal, stSecond](OI::Coro::Token)
-		{
-			return Refresh(iSessionIdLocal, stSecond);
-		});
-		return;
-	}
-	if (iIdLocal == ::OI::Base::PROTO_REG_PULL)
-	{
-		::OI::RpcData::RegPull stRequestLocal;
-		stRequestLocal.deserialize(stBody);
-		::OI::RpcData::RegPullRes stResponseLocal;
-		stResponseLocal.iCode = OI_ERR_FAIL;
-		if (m_bSnapshotOk)
-		{
-			stResponseLocal.iCode = OI_OK;
-			for (size_t iIndexLocal = 0; iIndexLocal < m_vSnapshot.size(); ++iIndexLocal)
+			if (sName == stInst.sName)
 			{
-				const ::OI::Base::ServiceInstance& stInst = m_vSnapshot[iIndexLocal];
-				bool bWant = stRequestLocal.vNames.empty();
-				for (size_t iNumber = 0; !bWant && iNumber < stRequestLocal.vNames.size(); ++iNumber)
-				{
-					bWant = stRequestLocal.vNames[iNumber] == stInst.sName;
-				}
-				if (bWant)
-				{
-					stResponseLocal.vList.push_back(::OI::RpcData::RegInstance(stInst.sName, stInst.iId, stInst.sIp, stInst.sPort, stInst.sZone));
-				}
+				bWant = true;
+				break;
 			}
 		}
-		Reply(iSessionIdLocal, ::OI::Base::PROTO_REG_PULL_RES, stResponseLocal);
-		return;
+		if (bWant)
+		{
+			stResponse.vList.push_back(::OI::RpcData::RegInstance(stInst.sName, stInst.iId, stInst.sIp, stInst.sPort, stInst.sZone));
+		}
 	}
+	return OI_OK;
 }

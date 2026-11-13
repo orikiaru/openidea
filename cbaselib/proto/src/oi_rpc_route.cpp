@@ -3,6 +3,9 @@
 #include "oi_thread.h"
 #include "oi_log.h"
 #include "oi_tcp_channel.h"
+#include "oi_registry.h"
+#include "oi_timer_manager.h"
+#include "oi_duration.h"
 #include <tuple>
 #include <mutex>
 #include <cstdlib>
@@ -11,6 +14,12 @@ namespace OI
 {
 namespace Rpc
 {
+namespace
+{
+// 缓存还没拉到时多久再看一次。
+const int kRecheckMilliseconds = 10;
+}
+
 RouteManager::RouteManager()
 {
 	int64_t iLimit = static_cast<int64_t>(m_iMaxClients);
@@ -471,25 +480,63 @@ bool RouteAwaiter::PrepareZones()
 	return false;
 }
 
-void RouteAwaiter::Pull(int64_t iTimeoutMilliseconds)
+bool RouteAwaiter::ReadCache(int64_t iTimeoutMilliseconds)
 {
-	::OI::Base::RegistryClient::GetInstance().PullAsync(sName, [this](int32_t iCodeLocal, const std::vector<::OI::Base::ServiceInstance>& vListLocal)
+	auto& stClient = ::OI::Base::RegistryClient::GetInstance();
+	if (!stClient.Configured())
 	{
-		iCode = iCodeLocal;
+		iCode = OI_ERR_NOT_FOUND;
+		return true;
+	}
+	if (stClient.Snapshot(sName, vList))
+	{
+		iCode = OI_OK;
+		return true;
+	}
+	Recheck(::OI::Timer::SteadyMilliseconds() + iTimeoutMilliseconds);
+	return false;
+}
+
+void RouteAwaiter::Recheck(int64_t iDeadlineMilliseconds)
+{
+	const int32_t iStatus = ::OI::Timer::BaseTimerManager::GetInstance().AddTimer([this, iDeadlineMilliseconds]()
+	{
 		try
 		{
-			vList = vListLocal;
+			if (::OI::Base::ServiceTable::GetInstance().Snapshot(sName, vList))
+			{
+				iCode = OI_OK;
+			}
+			else if (::OI::Timer::SteadyMilliseconds() < iDeadlineMilliseconds)
+			{
+				Recheck(iDeadlineMilliseconds);
+				return;
+			}
+			else
+			{
+				iCode = OI_ERR_TIMEOUT;
+			}
 		}
 		catch (...)
 		{
 			iCode = OI_ERR_FAIL;
 		}
-		// Waiting→Ready 才调度。回包先到时门已是 Ready，await_suspend 的 exchange(Waiting) 会选择不挂起。
-		if (iGate.exchange(OI::Coro::Gate::Ready, std::memory_order_acq_rel) == OI::Coro::Gate::Waiting)
-		{
-			OI::Coro::Schedule(stHandle);
-		}
-	}, iTimeoutMilliseconds);
+		Finish();
+	}, kRecheckMilliseconds);
+	if (iStatus != OI_OK)
+	{
+		iCode = OI_ERR_TIMEOUT;
+		Finish();
+	}
+}
+
+void RouteAwaiter::Finish()
+{
+	// Waiting→Ready 才调度。先到时门已是 Ready，await_suspend 的 exchange(Waiting) 会选择不挂起。
+	if (iGate.exchange(OI::Coro::Gate::Ready, std::memory_order_acq_rel) == OI::Coro::Gate::Waiting)
+	{
+		OI::Coro::Schedule(stHandle);
+	}
 }
 }
 }

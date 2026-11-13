@@ -187,7 +187,7 @@ if (iRet != 0)
 // 此处直接使用 stResponse。
 ```
 
-`client.Call(req, res, duration)` 使用这个客户端的连接；`client.Call(zone, req, res, duration)` 指定分区；`client.CallAny(req, res, duration)` 按服务名选择实例。自由函数 `RpcCall(client, req, res, duration)` 同样返回任务；显式会话用 `RpcCall(manager, sid, req, res, duration)`，服务字符串用 `RpcCall("gameserver.1001", req, res, duration)`。这些接口都不需要显式响应模板参数。命名接口从入口保存单调时钟截止时间，注册查询、连接前排队和回包共用剩余预算；预算用尽后不再发送请求。注册查询另有最多 1 秒的故障检测上限；非正 RPC 时长不限制回包等待，但不取消注册查询的故障检测。实际唤醒仍受时间轮/调度粒度影响。
+`client.Call(req, res, duration)` 使用这个客户端的连接；`client.Call(zone, req, res, duration)` 指定分区；`client.CallAny(req, res, duration)` 按服务名选择实例。自由函数 `RpcCall(client, req, res, duration)` 同样返回任务；显式会话用 `RpcCall(manager, sid, req, res, duration)`，服务字符串用 `RpcCall("gameserver.1001", req, res, duration)`。这些接口都不需要显式响应模板参数。命名接口从入口保存单调时钟截止时间，读本地缓存、连接前排队和回包共用剩余预算；预算用尽后不再发送请求。还没拉到过时，最多再等 min(剩余预算, 3000ms)，等下一次 `OnSecondUpdate` 把名单写入缓存；非正 RPC 时长不限制回包等待，但这段缓存等待仍按最多 3000ms 封顶。实际唤醒仍受时间轮/调度粒度影响。
 
 可以先保存任务、后等待，也可以将任务按值交给多个协程等待：请求只发一次、响应只写一次，重复等待返回保存的状态码，不会再次修改响应。协程内跨挂起点使用的局部响应在协程帧中存活。响应和管理器必须覆盖任务的执行期，**丢弃任务对象不会取消请求**，因此输出引用版必须等待完成再离开响应作用域；不能把同一响应交给多个独立请求并发写。请求创建后可修改或销毁原值；大请求可以 `std::move` 移交。
 
@@ -205,7 +205,7 @@ auto& res = result.GetRes(); // 自动配对的响应类型
 
 不带输出的直连接口在实际 await 提交时选择当前会话，并在同一客户端临界区决定排队或绑定回包来源；构造等待对象不会截取会话号，首次连接前仍按原规则排队。可以先创建等待对象，等连接成功后再 await。需要固定会话时使用 `RpcCall(manager, sid, req, duration)`，此接口不会自动改发到新连接。自带结果的显式响应模板接口保留；输出引用的直接 co_await 写法兼容，但返回类型已改为 TaskResult<int32_t>，需要操作底层等待器的框架代码改用 MakeRpcCallAwaiter。新接口只接受明确的时长类型。创建等待对象时复制请求，调用方可用 `std::move(req)` 交出大请求以避免复制。未使用的任务或 RPC 等待对象会产生 nodiscard 编译诊断。
 
-`CallRedisSync`、`RegistryClient::Lookup`、`PullSync`、`Publish` 不能在 poll 回调（含定时器回调）里调。适合在启动阶段调用，运行期用 `co_await` 版本。注册表的 `Lookup`、`PullSync`、`Publish` 在 poll 回调里需要真正等待时会抛 `logic_error`，协程里用 `PullAsync`。在协程里直接调这些同步接口：多线程会占住一个工人；单线程的 `CallRedisSync` 在当前协程里转 `PumpOnce`，注册表这几个在单线程里转 `PollWait`。只建议测试或特殊场景使用。
+`CallRedisSync`、`RegistryClient::Lookup`、`PullSync`、`Publish` 不能在 poll 回调（含定时器回调）里调。适合在启动阶段调用。运行期选路读 `Snapshot` 的本地缓存，不在调用方协程里同步拉。登记、心跳和整量拉取由 `RegistryClient` 的单例秒更新 `OnSecondUpdate` 协程做：每秒一次，上一次没结束就跳过；`Snapshot` 未命中不立刻拉取，由下一次秒更新拉。`Lookup`、`PullSync`、`Publish` 在 poll 回调里需要真正等待时会抛 `logic_error`。在协程里直接调这些同步接口：多线程会占住一个工人；单线程的 `CallRedisSync` 在当前协程里转 `PumpOnce`，注册表这几个在单线程里转 `PollWait`。只建议测试或特殊场景使用。
 
 ## 标准 RPC 回执
 
