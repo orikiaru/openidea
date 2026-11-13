@@ -777,6 +777,7 @@ def run(case, args):
                 budget = re.search(r"hold named rpc end to end budget elapsed_ms=(\d+) bad=0", text)
                 assert budget and int(budget.group(1)) < 1450, budget.group(0) if budget else "missing budget marker"
                 assert "hold binary bool bad=0" in text
+                assert "hold binary container bad=0" in text
                 assert "hold connection isolation bad=0" in text
                 assert "hold coroutine connect bad=0" in text
                 assert "hold address connect bad=0" in text

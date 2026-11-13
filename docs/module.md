@@ -47,7 +47,7 @@ rpcdata DbSample json db {
 
 JSON 会穿透。嵌套的 `rpcdata`、`vector`、`map` 按内层继续生成，里层 `rpcdata` 自己也要标 `json`，否则外层字段无法生成 JSON。`[nojson]` 的字段不检查能不能表达成 JSON，所以不适合 JSON 的 `map` 可以留在同一个结构里，只要标 `[nojson]`。要沿用外部键就写 `[json 键名]`，例如 `0 [json count] int32_t iCount;`。不改名就写成 `0 [json] int32_t iCount;`，键名仍是 `iCount`，和什么都不写一样。
 
-`db` 不穿透，只映射头一层。整数、浮点、`bool`、`string`、`Bytes` 各是一列。`vector`、`map` 和嵌套 `rpcdata` 默认整段收成 PB blob：序号固定为 0，`vector` 每个元素一条，空 `vector` 是空 blob。写了 `[dbjson]` 才改用现有 JSON 文本入库，这时里面的 `rpcdata` 必须自己标 `json`，标量不能写 `[dbjson]`。没写 `[dbjson]` 就不做这套 JSON。blob 里的结构不用标 `db`。列名默认是字段名，`[db 列名]` 才换，只写 `[db]` 列名仍是字段名。结构没标 `db`，就不能写 `[db]`、`[nodb]`、`[dbjson]`。字段写了 `[nodb]` 就不再是数据库字段，不能再写 `[db]`、`[dbjson]`、`[dbkey]`、`[dbtype]`。
+`db` 不穿透，只映射头一层。整数、浮点、`bool`、`string`、`Bytes` 各是一列。`vector`、`map` 和嵌套 `rpcdata` 默认整段收成 PB blob：序号固定为 0，每个容器恰好一条字段，空容器也包含数量为 0 的 payload。写了 `[dbjson]` 才改用现有 JSON 文本入库，这时里面的 `rpcdata` 必须自己标 `json`，标量不能写 `[dbjson]`。没写 `[dbjson]` 就不做这套 JSON。blob 里的结构不用标 `db`。列名默认是字段名，`[db 列名]` 才换，只写 `[db]` 列名仍是字段名。结构没标 `db`，就不能写 `[db]`、`[nodb]`、`[dbjson]`。字段写了 `[nodb]` 就不再是数据库字段，不能再写 `[db]`、`[dbjson]`、`[dbkey]`、`[dbtype]`。
 
 `[dbkey]` 标主键字段，可以标多个组成联合主键，`BuildCreateTable` 和按主键读改删的语句靠它，见 [数据库客户端](database.md) 的单表语句。主键只能是整数、`bool`、`string` 或 `Bytes`，`string`、`Bytes` 还必须写定长的 `[dbtype]`；浮点、`vector`、`map`、`rpcdata` 和 `[dbjson]` 不能做主键。`[dbtype]` 换建表时的列类型，类型名不分大小写，生成时统一成大写：`VARCHAR`、`VARBINARY` 后面跟 1 到 65535 的长度，`CHAR`、`BINARY` 跟 1 到 255 的长度，`TEXT`、`MEDIUMTEXT`、`LONGTEXT`、`BLOB`、`MEDIUMBLOB`、`LONGBLOB` 不带长度，例如 `[dbtype VARBINARY 64]`。`string` 可以用其中任何一种；`Bytes` 和 PB blob 只能用二进制类型；`[dbjson]` 只能用文本类型；数值字段不能写。读行时按列名匹配，缺列保持原值，NULL、类型不对、重复列和列数对不上都失败并保持原对象。schema migration 仍未实现。模块访问数据库见 [数据库客户端](database.md)。
 

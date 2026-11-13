@@ -67,13 +67,16 @@ BytesStream& BytesStream::operator<<(const BytesStream& stFirst)
 
 BytesStream& BytesStream::operator<<(const ::OI::Rpc::Serialize& stFirst)
 {
-	stFirst.serialize(*this);
+	BytesStream stPayload;
+	stFirst.serialize(stPayload);
+	WriteLenPrefixed(*this, stPayload.Data(), stPayload.Size());
 	return *this;
 }
 
 BytesStream& BytesStream::operator>>(::OI::Rpc::Serialize& stFirst)
 {
-	stFirst.deserialize(*this);
+	const size_t iSize = ReadLenPrefix(*this);
+	ReadPb(static_cast<uint32_t>(iSize), stFirst);
 	return *this;
 }
 
@@ -120,6 +123,38 @@ PbHeaderState BytesStream::PreparePbHeader(uint32_t& iSequence, uint32_t& iSize)
 	iSequence = iSequenceValue;
 	iSize = iSizeValue;
 	return PB_HEADER_OK;
+}
+
+BytesStream& BytesStream::ReadFields(void* pObject, std::span<const PbField> vFields, std::span<uint8_t> vSeen)
+{
+	if (vSeen.size() != vFields.size() || (!pObject && !vFields.empty()))
+	{
+		throw ParserException();
+	}
+	while (RemainSize() > 0)
+	{
+		uint32_t iSequence = 0;
+		uint32_t iSize = 0;
+		ReadPbHeader(iSequence, iSize);
+		const auto it = std::lower_bound(vFields.begin(), vFields.end(), iSequence,
+		    [](const PbField& stField, uint32_t iSequenceLocal)
+		{
+			return stField.iSequence < iSequenceLocal;
+		});
+		if (it == vFields.end() || it->iSequence != iSequence)
+		{
+			SkipPb(iSize);
+			continue;
+		}
+		const size_t iField = static_cast<size_t>(it - vFields.begin());
+		if (vSeen[iField] != 0)
+		{
+			throw ParserException();
+		}
+		it->fnRead(*this, iSize, pObject);
+		vSeen[iField] = 1;
+	}
+	return *this;
 }
 
 void BytesStream::ReadPbHeader(uint32_t& iSequence, uint32_t& iSize)

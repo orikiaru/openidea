@@ -112,6 +112,44 @@ class StopHelperTests(unittest.TestCase):
             stop(proc)
         proc.kill.assert_not_called()
 
+    def test_console_not_ready_retry_then_success(self):
+        proc = mock.Mock(pid=123)
+        proc.poll.return_value = None
+        error = subprocess.CalledProcessError(6, "helper", stderr=b"AttachConsole failed")
+        with mock.patch("regression_platform.WINDOWS", True), \
+             mock.patch("subprocess.CREATE_NO_WINDOW", 0, create=True), \
+             mock.patch("regression_platform.subprocess.run", side_effect=[error, None]) as helper, \
+             mock.patch("regression_platform.time.sleep"):
+            stop(proc)
+        self.assertEqual(helper.call_count, 2)
+        proc.kill.assert_not_called()
+
+    def test_console_not_ready_then_process_exits(self):
+        proc = mock.Mock(pid=123)
+        proc.poll.side_effect = [None, 0]
+        error = subprocess.CalledProcessError(6, "helper", stderr=b"AttachConsole failed")
+        with mock.patch("regression_platform.WINDOWS", True), \
+             mock.patch("subprocess.CREATE_NO_WINDOW", 0, create=True), \
+             mock.patch("regression_platform.subprocess.run", side_effect=error) as helper, \
+             mock.patch("regression_platform.time.sleep") as sleep:
+            stop(proc)
+        self.assertEqual(helper.call_count, 1)
+        sleep.assert_not_called()
+        proc.kill.assert_not_called()
+
+    def test_console_not_ready_exhaustion_remains_failure(self):
+        proc = mock.Mock(pid=123)
+        proc.poll.return_value = None
+        error = subprocess.CalledProcessError(6, "helper", stderr=b"AttachConsole failed")
+        with mock.patch("regression_platform.WINDOWS", True), \
+             mock.patch("subprocess.CREATE_NO_WINDOW", 0, create=True), \
+             mock.patch("regression_platform.subprocess.run", side_effect=error) as helper, \
+             mock.patch("regression_platform.time.sleep"):
+            with self.assertRaises(subprocess.CalledProcessError):
+                stop(proc)
+        self.assertEqual(helper.call_count, 10)
+        proc.kill.assert_not_called()
+
     def test_already_exited_never_sends_control(self):
         proc = mock.Mock()
         proc.poll.return_value = 0

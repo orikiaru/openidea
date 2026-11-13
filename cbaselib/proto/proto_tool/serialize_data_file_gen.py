@@ -24,6 +24,9 @@ class SerializeDataFileGen:
         return self.member_init_list        
     
     def GetMemberInitParamList(self):
+        # 没有字段时没有参数构造函数。空串再 rindex 会在生成时空包协议处崩掉。
+        if not self.data.members:
+            return ""
         if(self.member_init_param_list == ""):
             for m in self.data.members:
                 # const m.type & l_m.name = m.value , const member2 &l_member2 = m.value
@@ -54,25 +57,17 @@ class SerializeDataFileGen:
         return "\n".join(lines) + "\n"
 
     def GetPbDeserialize(self):
-        lines = []
-        for m in self.data.members:
-            if("vector" in m.type or "map" in m.type):
-                lines.append("        {}.clear();".format(m.name))
-        lines.append("        while (os.RemainSize() > 0)")
-        lines.append("        {")
-        lines.append("            uint32_t field_seq = 0;")
-        lines.append("            uint32_t field_size = 0;")
-        lines.append("            os.ReadPbHeader(field_seq, field_size);")
-        lines.append("            switch (field_seq)")
-        lines.append("            {")
-        for index, m in enumerate(self.data.members):
-            lines.append("            case {}: os.ReadPb(field_size, {}); break;".format(self.GetFieldSeq(index, m), m.name))
-        lines.append("            default: os.SkipPb(field_size); break;")
-        lines.append("            }")
-        lines.append("        }")
-        lines.append("        return os;")
+        fields = sorted((self.GetFieldSeq(index, member), member)
+                        for index, member in enumerate(self.data.members))
+        lines = ["        static constexpr std::array<::OI::Base::PbField, %d> fields = {{" % len(fields)]
+        for sequence, member in fields:
+            lines.append("            OI_PB_FIELD(%s, %d, %s),"
+                         % (self.class_name, sequence, member.name))
+        lines.append("        }};")
+        lines.append("        std::array<uint8_t, %d> seen{};" % len(fields))
+        lines.append("        return os.ReadFields(this, fields, seen);")
         return "\n".join(lines) + "\n"
-        
+
     def GetMemberDeclareList(self):
         if(self.member_declare_list == ""):
             for m in self.data.members:
@@ -140,6 +135,12 @@ __PB_DESERIALIZE__    }
 __COMPARE____JSON_METHODS____DB_METHODS__};
 }}
 '''
+        # 无字段再留参数构造函数会和上面的默认构造重复。有字段的输出保持原样。
+        if not self.data.members:
+            ctor = "    __CLASS_NAME__ ( __MEMBER_INIT_PARAM_LIST__ )\n    {\n        __MEMBER_INIT_LIST__\n    }\n"
+            if ctor not in file_data:
+                raise RuntimeError("empty rpcdata constructor marker missing")
+            file_data = file_data.replace(ctor, "")
         file_data = self.DoReplace(file_data)
         if self.data.has_json:
             file_data = file_data.replace("__JSON_INCLUDE__", '#include "oi_json.h"\n#include <memory>\n#include <string>\n')

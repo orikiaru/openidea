@@ -5,6 +5,7 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
+import time
 
 WINDOWS = os.name == "nt"
 SUFFIX = ".exe" if WINDOWS else ""
@@ -27,17 +28,23 @@ def stop(proc):
     if isinstance(proc, WslRedis):
         proc.terminate()
     elif WINDOWS:
-        try:
-            subprocess.run([sys.executable, str(Path(__file__).resolve()), "--interrupt", str(proc.pid)],
-                           check=True, creationflags=subprocess.CREATE_NO_WINDOW, timeout=5,
-                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        except (OSError, subprocess.SubprocessError) as error:
-            print("Windows interrupt helper failed pid=%s returncode=%s stdout=%r stderr=%r error=%r" % (
-                proc.pid, getattr(error, "returncode", None), getattr(error, "stdout", None),
-                getattr(error, "stderr", None), error), file=sys.stderr, flush=True)
-            # AttachConsole can lose a race with normal exit. Never hide a live
-            # process's helper failure or treat a forced kill as graceful exit.
-            if proc.poll() is None:
+        for attempt in range(10):
+            try:
+                subprocess.run([sys.executable, str(Path(__file__).resolve()), "--interrupt", str(proc.pid)],
+                               check=True, creationflags=subprocess.CREATE_NO_WINDOW, timeout=5,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                break
+            except (OSError, subprocess.SubprocessError) as error:
+                if proc.poll() is not None:
+                    return
+                # A newly created console process can still be attaching to its console.
+                # Only the helper's explicit AttachConsole ERROR_INVALID_HANDLE is retryable.
+                if isinstance(error, subprocess.CalledProcessError) and error.returncode == 6 and attempt < 9:
+                    time.sleep(0.05)
+                    continue
+                print("Windows interrupt helper failed pid=%s returncode=%s stdout=%r stderr=%r error=%r" % (
+                    proc.pid, getattr(error, "returncode", None), getattr(error, "stdout", None),
+                    getattr(error, "stderr", None), error), file=sys.stderr, flush=True)
                 raise
     else:
         proc.terminate()
@@ -116,7 +123,9 @@ if __name__ == "__main__":
     kernel = ctypes.windll.kernel32
     kernel.FreeConsole()
     if not kernel.AttachConsole(int(sys.argv[2])):
-        raise ctypes.WinError()
+        error = ctypes.WinError()
+        print("AttachConsole failed: %s" % error, file=sys.stderr, flush=True)
+        raise SystemExit(6 if error.winerror == 6 else 1)
     kernel.SetConsoleCtrlHandler(None, True)
     if not kernel.GenerateConsoleCtrlEvent(0, 0):
         raise ctypes.WinError()

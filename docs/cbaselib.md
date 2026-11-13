@@ -108,6 +108,12 @@ if (iRangeRet != OI_OK)
 
 `include` 是给业务包含的汇总头：`oi_header.h`、`oi_base.h`、`oi_net.h`。
 
+### 容器二进制格式
+
+PB 每个字段只有一条 `uint32 index + uint32 bytesize + payload`，整数和长度均为小端。`vector` payload 是 `uint32 count` 后逐个流式元素；`map` payload 是 `uint32 count` 后逐对流式 key/value。嵌套容器递归使用相同格式；标量定宽，流式 string 和 Bytes 保留原长度前缀。流式 rpcdata 使用 `uint32` 字节长加完整对象，PB 字段中的 rpcdata 仍使用字段自身的长度，不额外嵌套流式长度。空容器仍有一个 count 为 0 的字段。
+
+容器解码先检查数量与剩余字节，再逐项解码到临时容器，成功后替换输出；字段内多余字节、截断和重复 map key 会被拒绝；生成的 rpcdata 使用按字段号排序的静态字段表，表项由无捕获回调读取成员，每次解码用局部数组记录已见字段；各结构共用底层解码循环，不生成逐结构 switch；它拒绝重复的已知字段，允许字段乱序和未知字段。旧版容器格式和新版不兼容，通信两端须同步升级；持久化的旧容器 blob 须使用旧版本读取后迁移为新格式，不能直接交给新版解码。
+
 ## 进程里谁先起来
 
 时序在 [时序图](sequence-diagram/README.md)。生成出来的 `main` 按这个顺序：

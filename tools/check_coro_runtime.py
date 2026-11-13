@@ -189,7 +189,7 @@ int main(int iCountParam, char** vArgumentsParam)
     stFields.WritePb(0, uint64_t{42});
     stFields.WritePb(17, uint64_t{99});
     OI::RpcData::WorkCompleted stMessage;
-    stFields >> stMessage;
+    stMessage.deserialize(stFields);
     OI::Base::BytesStream stPacket;
     stPacket.WritePb(999, stMessage);
     uint32_t iProtocol = 0;

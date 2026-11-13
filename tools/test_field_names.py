@@ -49,6 +49,39 @@ class FieldNamesTest(unittest.TestCase):
         self.assertEqual(plain.members[0].json_name, "iCount")
         self.assertEqual(plain.members[0].db_name, "iCount")
 
+    def test_container_deserialize_does_not_clear_existing_values(self):
+        data = ParseProtoText("rpcdata Example { 0 vector<int32_t> vNumbers; 1 map<string, int32_t> mFlags; 2 int32_t iSibling; }")[0]
+        generated = SerializeDataFileGen(data).GenDataFile()
+        self.assertIn("os.WritePb(0, vNumbers)", generated)
+        self.assertIn("os.WritePb(1, mFlags)", generated)
+        self.assertIn("static constexpr std::array<::OI::Base::PbField, 3> fields", generated)
+        self.assertIn("std::array<uint8_t, 3> seen{};", generated)
+        for name, sequence in (("vNumbers", 0), ("mFlags", 1), ("iSibling", 2)):
+            self.assertIn(f"OI_PB_FIELD(Example, {sequence}, {name})", generated)
+        self.assertIn("return os.ReadFields(this, fields, seen);", generated)
+        self.assertNotIn("switch (field_seq)", generated)
+        self.assertNotIn("while (os.RemainSize()", generated)
+        self.assertNotIn("vNumbers.clear()", generated)
+        self.assertNotIn("mFlags.clear()", generated)
+
+    def test_deserialize_field_table_is_sorted_and_empty_is_supported(self):
+        data = ParseProtoText("rpcdata Example { 20 int32_t iLast; 7 string sFirst; 13 vector<int32_t> vMiddle; }")[0]
+        generated = SerializeDataFileGen(data).GenDataFile()
+        entries = ["OI_PB_FIELD(Example, 7, sFirst)",
+                   "OI_PB_FIELD(Example, 13, vMiddle)",
+                   "OI_PB_FIELD(Example, 20, iLast)"]
+        positions = [generated.index(entry) for entry in entries]
+        self.assertEqual(positions, sorted(positions))
+        self.assertIn("static constexpr std::array<::OI::Base::PbField, 3> fields", generated)
+        self.assertNotIn("switch (field_seq)", generated)
+        self.assertNotIn("while (os.RemainSize()", generated)
+        empty = SerializeDataFileGen(ParseProtoText("rpcdata Empty { }")[0]).GenDataFile()
+        self.assertIn("static constexpr std::array<::OI::Base::PbField, 0> fields", empty)
+        self.assertIn("std::array<uint8_t, 0> seen{};", empty)
+        self.assertIn("return os.ReadFields(this, fields, seen);", empty)
+        self.assertNotIn("switch (field_seq)", empty)
+        self.assertNotIn("while (os.RemainSize()", empty)
+
     def test_codec_markers_skip_fields_and_blob_complex_values(self):
         text = "rpcdata Child json { 0 int32_t iNumber; } rpcdata Example json db { 7 [json count, db id] int32_t iCount; 20 string sName; 3 [nojson] int32_t iSecret; 4 [nodb] string sCache; 5 vector<int32_t> vNumbers; 6 map<string, int32_t> mFlags; 8 [db child] Child stChild; }"
         data = ParseProtoText(text)[1]
@@ -74,7 +107,7 @@ class FieldNamesTest(unittest.TestCase):
         self.assertIn("::OI::Db::AppendRowParameters(*this, vParameters)", generated)
         self.assertIn("::OI::Db::ToParameterMap(*this)", generated)
         self.assertIn("::OI::Db::FromCellMap(*this, mCells)", generated)
-        self.assertNotIn("&Example::sCache", generated)
+        self.assertNotIn("pMember == &Example::sCache", generated)
         self.assertIn('#include "oi_db_row.h"', generated)
 
     def test_invalid_and_duplicate_names(self):

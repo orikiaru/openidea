@@ -140,7 +140,7 @@ inline bool FromDbText(const Blob& stBlob, ::OI::Base::Bytes& stOutput)
 }
 
 // 头一层的 vector、map、rpcdata 不拆列。blob 是这条值自己的 PB：序号固定为 0。
-// vector 每个元素一条，空 vector 是空 blob；map 和 rpcdata 是一整条。
+// 所有类型均为一条完整字段，空容器也带数量头。
 template <typename T>
 Blob ToDbBlob(const T& stValue)
 {
@@ -161,16 +161,17 @@ bool FromDbBlob(const Blob& stBlob, T& stOutput)
 	{
 		::OI::Base::BytesStream stStream(stBlob.empty() ? nullptr : reinterpret_cast<const char*>(stBlob.data()), stBlob.size());
 		T stDecoded{};
-		while (stStream.RemainSize() > 0)
+		uint32_t iSequence = 0;
+		uint32_t iSize = 0;
+		stStream.ReadPbHeader(iSequence, iSize);
+		if (iSequence != 0)
 		{
-			uint32_t iSequence = 0;
-			uint32_t iSize = 0;
-			stStream.ReadPbHeader(iSequence, iSize);
-			if (iSequence != 0)
-			{
-				return false;
-			}
-			stStream.ReadPb(iSize, stDecoded);
+			return false;
+		}
+		stStream.ReadPb(iSize, stDecoded);
+		if (stStream.RemainSize() != 0)
+		{
+			return false;
 		}
 		stOutput = std::move(stDecoded);
 		return true;

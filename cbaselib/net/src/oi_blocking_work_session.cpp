@@ -57,7 +57,7 @@ class BlockingWorkSessionManager::BlockingWorkSession : public Session
 			case OI::RpcData::WORK_PROTOCOL_COMPLETED:
 			{
 				OI::RpcData::WorkCompleted stMessage;
-				stPacket >> stMessage;
+				stPacket.ReadPb(iSize, stMessage);
 				if (stMessage.iOperation != stCompletion.iOperation)
 				{
 					throw OI::Base::ParserException();

@@ -1,6 +1,8 @@
 #pragma once
 #include "oi_bytes.h"
 #include <vector>
+#include <array>
+#include <span>
 #include <list>
 #include <map>
 #include <string>
@@ -75,6 +77,15 @@ T LoadLittleEndian(const void* pSource)
 	return stValue;
 }
 
+class BytesStream;
+
+// 按字段号升序排列，大小只与实际字段数有关。
+struct PbField
+{
+	uint32_t iSequence;
+	void (*fnRead)(BytesStream&, uint32_t, void*);
+};
+
 // 带读游标的字节流。编码往末尾追加，解码从游标往前读，字节不够抛 ParserException。
 class BytesStream : public Bytes
 {
@@ -82,6 +93,7 @@ class BytesStream : public Bytes
 	size_t m_iCurrentPosition;
 	// StartTransaction 记下的游标。RollBack 回到这里。
 	size_t m_iSnapshotPosition;
+
   public:
 	BytesStream()
 	    : m_iCurrentPosition(0), m_iSnapshotPosition(0)
@@ -185,29 +197,76 @@ class BytesStream : public Bytes
 	template <typename T>
 	BytesStream& operator>>(std::vector<T>& stValueLocal)
 	{
-		uint32_t iSize;
-		(*this) >> iSize;
-		// 个数是对端给的。先按剩余字节估一下，免得按一个巨大的数先分配。
-		const size_t iMinElem = PbFixedTrait<T>::bValue ? sizeof(T) : 1;
-		if ((size_t)iSize > RemainSize() / iMinElem)
+		static_assert(!std::is_same_v<T, bool>, "vector<bool> is not a protocol container");
+		uint32_t iCount = 0;
+		(*this) >> iCount;
+		// 变长值至少有四字节长度/数量头，不能按不可信数量先分配。
+		constexpr size_t iMinElementSize = PbFixedTrait<T>::bValue ? sizeof(T) : sizeof(uint32_t);
+		if (iCount > 0x7FFFFFFF || iCount > RemainSize() / iMinElementSize)
 		{
 			throw ParserException();
 		}
-		stValueLocal.resize(iSize);
-		for (uint32_t iIndexLocal = 0; iIndexLocal < iSize; ++iIndexLocal)
+		std::vector<T> vDecoded;
+		for (uint32_t iIndex = 0; iIndex < iCount; ++iIndex)
 		{
-			(*this) >> stValueLocal[iIndexLocal];
+			T stElement{};
+			(*this) >> stElement;
+			vDecoded.push_back(std::move(stElement));
 		}
+		stValueLocal = std::move(vDecoded);
 		return *this;
 	}
 	template <typename T>
 	BytesStream& operator<<(const std::vector<T>& stValueLocal)
 	{
-		uint32_t iSize = stValueLocal.size();
-		(*this) << iSize;
+		static_assert(!std::is_same_v<T, bool>, "vector<bool> is not a protocol container");
+		if (stValueLocal.size() > 0x7FFFFFFF)
+		{
+			throw ParserException();
+		}
+		(*this) << static_cast<uint32_t>(stValueLocal.size());
 		for (const auto& stValue : stValueLocal)
 		{
 			(*this) << stValue;
+		}
+		return *this;
+	}
+	template <typename K, typename V>
+	BytesStream& operator>>(std::map<K, V>& stValueLocal)
+	{
+		uint32_t iCount = 0;
+		(*this) >> iCount;
+		constexpr size_t iMinKeySize = PbFixedTrait<K>::bValue ? sizeof(K) : sizeof(uint32_t);
+		constexpr size_t iMinValueSize = PbFixedTrait<V>::bValue ? sizeof(V) : sizeof(uint32_t);
+		if (iCount > 0x7FFFFFFF || iCount > RemainSize() / (iMinKeySize + iMinValueSize))
+		{
+			throw ParserException();
+		}
+		std::map<K, V> mDecoded;
+		for (uint32_t iIndex = 0; iIndex < iCount; ++iIndex)
+		{
+			K stKey{};
+			V stValue{};
+			(*this) >> stKey >> stValue;
+			if (!mDecoded.emplace(std::move(stKey), std::move(stValue)).second)
+			{
+				throw ParserException();
+			}
+		}
+		stValueLocal = std::move(mDecoded);
+		return *this;
+	}
+	template <typename K, typename V>
+	BytesStream& operator<<(const std::map<K, V>& stValueLocal)
+	{
+		if (stValueLocal.size() > 0x7FFFFFFF)
+		{
+			throw ParserException();
+		}
+		(*this) << static_cast<uint32_t>(stValueLocal.size());
+		for (const auto& [stKey, stValue] : stValueLocal)
+		{
+			(*this) << stKey << stValue;
 		}
 		return *this;
 	}
@@ -216,7 +275,7 @@ class BytesStream : public Bytes
 	// totalsize 是后面所有 seqid+size+data 的总字节数。
 	// seqid 从 0 起，按字段声明顺序对应；允许缺号、乱序。
 	// 没出现的 seqid 保持字段原值，不认识的 seqid 按 size 跳过。
-	// vector 的每个元素单独一条，seqid 相同。
+	// 每个字段只占一条；vector/map 的字段体是数量加元素，嵌套值自行编码。
 	// 字段头、长度前缀、定宽整数、枚举、float、double 都是小端，不看主机字节序。
 	BytesStream& WritePbRaw(uint32_t iSequence, const void* pData, uint32_t iSize);
 	PbHeaderState PreparePbHeader(uint32_t& iSequence, uint32_t& iSize);
@@ -237,11 +296,9 @@ class BytesStream : public Bytes
 	template <typename T>
 	BytesStream& WritePb(uint32_t iSequence, const std::vector<T>& stValueLocal)
 	{
-		for (const auto& stValue : stValueLocal)
-		{
-			WritePb(iSequence, stValue);
-		}
-		return *this;
+		BytesStream stPayload;
+		stPayload << stValueLocal;
+		return WritePb(iSequence, static_cast<const Bytes&>(stPayload));
 	}
 
 	template <typename T>
@@ -273,81 +330,51 @@ class BytesStream : public Bytes
 	template <typename T>
 	void ReadPb(uint32_t iSize, std::vector<T>& stValueLocal)
 	{
-		T stElem{};
-		ReadPb(iSize, stElem);
-		stValueLocal.push_back(std::move(stElem));
+		ReadPbContainer(iSize, stValueLocal);
 	}
 	template <typename K, typename V>
 	BytesStream& WritePb(uint32_t iSequence, const std::map<K, V>& stValueLocal)
 	{
-		BytesStream stAll;
-		for (const auto& [stKey, stValue] : stValueLocal)
-		{
-			BytesStream stPair;
-			stPair.WritePb(0, stKey);
-			stPair.WritePb(1, stValue);
-			uint32_t iPairSize = (uint32_t)stPair.Size();
-			stAll.WritePbRaw(0, iPairSize ? stPair.Begin() : NULL, iPairSize);
-		}
-		uint32_t iSize = (uint32_t)stAll.Size();
-		return WritePbRaw(iSequence, iSize ? stAll.Begin() : NULL, iSize);
+		BytesStream stPayload;
+		stPayload << stValueLocal;
+		return WritePb(iSequence, static_cast<const Bytes&>(stPayload));
 	}
 	template <typename K, typename V>
 	void ReadPb(uint32_t iSize, std::map<K, V>& stValueLocal)
+	{
+		ReadPbContainer(iSize, stValueLocal);
+	}
+
+	BytesStream& ReadFields(void* pObject, std::span<const PbField> vFields, std::span<uint8_t> vSeen);
+
+  private:
+	template <typename T>
+	void ReadPbContainer(uint32_t iSize, T& stValueLocal)
 	{
 		if (RemainSize() < iSize)
 		{
 			throw ParserException();
 		}
-		BytesStream stAll;
-		if (iSize > 0)
+		BytesStream stPayload(GetCurPtr(), iSize);
+		T stDecoded;
+		stPayload >> stDecoded;
+		if (stPayload.RemainSize() != 0)
 		{
-			stAll.Append(GetCurPtr(), iSize);
+			throw ParserException();
 		}
+		stValueLocal = std::move(stDecoded);
 		m_iCurrentPosition += iSize;
-		stValueLocal.clear();
-		while (stAll.RemainSize() > 0)
-		{
-			uint32_t iPairSequence = 0;
-			uint32_t iPairSize = 0;
-			stAll.ReadPbHeader(iPairSequence, iPairSize);
-			BytesStream stPair;
-			if (iPairSize > 0)
-			{
-				stPair.Append(stAll.GetCurPtr(), iPairSize);
-			}
-			stAll.AddCurPos(iPairSize);
-			K stKey;
-			V stVal;
-			bool bGotKey = false;
-			bool bGotVal = false;
-			while (stPair.RemainSize() > 0)
-			{
-				uint32_t iFieldSequence = 0;
-				uint32_t iFieldSize = 0;
-				stPair.ReadPbHeader(iFieldSequence, iFieldSize);
-				if (iFieldSequence == 0)
-				{
-					stPair.ReadPb(iFieldSize, stKey);
-					bGotKey = true;
-				}
-				else if (iFieldSequence == 1)
-				{
-					stPair.ReadPb(iFieldSize, stVal);
-					bGotVal = true;
-				}
-				else
-				{
-					stPair.SkipPb(iFieldSize);
-				}
-			}
-			if (!bGotKey || !bGotVal)
-			{
-				throw ParserException();
-			}
-			stValueLocal.insert(std::make_pair(stKey, stVal));
-		}
 	}
 };
 }
 }
+
+// 表项直接生成对应成员的解码函数，不引入成员指针模板实例。
+#define OI_PB_FIELD(Type, Sequence, Member)                                             \
+	::OI::Base::PbField                                                                 \
+	{                                                                                   \
+		Sequence, +[](::OI::Base::BytesStream& stStream, uint32_t iSize, void* pObject) \
+		{                                                                               \
+			stStream.ReadPb(iSize, static_cast<Type*>(pObject)->Member);                \
+		}                                                                               \
+	}
