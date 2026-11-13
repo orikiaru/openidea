@@ -13,7 +13,7 @@ class RpcAwaitMgr
 	template <typename T>
 	OI::Coro::TaskResult<int> CheckSingleUse(std::shared_ptr<T> pCall);
 	// 等同一次建连。创建时就跑到挂起。
-	OI::Coro::TaskResult<bool> AwaitConnect(std::shared_ptr<OI::Net::SessionManager::ConnectAwaiter> pConnect);
+	OI::Coro::TaskResult<int32_t> AwaitConnect(std::shared_ptr<OI::Net::SessionManager::ConnectAwaiter> pConnect);
 	// RPC、HTTP 和 32 个协程的建连都只能成功等待一次。移走后再等会拒绝。
 	OI::Coro::TaskResult<int> CheckAwaitOwnership();
 

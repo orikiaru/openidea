@@ -37,7 +37,6 @@
 #include <thread>
 #include <vector>
 
-
 // 成功且标记对上返回 0，其他结果原样返回状态码。
 OI::Coro::TaskResult<int32_t> RpcAdmissionMgr::AdmissionCall(DeferredRpcProbe* pClient)
 {
@@ -58,7 +57,7 @@ OI::Coro::TaskResult<int> RpcAdmissionMgr::CheckRpcAdmission()
 	int iBad = 0;
 	for (auto& stClient : vClients)
 	{
-		if (!(co_await stClient.StartClient()))
+		if ((co_await stClient.StartClient()) != OI_OK)
 		{
 			co_return 1;
 		}

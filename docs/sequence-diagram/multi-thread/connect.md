@@ -58,4 +58,4 @@ sequenceDiagram
 
 `ipcclient` 的 `OnClientConnect` 里再 `Start` 回声、日志和 Hold。
 
-`StartClient()` 不等待也会启动连接；`co_await StartClient()` 等待同一代连接的结果，成功 true，失败 false。回调先于 await 到达时保留结果，后续 await 不丢唤醒；无布尔模式参数。
+`StartClient()` 不等待也会启动连接；`co_await StartClient()` 等待同一代连接的结果，成功返回 `OI_OK`，失败返回对应错误码。回调先于 await 到达时保留结果，后续 await 不丢唤醒；无布尔模式参数。

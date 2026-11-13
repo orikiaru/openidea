@@ -36,7 +36,6 @@
 #include <thread>
 #include <vector>
 
-
 OI::Coro::TaskResult<int> HttpMgr::CheckHttpFraming(int32_t iHttpPort)
 {
 	int iBadLocal = 0;
@@ -45,38 +44,38 @@ OI::Coro::TaskResult<int> HttpMgr::CheckHttpFraming(int32_t iHttpPort)
 	{
 		const char* pPath;
 		int iStatus;
-		bool bFail;
+		int32_t iCode;
 		const char* pBody;
 	};
 	const std::vector<HttpCase> vCases{
-		{"good", 200, false, "ok"},
-		{"interim", 200, false, "ok"},
-		{"fragmented", 200, false, "ok"},
-		{"204", 204, false, ""},
-		{"304", 304, false, ""},
-		{"chunk-good", 200, false, "ok"},
-		{"length-junk", 200, true, ""},
-		{"length-overflow", 200, true, ""},
-		{"length-conflict", 200, true, ""},
-		{"te-cl", 200, true, ""},
-		{"chunk-separator", 200, true, ""},
-		{"chunk-junk", 200, true, ""},
-		{"truncated", 200, true, ""},
-		{"only-interim", 100, true, ""},
-		{"tail", 200, false, "ok"},
-		{"good", 200, false, "ok"},
-		{"chunk-tail", 200, false, "ok"},
-		{"good", 200, false, "ok"},
-		{"empty-tail", 204, false, ""},
-		{"good", 200, false, "ok"},
+	    {"good", 200, OI_OK, "ok"},
+	    {"interim", 200, OI_OK, "ok"},
+	    {"fragmented", 200, OI_OK, "ok"},
+	    {"204", 204, OI_OK, ""},
+	    {"304", 304, OI_OK, ""},
+	    {"chunk-good", 200, OI_OK, "ok"},
+	    {"length-junk", 200, OI_ERR_PROTOCOL, ""},
+	    {"length-overflow", 200, OI_ERR_PROTOCOL, ""},
+	    {"length-conflict", 200, OI_ERR_PROTOCOL, ""},
+	    {"te-cl", 200, OI_ERR_PROTOCOL, ""},
+	    {"chunk-separator", 200, OI_ERR_PROTOCOL, ""},
+	    {"chunk-junk", 200, OI_ERR_PROTOCOL, ""},
+	    {"truncated", 200, OI_ERR_PROTOCOL, ""},
+	    {"only-interim", 100, OI_ERR_PROTOCOL, ""},
+	    {"tail", 200, OI_OK, "ok"},
+	    {"good", 200, OI_OK, "ok"},
+	    {"chunk-tail", 200, OI_OK, "ok"},
+	    {"good", 200, OI_OK, "ok"},
+	    {"empty-tail", 204, OI_OK, ""},
+	    {"good", 200, OI_OK, "ok"},
 	};
 	for (const auto& stCase : vCases)
 	{
 		auto stResult = co_await stHttp.Get(std::string("/") + stCase.pPath, {});
-		if (stResult.bFail != stCase.bFail || (!stCase.bFail && (stResult.iStatus != stCase.iStatus || stResult.sBody != stCase.pBody)))
+		if (stResult.iCode != stCase.iCode || (stCase.iCode == OI_OK && (stResult.iStatus != stCase.iStatus || stResult.sBody != stCase.pBody)))
 		{
 			++iBadLocal;
-			LOG_TRACE("http regression path=%s status=%d fail=%d error=%s", stCase.pPath, stResult.iStatus, stResult.bFail, stResult.sError.c_str());
+			LOG_TRACE("http regression path=%s status=%d code=%d error=%s", stCase.pPath, stResult.iStatus, stResult.iCode, stResult.sError.c_str());
 		}
 	}
 	LOG_TRACE("hold http framing bad=%d", iBadLocal);
@@ -91,10 +90,10 @@ OI::Coro::TaskResult<int> HttpMgr::CheckHttpNoReuse(int32_t iHttpPort)
 	for (int iIndex = 0; iIndex < 2; ++iIndex)
 	{
 		auto stResult = co_await stHttp.Get("/good", {});
-		if (stResult.bFail || stResult.iStatus != 200 || stResult.sBody != "ok")
+		if (stResult.iCode != OI_OK || stResult.iStatus != 200 || stResult.sBody != "ok")
 		{
 			++iBadLocal;
-			LOG_TRACE("http no reuse index=%d status=%d fail=%d error=%s", iIndex, stResult.iStatus, stResult.bFail ? 1 : 0, stResult.sError.c_str());
+			LOG_TRACE("http no reuse index=%d status=%d code=%d error=%s", iIndex, stResult.iStatus, stResult.iCode, stResult.sError.c_str());
 		}
 	}
 	LOG_TRACE("hold http no reuse bad=%d", iBadLocal);
@@ -124,7 +123,7 @@ OI::Coro::TaskResult<int> HttpMgr::CheckHttpRelease(int32_t iHttpPort)
 	for (int iIndex = 0; iIndex < 32; ++iIndex)
 	{
 		auto stResult = co_await stLargeHttp.Get("/large", {});
-		if (stResult.bFail || stResult.sBody != std::string(1024 * 1024, 'x'))
+		if (stResult.iCode != OI_OK || stResult.sBody != std::string(1024 * 1024, 'x'))
 		{
 			++iBadLocal;
 		}

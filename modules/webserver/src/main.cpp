@@ -6,15 +6,17 @@ int main(int iArgumentCount, char* vArguments[])
 {
 	(void)iArgumentCount;
 	(void)vArguments;
-	if (!::OI::Base::Config::GlobalMutableConfig().Parse("../config/webserver.toml"))
+	int32_t iCode = ::OI::Base::Config::GlobalMutableConfig().Parse("../config/webserver.toml");
+	if (iCode != OI_OK)
 	{
-		printf("ParseConfigError\n");
-		return -2;
+		fprintf(stderr, "web server config parse failed: code=%d\n", iCode);
+		return iCode;
 	}
-	if (!WebServer::GetInstance().Run())
+	iCode = WebServer::GetInstance().Run();
+	if (iCode != OI_OK)
 	{
-		printf("web server failed\n");
-		return 1;
+		fprintf(stderr, "web server run failed: code=%d\n", iCode);
+		return iCode;
 	}
 	return 0;
 }

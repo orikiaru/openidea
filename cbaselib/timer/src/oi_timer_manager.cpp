@@ -20,14 +20,14 @@ BaseTimerManager::BaseTimerManager()
 	m_iTickOffsetMilliseconds = 0;
 }
 
-bool BaseTimerManager::Init()
+int32_t BaseTimerManager::Init()
 {
 	uint32_t iOffsetMilliseconds = 50;
 	TryGetConfigNoReturn("Timer.offset_ms", iOffsetMilliseconds);
 	if (iOffsetMilliseconds == 0 || 1000 % iOffsetMilliseconds != 0)
 	{
 		fprintf(stderr, "Timer.offset_ms=%u must divide 1000\n", iOffsetMilliseconds);
-		return false;
+		return OI_ERR_INVALID_ARGUMENT;
 	}
 
 	uint32_t iTimerLevelCount = 4;
@@ -35,7 +35,7 @@ bool BaseTimerManager::Init()
 	if (iTimerLevelCount <= 2)
 	{
 		fprintf(stderr, "Timer.timer_lv_count=%u must be bigger than 2\n", iTimerLevelCount);
-		return false;
+		return OI_ERR_INVALID_ARGUMENT;
 	}
 	m_iTimerLevelCount = iTimerLevelCount;
 
@@ -55,7 +55,7 @@ bool BaseTimerManager::Init()
 	if (vTimerLevels.size() != m_iTimerLevelCount || vTimerLevels[m_iTimerLevelCount - 1] != 1)
 	{
 		fprintf(stderr, "Timer.timer_lvs needs %zu levels and the last one must be 1\n", (size_t)m_iTimerLevelCount);
-		return false;
+		return OI_ERR_INVALID_ARGUMENT;
 	}
 	// 各层格子数相乘不能溢出 uint32_t。
 	uint64_t iTotal = 1;
@@ -68,7 +68,7 @@ bool BaseTimerManager::Init()
 		if (vTimerLevels[iIndexLocal] <= 0 || vTimerLevels[iIndexLocal] > 0xFFFFFFFFll || iTotal > 0xFFFFFFFFull)
 		{
 			fprintf(stderr, "Timer.timer_lvs[%zu]=%lld out of range\n", iIndexLocal, (long long)vTimerLevels[iIndexLocal]);
-			return false;
+			return OI_ERR_INVALID_ARGUMENT;
 		}
 	}
 
@@ -89,7 +89,7 @@ bool BaseTimerManager::Init()
 	localtime_r(&m_iCurrentTime, &m_stCurrentCalendarTime);
 	// Windows / Linux 都用 poll 循环上的 libuv timer 叫醒
 	::OI::Net::Poll::GetInstance().ArmTick(m_iTickOffsetMilliseconds, OnLoopTick);
-	return true;
+	return OI_OK;
 }
 
 void BaseTimerManager::OnSignal()
@@ -175,11 +175,21 @@ void BaseTimerManager::DispatchUpdates()
 	::OI::Base::SingletonUpdates::Instance().DispatchSecond(m_iCurrentTime);
 }
 
-void BaseTimerManager::AddTimer(BaseTimer* pTimer, int iMillisecond)
+int32_t BaseTimerManager::AddTimer(BaseTimer* pTimer, int iMillisecond)
 {
+	const int32_t iThreadStatus = ::OI::Net::Poll::GetInstance().CheckThreadAccess("BaseTimerManager::AddTimer");
+	if (iThreadStatus != OI_OK)
+	{
+		return iThreadStatus;
+	}
+	if (!pTimer)
+	{
+		return OI_ERR_INVALID_ARGUMENT;
+	}
 	::OI::Thread::MutexGuard stLock(m_stWheelMutex);
 	pTimer->InitData(this, iMillisecond, TicksFromNow(iMillisecond));
 	add_timer(pTimer);
+	return OI_OK;
 }
 
 int64_t BaseTimerManager::TicksFromNow(int iMillisecond) const

@@ -11,27 +11,42 @@ int main(int iArgumentCount, char* vArguments[])
 	{
 		pConfigPath = vArguments[1];
 	}
-	int iCodeLocal = ::OI::Base::StartFramework(pConfigPath);
-	if (iCodeLocal != 0)
+	int32_t iCode = ::OI::Base::StartFramework(pConfigPath);
+	if (iCode != OI_OK)
 	{
-		return iCodeLocal;
+		fprintf(stderr, "StartFramework failed: code=%d\n", iCode);
+		return iCode;
 	}
-	::OI::Log::Init();
+	iCode = ::OI::Log::Init();
+	if (iCode != OI_OK)
+	{
+		fprintf(stderr, "Log Init failed: code=%d\n", iCode);
+		return iCode;
+	}
 
-	if (!IpcServer::GetInstance().Init())
+	iCode = IpcServer::GetInstance().Init();
+	if (iCode != OI_OK)
 	{
-		printf("IpcServer Init error\n");
-		return -1;
+		fprintf(stderr, "IpcServer Init failed: code=%d\n", iCode);
+		return iCode;
 	}
-	if (!IpcServer::GetInstance().StartServer())
+	iCode = IpcServer::GetInstance().StartServer();
+	if (iCode != OI_OK)
 	{
-		printf("IpcServer StartServer error\n");
-		return -1;
+		fprintf(stderr, "IpcServer StartServer failed: code=%d\n", iCode);
+		return iCode;
 	}
-	if (!IpcUdp::GetInstance().Init() || !IpcUdp::GetInstance().StartServer())
+	iCode = IpcUdp::GetInstance().Init();
+	if (iCode != OI_OK)
 	{
-		printf("IpcUdp StartServer error\n");
-		return -1;
+		fprintf(stderr, "IpcUdp Init failed: code=%d\n", iCode);
+		return iCode;
+	}
+	iCode = IpcUdp::GetInstance().StartServer();
+	if (iCode != OI_OK)
+	{
+		fprintf(stderr, "IpcUdp StartServer failed: code=%d\n", iCode);
+		return iCode;
 	}
 	printf("ipc udp listen port=%u\n", (unsigned)IpcUdp::GetInstance().LocalPort());
 	printf("ipc server listen\n");

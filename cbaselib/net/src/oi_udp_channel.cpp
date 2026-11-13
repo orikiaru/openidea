@@ -22,8 +22,29 @@ UDP_PeerChannel::UDP_PeerChannel(UDP_Channel* pOwner, const NetAddr& stAddr, Ses
 {
 }
 
+int32_t UDP_PeerChannel::ForbidSend()
+{
+	return Poll::GetInstance().CheckThreadAccess("UDP_PeerChannel::ForbidSend");
+}
+
+int32_t UDP_PeerChannel::AllowRead()
+{
+	return Poll::GetInstance().CheckThreadAccess("UDP_PeerChannel::AllowRead");
+}
+
+int32_t UDP_PeerChannel::ForbidRead()
+{
+	return Poll::GetInstance().CheckThreadAccess("UDP_PeerChannel::ForbidRead");
+}
+
 int32_t UDP_PeerChannel::AllowSend()
 {
+	const int32_t iThreadStatus = Poll::GetInstance().CheckThreadAccess("UDP_PeerChannel::AllowSend");
+	if (iThreadStatus != OI_OK)
+	{
+		return iThreadStatus;
+	}
+
 	if (pSession->IsClosed())
 	{
 		m_pOwner->MarkClosing(this);
@@ -38,29 +59,39 @@ UDP_Channel::UDP_Channel(NetSocket stSocketLocal, SessionManager* pMgr, uint16_t
 	m_stInput.Reserve(64 * 1024);
 }
 
-bool UDP_Channel::StartBind(SessionManager* pMgr)
+int32_t UDP_Channel::StartBind(SessionManager* pMgr)
 {
+	const int32_t iThreadStatus = Poll::GetInstance().CheckThreadAccess("UDP_Channel::StartBind");
+	if (iThreadStatus != OI_OK)
+	{
+		return iThreadStatus;
+	}
+	if (!pMgr)
+	{
+		return OI_ERR_INVALID_ARGUMENT;
+	}
+
 	if (pMgr->pUdpChannel)
 	{
 		LOG_ERROR("UDP_Channel::StartBind already bound id=%s", pMgr->GetIDString().c_str());
-		return false;
+		return OI_ERR_EXIST;
 	}
 	NetAddr stAddr;
 	if (!stAddr.Init(pMgr))
 	{
-		return false;
+		return OI_ERR_INVALID_ARGUMENT;
 	}
 	net_socket_t iDescriptor = stAddr.CreateUdp(true);
 	if (iDescriptor == INVALID_SOCKET_ID)
 	{
 		LOG_ERROR("UDP_Channel::StartBind id=%s, err=%s", pMgr->GetIDString().c_str(), NetOs_StrError(errno));
-		return false;
+		return OI_ERR_SOCKET;
 	}
 	if (NetOs_BindDatagram(iDescriptor, stAddr.NetAttrPtr(), stAddr.NetAttrLen()) != 0)
 	{
 		LOG_ERROR("UDP_Channel::StartBind bind id=%s, err=%s", pMgr->GetIDString().c_str(), NetOs_StrError(errno));
 		NetOs_Close(iDescriptor);
-		return false;
+		return OI_ERR_BIND;
 	}
 	sockaddr_storage stLocal;
 	memset(&stLocal, 0, sizeof(stLocal));
@@ -70,7 +101,7 @@ bool UDP_Channel::StartBind(SessionManager* pMgr)
 	{
 		LOG_ERROR("UDP_Channel::StartBind getsockname id=%s, err=%s", pMgr->GetIDString().c_str(), NetOs_StrError(errno));
 		NetOs_Close(iDescriptor);
-		return false;
+		return OI_ERR_BIND;
 	}
 	NetSocket stSocketLocal;
 	stSocketLocal.Init(iDescriptor, pMgr);
@@ -78,7 +109,7 @@ bool UDP_Channel::StartBind(SessionManager* pMgr)
 	pMgr->pUdpChannel = pChannelLocal;
 	Poll::GetInstance().IOEventRegister(pChannelLocal, true, false);
 	Poll::GetInstance().CallOnLoop(&UDP_Channel::OnStartIdle, pChannelLocal);
-	return true;
+	return OI_OK;
 }
 
 UDP_PeerChannel* UDP_Channel::OpenLocked(const NetAddr& stAddr)
@@ -105,16 +136,16 @@ sid_t UDP_Channel::OpenPeer(const NetAddr& stAddr)
 	return OpenLocked(stAddr)->pSession->GetSessionID();
 }
 
-bool UDP_Channel::GetPeerAddr(sid_t iSessionId, NetAddr& stAddr)
+int32_t UDP_Channel::GetPeerAddr(sid_t iSessionId, NetAddr& stAddr)
 {
 	::OI::Thread::MutexGuard stLock(m_stPeerLock);
 	auto it = m_mSessions.find(iSessionId);
 	if (it == m_mSessions.end())
 	{
-		return false;
+		return OI_ERR_NOT_FOUND;
 	}
 	stAddr = it->second->m_stAddr;
-	return true;
+	return OI_OK;
 }
 
 int32_t UDP_Channel::Flush(UDP_PeerChannel* pPeer)

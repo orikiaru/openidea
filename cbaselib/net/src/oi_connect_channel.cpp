@@ -91,8 +91,18 @@ bool ConnectChannel::CheckTcpConnect()
 	return true;
 }
 
-bool ConnectChannel::StartConnect(SessionManager* pMgr, bool bAsync)
+int32_t ConnectChannel::StartConnect(SessionManager* pMgr, bool bAsync)
 {
+	const int32_t iThreadStatus = Poll::GetInstance().CheckThreadAccess("ConnectChannel::StartConnect");
+	if (iThreadStatus != OI_OK)
+	{
+		return iThreadStatus;
+	}
+	if (!pMgr)
+	{
+		return OI_ERR_INVALID_ARGUMENT;
+	}
+
 	SESSION_TYPE iTextType = pMgr->GetSessionType();
 	switch (iTextType)
 	{
@@ -100,17 +110,27 @@ bool ConnectChannel::StartConnect(SessionManager* pMgr, bool bAsync)
 		return StartTcpConnect(pMgr, bAsync);
 	default:
 		printf("ConnectChannel::StartConnect not support session_type=%d\n", iTextType);
-		assert(false);
 	}
-	return false;
+	return OI_ERR_INVALID_ARGUMENT;
 }
 
-bool ConnectChannel::StartTcpConnect(SessionManager* pMgr, bool bAsync)
+int32_t ConnectChannel::StartTcpConnect(SessionManager* pMgr, bool bAsync)
 {
-	NetSocket stText;
-	if (!stText.CreateSocket(pMgr, bAsync))
+	const int32_t iThreadStatus = Poll::GetInstance().CheckThreadAccess("ConnectChannel::StartTcpConnect");
+	if (iThreadStatus != OI_OK)
 	{
-		return false;
+		return iThreadStatus;
+	}
+	if (!pMgr)
+	{
+		return OI_ERR_INVALID_ARGUMENT;
+	}
+
+	NetSocket stText;
+	int32_t iStatus = stText.CreateSocket(pMgr, bAsync);
+	if (iStatus != OI_OK)
+	{
+		return iStatus;
 	}
 
 	return stText.SocketConnect(pMgr);

@@ -28,7 +28,8 @@ enum class RedisStatus
 	SendFailed,
 	ServerError,
 	ProtocolError,
-	Busy
+	Busy,
+	WrongThread
 };
 
 // reply 共享 hiredis 回执，错误回执也保留，方便业务读取错误文本。
@@ -111,7 +112,7 @@ class RedisClient : public ::OI::Rpc::ProtoClientManager
 		return "RedisClient";
 	}
 	// 读 Redis 地址、超时和在途上限。
-	virtual bool Init();
+	virtual int32_t Init();
 	// 组一条 RESP 调用。pOutput 可空，空则结果只留在 co_await 的返回值里。
 	RedisCall Call(std::vector<std::string> vArguments, RedisResult* pOutput);
 	// 阻塞到回执或超时。多线程不能在 poll 线程上调。

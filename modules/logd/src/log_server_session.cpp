@@ -35,9 +35,15 @@ void LogServerSession::OnDataIn()
 		size_t iTextLength = iPayload - 1;
 		if (iLevel >= 0 && iLevel < LOG_LEVEL::LOG_LEVEL_COUNT)
 		{
-			if (!LogManager::GetInstance().WriteLog((LOG_LEVEL)iLevel, pText, iTextLength, this))
+			const int32_t iStatus = LogManager::GetInstance().WriteLog((LOG_LEVEL)iLevel, pText, iTextLength, this);
+			if (iStatus == OI_ERR_BUSY)
 			{
 				break;
+			}
+			if (iStatus != OI_OK)
+			{
+				PassiveClose(iStatus);
+				return;
 			}
 		}
 		iUsed += (size_t)::OI::Log::LOG_FRAME_HEAD + iPayload;

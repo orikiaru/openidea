@@ -30,9 +30,19 @@ static bool ParseJson(const std::string& sText, Json::Value& stOutput)
 	return pReader->parse(pBegin, pBegin + sText.size(), &stOutput, &sErrors);
 }
 
-static bool OkStatus(const ::OI::Http::Response& stResponse)
+static int32_t OkStatus(const ::OI::Http::Response& stResponse)
 {
-	return !stResponse.bFail && stResponse.iStatus == 200;
+	if (stResponse.iCode != OI_OK)
+	{
+		LOG_ERROR("web request failed code=%d status=%d", stResponse.iCode, stResponse.iStatus);
+		return stResponse.iCode;
+	}
+	if (stResponse.iStatus != 200)
+	{
+		LOG_ERROR("web unexpected HTTP status=%d code=%d", stResponse.iStatus, OI_ERR_PROTOCOL);
+		return OI_ERR_PROTOCOL;
+	}
+	return OI_OK;
 }
 
 // 别名键仍是 c、gap。
@@ -52,22 +62,15 @@ static bool PlainJsonKeys(const std::string& sText)
 	{
 		return false;
 	}
-	if (!stWire.isMember("vPlain")
-		|| !stWire["vPlain"].isArray()
-		|| stWire["vPlain"].size() != 1
-		|| !stWire["vPlain"][0].isInt()
-		|| stWire["vPlain"][0].asInt() != 5)
+	if (!stWire.isMember("vPlain") || !stWire["vPlain"].isArray() || stWire["vPlain"].size() != 1 || !stWire["vPlain"][0].isInt() || stWire["vPlain"][0].asInt() != 5)
 	{
 		return false;
 	}
-	if (!stWire.isMember("mPlain")
-		|| !stWire["mPlain"].isObject()
-		|| !stWire["mPlain"].isMember("k")
-		|| !stWire["mPlain"]["k"].isInt()
-		|| stWire["mPlain"]["k"].asInt() != 6)
+	if (!stWire.isMember("mPlain") || !stWire["mPlain"].isObject() || !stWire["mPlain"].isMember("k") || !stWire["mPlain"]["k"].isInt() || stWire["mPlain"]["k"].asInt() != 6)
 	{
 		return false;
 	}
+	// clang-format off
 	if (!stWire.isMember("stPlain")
 		|| !stWire["stPlain"].isObject()
 		|| !stWire["stPlain"].isMember("iNumber")
@@ -77,6 +80,7 @@ static bool PlainJsonKeys(const std::string& sText)
 	{
 		return false;
 	}
+	// clang-format on
 	if (!stWire.isMember("iDefault") || !stWire["iDefault"].isInt() || stWire["iDefault"].asInt() != 12)
 	{
 		return false;
@@ -85,22 +89,15 @@ static bool PlainJsonKeys(const std::string& sText)
 	{
 		return false;
 	}
-	if (!stWire.isMember("vDefault")
-		|| !stWire["vDefault"].isArray()
-		|| stWire["vDefault"].size() != 1
-		|| !stWire["vDefault"][0].isInt()
-		|| stWire["vDefault"][0].asInt() != 7)
+	if (!stWire.isMember("vDefault") || !stWire["vDefault"].isArray() || stWire["vDefault"].size() != 1 || !stWire["vDefault"][0].isInt() || stWire["vDefault"][0].asInt() != 7)
 	{
 		return false;
 	}
-	if (!stWire.isMember("mDefault")
-		|| !stWire["mDefault"].isObject()
-		|| !stWire["mDefault"].isMember("d")
-		|| !stWire["mDefault"]["d"].isInt()
-		|| stWire["mDefault"]["d"].asInt() != 8)
+	if (!stWire.isMember("mDefault") || !stWire["mDefault"].isObject() || !stWire["mDefault"].isMember("d") || !stWire["mDefault"]["d"].isInt() || stWire["mDefault"]["d"].asInt() != 8)
 	{
 		return false;
 	}
+	// clang-format off
 	if (!stWire.isMember("stDefault")
 		|| !stWire["stDefault"].isObject()
 		|| !stWire["stDefault"].isMember("iNumber")
@@ -110,6 +107,7 @@ static bool PlainJsonKeys(const std::string& sText)
 	{
 		return false;
 	}
+	// clang-format on
 	if (stWire["stDefault"].isMember("iSkip") || stWire.isMember("iSkip") || stWire.isMember("plain"))
 	{
 		return false;
@@ -136,7 +134,7 @@ static OI::Coro::Task Run()
 	vQuery.push_back(std::make_pair(std::string("text"), sText));
 	::OI::Http::Response stGot = co_await stCli.Get("/query", vQuery);
 	std::string sGotTextGottext;
-	if (!OkStatus(stGot))
+	if (OkStatus(stGot) != OI_OK)
 	{
 		iBadLocal += 1;
 	}
@@ -164,7 +162,7 @@ static OI::Coro::Task Run()
 	int iGotNumber = 0;
 	bool bGotOk = false;
 	std::string sGotTextGots;
-	if (!OkStatus(stJs))
+	if (OkStatus(stJs) != OI_OK)
 	{
 		iBadLocal += 1;
 	}
@@ -238,23 +236,21 @@ static OI::Coro::Task Run()
 	::OI::RpcData::JsonAll stKept;
 	stKept.iSkip = 99;
 	stKept.stDefault.iSkip = 77;
-	if (!stKept.FromJson(std::string("{\"iSkip\":1,\"stDefault\":{\"iNumber\":9,\"sText\":\"bare\",\"iSkip\":2}}"))
-		|| stKept.iSkip != 99
-		|| stKept.stDefault.iSkip != 77
-		|| stKept.stDefault.iNumber != 9)
+	if (!stKept.FromJson(std::string("{\"iSkip\":1,\"stDefault\":{\"iNumber\":9,\"sText\":\"bare\",\"iSkip\":2}}")) || stKept.iSkip != 99 || stKept.stDefault.iSkip != 77 || stKept.stDefault.iNumber != 9)
 	{
 		iBadLocal += 1;
 	}
 	const std::string sRpcJson = stSent.ToJson();
 	::OI::Http::Response stRpc = co_await stCli.Post("/rpcjson", sRpcJson, "application/json");
 	int iRpcOk = 0;
-	if (!OkStatus(stRpc))
+	if (OkStatus(stRpc) != OI_OK)
 	{
 		iBadLocal += 1;
 	}
 	else
 	{
 		::OI::RpcData::JsonAll stBack;
+		// clang-format off
 		bool bSame = PlainJsonKeys(sRpcJson)
 			&& PlainJsonKeys(stRpc.sBody)
 			&& stBack.FromJson(stRpc.sBody)
@@ -297,12 +293,12 @@ static OI::Coro::Task Run()
 			&& stBack.stDefault.sText == stSent.stDefault.sText
 			&& stBack.iSkip == 0
 			&& stBack.stDefault.iSkip == 0;
+		// clang-format on
 		if (bSame)
 		{
 			for (size_t iIndexLocal = 0; iIndexLocal < stSent.vChildren.size(); ++iIndexLocal)
 			{
-				if (stBack.vChildren[iIndexLocal].iNumber != stSent.vChildren[iIndexLocal].iNumber
-					|| stBack.vChildren[iIndexLocal].sText != stSent.vChildren[iIndexLocal].sText)
+				if (stBack.vChildren[iIndexLocal].iNumber != stSent.vChildren[iIndexLocal].iNumber || stBack.vChildren[iIndexLocal].sText != stSent.vChildren[iIndexLocal].sText)
 				{
 					bSame = false;
 					break;
@@ -334,7 +330,7 @@ static OI::Coro::Task Run()
 	std::string sBin("\x00\x01\xff", 3);
 	::OI::Http::Response stRaw = co_await stCli.Post("/bin", sBin, "application/octet-stream");
 	int iBinOk = 0;
-	if (OkStatus(stRaw) && stRaw.sBody.size() == sBin.size() && std::memcmp(stRaw.sBody.data(), sBin.data(), sBin.size()) == 0)
+	if (OkStatus(stRaw) == OI_OK && stRaw.sBody.size() == sBin.size() && std::memcmp(stRaw.sBody.data(), sBin.data(), sBin.size()) == 0)
 	{
 		iBinOk = 1;
 	}
@@ -347,8 +343,8 @@ static OI::Coro::Task Run()
 	    sGotTextGottext == sText ? 1 : 0, sGotTextGottext.c_str(), iGotNumber, sGotTextGots.c_str(), bGotOk ? 1 : 0, iRpcOk, iBinOk, iBadLocal);
 	if (iBadLocal != 0)
 	{
-		LOG_TRACE("web err query=%s json=%s rpc=%s bin=%s",
-		    stGot.sError.c_str(), stJs.sError.c_str(), stRpc.sError.c_str(), stRaw.sError.c_str());
+		LOG_TRACE("web err query_code=%d json_code=%d rpc_code=%d bin_code=%d",
+		    stGot.iCode, stJs.iCode, stRpc.iCode, stRaw.iCode);
 	}
 	fflush(stdout);
 	::OI::Thread::ThreadPool::GetInstance().RequestStop(iBadLocal == 0 ? 0 : 1);

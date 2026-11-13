@@ -233,7 +233,7 @@ void OnReply(redisAsyncContext*, void* pReply, void* pPriv)
 		AppendReply(stOutput, (redisReply*)pReply);
 		freeReplyObject(pReply);
 	}
-	if (!RedisServer::GetInstance().SendBytes(iSessionIdLocal, stOutput))
+	if (RedisServer::GetInstance().SendBytes(iSessionIdLocal, stOutput) != OI_OK)
 	{
 		RedisServer::GetInstance().CloseSession(iSessionIdLocal);
 	}
@@ -293,16 +293,17 @@ RedisServer::~RedisServer()
 	}
 }
 
-bool RedisServer::Init()
+int32_t RedisServer::Init()
 {
-	if (!::OI::Net::SessionManager::Init())
+	int32_t iCode = ::OI::Net::SessionManager::Init();
+	if (iCode != OI_OK)
 	{
-		return false;
+		return iCode;
 	}
 	if (!TryGetConfig("Redis.ip", m_sRedisIp) || !TryGetConfig("Redis.port", m_sRedisPort))
 	{
 		LOG_ERROR("RedisServer missing Redis.ip or Redis.port");
-		return false;
+		return OI_ERR_FAIL;
 	}
 	int64_t iMaxBytes = static_cast<int64_t>(m_iMaxPendingBytes);
 	int64_t iMaxCommands = static_cast<int64_t>(m_iMaxPendingCommands);
@@ -310,7 +311,7 @@ bool RedisServer::Init()
 	TryGetConfig("Redis.max_pending_commands", iMaxCommands);
 	if (iMaxBytes < 64 || static_cast<uint64_t>(iMaxBytes) > (std::numeric_limits<size_t>::max)() || iMaxCommands < 1 || static_cast<uint64_t>(iMaxCommands) > (std::numeric_limits<size_t>::max)())
 	{
-		return false;
+		return OI_ERR_FAIL;
 	}
 	m_iMaxPendingBytes = static_cast<size_t>(iMaxBytes);
 	m_iMaxPendingCommands = static_cast<size_t>(iMaxCommands);
@@ -327,7 +328,7 @@ bool RedisServer::Init()
 		Open(&m_vLinks[(size_t)iIndexLocal]);
 	}
 	LOG_TRACE("RedisServer connections=%d", m_iConnections);
-	return true;
+	return OI_OK;
 }
 
 ::OI::Net::Session* RedisServer::CloneSession()
@@ -498,7 +499,7 @@ bool RedisServer::Issue(int32_t iLink, sid_t iSessionId, const char* pCmd, size_
 	{
 		::OI::Base::Bytes stError;
 		AppendErr(stError, "ERR redis down");
-		if (!SendBytes(iSessionId, stError))
+		if (SendBytes(iSessionId, stError) != OI_OK)
 		{
 			CloseSession(iSessionId);
 		}

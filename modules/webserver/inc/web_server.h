@@ -1,5 +1,6 @@
 #pragma once
 #include "oi_singleton.h"
+#include <cstdint>
 
 class WebServer
 {
@@ -7,5 +8,5 @@ class WebServer
 	WebServer() = default;
 
   public:
-	bool Run();
+	int32_t Run();
 };

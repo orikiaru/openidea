@@ -171,7 +171,7 @@ OI::Coro::Task RunHandledRpc(F fnFunction, proto_type_t iResponseId, OI::Coro::T
 	}
 	try
 	{
-		if (!pManager->SendBytes(iSessionId, stFrame.GetMutableBuff()))
+		if (pManager->SendBytes(iSessionId, stFrame.GetMutableBuff()) != OI_OK)
 		{
 			pManager->CloseSession(iSessionId);
 		}
@@ -234,6 +234,12 @@ void HandleNotify(F fnFunction)
 template <typename Msg>
 int32_t RpcNotify(::OI::Net::SessionManager& stManager, sid_t iSessionId, const Msg& stMessage)
 {
+	const int32_t iThreadStatus = ::OI::Net::Poll::GetInstance().CheckThreadAccess("RpcNotify");
+	if (iThreadStatus != OI_OK)
+	{
+		return iThreadStatus;
+	}
+
 	::OI::Base::BytesStream stFrame;
 	try
 	{
@@ -252,15 +258,15 @@ int32_t RpcNotify(::OI::Net::SessionManager& stManager, sid_t iSessionId, const 
 // 返回调用号。回包、超时或 WakeRpcCall 三者只有一个会触发 decode/resume。
 // 回包回调携带实际匹配的 sid，日志不得用可能已重连的当前会话替代来源。
 uint64_t BindRpcCall(::OI::Net::SessionManager* pManager,
-	sid_t iSessionId,
-	proto_type_t iResponseId,
-	std::coroutine_handle<> stHandle,
-	int32_t* pResult,
-	int64_t iTimeoutMilliseconds,
-	std::function<bool(::OI::Base::BytesStream&, sid_t)> fnDecode,
-	std::function<void()> fnResume,
-	std::shared_ptr<std::atomic<int32_t>> pGuard = {},
-	RpcSender* pSender = nullptr);
+    sid_t iSessionId,
+    proto_type_t iResponseId,
+    std::coroutine_handle<> stHandle,
+    int32_t* pResult,
+    int64_t iTimeoutMilliseconds,
+    std::function<bool(::OI::Base::BytesStream&, sid_t)> fnDecode,
+    std::function<void()> fnResume,
+    std::shared_ptr<std::atomic<int32_t>> pGuard = {},
+    RpcSender* pSender = nullptr);
 void FailRpcCalls(::OI::Net::SessionManager* pManager, sid_t iSessionId);
 // 取走等待项且不调用完成回调。已经在回调里的，等 WaitRpcGuard 归零。
 void AbandonRpcCall(uint64_t iCallId);
@@ -352,6 +358,12 @@ struct [[nodiscard]] RpcCallAwaiter
 			return;
 		}
 		bDispatched = true;
+		iResult = ::OI::Net::Poll::GetInstance().CheckThreadAccess("RpcCall::Dispatch");
+		if (iResult != OI_OK)
+		{
+			iGate.store(OI::Coro::Gate::Ready, std::memory_order_release);
+			return;
+		}
 		iResult = OI_ERR_FAIL;
 		bReplied = false;
 		stSubmissionError = nullptr;
@@ -1090,15 +1102,15 @@ OI::Coro::TaskResult<std::vector<RpcResult<Res>>> SendRouted(ServiceRoute stRout
 // 路由在执行期间持有连接租约，完成后释放；回包仍按调用号匹配等待器。
 template <typename Res, typename Req>
 OI::Coro::TaskResult<std::vector<RpcResult<Res>>> CallRouted(RouteAwaiter::Kind iKind,
-	::OI::Net::SessionManager* pManager,
-	std::string sName,
-	ServicePick iPick,
-	std::string sZone,
-	std::vector<int32_t> vZones,
-	std::string sTarget,
-	bool bBatch,
-	Req stRequest,
-	RpcDeadline stDeadline)
+    ::OI::Net::SessionManager* pManager,
+    std::string sName,
+    ServicePick iPick,
+    std::string sZone,
+    std::vector<int32_t> vZones,
+    std::string sTarget,
+    bool bBatch,
+    Req stRequest,
+    RpcDeadline stDeadline)
 {
 	// 指定分区时，整体错误也必须保留每个输入槽（包括重复分区）。
 	const size_t iFailureCount = iKind == RouteAwaiter::Kind::Zones ? vZones.size() : 1;
@@ -1213,6 +1225,12 @@ OI::Coro::Task RunPeerNotify(std::shared_ptr<RpcSender> pSender, Msg stMessage)
 template <typename Msg>
 int32_t StartPeerNotify(std::shared_ptr<RpcSender> pSender, const Msg& stMessage)
 {
+	const int32_t iThreadStatus = ::OI::Net::Poll::GetInstance().CheckThreadAccess("StartPeerNotify");
+	if (iThreadStatus != OI_OK)
+	{
+		return iThreadStatus;
+	}
+
 	if (!pSender)
 	{
 		return OI_ERR_CONNECT;
@@ -1227,12 +1245,24 @@ int32_t StartPeerNotify(std::shared_ptr<RpcSender> pSender, const Msg& stMessage
 template <typename Msg>
 int32_t ProtoMultiClientManager::NotifyPeer(int32_t iInstanceId, const Msg& stMessage)
 {
+	const int32_t iThreadStatus = ::OI::Net::Poll::GetInstance().CheckThreadAccess("ProtoMultiClientManager::NotifyPeer");
+	if (iThreadStatus != OI_OK)
+	{
+		return iThreadStatus;
+	}
+
 	return StartPeerNotify(PeerSender(iInstanceId), stMessage);
 }
 
 template <typename Msg>
 int32_t ProtoMultiClientManager::NotifyAny(const Msg& stMessage)
 {
+	const int32_t iThreadStatus = ::OI::Net::Poll::GetInstance().CheckThreadAccess("ProtoMultiClientManager::NotifyAny");
+	if (iThreadStatus != OI_OK)
+	{
+		return iThreadStatus;
+	}
+
 	return StartPeerNotify(AnySender(), stMessage);
 }
 

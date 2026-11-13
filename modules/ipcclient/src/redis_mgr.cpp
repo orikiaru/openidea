@@ -216,7 +216,7 @@ class RedisFairPeer : public OI::Net::SessionManager
 	{
 		DefaultInit("127.0.0.1", RedisServerPort());
 	}
-	bool SendCommands(int iCount)
+	int32_t SendCommands(int iCount)
 	{
 		OI::Base::Bytes stWire;
 		const std::string sCommand = std::string("*2\r\n$4\r\nECHO\r\n$1\r\n") + m_sLabel + "\r\n";
@@ -226,7 +226,7 @@ class RedisFairPeer : public OI::Net::SessionManager
 		}
 		return SendBytes(m_iSid.load(), stWire);
 	}
-	bool SendScriptProbe()
+	int32_t SendScriptProbe()
 	{
 		const std::string sCommand = "*3\r\n$4\r\nEVAL\r\n$9\r\nreturn 42\r\n$1\r\n0\r\n";
 		OI::Base::Bytes stWire;
@@ -251,14 +251,36 @@ static OI::Coro::Task RedisFairnessRegression()
 {
 	static RedisFairPeer stFirst("A", nullptr), stSecond("B", &stFirst);
 	int iBad = 0;
-	if (!(co_await stFirst.StartClient()) || !stFirst.SendCommands(64))
+	int32_t iFirstCode = co_await stFirst.StartClient();
+	if (iFirstCode != OI_OK)
 	{
+		std::fprintf(stderr, "redis fairness first connect failed code=%d\n", iFirstCode);
 		++iBad;
 	}
-	co_await OI::Coro::yield(100);
-	if (!(co_await stSecond.StartClient()) || !stSecond.SendCommands(1))
+	else
 	{
+		iFirstCode = stFirst.SendCommands(64);
+		if (iFirstCode != OI_OK)
+		{
+			std::fprintf(stderr, "redis fairness first send failed code=%d\n", iFirstCode);
+			++iBad;
+		}
+	}
+	co_await OI::Coro::yield(100);
+	int32_t iSecondCode = co_await stSecond.StartClient();
+	if (iSecondCode != OI_OK)
+	{
+		std::fprintf(stderr, "redis fairness second connect failed code=%d\n", iSecondCode);
 		++iBad;
+	}
+	else
+	{
+		iSecondCode = stSecond.SendCommands(1);
+		if (iSecondCode != OI_OK)
+		{
+			std::fprintf(stderr, "redis fairness second send failed code=%d\n", iSecondCode);
+			++iBad;
+		}
 	}
 	LOG_TRACE("redis fairness ready");
 	fflush(stdout);
@@ -429,10 +451,26 @@ static OI::Coro::TaskResult<int> CheckReplyStatus()
 	co_return iBad;
 }
 
+#ifdef _SINGLE_THREAD_
+static int32_t CheckRedisWorkerThread()
+{
+	const auto stResult = OI::Redis::CallRedisSync({"PING"});
+	return stResult.iStatus == OI::Redis::RedisStatus::WrongThread && stResult.GetRet() == OI_ERR_WRONG_THREAD ? OI_OK : OI_ERR_FAIL;
+}
+#endif
+
 // poll 线程里调用同步接口必须抛错，不能把自己堵死；协程里的同步调用照常返回。
 static OI::Coro::TaskResult<int> CheckSyncOnLoop()
 {
 	int iBad = 0;
+#ifdef _SINGLE_THREAD_
+	const int32_t iWorkerStatus = co_await OI::Coro::RunBlocking(CheckRedisWorkerThread);
+	if (iWorkerStatus != OI_OK)
+	{
+		std::fprintf(stderr, "redis sync worker wrong-thread check failed code=%d\n", iWorkerStatus);
+		++iBad;
+	}
+#endif
 	std::atomic<int32_t> iSyncGuard(0);
 	::OI::Net::Poll::GetInstance().CallOnLoop([](void* pArgument)
 	{
@@ -1823,7 +1861,7 @@ static OI::Coro::TaskResult<int> CheckScriptIsolation()
 {
 	static RedisFairPeer stScriptPeer("B", nullptr, ":42\r\n");
 	int iBad = 0;
-	if (!(co_await stScriptPeer.StartClient()))
+	if ((co_await stScriptPeer.StartClient()) != OI_OK)
 	{
 		++iBad;
 	}
@@ -1840,8 +1878,10 @@ static OI::Coro::TaskResult<int> CheckScriptIsolation()
 			++iBad;
 		}
 		const int iExpected = stScriptPeer.Replies() + 1;
-		if (!stScriptPeer.SendScriptProbe())
+		const int32_t iSendCode = stScriptPeer.SendScriptProbe();
+		if (iSendCode != OI_OK)
 		{
+			std::fprintf(stderr, "redis script probe send failed code=%d\n", iSendCode);
 			++iBad;
 		}
 		const int64_t iDeadline = ::OI::Timer::SteadyMilliseconds() + ::OI::Timer::MS(::OI::Timer::Seconds(3)).iMilliseconds;
@@ -1853,7 +1893,7 @@ static OI::Coro::TaskResult<int> CheckScriptIsolation()
 		{
 			++iBad;
 		}
-		if (!(co_await OI::Redis::RedisClient::GetInstance().StartClient()))
+		if ((co_await OI::Redis::RedisClient::GetInstance().StartClient()) != OI_OK)
 		{
 			++iBad;
 		}
@@ -2093,6 +2133,7 @@ void RedisMgr::SyncStress(int iIdLocal)
 	{
 		++iTypedBad;
 	}
+	// clang-format off
 	if (OI::Redis::RedisRPushSync(sListKey, stWritten) != OI_OK
 		|| OI::Redis::RedisLRangeSync(sListKey, 0, -1, vRecords) != OI_OK
 		|| vRecords.size() != 1
@@ -2100,6 +2141,8 @@ void RedisMgr::SyncStress(int iIdLocal)
 	{
 		++iTypedBad;
 	}
+	// clang-format on
+	// clang-format off
 	if (OI::Redis::RedisSAddSync(sSetKey, stWritten) != OI_OK
 		|| OI::Redis::RedisSIsMemberSync(sSetKey, stWritten, bMember) != OI_OK
 		|| !bMember
@@ -2109,6 +2152,8 @@ void RedisMgr::SyncStress(int iIdLocal)
 	{
 		++iTypedBad;
 	}
+	// clang-format on
+	// clang-format off
 	if (OI::Redis::RedisZAddSync(sZsetKey, 1.25, stWritten) != OI_OK
 		|| OI::Redis::RedisZScoreSync(sZsetKey, stWritten, dScore) != OI_OK
 		|| dScore != 1.25
@@ -2119,6 +2164,7 @@ void RedisMgr::SyncStress(int iIdLocal)
 	{
 		++iTypedBad;
 	}
+	// clang-format on
 	const std::vector<std::string> vFields{"missing", "f"};
 	std::vector<std::optional<OI::RpcData::RegInstance>> vOptionalRecords;
 	OI::RpcData::RegInstance stMissingRecord = stWritten;

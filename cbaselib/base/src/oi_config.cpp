@@ -11,7 +11,7 @@ Config::Config()
 	m_pTomlConfig = cpptoml::make_table();
 }
 
-bool Config::Parse(const std::string& sConfFileName)
+int32_t Config::Parse(const std::string& sConfFileName)
 {
 	std::shared_ptr<cpptoml::table> pConfig;
 	try
@@ -21,7 +21,7 @@ bool Config::Parse(const std::string& sConfFileName)
 	catch (const cpptoml::parse_exception& stErrorLocal)
 	{
 		std::cerr << "Failed to parse " << sConfFileName << ": " << stErrorLocal.what() << std::endl;
-		return false;
+		return OI_ERR_INVALID_ARGUMENT;
 	}
 	for (const auto& [sName, pValue] : *pConfig)
 	{
@@ -31,7 +31,7 @@ bool Config::Parse(const std::string& sConfFileName)
 		}
 		m_pTomlConfig->insert(sName, pValue);
 	}
-	return true;
+	return OI_OK;
 }
 }
 }

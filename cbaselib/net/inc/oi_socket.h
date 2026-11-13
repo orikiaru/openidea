@@ -143,15 +143,15 @@ class NetSocket
 
   public:
 	// 按管理器的类型新建套接字。bAsync 为真时设成非阻塞。
-	bool CreateSocket(SessionManager* pMgr, bool bAsync);
+	int32_t CreateSocket(SessionManager* pMgr, bool bAsync);
 	// 绑到管理器的地址。失败返回 false。
-	bool SocketBind(SessionManager* pMgr);
+	int32_t SocketBind(SessionManager* pMgr);
 	// 开始监听。还没 bind 时失败。
-	bool SocketListen(SessionManager* pMgr);
+	int32_t SocketListen(SessionManager* pMgr);
 	// 先 bind 再 listen。
-	bool SocketListenAndBind(SessionManager* pMgr);
+	int32_t SocketListenAndBind(SessionManager* pMgr);
 	// 向管理器的地址发起连接。非阻塞时可能还没连上就返回 true。
-	bool SocketConnect(SessionManager* pMgr);
+	int32_t SocketConnect(SessionManager* pMgr);
 	//accept一个套接字,返回-1失败,返回0说明没有可接受的了
 	int SocketAcceptOne(SessionManager* pMgr);
 	NetAddr GetNetAddr(SessionManager* pMgr);

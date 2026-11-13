@@ -235,29 +235,48 @@ std::vector<::OI::Net::SessionManager*> ServiceTable::Watchers(const std::string
 	return vWatchers;
 }
 
-void ServiceTable::Watch(::OI::Net::SessionManager* pManager, const std::string& sNameLocal)
+int32_t ServiceTable::Watch(::OI::Net::SessionManager* pManager, const std::string& sNameLocal)
 {
+	const int32_t iThreadStatus = ::OI::Net::Poll::GetInstance().CheckThreadAccess("ServiceTable::Watch");
+	if (iThreadStatus != OI_OK)
+	{
+		return iThreadStatus;
+	}
+	if (!pManager || sNameLocal.empty())
+	{
+		return OI_ERR_INVALID_ARGUMENT;
+	}
 	::OI::Thread::MutexGuard stLock(m_stMutex);
 	State& stState = m_mServices[sNameLocal];
 	for (size_t iIndexLocal = 0; iIndexLocal < stState.vWatchers.size(); ++iIndexLocal)
 	{
 		if (stState.vWatchers[iIndexLocal] == pManager)
 		{
-			return;
+			return OI_OK;
 		}
 	}
 	stState.vWatchers.push_back(pManager);
+	return OI_OK;
 }
 
-void ServiceTable::WatchList(::OI::Net::SessionManager* pManager, const std::string& sNameLocal, const std::vector<ServiceInstance>& vInitial)
+int32_t ServiceTable::WatchList(::OI::Net::SessionManager* pManager, const std::string& sNameLocal, const std::vector<ServiceInstance>& vInitial)
 {
+	const int32_t iThreadStatus = ::OI::Net::Poll::GetInstance().CheckThreadAccess("ServiceTable::WatchList");
+	if (iThreadStatus != OI_OK)
+	{
+		return iThreadStatus;
+	}
+	if (!pManager || sNameLocal.empty())
+	{
+		return OI_ERR_INVALID_ARGUMENT;
+	}
 	::OI::Thread::MutexGuard stLock(m_stMutex);
 	State& stState = m_mServices[sNameLocal];
 	for (const auto* pWatcher : stState.vListWatchers)
 	{
 		if (pWatcher == pManager)
 		{
-			return;
+			return OI_OK;
 		}
 	}
 	// 已有别的管理器在收时保留上次下发的名单，免得它漏掉这次之后的变化。
@@ -271,6 +290,7 @@ void ServiceTable::WatchList(::OI::Net::SessionManager* pManager, const std::str
 	}
 	stState.vListWatchers.push_back(pManager);
 	stState.vPendingListWatchers.push_back(pManager);
+	return OI_OK;
 }
 
 std::vector<std::string> ServiceTable::Names()
@@ -419,7 +439,7 @@ void RegistryClient::Notify()
 	stConditionVariable.Broadcast();
 }
 
-bool RegistryClient::WaitFlag(const std::atomic<bool>& bFlag)
+int32_t RegistryClient::WaitFlag(const std::atomic<bool>& bFlag)
 {
 	std::chrono::steady_clock::time_point stDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kWaitMs);
 #ifdef _SINGLE_THREAD_
@@ -427,7 +447,7 @@ bool RegistryClient::WaitFlag(const std::atomic<bool>& bFlag)
 	{
 		::OI::Net::Poll::GetInstance().PollWait(1);
 	}
-	return bFlag.load();
+	return bFlag.load() ? OI_OK : (bFailed.load() ? OI_ERR_CONNECT : OI_ERR_TIMEOUT);
 #else
 	::OI::Thread::MutexGuard stLock(stMutex);
 	while (!bFlag.load() && !bFailed.load())
@@ -437,16 +457,21 @@ bool RegistryClient::WaitFlag(const std::atomic<bool>& bFlag)
 			break;
 		}
 	}
-	return bFlag.load();
+	return bFlag.load() ? OI_OK : (bFailed.load() ? OI_ERR_CONNECT : OI_ERR_TIMEOUT);
 #endif
 }
 
-bool RegistryClient::Connect()
+int32_t RegistryClient::Connect()
 {
+	const int32_t iThreadStatus = ::OI::Net::Poll::GetInstance().CheckThreadAccess("RegistryClient::Connect");
+	if (iThreadStatus != OI_OK)
+	{
+		return iThreadStatus;
+	}
 	::OI::Thread::MutexGuard stPendingLock(stPendingMutex);
 	if (bConnected.load())
 	{
-		return true;
+		return OI_OK;
 	}
 	if (!bAddressReady)
 	{
@@ -455,19 +480,19 @@ bool RegistryClient::Connect()
 		std::string sType;
 		if (!::OI::Base::Config::GlobalConfig().GetAs("Registry.ip", sIpLocal))
 		{
-			return false;
+			return OI_ERR_INVALID_ARGUMENT;
 		}
 		if (!::OI::Base::Config::GlobalConfig().GetAs("Registry.port", sPortLocal))
 		{
-			return false;
+			return OI_ERR_INVALID_ARGUMENT;
 		}
 		if (!::OI::Base::Config::GlobalConfig().GetAs("Registry.type", sType))
 		{
-			return false;
+			return OI_ERR_INVALID_ARGUMENT;
 		}
 		if (sIpLocal.empty() || sPortLocal.empty())
 		{
-			return false;
+			return OI_ERR_INVALID_ARGUMENT;
 		}
 		DefaultInit(sIpLocal, sPortLocal, GetSessionTypeByString(sType));
 		bAddressReady = true;
@@ -475,42 +500,43 @@ bool RegistryClient::Connect()
 	bool bExpected = false;
 	if (!bConnecting.compare_exchange_strong(bExpected, true))
 	{
-		return true;
+		return OI_OK;
 	}
 	bFailed = false;
 	if (OI::Thread::ThreadPool::GetInstance().StopRequested())
 	{
 		bConnecting = false;
-		return false;
+		return OI_ERR_CONNECT;
 	}
 	StartClient();
-	return true;
+	return OI_OK;
 }
 
-bool RegistryClient::Ensure()
+int32_t RegistryClient::Ensure()
 {
 	if (bConnected.load())
 	{
-		return true;
+		return OI_OK;
 	}
-	if (!Connect())
+	const int32_t iStatus = Connect();
+	if (iStatus != OI_OK)
 	{
-		return false;
+		return iStatus;
 	}
-	return bConnected.load() || WaitFlag(bConnected);
+	return WaitFlag(bConnected);
 }
 
-bool RegistryClient::Send(uint32_t iIdLocal, const ::OI::Rpc::Serialize& stMessage)
+int32_t RegistryClient::Send(uint32_t iIdLocal, const ::OI::Rpc::Serialize& stMessage)
 {
 	sid_t iSessionIdLocal = iSessionId.load();
 	if (iSessionIdLocal == INVALID_SID)
 	{
-		return false;
+		return OI_ERR_CONNECT;
 	}
 	return SendBytes(iSessionIdLocal, EncodeRegFrame(iIdLocal, stMessage));
 }
 
-bool RegistryClient::EnqueueSentPull(const PendingPull& stPending)
+int32_t RegistryClient::EnqueueSentPull(const PendingPull& stPending)
 {
 	ArmPullTimeout();
 	vPendingPulls.push_back(stPending);
@@ -521,10 +547,11 @@ bool RegistryClient::EnqueueSentPull(const PendingPull& stPending)
 	try
 	{
 		::OI::RpcData::RegPull stRequestLocal(stPending.vNames);
-		if (!Send(PROTO_REG_PULL, stRequestLocal))
+		const int32_t iStatus = Send(PROTO_REG_PULL, stRequestLocal);
+		if (iStatus != OI_OK)
 		{
 			vPendingPulls.pop_back();
-			return false;
+			return iStatus;
 		}
 	}
 	catch (...)
@@ -532,7 +559,7 @@ bool RegistryClient::EnqueueSentPull(const PendingPull& stPending)
 		vPendingPulls.pop_back();
 		throw;
 	}
-	return true;
+	return OI_OK;
 }
 
 size_t RegistryClient::GetPendingPullCount()
@@ -658,8 +685,15 @@ void RegistryClient::ExpirePulls()
 	}
 }
 
-void RegistryClient::PullAsync(const std::string& sNameLocal, std::function<void(int32_t, const std::vector<ServiceInstance>&)> fnDoneLocal, int64_t iTimeoutMilliseconds)
+int32_t RegistryClient::PullAsync(const std::string& sNameLocal, std::function<void(int32_t, const std::vector<ServiceInstance>&)> fnDoneLocal, int64_t iTimeoutMilliseconds)
 {
+	const int32_t iThreadStatus = ::OI::Net::Poll::GetInstance().CheckThreadAccess("RegistryClient::PullAsync");
+	if (iThreadStatus != OI_OK)
+	{
+		InvokePullCallback(std::move(fnDoneLocal), iThreadStatus, {});
+		return iThreadStatus;
+	}
+
 	const int64_t iStartedMilliseconds = ::OI::Timer::SteadyMilliseconds();
 	std::shared_ptr<RegPullState> pState;
 	const std::vector<ServiceInstance> vEmpty;
@@ -672,20 +706,21 @@ void RegistryClient::PullAsync(const std::string& sNameLocal, std::function<void
 	{
 		::OI::Thread::ReportTaskError(std::current_exception());
 		InvokePullCallback(std::move(fnDoneLocal), OI_ERR_FAIL, vEmpty);
-		return;
+		return OI_ERR_FAIL;
 	}
 	if (iTimeoutMilliseconds <= 0)
 	{
 		FinishPull(pState, OI_ERR_TIMEOUT, vEmpty);
-		return;
+		return OI_ERR_TIMEOUT;
 	}
 	int32_t iResult = OI_ERR_CONNECT;
 	try
 	{
 		if (sNameLocal.empty() || !Configured())
 		{
-			FinishPull(pState, OI_ERR_FAIL, vEmpty);
-			return;
+			const int32_t iStatus = sNameLocal.empty() ? OI_ERR_INVALID_ARGUMENT : OI_ERR_NOT_FOUND;
+			FinishPull(pState, iStatus, vEmpty);
+			return iStatus;
 		}
 		PendingPull stPending;
 		stPending.bSynchronous = false;
@@ -697,24 +732,33 @@ void RegistryClient::PullAsync(const std::string& sNameLocal, std::function<void
 		{
 			iResult = OI_ERR_BUSY;
 		}
-		else if (Connect())
+		else
 		{
-			ArmPullTimeout();
-			if (stPending.iDeadlineMilliseconds <= ::OI::Timer::SteadyMilliseconds())
+			iResult = Connect();
+			if (iResult == OI_OK)
 			{
-				iResult = OI_ERR_TIMEOUT;
-			}
-			else if (bConnected.load())
-			{
-				if (EnqueueSentPull(stPending))
+				ArmPullTimeout();
+				if (stPending.iDeadlineMilliseconds <= ::OI::Timer::SteadyMilliseconds())
 				{
-					return;
+					iResult = OI_ERR_TIMEOUT;
 				}
-			}
-			else if (bConnecting.load())
-			{
-				vDeferredPulls.push_back(std::move(stPending));
-				return;
+				else if (bConnected.load())
+				{
+					iResult = EnqueueSentPull(stPending);
+					if (iResult == OI_OK)
+					{
+						return iResult;
+					}
+				}
+				else if (bConnecting.load())
+				{
+					vDeferredPulls.push_back(std::move(stPending));
+					return OI_OK;
+				}
+				else
+				{
+					iResult = OI_ERR_CONNECT;
+				}
 			}
 		}
 	}
@@ -724,12 +768,13 @@ void RegistryClient::PullAsync(const std::string& sNameLocal, std::function<void
 		iResult = OI_ERR_FAIL;
 	}
 	FinishPull(pState, iResult, vEmpty);
+	return iResult;
 }
 
-void RegistryClient::SendRegister()
+int32_t RegistryClient::SendRegister()
 {
 	::OI::RpcData::RegRegister stRequestLocal(sServiceName, iServiceId, sServiceIp, sServicePort, sServiceZone);
-	Send(PROTO_REG_REGISTER, stRequestLocal);
+	return Send(PROTO_REG_REGISTER, stRequestLocal);
 }
 
 void RegistryClient::OnAddSession(::OI::Net::Session* pSession)
@@ -764,7 +809,8 @@ void RegistryClient::OnAddSession(::OI::Net::Session* pSession)
 			}
 			try
 			{
-				if (EnqueueSentPull(stPending))
+				stPending.iSendStatus = EnqueueSentPull(stPending);
+				if (stPending.iSendStatus == OI_OK)
 				{
 					stPending.pState.reset();
 				}
@@ -782,7 +828,7 @@ void RegistryClient::OnAddSession(::OI::Net::Session* pSession)
 	}
 	for (const auto& stPending : vSend)
 	{
-		FinishPull(stPending.pState, stPending.iDeadlineMilliseconds <= ::OI::Timer::SteadyMilliseconds() ? OI_ERR_TIMEOUT : OI_ERR_CONNECT, vEmpty);
+		FinishPull(stPending.pState, stPending.iDeadlineMilliseconds <= ::OI::Timer::SteadyMilliseconds() ? OI_ERR_TIMEOUT : stPending.iSendStatus, vEmpty);
 	}
 	LOG_INFO("RegistryClient::OnAddSession sid=%d", pSession->GetSessionID());
 }
@@ -942,37 +988,52 @@ void RegistryClient::OnFrame(sid_t iSessionIdLocal, uint32_t iIdLocal, ::OI::Bas
 	}
 }
 
-bool RegistryClient::PullSync(const std::string& sNameLocal, int32_t& iCodeLocal, std::vector<ServiceInstance>& vList)
+int32_t RegistryClient::PullSync(const std::string& sNameLocal, std::vector<ServiceInstance>& vList)
 {
+	int32_t iCodeLocal = OI_OK;
+	const int32_t iThreadStatus = ::OI::Net::Poll::GetInstance().CheckThreadAccess("RegistryClient::PullSync");
+	if (iThreadStatus != OI_OK)
+	{
+		iCodeLocal = iThreadStatus;
+		return iThreadStatus;
+	}
+
 	::OI::Thread::MutexGuard stSyncLock(stSyncMutex);
 	vList.clear();
 	iCodeLocal = OI_ERR_FAIL;
 	if (sNameLocal.empty() || !Configured())
 	{
-		return false;
+		iCodeLocal = sNameLocal.empty() ? OI_ERR_INVALID_ARGUMENT : OI_ERR_NOT_FOUND;
+		return iCodeLocal;
 	}
 	RejectPollCallback("PullSync");
-	if (!Ensure())
+	iCodeLocal = Ensure();
+	if (iCodeLocal != OI_OK)
 	{
-		LOG_TRACE("registry lookup %s connect failed", sNameLocal.c_str());
-		return false;
+		LOG_TRACE("registry lookup stage=connect service=%s code=%d", sNameLocal.c_str(), iCodeLocal);
+		return iCodeLocal;
 	}
 	PendingPull stPending;
 	stPending.bSynchronous = true;
 	stPending.vNames.push_back(sNameLocal);
-	bool bSent = false;
+	int32_t iSendStatus = OI_OK;
 	{
 		::OI::Thread::MutexGuard stLock(stPendingMutex);
 		if (!CanEnqueuePull())
 		{
 			iCodeLocal = OI_ERR_BUSY;
-			return false;
+			return iCodeLocal;
 		}
 		bGot = false;
 		iCode = OI_ERR_FAIL;
-		bSent = EnqueueSentPull(stPending);
+		iSendStatus = EnqueueSentPull(stPending);
 	}
-	if (!bSent || !WaitFlag(bGot))
+	iCodeLocal = iSendStatus;
+	if (iCodeLocal == OI_OK)
+	{
+		iCodeLocal = WaitFlag(bGot);
+	}
+	if (iCodeLocal != OI_OK)
 	{
 		{
 			::OI::Thread::MutexGuard stLock(stPendingMutex);
@@ -988,58 +1049,91 @@ bool RegistryClient::PullSync(const std::string& sNameLocal, int32_t& iCodeLocal
 		}
 		// 未到期的占位只用于 FIFO 配对；统一扫描到期后失效整代并回收。
 		ExpirePulls();
-		iCodeLocal = bSent ? OI_ERR_TIMEOUT : OI_ERR_CONNECT;
-		LOG_TRACE("registry lookup %s %s", sNameLocal.c_str(), bSent ? "timeout" : "send failed");
-		return false;
+		LOG_TRACE("registry lookup service=%s stage=%s code=%d", sNameLocal.c_str(), iSendStatus == OI_OK ? "wait" : "send", iCodeLocal);
+		return iCodeLocal;
 	}
 	::OI::Thread::MutexGuard stResultLock(stPendingMutex);
 	iCodeLocal = iCode;
 	if (iCodeLocal == OI_ERR_TIMEOUT || iCodeLocal == OI_ERR_CONNECT)
 	{
-		return false;
+		return iCodeLocal;
 	}
 	vList = vResponseList;
-	return true;
+	return iCodeLocal;
 }
 
-bool RegistryClient::Lookup(const std::string& sNameLocal, std::string& sIpLocal, std::string& sPortLocal)
+int32_t RegistryClient::Lookup(const std::string& sNameLocal, std::string& sIpLocal, std::string& sPortLocal)
 {
-	int32_t iCodeLocal = OI_ERR_FAIL;
-	std::vector<ServiceInstance> vList;
-	if (!PullSync(sNameLocal, iCodeLocal, vList))
+	const int32_t iThreadStatus = ::OI::Net::Poll::GetInstance().CheckThreadAccess("RegistryClient::Lookup");
+	if (iThreadStatus != OI_OK)
 	{
-		return false;
+		return iThreadStatus;
+	}
+
+	std::vector<ServiceInstance> vList;
+	const int32_t iPullStatus = PullSync(sNameLocal, vList);
+	if (iPullStatus != OI_OK)
+	{
+		return iPullStatus;
 	}
 	ServiceInstance stPick;
-	if (iCodeLocal != OI_OK || !ServiceTable::Pick(vList, sNameLocal, 0, stPick))
+	if (!ServiceTable::Pick(vList, sNameLocal, 0, stPick))
 	{
 		LOG_TRACE("registry lookup %s miss", sNameLocal.c_str());
-		return false;
+		return OI_ERR_NOT_FOUND;
 	}
 	sIpLocal = stPick.sIp;
 	sPortLocal = stPick.sPort;
 	LOG_TRACE("registry lookup %s -> %d %s:%s", sNameLocal.c_str(), stPick.iId, sIpLocal.c_str(), sPortLocal.c_str());
-	return true;
+	return OI_OK;
 }
 
-void RegistryClient::Watch(::OI::Net::SessionManager* pManager, const std::string& sNameLocal)
+int32_t RegistryClient::Watch(::OI::Net::SessionManager* pManager, const std::string& sNameLocal)
 {
-	if (!pManager || sNameLocal.empty() || !Configured())
+	const int32_t iThreadStatus = ::OI::Net::Poll::GetInstance().CheckThreadAccess("RegistryClient::Watch");
+	if (iThreadStatus != OI_OK)
 	{
-		return;
+		return iThreadStatus;
 	}
-	ServiceTable::GetInstance().Watch(pManager, sNameLocal);
+	if (!pManager || sNameLocal.empty())
+	{
+		return OI_ERR_INVALID_ARGUMENT;
+	}
+	if (!Configured())
+	{
+		return OI_OK;
+	}
+	const int32_t iWatchStatus = ServiceTable::GetInstance().Watch(pManager, sNameLocal);
+	if (iWatchStatus != OI_OK)
+	{
+		return iWatchStatus;
+	}
 	ArmPull();
+	return OI_OK;
 }
 
-void RegistryClient::WatchList(::OI::Net::SessionManager* pManager, const std::string& sNameLocal, const std::vector<ServiceInstance>& vInitial)
+int32_t RegistryClient::WatchList(::OI::Net::SessionManager* pManager, const std::string& sNameLocal, const std::vector<ServiceInstance>& vInitial)
 {
-	if (!pManager || sNameLocal.empty() || !Configured())
+	const int32_t iThreadStatus = ::OI::Net::Poll::GetInstance().CheckThreadAccess("RegistryClient::WatchList");
+	if (iThreadStatus != OI_OK)
 	{
-		return;
+		return iThreadStatus;
 	}
-	ServiceTable::GetInstance().WatchList(pManager, sNameLocal, vInitial);
+	if (!pManager || sNameLocal.empty())
+	{
+		return OI_ERR_INVALID_ARGUMENT;
+	}
+	if (!Configured())
+	{
+		return OI_OK;
+	}
+	const int32_t iWatchStatus = ServiceTable::GetInstance().WatchList(pManager, sNameLocal, vInitial);
+	if (iWatchStatus != OI_OK)
+	{
+		return iWatchStatus;
+	}
 	ArmPull();
+	return OI_OK;
 }
 
 void RegistryClient::ArmPull()
@@ -1145,17 +1239,23 @@ bool PublishAddress(const std::string& sSection, const std::string& sBindIp, con
 }
 }
 
-bool RegistryClient::Publish(const std::string& sSection, const std::string& sIpLocal, const std::string& sPortLocal)
+int32_t RegistryClient::Publish(const std::string& sSection, const std::string& sIpLocal, const std::string& sPortLocal)
 {
+	const int32_t iThreadStatus = ::OI::Net::Poll::GetInstance().CheckThreadAccess("RegistryClient::Publish");
+	if (iThreadStatus != OI_OK)
+	{
+		return iThreadStatus;
+	}
+
 	::OI::Thread::MutexGuard stSyncLock(stSyncMutex);
 	if (sSection == "Registry" || !Configured())
 	{
-		return true;
+		return OI_OK;
 	}
 	std::string sNameLocal;
 	if (!::OI::Base::Config::GlobalConfig().GetAs("Service.name", sNameLocal) || sNameLocal.empty())
 	{
-		return true;
+		return OI_OK;
 	}
 	std::string sZoneLocal;
 	::OI::Base::Config::GlobalConfig().GetAs("Service.zone", sZoneLocal);
@@ -1181,7 +1281,7 @@ bool RegistryClient::Publish(const std::string& sSection, const std::string& sIp
 		fprintf(stderr, "registry publish name=\"%s\" zone=\"%s\" 只能用字母、数字、_、-，名字不能为空，不能带 . 或 *\n", sNameLocal.c_str(), sZoneLocal.c_str());
 		fflush(stderr);
 		LOG_ERROR("registry publish invalid name=%s zone=%s", sNameLocal.c_str(), sZoneLocal.c_str());
-		return false;
+		return OI_ERR_INVALID_ARGUMENT;
 	}
 	int32_t iIdLocal = 0;
 	if (!::OI::Base::Config::GlobalConfig().GetAs("Service.id", iIdLocal) || iIdLocal <= 0)
@@ -1189,14 +1289,14 @@ bool RegistryClient::Publish(const std::string& sSection, const std::string& sIp
 		fprintf(stderr, "registry publish %s: [Service] id 必须是正整数\n", sNameLocal.c_str());
 		fflush(stderr);
 		LOG_ERROR("registry publish %s invalid id", sNameLocal.c_str());
-		return false;
+		return OI_ERR_INVALID_ARGUMENT;
 	}
 	std::string sAdvertiseIp;
 	std::string sAdvertisePort;
 	if (!PublishAddress(sSection, sIpLocal, sPortLocal, sAdvertiseIp, sAdvertisePort))
 	{
 		LOG_TRACE("registry publish %s skip bind %s:%s", sNameLocal.c_str(), sIpLocal.c_str(), sPortLocal.c_str());
-		return true;
+		return OI_OK;
 	}
 	if (bPublished.load())
 	{
@@ -1205,7 +1305,7 @@ bool RegistryClient::Publish(const std::string& sSection, const std::string& sIp
 			LOG_TRACE("registry publish %s keep %s:%s, skip %s:%s", sNameLocal.c_str(),
 			    sServiceIp.c_str(), sServicePort.c_str(), sAdvertiseIp.c_str(), sAdvertisePort.c_str());
 		}
-		return true;
+		return OI_OK;
 	}
 	RejectPollCallback("Publish");
 	sServiceName = sNameLocal;
@@ -1214,20 +1314,27 @@ bool RegistryClient::Publish(const std::string& sSection, const std::string& sIp
 	sServicePort = sAdvertisePort;
 	sServiceZone = sZoneLocal;
 	bool bGotLocal = false;
-	int32_t iCodeLocal = OI_ERR_FAIL;
-	if (Ensure())
+	int32_t iCodeLocal = Ensure();
+	if (iCodeLocal == OI_OK)
 	{
 		{
 			::OI::Thread::MutexGuard stPendingLock(stPendingMutex);
 			bGot = false;
 			iCode = OI_ERR_FAIL;
 			bRegistrationWaiting = true;
-			SendRegister();
+			iCodeLocal = SendRegister();
 		}
-		bGotLocal = WaitFlag(bGot);
+		if (iCodeLocal == OI_OK)
+		{
+			iCodeLocal = WaitFlag(bGot);
+			bGotLocal = iCodeLocal == OI_OK;
+		}
 		{
 			::OI::Thread::MutexGuard stPendingLock(stPendingMutex);
-			iCodeLocal = iCode;
+			if (bGotLocal)
+			{
+				iCodeLocal = iCode;
+			}
 			bRegistrationWaiting = false;
 		}
 	}
@@ -1236,7 +1343,7 @@ bool RegistryClient::Publish(const std::string& sSection, const std::string& sIp
 		fprintf(stderr, "registry publish %s id=%d 已经在线，拒绝启动\n", sNameLocal.c_str(), iIdLocal);
 		fflush(stderr);
 		LOG_ERROR("registry publish %s id=%d already online", sNameLocal.c_str(), iIdLocal);
-		return false;
+		return OI_ERR_EXIST;
 	}
 	bPublished = true;
 	if (bGotLocal && iCodeLocal == OI_OK)
@@ -1245,10 +1352,10 @@ bool RegistryClient::Publish(const std::string& sSection, const std::string& sIp
 	}
 	else
 	{
-		LOG_ERROR("registry publish %s id=%d not confirmed, retry on heartbeat", sNameLocal.c_str(), iIdLocal);
+		LOG_ERROR("registry publish %s id=%d not confirmed code=%d, retry on heartbeat", sNameLocal.c_str(), iIdLocal, iCodeLocal);
 	}
 	ArmHeartbeat();
-	return true;
+	return OI_OK;
 }
 
 }

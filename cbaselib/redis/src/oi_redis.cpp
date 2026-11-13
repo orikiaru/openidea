@@ -23,6 +23,8 @@ int32_t RedisResult::GetRet() const noexcept
 {
 	switch (iStatus)
 	{
+	case RedisStatus::WrongThread:
+		return OI_ERR_WRONG_THREAD;
 	case RedisStatus::Ok:
 		return pReply ? OI_OK : OI_ERR_PROTOCOL;
 	case RedisStatus::Timeout:
@@ -114,19 +116,19 @@ bool ArmRedisSweep()
 struct RedisCall::State
 {
 	uint64_t iRequestId = OI::Coro::AllocTaskUid(); // 这一次调用的配对号。旧会话的回包对不上就丢掉。
-	std::vector<std::string> vArguments;        // 命令和参数。
-	std::shared_ptr<redisReply> pReply;         // 回包。exchange(Ready) 之前写完。
-	RedisStatus iStatus;                        // 结果状态。和 pReply 一起在认领成功后写。
-	bool bReady;                                // 同步等待看它。协程等待看 iGate。
-	bool bSynchronous;                          // 真则用条件变量，不进完成门。
-	RedisResult* pOutput;                       // 调用方给出的输出。resume 时再填。
-	std::coroutine_handle<> stHandle;           // 调用方句柄。门已经是 Waiting 才 Schedule。
-	int64_t iDeadlineMilliseconds;              // 绝对截止。
+	std::vector<std::string> vArguments;            // 命令和参数。
+	std::shared_ptr<redisReply> pReply;             // 回包。exchange(Ready) 之前写完。
+	RedisStatus iStatus;                            // 结果状态。和 pReply 一起在认领成功后写。
+	bool bReady;                                    // 同步等待看它。协程等待看 iGate。
+	bool bSynchronous;                              // 真则用条件变量，不进完成门。
+	RedisResult* pOutput;                           // 调用方给出的输出。resume 时再填。
+	std::coroutine_handle<> stHandle;               // 调用方句柄。门已经是 Waiting 才 Schedule。
+	int64_t iDeadlineMilliseconds;                  // 绝对截止。
 	std::atomic<OI::Coro::Gate> iGate;              // 完成门。Idle 还没人认领，Ready 结果已写好，Waiting 调用方已挂起。
-	std::atomic<int32_t> iWon;                  // 回包、超时、断连只有一个能写下结果。
-	std::atomic<int32_t> iReferences;           // 调用方和超时扫描各持一份。
-	std::atomic<bool> bAwaitStarted{false};     // 一次性闩。第二次 await 或移走后再等直接抛。
-	sid_t iSessionId;                           // 发出时绑定的会话。
+	std::atomic<int32_t> iWon;                      // 回包、超时、断连只有一个能写下结果。
+	std::atomic<int32_t> iReferences;               // 调用方和超时扫描各持一份。
+	std::atomic<bool> bAwaitStarted{false};         // 一次性闩。第二次 await 或移走后再等直接抛。
+	sid_t iSessionId;                               // 发出时绑定的会话。
 	::OI::Thread::Mutex stMutex;
 	::OI::Thread::MutexCond stConditionVariable;
 	State()
@@ -149,21 +151,28 @@ RedisClient::~RedisClient()
 	}
 }
 
-bool RedisClient::Init()
+int32_t RedisClient::Init()
 {
+	const int32_t iThreadStatus = ::OI::Net::Poll::GetInstance().CheckThreadAccess("RedisClient::Init");
+	if (iThreadStatus != OI_OK)
+	{
+		return iThreadStatus;
+	}
+
 	TryGetConfig("RedisClient.timeout_ms", m_iTimeoutMilliseconds);
 	TryGetConfig("RedisClient.max_pending", m_iMaxPending);
 	if (m_iMaxPending < 1)
 	{
-		return false;
+		return OI_ERR_INVALID_ARGUMENT;
 	}
 	if (m_iTimeoutMilliseconds <= 0)
 	{
 		m_iTimeoutMilliseconds = 25000;
 	}
-	if (!::OI::Rpc::ProtoClientManager::Init())
+	int32_t iCode = ::OI::Rpc::ProtoClientManager::Init();
+	if (iCode != OI_OK)
 	{
-		return false;
+		return iCode;
 	}
 	return ::OI::Thread::ThreadPool::GetInstance().AddStopHandler([]()
 	{
@@ -262,6 +271,12 @@ bool RedisCall::Suspend(std::coroutine_handle<> stHandleLocal)
 	{
 		throw std::logic_error("RedisCall can only be awaited once and must not be moved from");
 	}
+	if (::OI::Net::Poll::GetInstance().CheckThreadAccess("RedisCall::Suspend") != OI_OK)
+	{
+		m_pState->iStatus = RedisStatus::WrongThread;
+		return false;
+	}
+
 	if (::OI::Thread::ThreadPool::GetInstance().StopRequested())
 	{
 		return false;
@@ -279,6 +294,13 @@ RedisCall RedisClient::Call(std::vector<std::string> vArgumentsLocal, RedisResul
 
 RedisResult RedisClient::CallSync(std::vector<std::string> vArgumentsLocal)
 {
+	if (::OI::Net::Poll::GetInstance().CheckThreadAccess("RedisClient::CallSync") != OI_OK)
+	{
+		RedisResult stRejected;
+		stRejected.iStatus = RedisStatus::WrongThread;
+		return stRejected;
+	}
+
 	// 两种模式都禁止在 libuv 回调中同步等待，不能重入事件循环。
 	if (::OI::Net::Poll::GetInstance().InPollCallback())
 	{

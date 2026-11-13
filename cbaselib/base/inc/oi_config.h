@@ -1,4 +1,5 @@
 #pragma once
+#include "oi_errno.h"
 #include "cpptoml.h"
 #include "oi_singleton.h"
 #include <assert.h>
@@ -22,7 +23,7 @@ class Config
 
   public:
 	// 读一份 toml 并合进当前表。解析失败返回 false，已有内容不动。
-	bool Parse(const std::string& sConfFileName);
+	int32_t Parse(const std::string& sConfFileName);
 
 	// 按点分键取单个值。没有这个键或类型对不上时返回 false，不改输出。
 	template <class T>

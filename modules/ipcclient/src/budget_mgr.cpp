@@ -36,7 +36,6 @@
 #include <thread>
 #include <vector>
 
-
 // 发送预算必须跨会话/通道缓冲连续计数，真正写出才恢复额度。
 int BudgetMgr::CheckSendBudget()
 {
@@ -61,13 +60,13 @@ int BudgetMgr::CheckSendBudget()
 		++iBadLocal;
 	}
 	stBuffered.SwapOutBuff(stStaged);
-	if (stBuffered.PendingSendBytes() != 8 || stBuffered.Send(stPayload))
+	if (stBuffered.PendingSendBytes() != 8 || stBuffered.Send(stPayload) != OI_ERR_BUSY)
 	{
 		++iBadLocal;
 	}
 	stBuffered.OnBytesSend(8);
 	stStaged.Clear();
-	if (!stBuffered.Send(stPayload))
+	if (stBuffered.Send(stPayload) != OI_OK)
 	{
 		++iBadLocal;
 	}

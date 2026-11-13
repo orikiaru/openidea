@@ -1,6 +1,7 @@
 #include "oi_log_client.h"
 #include "oi_config.h"
 #include "oi_log_frame.h"
+#include "oi_errno.h"
 #include "string.h"
 namespace OI
 {
@@ -11,7 +12,7 @@ LogClient::~LogClient()
 {
 }
 
-bool LogClient::Init()
+int32_t LogClient::Init()
 {
 	LOG_TRACE("LogClient::Init");
 	return ::OI::Rpc::ProtoClientManager::Init();
@@ -27,15 +28,15 @@ void LogClient::OnClientDisconnect(const ::OI::Net::Session* pSession)
 	LOG_TRACE("LogClient::OnClientDisconnect sid=%d, errno=%d", pSession->GetSessionID(), pSession->GetError());
 }
 
-bool LogClient::SendLog(int iLevel, const char* pText, size_t iTextLength)
+int32_t LogClient::SendLog(int iLevel, const char* pText, size_t iTextLength)
 {
 	if (!pText && iTextLength > 0)
 	{
-		return false;
+		return OI_ERR_INVALID_ARGUMENT;
 	}
-	if (iTextLength + 1 > (size_t)LOG_FRAME_MAX)
+	if (iTextLength >= (size_t)LOG_FRAME_MAX)
 	{
-		return false;
+		return OI_ERR_INVALID_ARGUMENT;
 	}
 	::OI::Base::Bytes stFrame;
 	AppendLogFrame(stFrame, iLevel, pText, iTextLength);

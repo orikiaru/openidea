@@ -46,7 +46,7 @@ class UdpMgr
 	OI::Coro::Task Pump(sid_t iSessionId);
 
   public:
-	bool Load();
+	int32_t Load();
 	bool Enabled() const
 	{
 		return m_bEnabled;

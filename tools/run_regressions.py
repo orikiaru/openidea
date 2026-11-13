@@ -754,6 +754,7 @@ def run(case, args):
                 assert "hold blocking tasks=128 waiters=64 runs=1 bad=0" in text
                 assert "hold blocking read started=1 timer=1 rpc=1 early=0 content=1 bad=0" in text
                 assert "hold blocking categories bad=0" in text
+                assert "hold blocking access bad=0" in text
                 for waiter_count in (2, 8, 64, 256):
                     for shared_mode in range(3):
                         assert f"hold started task mode={shared_mode} waiters={waiter_count} runs=1 awakened={waiter_count} bad=0" in text
@@ -779,6 +780,7 @@ def run(case, args):
                 assert "hold connection isolation bad=0" in text
                 assert "hold coroutine connect bad=0" in text
                 assert "hold address connect bad=0" in text
+                assert "hold address failure init=-6 bind=-15 bad=0" in text
                 assert "hold address stress waiters=64 rounds=20 bad=0" in text
                 assert "hold reentrant connect first=1 retry=0 connections=1 bad=0" in text
                 assert "hold registry pairing bad=0" in text

@@ -52,7 +52,7 @@ class RedisServer : public ::OI::Net::SessionManager
 	{
 		return "RedisServer";
 	}
-	virtual bool Init();
+	virtual int32_t Init();
 	// cmd 是一条完整的 RESP 命令，原样转给上游
 	// false 表示额度不足，调用方保留当前完整命令并暂停读取。
 	bool Issue(int32_t iLink, sid_t iSessionId, const char* pCmd, size_t iLength);

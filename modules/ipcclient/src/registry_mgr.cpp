@@ -37,7 +37,6 @@
 #include <thread>
 #include <vector>
 
-
 OI::Coro::TaskResult<bool> RegistryMgr::RegistryFaultHandshake(std::string sPath, std::string sCommand)
 {
 	{
@@ -239,7 +238,7 @@ OI::Coro::TaskResult<int> RegistryMgr::RegistryLookups()
 		// 周期拉取与同步查询交错，队列顺序必须和线上顺序一致。
 		OI::Base::RegistryClient::GetInstance().Pull();
 		std::string sIp, sPort;
-		if (!OI::Base::RegistryClient::GetInstance().Lookup("ipcserver", sIp, sPort) || sIp != "127.0.0.1" || sPort != HoldTest::IpcServerPort())
+		if (OI::Base::RegistryClient::GetInstance().Lookup("ipcserver", sIp, sPort) != OI_OK || sIp != "127.0.0.1" || sPort != HoldTest::IpcServerPort())
 		{
 			++iBad;
 		}

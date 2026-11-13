@@ -111,7 +111,7 @@ static OI::Rpc::RpcTask HandleEncodingRegression(const OI::Rpc::RpcContext& stCo
 	co_return 0;
 }
 
-bool IpcServer::Init()
+int32_t IpcServer::Init()
 {
 	TryGetConfig("Service.id", m_iServiceId);
 	OI_RPC_BIND(AllEcho, HandleAllEcho);
@@ -153,8 +153,8 @@ static OI::Coro::Task HttpProbe(std::string sHost, int32_t iPort, std::string sP
 	std::chrono::steady_clock::time_point stBegin = std::chrono::steady_clock::now();
 	::OI::Http::Response stResponseLocal = co_await stCli.Get(sPath, {});
 	long long iMillisecondsLocal = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - stBegin).count();
-	printf("http probe host=%s port=%d path=%s status=%d bytes=%zu ms=%lld fail=%d err=%s title=%s\n",
-	    sHost.c_str(), iPort, sPath.c_str(), stResponseLocal.iStatus, stResponseLocal.sBody.size(), iMillisecondsLocal, stResponseLocal.bFail ? 1 : 0,
+	printf("http probe host=%s port=%d path=%s status=%d bytes=%zu ms=%lld code=%d err=%s title=%s\n",
+	    sHost.c_str(), iPort, sPath.c_str(), stResponseLocal.iStatus, stResponseLocal.sBody.size(), iMillisecondsLocal, stResponseLocal.iCode,
 	    stResponseLocal.sError.c_str(), HtmlTitle(stResponseLocal.sBody).c_str());
 	fflush(stdout);
 }

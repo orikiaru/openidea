@@ -5,46 +5,50 @@
 #include "log_manager.h"
 
 // logd 自己的日志直接进本地文件，不作为日志客户端连自己。
-static bool WriteSelfLog(LOG_LEVEL iLevel, const char* pText, size_t iLength)
+static int32_t WriteSelfLog(LOG_LEVEL iLevel, const char* pText, size_t iLength)
 {
 	return LogManager::GetInstance().WriteLog(iLevel, pText, iLength);
 }
 
 int main(int iArgumentCount, char* vArguments[])
 {
-	int iCodeLocal = ::OI::Base::StartFramework("../config/logd.toml");
-	if (iCodeLocal != 0)
+	int32_t iCode = ::OI::Base::StartFramework("../config/logd.toml");
+	if (iCode != OI_OK)
 	{
-		return iCodeLocal;
+		fprintf(stderr, "StartFramework failed: code=%d\n", iCode);
+		return iCode;
 	}
 
 	// 写线程起来之前的日志只打 stdout
-	if (!LogManager::GetInstance().Init())
+	iCode = LogManager::GetInstance().Init();
+	if (iCode != OI_OK)
 	{
-		printf("LogManager Init error\n");
-		return -3;
+		fprintf(stderr, "LogManager Init failed: code=%d\n", iCode);
+		return iCode;
 	}
 	::OI::Log::InitLocal(WriteSelfLog);
 
-	if (!LogServer::GetInstance().Init())
+	iCode = LogServer::GetInstance().Init();
+	if (iCode != OI_OK)
 	{
-		LOG_ERROR("LogServer::Init error");
+		fprintf(stderr, "LogServer Init failed: code=%d\n", iCode);
 		::OI::Log::InitLocal(NULL);
 		LogManager::GetInstance().Stop();
-		return -1;
+		return iCode;
 	}
-	if (!LogServer::GetInstance().StartServer())
+	iCode = LogServer::GetInstance().StartServer();
+	if (iCode != OI_OK)
 	{
-		LOG_ERROR("LogServer::StartServer error");
+		fprintf(stderr, "LogServer StartServer failed: code=%d\n", iCode);
 		::OI::Log::InitLocal(NULL);
 		LogManager::GetInstance().Stop();
-		return -1;
+		return iCode;
 	}
 
-	iCodeLocal = ::OI::Base::RunFramework();
+	iCode = ::OI::Base::RunFramework();
 
 	//网络和工人都停了，不会再进日志。写线程把剩下的写完再退出。
 	::OI::Log::InitLocal(NULL);
 	LogManager::GetInstance().Stop();
-	return iCodeLocal;
+	return iCode;
 }

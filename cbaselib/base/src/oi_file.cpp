@@ -1,6 +1,8 @@
 #include "oi_file.h"
 #include <filesystem>
 #include <system_error>
+#include <cstdio>
+#include <cerrno>
 
 namespace OI
 {
@@ -16,23 +18,27 @@ bool Exists(const std::string& sPath)
 	return std::filesystem::exists(sPath, stEc) && !stEc;
 }
 
-bool MakeDirs(const std::string& sPath)
+int32_t MakeDirs(const std::string& sPath)
 {
 	if (sPath.empty())
 	{
-		return false;
+		return OI_ERR_INVALID_ARGUMENT;
 	}
-	std::error_code stEc;
-	if (std::filesystem::is_directory(sPath, stEc))
+	std::error_code stError;
+	if (std::filesystem::is_directory(sPath, stError))
 	{
-		return true;
+		return OI_OK;
 	}
-	std::filesystem::create_directories(sPath, stEc);
-	if (stEc)
+	stError.clear();
+	std::filesystem::create_directories(sPath, stError);
+	if (!stError && std::filesystem::is_directory(sPath, stError))
 	{
-		return false;
+		return OI_OK;
 	}
-	return std::filesystem::is_directory(sPath, stEc);
+	const int32_t iCode = stError ? stError.value() : ENOTDIR;
+	fprintf(stderr, "MakeDirs failed path=%s code=%d reason=%s\n", sPath.c_str(), iCode,
+	    stError ? stError.message().c_str() : "not a directory");
+	return iCode;
 }
 }
 }

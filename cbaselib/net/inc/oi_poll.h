@@ -1,5 +1,6 @@
 #pragma once
 #include <thread>
+#include <cstdint>
 #include "oi_singleton.h"
 struct uv_loop_s;
 namespace OI
@@ -41,7 +42,7 @@ class Poll
 	~Poll();
 
 	// 准备 loop。多线程拉起 poll 线程并等到就绪；线程创建失败返回 false。
-	bool Init();
+	int32_t Init();
 	// 正在 poll 里。单线程看 PollWait 的嵌套深度；多线程看是不是 loop 线程。同步等待不能从这里发起。
 	bool InPollCallback() const;
 
@@ -50,6 +51,8 @@ class Poll
 	{
 		return std::this_thread::get_id() == m_stLoopThread;
 	}
+	// 单线程必须由 loop 线程访问；违规记录操作名并返回错误码，多线程直接成功。
+	int32_t CheckThreadAccess(const char* pOperation) const;
 	// 套接字事件只从 Channel 的 DataIn / DataOut 进来。只在 poll 线程里用。
 	::uv_loop_s* Loop();
 	// 已经在 poll 线程就直接执行，否则丢进 libuv 再执行。定时器轮子只能在这条线程上改。

@@ -29,25 +29,29 @@ LogFileInstance::~LogFileInstance()
 	}
 }
 
-bool LogFileInstance::CreateNewFile(const char* pPath)
+int32_t LogFileInstance::CreateNewFile(const char* pPath)
 {
 #ifdef _WIN32
 	FILE* pFile = NULL;
-	if (fopen_s(&pFile, pPath, "ab+") != 0 || !pFile)
+	const int iError = fopen_s(&pFile, pPath, "ab+");
+	if (iError != 0 || !pFile)
 	{
-		return false;
+		fprintf(stderr, "logd open %s failed: %s\n", pPath, strerror(iError ? iError : EIO));
+		return iError ? iError : EIO;
 	}
 #else
 	FILE* pFile = fopen(pPath, "ab+");
 	if (!pFile)
 	{
-		return false;
+		const int iError = errno ? errno : EIO;
+		fprintf(stderr, "logd open %s failed: %s\n", pPath, strerror(iError));
+		return iError;
 	}
 #endif
 	// 交给写线程按块刷。这里只把 stdio 缓冲放大，避免每条日志一次系统调用。
 	setvbuf(pFile, NULL, _IOFBF, 1024 * 1024);
 	OnCreateNewFile(pFile);
-	return true;
+	return OI_OK;
 }
 
 void LogFileInstance::OnCreateNewFile(FILE* pNewFile)
@@ -64,7 +68,7 @@ void LogFileInstance::OnCreateNewFile(FILE* pNewFile)
 	}
 }
 
-bool LogFileInstance::StartWriteThread()
+int32_t LogFileInstance::StartWriteThread()
 {
 	return ::OI::Thread::ThreadPool::CreateSpecThread(m_stThread, LogFileInstance::WriteLogThreadHandle, this);
 }

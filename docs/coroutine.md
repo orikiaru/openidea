@@ -46,6 +46,8 @@ if (iRet == 0)
 
 传给 `RunBlocking` 的 lambda 只能按值捕获临时变量。初始化捕获把临时对象移进闭包，这份对象活到任务结束。不要写 `[&]`、引用捕获、裸 `this` 或成员，也不要捕获指向调用方栈上局部对象的指针或引用。具名局部变量要带进后台时，先做成临时对象再捕获，或作为右值参数传入。输出继续用左值引用参数，调用方保证活到 `co_await` 结束。
 
+单线程构建中，后台线程误调用受保护的同步发送入口会返回 `OI_ERR_WRONG_THREAD`，并向标准错误输出记录操作名；调用仍应留在 poll 线程。多线程构建保留原有行为。此检查不能代替同步回调不得调用异步接口的约束。
+
 阻塞工作按 `OI::Thread::BlockingType` 分类，由各自的固定线程池执行。省略类型时使用 `Default`，默认 4 个线程、1024 个排队项，各类别的在途上限为线程数加队列上限，Default 取该值与 1024 的较小值；在途包含排队、执行中以及完成通知尚未消费的工作，队列上限单独计算且不包含正在执行的工作。其他类型必须在首次使用前调用 `OI::Thread::ConfigureBlockingPool(type, threads, queueLimit)` 显式配置。每个类型第一次启动后再配置返回 `OI_ERR_BUSY`；线程数须为 1–256，队列上限须大于 0。未配置的类型返回 `OI_ERR_NOT_FOUND`，队列已满返回 `OI_ERR_BUSY`，关闭后返回 `OI_ERR_CONNECT`。例如可先配置 `OI::Thread::BlockingType::File`，再用 `co_await OI::Coro::RunBlocking(OI::Thread::BlockingType::File, ReadFile, sPath, sData)` 指定类型；配置返回码须由调用方检查。
 
 工作线程使用项目封装的 `NativeMutex`、`NativeMutexGuard` 和 `NativeMutexCond` 同步，单线程构建中也是真实的线程同步。完成通知使用预分配的内嵌队列节点，通过 poll 的 `PostOnLoop` 无需额外分配地回到事件循环，结果和异常保留在进程内存中，不经过网络传输。阻塞池不使用 `uv_queue_work`，不受 `UV_THREADPOOL_SIZE` 控制。执行顺序和线程亲和性没有保证；后台函数不能访问非线程安全的单线程业务管理器，借用对象的并发访问由应用同步。同步回调及其自有调用链禁止调用 `co_await`、`yield`、`StartTask`、`TaskScope` 和 RPC、Redis、HTTP 异步接口。
@@ -262,7 +264,7 @@ OI_RPC_BIND(Hold, HandleHold);
 
 ## 单向消息
 
-调用号 0 是单向消息：不登记等待、不回包。管理器上用 `Notify(sid, msg)`，这次请求的上下文上用 `stContext.Notify(msg)`，换一条会话用 `stContext.Notify(sid, msg)`。返回 `SendBytesResult` 的错误码，编码失败是 `OI_ERR_ENCODE`。UDP 先用 `OpenPeer(ip, port)` 换成 sid。接收和 RPC 共用一张按协议号的处理表，一个协议号只注册一种：
+调用号 0 是单向消息：不登记等待、不回包。管理器上用 `Notify(sid, msg)`，这次请求的上下文上用 `stContext.Notify(msg)`，换一条会话用 `stContext.Notify(sid, msg)`。返回 `SendBytes` 的错误码，编码失败是 `OI_ERR_ENCODE`。UDP 先用 `OpenPeer(ip, port, sid)` 换成 sid，检查返回码后再使用输出。接收和 RPC 共用一张按协议号的处理表，一个协议号只注册一种：
 
 ```cpp
 static OI_NOTIFY_HANDLER(UdpNote, HandleNote)
@@ -285,14 +287,17 @@ OI_NOTIFY_BIND(UdpNote, HandleNote);
 
 ```cpp
 client.StartClient(); // 不等待：调用时就发起非阻塞建连，忽略临时对象不会取消连接。
-if (!(co_await client.StartClient())) co_return; // 等建连成功，再处理后续逻辑。
+if ((co_await client.StartClient()) != OI_OK)
+{
+    co_return;
+} // 等建连成功，再处理后续逻辑。
 ```
 
-已有连接时返回成功；并发调用等待同一代连接，不重复创建 socket。失败、服务地址切换、停止入口后返回 false。等待只挂起协程，完成排回现有调度队列，不直接 resume。可以先 `auto connecting = client.StartClient();`，之后再 `co_await connecting`；即便连接先完成也不会丢唤醒。返回对象仅可移动，不可复制；同一对象支持多个协程同时 await；完成后也可再次 await，所有等待者读取同一代连接结果。等待已移走的对象会抛出 std::logic_error。
+已有连接时返回成功；并发调用等待同一代连接，不重复创建 socket。成功返回 `OI_OK`；连接失败、服务地址切换或停止入口返回相应错误码。等待只挂起协程，完成排回现有调度队列，不直接 resume。可以先 `auto connecting = client.StartClient();`，之后再 `co_await connecting`；即便连接先完成也不会丢唤醒。返回对象仅可移动，不可复制；同一对象支持多个协程同时 await；完成后也可再次 await，所有等待者读取同一代连接结果。等待已移走的对象会抛出 std::logic_error。
 
 管理器必须覆盖网络操作和等待者的生命周期；全局停止前仍按 TaskScope 约定 Join。接口不提供单独连接超时参数，失败时间由网络连接结果决定。旧 `StartClient(false)` 同步入口和独立 `Connect()` 入口已移除，应用等待建连统一使用 `co_await StartClient()`。
 
-建连等待在启动 socket 前登记；完成时先摘取该代等待者，再执行连接成功回调。成功回调内关闭旧连接并再次 StartClient，新一代不会收到旧连接的成功结果。`ConnectMgr` 覆盖该重入场景，要求首次 true、下一次连接拒绝 false。
+建连等待在启动 socket 前登记；完成时先摘取该代等待者，再执行连接成功回调。成功回调内关闭旧连接并再次 StartClient，新一代不会收到旧连接的成功结果。`ConnectMgr` 覆盖该重入场景，要求首次返回 `OI_OK`、下一次返回连接错误码。
 
 ## 请求消费与服务端容量
 

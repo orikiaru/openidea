@@ -87,15 +87,27 @@ MultiMgr::MultiMgr()
 {
 }
 
-bool MultiMgr::Load()
+int32_t MultiMgr::Load()
 {
 	TryGetConfig("Test.multi", m_bEnabled);
 	if (!m_bEnabled)
 	{
-		return true;
+		return OI_OK;
 	}
 	OI_NOTIFY_BIND_SELF(PeerNote, MultiClient, HandleNote);
-	return m_stFixed.Init() && m_stPeers.Init();
+	int32_t iCode = m_stFixed.Init();
+	if (iCode != OI_OK)
+	{
+		LOG_ERROR("multi load fixed init failed code=%d", iCode);
+		return iCode;
+	}
+	iCode = m_stPeers.Init();
+	if (iCode != OI_OK)
+	{
+		LOG_ERROR("multi load peers init failed code=%d", iCode);
+		return iCode;
+	}
+	return OI_OK;
 }
 
 void MultiMgr::Start()
@@ -156,7 +168,7 @@ std::string MultiMgr::JoinIds(const std::vector<int32_t>& vIds)
 OI::Coro::TaskResult<int32_t> MultiMgr::SwapFixed()
 {
 	// 走注册表的不能改地址。
-	const bool bReject = !m_stPeers.UseAddress("127.0.0.1", "1") && !m_stFixed.UseAddress("", "1");
+	const bool bReject = m_stPeers.UseAddress("127.0.0.1", "1") != OI_OK && m_stFixed.UseAddress("", "1") != OI_OK;
 
 	struct Found
 	{
@@ -191,7 +203,7 @@ OI::Coro::TaskResult<int32_t> MultiMgr::SwapFixed()
 	{
 		const int32_t iConnects = m_stFixed.Connects(0);
 		const int32_t iDisconnects = m_stFixed.Disconnects(0);
-		bSwapped = m_stFixed.UseAddress(pFound->sIp, pFound->sPort) && m_stFixed.GetStrPort() == pFound->sPort;
+		bSwapped = m_stFixed.UseAddress(pFound->sIp, pFound->sPort) == OI_OK && m_stFixed.GetStrPort() == pFound->sPort;
 		bSwapped = (co_await WaitFor([this, iConnects, iDisconnects]()
 		{
 			return m_stFixed.Connects(0) > iConnects && m_stFixed.Disconnects(0) > iDisconnects;
@@ -201,7 +213,7 @@ OI::Coro::TaskResult<int32_t> MultiMgr::SwapFixed()
 	}
 
 	const int32_t iConnects = m_stFixed.Connects(0);
-	const bool bBackCall = m_stFixed.UseAddress(sOldIp, sOldPort);
+	const bool bBackCall = m_stFixed.UseAddress(sOldIp, sOldPort) == OI_OK;
 	const bool bBackUp = co_await WaitFor([this, iConnects]()
 	{
 		return m_stFixed.Connects(0) > iConnects;
@@ -210,7 +222,7 @@ OI::Coro::TaskResult<int32_t> MultiMgr::SwapFixed()
 
 	// 地址没变：不断开，照常能打。
 	const int32_t iDisconnects = m_stFixed.Disconnects(0);
-	const bool bSameCall = m_stFixed.UseAddress(sOldIp, sOldPort);
+	const bool bSameCall = m_stFixed.UseAddress(sOldIp, sOldPort) == OI_OK;
 	const int32_t iSame = co_await ProbeOnce(m_stFixed, 0, 63, 0);
 	const bool bSame = bSameCall && iSame == 1 && m_stFixed.Disconnects(0) == iDisconnects;
 

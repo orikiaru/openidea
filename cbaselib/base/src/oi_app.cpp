@@ -10,33 +10,41 @@ namespace OI
 {
 namespace Base
 {
-int StartFramework(const char* pConfigPath)
+int32_t StartFramework(const char* pConfigPath)
 {
-	if (!Config::GlobalMutableConfig().Parse(pConfigPath))
+	if (!pConfigPath)
 	{
-		fprintf(stderr, "framework init failed: parse config %s\n", pConfigPath ? pConfigPath : "(null)");
-		fflush(stderr);
-		return -2;
+		return OI_ERR_INVALID_ARGUMENT;
 	}
-	if (!::OI::Thread::ThreadPool::GetInstance().Init())
+	int32_t iCode = Config::GlobalMutableConfig().Parse(pConfigPath);
+	if (iCode != OI_OK)
 	{
-		fprintf(stderr, "framework init failed: thread pool; see [ThreadPool] threadcount in %s\n", pConfigPath);
+		fprintf(stderr, "framework init failed: parse config %s code=%d\n", pConfigPath, iCode);
 		fflush(stderr);
-		return -1;
+		return iCode;
 	}
-	if (!::OI::Timer::BaseTimerManager::GetInstance().Init())
+	iCode = ::OI::Thread::ThreadPool::GetInstance().Init();
+	if (iCode != OI_OK)
 	{
-		fprintf(stderr, "framework init failed: timer manager; see [Timer] in %s\n", pConfigPath);
+		fprintf(stderr, "framework init failed: thread pool; see [ThreadPool] threadcount in %s code=%d\n", pConfigPath, iCode);
 		fflush(stderr);
-		return -1;
+		return iCode;
 	}
-	if (!::OI::Net::Poll::GetInstance().Init())
+	iCode = ::OI::Timer::BaseTimerManager::GetInstance().Init();
+	if (iCode != OI_OK)
 	{
-		fprintf(stderr, "framework init failed: poll in %s\n", pConfigPath);
+		fprintf(stderr, "framework init failed: timer manager; see [Timer] in %s code=%d\n", pConfigPath, iCode);
 		fflush(stderr);
-		return -1;
+		return iCode;
 	}
-	return 0;
+	iCode = ::OI::Net::Poll::GetInstance().Init();
+	if (iCode != OI_OK)
+	{
+		fprintf(stderr, "framework init failed: poll in %s code=%d\n", pConfigPath, iCode);
+		fflush(stderr);
+		return iCode;
+	}
+	return OI_OK;
 }
 
 int RunFramework()

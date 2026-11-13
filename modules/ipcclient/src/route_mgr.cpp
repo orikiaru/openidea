@@ -37,7 +37,6 @@
 #include <thread>
 #include <vector>
 
-
 static std::atomic<int> iReverseStarted{0};
 static std::atomic<int> iReverseFinished{0};
 
@@ -50,7 +49,7 @@ static OI_RPC_HANDLER(Hold, HandleReverseHold)
 	co_return 0;
 }
 
-OI::Coro::TaskResult<bool> RouteMgr::MoveRouteProbe(ZoneService* pManagerLocal, std::string sIpLocal, std::string sPortLocal)
+OI::Coro::TaskResult<int32_t> RouteMgr::MoveRouteProbe(ZoneService* pManagerLocal, std::string sIpLocal, std::string sPortLocal)
 {
 	struct ServiceMove
 	{
@@ -104,7 +103,7 @@ OI::Coro::TaskResult<int> RouteMgr::CheckRouteTargetStability()
 	static ZoneService stMoving("gameserver");
 	auto* pFirst = stPool.vClients[0];
 	auto* pSecond = stPool.vClients[1];
-	if (!(co_await MoveRouteProbe(&stMoving, OI::Rpc::RouteManager::GetInstance().ConnectionInfo(*pFirst).sIp, OI::Rpc::RouteManager::GetInstance().ConnectionInfo(*pFirst).sPort)))
+	if ((co_await MoveRouteProbe(&stMoving, OI::Rpc::RouteManager::GetInstance().ConnectionInfo(*pFirst).sIp, OI::Rpc::RouteManager::GetInstance().ConnectionInfo(*pFirst).sPort)) != OI_OK)
 	{
 		co_return 1;
 	}
@@ -121,7 +120,7 @@ OI::Coro::TaskResult<int> RouteMgr::CheckRouteTargetStability()
 	stManyWait.vZones = {1002, 1001};
 	auto stMany = co_await stManyWait;
 	// 刻意在选路和提交之间完成换区，稳定覆盖竞态窗口，不依赖压力碰运气。
-	if (!(co_await MoveRouteProbe(&stMoving, OI::Rpc::RouteManager::GetInstance().ConnectionInfo(*pSecond).sIp, OI::Rpc::RouteManager::GetInstance().ConnectionInfo(*pSecond).sPort)))
+	if ((co_await MoveRouteProbe(&stMoving, OI::Rpc::RouteManager::GetInstance().ConnectionInfo(*pSecond).sIp, OI::Rpc::RouteManager::GetInstance().ConnectionInfo(*pSecond).sPort)) != OI_OK)
 	{
 		co_return 1;
 	}

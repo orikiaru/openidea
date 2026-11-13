@@ -45,8 +45,18 @@ bool AcceptChannel::TryClose()
 	return false;
 }
 
-bool AcceptChannel::StartAccept(SessionManager* pMgr, bool bAsync)
+int32_t AcceptChannel::StartAccept(SessionManager* pMgr, bool bAsync)
 {
+	const int32_t iThreadStatus = Poll::GetInstance().CheckThreadAccess("AcceptChannel::StartAccept");
+	if (iThreadStatus != OI_OK)
+	{
+		return iThreadStatus;
+	}
+	if (!pMgr)
+	{
+		return OI_ERR_INVALID_ARGUMENT;
+	}
+
 	int iSessionTypeLocal = pMgr->GetSessionType();
 	switch (iSessionTypeLocal)
 	{
@@ -57,34 +67,46 @@ bool AcceptChannel::StartAccept(SessionManager* pMgr, bool bAsync)
 		return UDP_Channel::StartBind(pMgr);
 	default:
 		printf("SessionManager::StartServer not support session_type=%d\n", iSessionTypeLocal);
-		return false;
+		return OI_ERR_INVALID_ARGUMENT;
 	}
 }
 
-bool AcceptChannel::StartTcpAccept(SessionManager* pMgr, bool bAsync)
+int32_t AcceptChannel::StartTcpAccept(SessionManager* pMgr, bool bAsync)
 {
+	const int32_t iThreadStatus = Poll::GetInstance().CheckThreadAccess("AcceptChannel::StartTcpAccept");
+	if (iThreadStatus != OI_OK)
+	{
+		return iThreadStatus;
+	}
+	if (!pMgr)
+	{
+		return OI_ERR_INVALID_ARGUMENT;
+	}
+
 	// 只支持异步监听。同步 accept 会把调用线程永久堵住。
 	if (!bAsync)
 	{
 		LOG_ERROR("AcceptChannel::StartTcpAccept sync accept not supported id=%s", pMgr->GetIDString().c_str());
-		return false;
+		return OI_ERR_INVALID_ARGUMENT;
 	}
 	NetSocket stText;
-	if (!stText.CreateSocket(pMgr, bAsync))
+	int32_t iStatus = stText.CreateSocket(pMgr, bAsync);
+	if (iStatus != OI_OK)
 	{
-		return false;
+		return iStatus;
 	}
 
-	if (!stText.SocketListenAndBind(pMgr))
+	iStatus = stText.SocketListenAndBind(pMgr);
+	if (iStatus != OI_OK)
 	{
 		NetOs_Close(stText.GetSocket());
 		stText.Detach();
-		return false;
+		return iStatus;
 	}
 
 	AcceptChannel* pChannelLocal = new AcceptChannel(stText, pMgr);
 	Poll::GetInstance().IOEventRegister(pChannelLocal, true, true);
-	return true;
+	return OI_OK;
 }
 }
 }

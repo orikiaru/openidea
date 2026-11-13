@@ -13,6 +13,8 @@
 #include <string>
 #include "oi_singleton.h"
 #include "oi_lock.h"
+#include "oi_poll.h"
+#include "oi_errno.h"
 #include <type_traits>
 #include <utility>
 #include <memory>
@@ -51,7 +53,7 @@ class BaseTimerManager
 
   public:
 	// 读 tick 间隔，记下单调时钟起点，并在 poll 上挂重复定时器。
-	bool Init();
+	int32_t Init();
 	// libuv 定时器到点，在 poll 线程直接调用 Update
 	void OnSignal();
 	// 定时器实际触发。只在 poll 线程执行，回调里不能同步等待网络或 Redis，耗时工作交给协程
@@ -92,22 +94,41 @@ class BaseTimerManager
 	}
 
 	// 按毫秒挂上一个定时器。对象所有权仍在调用方，除非 OnTimer 里自己销毁。
-	void AddTimer(BaseTimer* pTimer, int iMillisecond);
+	int32_t AddTimer(BaseTimer* pTimer, int iMillisecond);
 	template <typename F>
-	typename std::enable_if<!std::is_base_of<BaseTimer, typename std::remove_pointer<typename std::decay<F>::type>::type>::value, void>::type
+	typename std::enable_if<!std::is_base_of<BaseTimer, typename std::remove_pointer<typename std::decay<F>::type>::type>::value, int32_t>::type
 	AddTimer(F fnFunction, int iMillisecond)
 	{
 		typedef typename std::decay<F>::type Fn;
-		AddTimer(new FnTimer<Fn>(std::move(fnFunction)), iMillisecond);
+		auto pTimer = std::make_unique<FnTimer<Fn>>(std::move(fnFunction));
+		const int32_t iStatus = AddTimer(pTimer.get(), iMillisecond);
+		if (iStatus == OI_OK)
+		{
+			pTimer.release();
+		}
+		return iStatus;
 	}
 
-	// 从时间轮摘掉。正在触发时可能摘不到，返回 false。
-	bool RemoveTimer(BaseTimer* pTimer)
+	// 从时间轮摘掉。正在触发或未登记时返回 OI_ERR_NOT_FOUND。
+	int32_t RemoveTimer(BaseTimer* pTimer)
 	{
+		return RemoveTimerResult(pTimer);
+	}
+	int32_t RemoveTimerResult(BaseTimer* pTimer)
+	{
+		const int32_t iThreadStatus = ::OI::Net::Poll::GetInstance().CheckThreadAccess("BaseTimerManager::RemoveTimer");
+		if (iThreadStatus != OI_OK)
+		{
+			return iThreadStatus;
+		}
 		::OI::Thread::MutexGuard stLock(m_stWheelMutex);
-		assert(pTimer->GetTimerLevel());
+		if (!pTimer || !pTimer->GetTimerLevel())
+		{
+			return OI_ERR_NOT_FOUND;
+		}
 		return pTimer->GetTimerLevel()->RemoveTimer(this, pTimer);
 	}
+
 	// 最近一次 Update 的单调时间和日历时间，给诊断用。
 	std::string GenTraceLog();
 

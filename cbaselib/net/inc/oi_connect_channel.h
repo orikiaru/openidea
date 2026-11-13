@@ -39,10 +39,10 @@ class ConnectChannel : public Channel
 
   public:
 	// 发起非阻塞连接并挂上 poll。失败返回 false。
-	static bool StartConnect(SessionManager* pMgr, bool bAsync);
+	static int32_t StartConnect(SessionManager* pMgr, bool bAsync);
 
   private:
-	static bool StartTcpConnect(SessionManager* pMgr, bool bAsync);
+	static int32_t StartTcpConnect(SessionManager* pMgr, bool bAsync);
 };
 }
 }

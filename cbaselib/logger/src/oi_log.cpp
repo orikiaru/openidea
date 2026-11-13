@@ -6,6 +6,7 @@
 #include "oi_log_client.h"
 #include "oi_config.h"
 #include "oi_base.h"
+#include "oi_errno.h"
 namespace OI
 {
 namespace Log
@@ -55,17 +56,17 @@ static void InitTitle()
 	sLogTitle = vBuffer;
 }
 
-bool Init()
+int32_t Init()
 {
-	bool bReturnCode = LogClient::GetInstance().Init();
-	if (!bReturnCode)
+	const int32_t iReturnCode = LogClient::GetInstance().Init();
+	if (iReturnCode != OI_OK)
 	{
-		return false;
+		return iReturnCode;
 	}
 	LogClient::GetInstance().StartClient();
 	InitTitle();
 	_logclient_init = true;
-	return true;
+	return OI_OK;
 }
 
 void InitLocal(LocalSink fnSink)
@@ -74,7 +75,7 @@ void InitLocal(LocalSink fnSink)
 	_local_sink = fnSink;
 }
 
-bool Log(LOG_LEVEL iLevel, const char* pFormat, ...)
+int32_t Log(LOG_LEVEL iLevel, const char* pFormat, ...)
 {
 	// 先格式化到栈上，放得下就只格式化一次；放不下再按实际长度格式化进 tmp。
 	char vStack[2048];
@@ -87,7 +88,7 @@ bool Log(LOG_LEVEL iLevel, const char* pFormat, ...)
 	if (iNeed < 0)
 	{
 		va_end(vAgain);
-		return false;
+		return OI_ERR_ENCODE;
 	}
 	::OI::Base::Bytes stTmp;
 	stTmp.Reserve(sLogTitle.length() + (size_t)iNeed + 2);
@@ -115,7 +116,7 @@ bool Log(LOG_LEVEL iLevel, const char* pFormat, ...)
 		return LogClient::GetInstance().SendLog((int)iLevel, stTmp.Data(), stTmp.Size());
 	}
 
-	return false;
+	return OI_ERR_CONNECT;
 }
 }
 }

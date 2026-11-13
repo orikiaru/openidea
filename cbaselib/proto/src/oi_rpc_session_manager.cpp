@@ -7,8 +7,19 @@ namespace OI
 namespace Rpc
 {
 
-bool ProtoClientManager::SendRaw(const ::OI::Base::Bytes& stData)
+int32_t ProtoClientManager::SendRaw(const ::OI::Base::Bytes& stData)
 {
+	return SendRawResult(stData);
+}
+
+int32_t ProtoClientManager::SendRawResult(const ::OI::Base::Bytes& stData)
+{
+	const int32_t iThreadStatus = ::OI::Net::Poll::GetInstance().CheckThreadAccess("ProtoClientManager::SendRaw");
+	if (iThreadStatus != OI_OK)
+	{
+		return iThreadStatus;
+	}
+
 	sid_t iSessionIdLocal = INVALID_SID;
 	{
 		::OI::Thread::SpinLockGuard stLock(m_stClientLocker);
@@ -19,13 +30,24 @@ bool ProtoClientManager::SendRaw(const ::OI::Base::Bytes& stData)
 	}
 	if (iSessionIdLocal == INVALID_SID)
 	{
-		return false;
+		return OI_ERR_CONNECT;
 	}
-	return SendBytes(iSessionIdLocal, stData);
+	return SendBytesResult(iSessionIdLocal, stData);
 }
 
-bool ProtoClientManager::SendRawOrPend(const ::OI::Base::Bytes& stData, size_t iMaxPendingBytes)
+int32_t ProtoClientManager::SendRawOrPend(const ::OI::Base::Bytes& stData, size_t iMaxPendingBytes)
 {
+	return SendRawOrPendResult(stData, iMaxPendingBytes);
+}
+
+int32_t ProtoClientManager::SendRawOrPendResult(const ::OI::Base::Bytes& stData, size_t iMaxPendingBytes)
+{
+	const int32_t iThreadStatus = ::OI::Net::Poll::GetInstance().CheckThreadAccess("ProtoClientManager::SendRawOrPend");
+	if (iThreadStatus != OI_OK)
+	{
+		return iThreadStatus;
+	}
+
 	sid_t iSessionIdLocal = INVALID_SID;
 	{
 		::OI::Thread::SpinLockGuard stLock(m_stClientLocker);
@@ -38,14 +60,14 @@ bool ProtoClientManager::SendRawOrPend(const ::OI::Base::Bytes& stData, size_t i
 			iMaxPendingBytes = (std::min)(iMaxPendingBytes, iMaxSendQueueBytes);
 			if (m_iPendingBytes > iMaxPendingBytes || stData.Size() > iMaxPendingBytes - m_iPendingBytes)
 			{
-				return false;
+				return OI_ERR_BUSY;
 			}
 			m_vPending.push_back(stData);
 			m_iPendingBytes += stData.Size();
-			return true;
+			return OI_OK;
 		}
 	}
-	return SendBytes(iSessionIdLocal, stData);
+	return SendBytesResult(iSessionIdLocal, stData);
 }
 
 bool ProtoClientManager::HoldCallLocked(uint64_t iCallId, const ::OI::Base::Bytes& stData)
@@ -180,9 +202,9 @@ void ProtoClientManager::FailHeldCalls()
 	}
 }
 
-void ProtoClientManager::Reconnect(int iMillisecond)
+int32_t ProtoClientManager::Reconnect(int iMillisecond)
 {
-	::OI::Timer::BaseTimerManager::GetInstance().AddTimer([this]()
+	return ::OI::Timer::BaseTimerManager::GetInstance().AddTimer([this]()
 	{
 		StartClient();
 	}, iMillisecond > 0 ? iMillisecond : 1);

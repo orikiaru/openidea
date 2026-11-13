@@ -36,7 +36,6 @@
 #include <thread>
 #include <vector>
 
-
 class ConnectMgr::ClientConnectProbe : public OI::Net::SessionManager
 {
 	class ProbeSession : public OI::Net::NetSession
@@ -90,9 +89,9 @@ class ConnectMgr::ClientConnectProbe : public OI::Net::SessionManager
 	}
 };
 
-OI::Coro::TaskResult<int> ConnectMgr::AwaitClientConnect(ClientConnectProbe* pProbe)
+OI::Coro::TaskResult<int32_t> ConnectMgr::AwaitClientConnect(ClientConnectProbe* pProbe)
 {
-	co_return (co_await pProbe->StartClient()) ? 0 : 1;
+	co_return co_await pProbe->StartClient();
 }
 
 OI::Coro::TaskResult<int> ConnectMgr::CheckClientConnect()
@@ -107,25 +106,25 @@ OI::Coro::TaskResult<int> ConnectMgr::CheckClientConnect()
 	{
 		co_await OI::Coro::yield(1);
 	}
-	if (stEager.Connections() != 1 || stDelayedAwait.Connections() != 1 || !(co_await stConnecting))
+	if (stEager.Connections() != 1 || stDelayedAwait.Connections() != 1 || (co_await stConnecting) != OI_OK)
 	{
 		++iBad;
 	}
-	if (!(co_await stConnecting))
+	if ((co_await stConnecting) != OI_OK)
 	{
 		++iBad;
 	}
 	stEager.CloseAllSessions();
 	stDelayedAwait.CloseAllSessions();
-	if (!(co_await stGood.StartClient()) || stGood.Connections() != 1)
+	if ((co_await stGood.StartClient()) != OI_OK || stGood.Connections() != 1)
 	{
 		++iBad;
 	}
-	if (!(co_await stGood.StartClient()) || stGood.Connections() != 1)
+	if ((co_await stGood.StartClient()) != OI_OK || stGood.Connections() != 1)
 	{
 		++iBad;
 	}
-	if (co_await stRefused.StartClient())
+	if ((co_await stRefused.StartClient()) == OI_OK)
 	{
 		++iBad;
 	}
@@ -155,26 +154,30 @@ OI::Coro::TaskResult<int> ConnectMgr::CheckClientConnect()
 		co_await OI::Coro::yield(1);
 	}
 	static ClientConnectProbe stAwait(HoldTest::IpcServerPort()), stAwaitRefused("0");
-	std::vector<OI::Coro::TaskResult<int>> vConnects;
+	std::vector<OI::Coro::TaskResult<int32_t>> vConnects;
 	for (int iIndex = 0; iIndex < 32; ++iIndex)
 	{
 		vConnects.push_back(AwaitClientConnect(&stAwait));
 	}
 	for (const auto& stConnect : vConnects)
 	{
-		iBad += co_await stConnect;
+		const int32_t iCode = co_await stConnect;
+		if (iCode != OI_OK)
+		{
+			++iBad;
+		}
 	}
-	if (stAwait.Connections() != 1 || !(co_await stAwait.StartClient()))
+	if (stAwait.Connections() != 1 || (co_await stAwait.StartClient()) != OI_OK)
 	{
 		++iBad;
 	}
-	if (co_await stAwaitRefused.StartClient())
+	if ((co_await stAwaitRefused.StartClient()) == OI_OK)
 	{
 		++iBad;
 	}
 	static ClientConnectProbe stReentrant(HoldTest::IpcServerPort(), true);
-	const bool bFirst = co_await stReentrant.StartClient();
-	const bool bRetry = co_await stReentrant.Retry();
+	const bool bFirst = (co_await stReentrant.StartClient()) == OI_OK;
+	const bool bRetry = (co_await stReentrant.Retry()) == OI_OK;
 	const int iReentrantBad = (!bFirst || bRetry || stReentrant.Connections() != 1) ? 1 : 0;
 	iBad += iReentrantBad;
 	LOG_TRACE("hold reentrant connect first=%d retry=%d connections=%d bad=%d", bFirst, bRetry, stReentrant.Connections(), iReentrantBad);

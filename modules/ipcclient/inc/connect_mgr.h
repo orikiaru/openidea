@@ -8,7 +8,7 @@ class ConnectMgr
 	ConnectMgr() = default;
 	class ClientConnectProbe;
 	// 等这一条探测连接的 StartClient 结束。
-	OI::Coro::TaskResult<int> AwaitClientConnect(ClientConnectProbe* pProbe);
+	OI::Coro::TaskResult<int32_t> AwaitClientConnect(ClientConnectProbe* pProbe);
 	// 协程建连、拒绝，32 个等待者共用一条连接，回调里重入时新一代收不到旧连接的成功。
 	OI::Coro::TaskResult<int> CheckClientConnect();
 

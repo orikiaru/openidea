@@ -5,17 +5,24 @@
 
 int main(int iArgumentCount, char* vArguments[])
 {
-	int iCodeLocal = ::OI::Base::StartFramework("../config/ipcclient.toml");
-	if (iCodeLocal != 0)
+	int32_t iCode = ::OI::Base::StartFramework("../config/ipcclient.toml");
+	if (iCode != OI_OK)
 	{
-		return iCodeLocal;
+		fprintf(stderr, "StartFramework failed: code=%d\n", iCode);
+		return iCode;
 	}
-	::OI::Log::Init();
-
-	if (!IpcClient::GetInstance().Init())
+	iCode = ::OI::Log::Init();
+	if (iCode != OI_OK)
 	{
-		printf("IpcClient Init error\n");
-		return -1;
+		fprintf(stderr, "Log Init failed: code=%d\n", iCode);
+		return iCode;
+	}
+
+	iCode = IpcClient::GetInstance().Init();
+	if (iCode != OI_OK)
+	{
+		fprintf(stderr, "IpcClient Init failed: code=%d\n", iCode);
+		return iCode;
 	}
 	IpcClient::GetInstance().StartClient();
 

@@ -11,7 +11,7 @@ class LogServer : public ::OI::Rpc::ProtoSessionManager
 
   public:
 	virtual ~LogServer();
-	bool Init();
+	int32_t Init();
 	virtual const std::string GetIDString()
 	{
 		return "LogServer";

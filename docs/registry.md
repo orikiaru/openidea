@@ -16,7 +16,7 @@
 
 用 `RedisClient`，直接连真正的 Redis，配置在 `registry.toml` 的 `[RedisClient]`，不写 `service`。每条登记、续期、撤销和整量拉取都是 `co_await CallRedis` 一段 Lua，等 Redis 的时候 poll 照转，别的连接照常收发。`timeout_ms` 要比 `expire_ms` 短，Redis 卡住时服务还来得及重新登记。
 
-Redis 连不上或卡住时，登记和续期回失败，客户端下一次心跳重来；整量拉取失败就回失败，客户端保持原状，不把对端判成下线。
+Redis 连不上或卡住时，登记和续期回失败，客户端下一次心跳重来；整量拉取失败就回失败，客户端保持原状，不把对端判成下线。 启动时 `Publish` 若未收到登记确认，会记录失败原因、接受后台心跳重试并返回 `OI_OK`；这表示已接受重试，不表示同步登记已成功。收到实例号已在线的明确回执时返回 `OI_ERR_EXIST`。
 
 ## 登记和在线
 
@@ -103,7 +103,7 @@ Redis 连不上或卡住时，登记和续期回失败，客户端下一次心�
 
 服务端推下来的消息照常用 `OI_NOTIFY_BIND_SELF` 绑定，`OI_RPC_SELF(类型)` 拿到的就是这个管理器。`InstanceIds()` 给当前名单，`ConnectedSid(实例号)` 给这台当前的会话，`IsConnect()` 表示至少有一台连着。
 
-写死地址时运行中要换服务器，在 `Init` 之后调 `UseAddress(ip, port)`：旧连接退役，在途调用回 `OI_ERR_CONNECT`，实例号仍是 0，`Start` 过就马上连新地址，`GetStrIP()`、`GetStrPort()` 跟着变。配了 `service` 时返回 false，地址没变什么都不做。
+写死地址时运行中要换服务器，在 `Init` 之后调 `UseAddress(ip, port)`：旧连接退役，在途调用回 `OI_ERR_CONNECT`，实例号仍是 0，`Start` 过就马上连新地址，`GetStrIP()`、`GetStrPort()` 跟着变。配了 `service` 时返回 `OI_ERR_INVALID_ARGUMENT`；成功返回 `OI_OK`，地址没变什么都不做。
 
 模块生成器生成的 Client 组件默认就是这个类，Server 和 Client 都是单例，带 `OI::Coro::Task OnSecondUpdate(time_t)`，默认函数体是 `co_return;`。回归见 testing.md 的 multi。
 

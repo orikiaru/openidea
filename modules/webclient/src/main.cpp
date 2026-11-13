@@ -7,10 +7,11 @@ int main(int iArgumentCount, char* vArguments[])
 {
 	(void)iArgumentCount;
 	(void)vArguments;
-	int iCodeLocal = ::OI::Base::StartFramework("../config/webclient.toml");
-	if (iCodeLocal != 0)
+	int32_t iCode = ::OI::Base::StartFramework("../config/webclient.toml");
+	if (iCode != OI_OK)
 	{
-		return iCodeLocal;
+		fprintf(stderr, "StartFramework failed: code=%d\n", iCode);
+		return iCode;
 	}
 	WebClient::GetInstance().Start();
 	return ::OI::Base::RunFramework();

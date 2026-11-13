@@ -51,12 +51,12 @@ class LogManager : public ::OI::Timer::BaseTimer
 	~LogManager()
 	{
 	}
-	bool Init();
+	int32_t Init();
 	// StartWork 返回后调用。join 各级写线程，返回时日志都已落盘。
 	void Stop();
 
-	// 满时不消费正文；网络会话登记恢复，本地调用直接返回 false。
-	bool WriteLog(LOG_LEVEL iLevel, const char* pText, size_t iLength,
+	// 满时不消费正文；网络会话登记恢复，本地调用返回 OI_ERR_BUSY。
+	int32_t WriteLog(LOG_LEVEL iLevel, const char* pText, size_t iLength,
 	    LogServerSession* pSession = nullptr);
 	// poll 单次解析达到预算，保留下一帧并排到等待队列尾部。
 	void DeferWrite(LogServerSession* pSession, size_t iLength);
@@ -68,10 +68,10 @@ class LogManager : public ::OI::Timer::BaseTimer
 	void ScheduleResume();
 	static void ResumeOnLoop(void* pArgument);
 	void ResumeWaiting(bool bShutdown);
-	bool StartLogInstanceWork();
-	bool OpenAllLogFile();
-	bool CheckAndCreateRootPath();
-	bool OpenLogFile(LOG_LEVEL iLevel);
+	int32_t StartLogInstanceWork();
+	int32_t OpenAllLogFile();
+	int32_t CheckAndCreateRootPath();
+	int32_t OpenLogFile(LOG_LEVEL iLevel);
 	void OnCrossDay();
 	virtual bool OnTimer();
 	std::string GetLogTitle();

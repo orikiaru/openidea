@@ -49,7 +49,7 @@ void ReportTaskError(std::exception_ptr stErrorLocal) noexcept
 		fprintf(stderr, "task failed: unknown exception\n");
 	}
 }
-bool ThreadPool::Init()
+int32_t ThreadPool::Init()
 {
 #ifdef _SINGLE_THREAD_
 	stThreadData.iThreadCount = 1;
@@ -62,7 +62,7 @@ bool ThreadPool::Init()
 		{
 			fprintf(stderr, "ThreadPool.threadcount missing or not an integer; set [ThreadPool] threadcount = <worker count>\n");
 			fflush(stderr);
-			return false;
+			return OI_ERR_INVALID_ARGUMENT;
 		}
 		fprintf(stderr, "ThreadPool.normal is deprecated, rename it to ThreadPool.threadcount\n");
 		fflush(stderr);
@@ -71,10 +71,10 @@ bool ThreadPool::Init()
 	{
 		fprintf(stderr, "ThreadPool.threadcount=%d must be positive\n", stThreadData.iThreadCount);
 		fflush(stderr);
-		return false;
+		return OI_ERR_INVALID_ARGUMENT;
 	}
 #endif
-	return true;
+	return OI_OK;
 }
 
 static void WorkerMain(ThreadPool::ThreadData* pData)
@@ -135,22 +135,32 @@ void ThreadPool::PostCoroutine(std::coroutine_handle<> stHandle)
 #endif
 }
 
-bool ThreadPool::AddStopHandler(void (*fnHandlerLocal)())
+int32_t ThreadPool::AddStopHandler(void (*fnHandlerLocal)())
 {
-	::OI::Thread::MutexGuard stLock(m_stStopHandlerMutex);
-	if (!fnHandlerLocal || m_bStopRequested.load())
+	const int32_t iThreadStatus = ::OI::Net::Poll::GetInstance().CheckThreadAccess("ThreadPool::AddStopHandler");
+	if (iThreadStatus != OI_OK)
 	{
-		return false;
+		return iThreadStatus;
+	}
+
+	if (!fnHandlerLocal)
+	{
+		return OI_ERR_INVALID_ARGUMENT;
+	}
+	::OI::Thread::MutexGuard stLock(m_stStopHandlerMutex);
+	if (m_bStopRequested.load())
+	{
+		return OI_ERR_CONNECT;
 	}
 	for (const auto& fnHandler : m_vStopHandlers)
 	{
 		if (fnHandler == fnHandlerLocal)
 		{
-			return true;
+			return OI_OK;
 		}
 	}
 	m_vStopHandlers.push_back(fnHandlerLocal);
-	return true;
+	return OI_OK;
 }
 
 void ThreadPool::RequestStop(int iCode)
@@ -198,9 +208,17 @@ void ThreadPool::FinishStop()
 	stThreadData.stCondition.Broadcast();
 }
 
-bool ThreadPool::CreateSpecThread(std::thread& stOutput, void* (*fnThreadHandle)(void*), void* pArgument)
+int32_t ThreadPool::CreateSpecThread(std::thread& stOutput, void* (*fnThreadHandle)(void*), void* pArgument)
 {
+	if (!fnThreadHandle)
+	{
+		return OI_ERR_INVALID_ARGUMENT;
+	}
 #ifndef _SINGLE_THREAD_
+	if (stOutput.joinable())
+	{
+		return OI_ERR_BUSY;
+	}
 	InitIgnoreSig();
 	try
 	{
@@ -215,17 +233,23 @@ bool ThreadPool::CreateSpecThread(std::thread& stOutput, void* (*fnThreadHandle)
 		stOutput = std::move(stWorker);
 		stGo.set_value();
 	}
+	catch (const std::exception& stError)
+	{
+		fprintf(stderr, "CreateSpecThread failed: %s\n", stError.what());
+		return OI_ERR_FAIL;
+	}
 	catch (...)
 	{
-		return false;
+		fprintf(stderr, "CreateSpecThread failed: unknown exception\n");
+		return OI_ERR_FAIL;
 	}
-	return true;
+	return OI_OK;
 #else
 	(void)stOutput;
 	(void)fnThreadHandle;
 	(void)pArgument;
-	assert(false && "ThreadPool::CreateSpecThread is singlethread");
-	return false;
+	fprintf(stderr, "CreateSpecThread is not supported in single-thread mode\n");
+	return OI_ERR_INVALID_ARGUMENT;
 #endif
 }
 

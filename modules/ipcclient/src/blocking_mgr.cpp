@@ -15,11 +15,13 @@
 #include "oi_rpcdata_allechores.h"
 #include "oi_rpcdata_holdreq.h"
 #include "oi_rpcdata_holdres.h"
+#include "oi_rpcdata_peerprobereq.h"
 #include "ipcclient.h"
 #include "rpc_ids.h"
 #include "oi_redis.h"
 #include "oi_poll.h"
 #include "oi_net_session.h"
+#include "oi_channel.h"
 #include "oi_timer_manager.h"
 #include <uv.h>
 #include "test_board.h"
@@ -36,11 +38,194 @@
 #include <thread>
 #include <vector>
 
-
 static int32_t BlockingCopy(std::string sInput, std::string& sOutput)
 {
 	sOutput = std::move(sInput);
 	return 0;
+}
+
+class BlockingAccessSession : public OI::Net::Session
+{
+  public:
+	BlockingAccessSession()
+	    : Session(nullptr)
+	{
+	}
+	void PassiveClose(int) override
+	{
+	}
+	void ActiveClose() override
+	{
+	}
+	void OnDataIn() override
+	{
+	}
+	void OnDataOut() override
+	{
+	}
+	int32_t CheckAllowSend()
+	{
+		return AllowSend();
+	}
+	int32_t CheckForbidSend()
+	{
+		return ForbidSend();
+	}
+	int32_t CheckAllowRead()
+	{
+		return AllowRead();
+	}
+	int32_t CheckForbidRead()
+	{
+		return ForbidRead();
+	}
+
+  protected:
+	void Close(int) override
+	{
+	}
+};
+
+class BlockingAccessChannel : public OI::Net::Channel
+{
+  public:
+	BlockingAccessChannel()
+	    : Channel(OI::Net::NetSocket(), nullptr)
+	{
+	}
+	void DataIn() override
+	{
+	}
+	void DataOut() override
+	{
+	}
+	bool TryClose() override
+	{
+		return false;
+	}
+};
+
+class BlockingAccessClient : public OI::Rpc::ProtoClientManager
+{
+  public:
+	void OnClientConnect(OI::Net::Session*) override
+	{
+	}
+	void OnClientDisconnect(const OI::Net::Session*) override
+	{
+	}
+};
+
+class BlockingAccessTimer : public OI::Timer::BaseTimer
+{
+  public:
+	bool OnTimer() override
+	{
+		return OI::Timer::END_TIMER;
+	}
+};
+
+struct BlockingAccessResult
+{
+	int32_t iManager = 0;
+	int32_t iSession = 0;
+	int32_t iAllow = 0;
+	int32_t iChannel = 0;
+	int32_t iSessionForbid = 0;
+	int32_t iSessionRead = 0;
+	int32_t iSessionForbidRead = 0;
+	int32_t iChannelForbid = 0;
+	int32_t iChannelRead = 0;
+	int32_t iChannelForbidRead = 0;
+	int32_t iRouteStart = 0;
+	int32_t iRouteAddress = 0;
+	int32_t iRaw = 0;
+	int32_t iPending = 0;
+	int32_t iPeer = 0;
+	int32_t iAny = 0;
+	int32_t iClose = 0;
+	int32_t iCloseAll = 0;
+#ifdef _SINGLE_THREAD_
+	int32_t iConnect = 0;
+	int32_t iServer = 0;
+	int32_t iOpenPeer = 0;
+	sid_t iPeerOutput = INVALID_SID;
+	int32_t iReconnect = 0;
+	int32_t iRegistrySync = 0;
+	int32_t iRegistryAsync = 0;
+	int32_t iRemoveTimer = 0;
+	int32_t iNotify = 0;
+	int32_t iRedis = 0;
+	int32_t iTimer = 0;
+	int32_t iClosureTimer = 0;
+	int32_t iRemoved = 0;
+	bool bClosureReleased = false;
+#endif
+};
+
+static int32_t CheckBlockingAccess(BlockingAccessSession& stSession, BlockingAccessChannel& stChannel, BlockingAccessTimer& stTimer, BlockingAccessTimer& stNewTimer, BlockingAccessResult& stResult)
+{
+	const OI::Base::Bytes stBytes("probe", 5);
+	stResult.iManager = IpcClient::GetInstance().SendBytes(-1, stBytes);
+	stResult.iSession = stSession.Send(stBytes);
+	stResult.iAllow = stSession.CheckAllowSend();
+	stResult.iChannel = stChannel.AllowSend();
+	stResult.iSessionForbid = stSession.CheckForbidSend();
+	stResult.iSessionRead = stSession.CheckAllowRead();
+	stResult.iSessionForbidRead = stSession.CheckForbidRead();
+	stResult.iChannelForbid = stChannel.ForbidSend();
+	stResult.iChannelRead = stChannel.AllowRead();
+	stResult.iChannelForbidRead = stChannel.ForbidRead();
+	BlockingAccessClient stClient;
+	OI::Rpc::ProtoMultiClientManager stRoutes;
+#ifdef _SINGLE_THREAD_
+	stClient.DefaultInit("127.0.0.1", "0");
+	auto stConnect = stClient.StartClient();
+	stResult.iConnect = stConnect.await_resume();
+	stResult.iServer = stClient.StartServer();
+	stResult.iPeerOutput = 12345;
+	stResult.iOpenPeer = stClient.OpenPeer("127.0.0.1", "9", stResult.iPeerOutput);
+	static BlockingAccessClient stReconnectClient;
+	stResult.iReconnect = stReconnectClient.Reconnect(600000);
+	stResult.iRouteStart = stRoutes.Start();
+	stResult.iRouteAddress = stRoutes.UseAddress("127.0.0.1", "1");
+#endif
+	const OI::Base::Bytes stEmpty;
+	stResult.iRaw = stClient.SendRaw(stEmpty);
+	stResult.iPending = stClient.SendRawOrPend(stEmpty, 0);
+	OI::RpcData::PeerProbeReq stPeerRequest;
+	stResult.iPeer = stRoutes.NotifyPeer(1, stPeerRequest);
+	stResult.iAny = stRoutes.NotifyAny(stPeerRequest);
+	stResult.iClose = stClient.CloseSession(INVALID_SID);
+	stResult.iCloseAll = stClient.CloseAllSessions();
+#ifdef _SINGLE_THREAD_
+	OI::RpcData::HoldReq stRequest;
+	stResult.iNotify = OI::Rpc::RpcNotify(IpcClient::GetInstance(), INVALID_SID, stRequest);
+	stResult.iRedis = OI::Redis::RedisClient::GetInstance().CallSync({"PING"}).GetRet();
+	std::vector<OI::Base::ServiceInstance> vServices;
+	stResult.iRegistrySync = OI::Base::RegistryClient::GetInstance().PullSync("blocking-probe", vServices);
+	auto pRegistryCode = std::make_shared<std::atomic<int32_t>>(OI_OK);
+	OI::Base::RegistryClient::GetInstance().PullAsync("blocking-probe", [pRegistryCode](int32_t iCode, const std::vector<OI::Base::ServiceInstance>&)
+	{
+		pRegistryCode->store(iCode);
+	});
+	stResult.iRegistryAsync = pRegistryCode->load();
+	auto& stTimers = OI::Timer::BaseTimerManager::GetInstance();
+	stResult.iTimer = stTimers.AddTimer(&stNewTimer, 60000);
+	auto pClosure = std::make_shared<int>(1);
+	std::weak_ptr<int> pWeak = pClosure;
+	stResult.iClosureTimer = stTimers.AddTimer([pClosure]()
+	{
+	}, 60000);
+	pClosure.reset();
+	stResult.bClosureReleased = pWeak.expired();
+	stResult.iRemoveTimer = stTimers.RemoveTimerResult(&stTimer);
+	stResult.iRemoved = stTimers.RemoveTimer(&stTimer);
+#else
+	(void)stTimer;
+	(void)stNewTimer;
+#endif
+	return OI_OK;
 }
 
 OI::Coro::TaskResult<int> BlockingMgr::BlockingWaiter(OI::Coro::TaskResult<int32_t> stTask)
@@ -235,6 +420,72 @@ OI::Coro::TaskResult<int> BlockingMgr::CheckBlockingCategories()
 OI::Coro::TaskResult<int> BlockingMgr::CheckBlockingWork()
 {
 	int iBad = 0;
+	BlockingAccessSession stAccessSession;
+	BlockingAccessChannel stAccessChannel;
+	BlockingAccessResult stAccessResult;
+	BlockingAccessTimer stAccessTimer;
+	BlockingAccessTimer stNewTimer;
+	BlockingAccessSession stLoopSession;
+	const OI::Base::Bytes stLoopBytes("loop", 4);
+	const int32_t iLoopSend = stLoopSession.Send(stLoopBytes);
+	const int32_t iLoopAllow = stLoopSession.CheckAllowSend();
+	const int32_t iLoopChannel = stAccessChannel.AllowSend();
+	const int32_t iLoopAdd = OI::Timer::BaseTimerManager::GetInstance().AddTimer(&stNewTimer, 60000);
+	const int32_t iLoopRemove = iLoopAdd == OI_OK ? OI::Timer::BaseTimerManager::GetInstance().RemoveTimer(&stNewTimer) : OI_ERR_FAIL;
+	const int32_t iLoopMissing = OI::Timer::BaseTimerManager::GetInstance().RemoveTimer(&stNewTimer);
+	if (iLoopSend != OI_OK || stLoopSession.PendingSendBytes() != 4 || iLoopAllow != OI_OK || iLoopChannel != OI_OK ||
+	    iLoopAdd != OI_OK || iLoopRemove != OI_OK || iLoopMissing != OI_ERR_NOT_FOUND)
+	{
+		std::fprintf(stderr, "blocking loop access send=%d allow=%d channel=%d add=%d remove=%d missing=%d\n",
+		    iLoopSend, iLoopAllow, iLoopChannel, iLoopAdd, iLoopRemove, iLoopMissing);
+		++iBad;
+	}
+#ifdef _SINGLE_THREAD_
+	const int32_t iTimerSetup = OI::Timer::BaseTimerManager::GetInstance().AddTimer(&stAccessTimer, 60000);
+#endif
+	const int32_t iAccessTask = co_await OI::Coro::RunBlocking(CheckBlockingAccess, stAccessSession, stAccessChannel, stAccessTimer, stNewTimer, stAccessResult);
+#ifdef _SINGLE_THREAD_
+	const bool bAccessOk = stAccessResult.iManager == OI_ERR_WRONG_THREAD && stAccessResult.iSession == OI_ERR_WRONG_THREAD &&
+	                       stAccessResult.iAllow == OI_ERR_WRONG_THREAD && stAccessResult.iChannel == OI_ERR_WRONG_THREAD && stAccessSession.PendingSendBytes() == 0 &&
+	                       stAccessResult.iRaw == OI_ERR_WRONG_THREAD && stAccessResult.iPending == OI_ERR_WRONG_THREAD && stAccessResult.iNotify == OI_ERR_WRONG_THREAD &&
+	                       stAccessResult.iPeer == OI_ERR_WRONG_THREAD && stAccessResult.iAny == OI_ERR_WRONG_THREAD &&
+	                       stAccessResult.iSessionForbid == OI_ERR_WRONG_THREAD && stAccessResult.iSessionRead == OI_ERR_WRONG_THREAD &&
+	                       stAccessResult.iSessionForbidRead == OI_ERR_WRONG_THREAD && stAccessResult.iChannelForbid == OI_ERR_WRONG_THREAD &&
+	                       stAccessResult.iChannelRead == OI_ERR_WRONG_THREAD && stAccessResult.iChannelForbidRead == OI_ERR_WRONG_THREAD &&
+	                       stAccessResult.iRouteStart == OI_ERR_WRONG_THREAD && stAccessResult.iRouteAddress == OI_ERR_WRONG_THREAD &&
+	                       stAccessResult.iConnect == OI_ERR_WRONG_THREAD && stAccessResult.iServer == OI_ERR_WRONG_THREAD &&
+	                       stAccessResult.iOpenPeer == OI_ERR_WRONG_THREAD && stAccessResult.iPeerOutput == 12345 && stAccessResult.iReconnect == OI_ERR_WRONG_THREAD &&
+	                       stAccessResult.iClose == OI_ERR_WRONG_THREAD && stAccessResult.iCloseAll == OI_ERR_WRONG_THREAD &&
+	                       stAccessResult.iRegistrySync == OI_ERR_WRONG_THREAD && stAccessResult.iRegistryAsync == OI_ERR_WRONG_THREAD &&
+	                       stAccessResult.iRemoveTimer == OI_ERR_WRONG_THREAD && stAccessResult.iRedis == OI_ERR_WRONG_THREAD && stAccessResult.iTimer == OI_ERR_WRONG_THREAD &&
+	                       stAccessResult.iClosureTimer == OI_ERR_WRONG_THREAD && stAccessResult.bClosureReleased && stAccessResult.iRemoved == OI_ERR_WRONG_THREAD && iTimerSetup == OI_OK;
+	if (stAccessResult.iTimer == OI_OK)
+	{
+		(void)OI::Timer::BaseTimerManager::GetInstance().RemoveTimer(&stNewTimer);
+	}
+	const bool bTimerStillRegistered = iTimerSetup == OI_OK && OI::Timer::BaseTimerManager::GetInstance().RemoveTimer(&stAccessTimer) == OI_OK;
+	if (!bTimerStillRegistered)
+	{
+		++iBad;
+	}
+#else
+	const bool bAccessOk = stAccessResult.iManager == OI_ERR_CONNECT && stAccessResult.iSession == OI_OK &&
+	                       stAccessResult.iAllow == OI_OK && stAccessResult.iChannel == OI_OK && stAccessSession.PendingSendBytes() == 5 &&
+	                       stAccessResult.iRaw == OI_ERR_CONNECT && stAccessResult.iPending == OI_OK &&
+	                       stAccessResult.iPeer == OI_ERR_CONNECT && stAccessResult.iAny == OI_ERR_CONNECT &&
+	                       stAccessResult.iSessionForbid == OI_OK && stAccessResult.iSessionRead == OI_OK && stAccessResult.iSessionForbidRead == OI_OK &&
+	                       stAccessResult.iChannelForbid == OI_OK && stAccessResult.iChannelRead == OI_OK && stAccessResult.iChannelForbidRead == OI_OK &&
+	                       stAccessResult.iClose == OI_ERR_NOT_FOUND && stAccessResult.iCloseAll == OI_OK;
+#endif
+	if (iAccessTask != OI_OK || !bAccessOk || stAccessChannel.iEventMask.load() != 0)
+	{
+		std::fprintf(stderr, "blocking access failed task=%d manager=%d session=%d allow=%d channel=%d pending=%zu mask=%d raw=%d pend=%d peer=%d any=%d close=%d all=%d\n",
+		    iAccessTask, stAccessResult.iManager, stAccessResult.iSession, stAccessResult.iAllow, stAccessResult.iChannel,
+		    stAccessSession.PendingSendBytes(), stAccessChannel.iEventMask.load(), stAccessResult.iRaw, stAccessResult.iPending,
+		    stAccessResult.iPeer, stAccessResult.iAny, stAccessResult.iClose, stAccessResult.iCloseAll);
+		++iBad;
+	}
+	LOG_TRACE("hold blocking access bad=%d", iBad);
 	iBad += co_await CheckBlockingCategories();
 	std::vector<OI::Coro::TaskResult<int>> vTasks;
 	constexpr uint32_t iSeed = 20261110;

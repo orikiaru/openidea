@@ -37,7 +37,6 @@
 #include <thread>
 #include <vector>
 
-
 // 常驻测试管理器，使用真实会话及固定发送额度，不绕过底层发送判定。
 class DirectBudgetProbe : public DeferredRpcProbe
 {
@@ -65,7 +64,7 @@ OI::Coro::TaskResult<int> BackpressureMgr::CheckDirectBackpressure()
 	stOutput.stData.sMessage = "unchanged";
 	// 当前任务内调用立即启动，连接尚未开始，稳定进入建连前排队路径。
 	auto stQueued = OI::Rpc::RpcCall(stClient, stLarge, stOutput, OI::Timer::Seconds(3));
-	const bool bConnected = co_await stClient.StartClient();
+	const bool bConnected = (co_await stClient.StartClient()) == OI_OK;
 	const int32_t iQueuedRet = co_await stQueued;
 	if (!bConnected || iQueuedRet != OI_ERR_BUSY || stOutput.stData.sMessage != "unchanged")
 	{

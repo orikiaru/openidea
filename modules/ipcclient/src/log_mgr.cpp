@@ -78,7 +78,7 @@ OI::Coro::Task LogMgr::Pump()
 			m_iSent.fetch_sub(m_iLineBytes);
 			break;
 		}
-		if (!::OI::Log::LogClient::GetInstance().SendLog(LOG_INFO, vPayload.data(), vPayload.size()))
+		if (::OI::Log::LogClient::GetInstance().SendLog(LOG_INFO, vPayload.data(), vPayload.size()) != OI_OK)
 		{
 			m_iSent.fetch_sub(m_iLineBytes);
 		}

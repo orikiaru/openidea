@@ -31,12 +31,12 @@ UdpMgr::UdpMgr()
 {
 }
 
-bool UdpMgr::Load()
+int32_t UdpMgr::Load()
 {
 	TryGetConfig("Test.udp", m_bEnabled);
 	if (!m_bEnabled)
 	{
-		return true;
+		return OI_OK;
 	}
 	TryGetConfig("TestUdp.ip", m_sServerIp);
 	TryGetConfig("TestUdp.port", m_sServerPort);
@@ -45,7 +45,7 @@ bool UdpMgr::Load()
 	if (m_sServerPort.empty() || m_iTotal <= 0 || m_iNotes <= 0)
 	{
 		LOG_ERROR("udp test config invalid port=%s total=%d notes=%d", m_sServerPort.c_str(), m_iTotal, m_iNotes);
-		return false;
+		return OI_ERR_INVALID_ARGUMENT;
 	}
 	m_pNoteSeen.reset(new std::atomic<uint8_t>[(size_t)m_iNotes]);
 	for (int32_t iIndex = 0; iIndex < m_iNotes; ++iIndex)
@@ -56,7 +56,19 @@ bool UdpMgr::Load()
 	{
 		return UdpMgr::GetInstance().HandleNote(stContext, stRequest);
 	});
-	return IpcUdp::GetInstance().Init() && IpcUdp::GetInstance().StartServer();
+	int32_t iCode = IpcUdp::GetInstance().Init();
+	if (iCode != OI_OK)
+	{
+		LOG_ERROR("udp load init failed code=%d", iCode);
+		return iCode;
+	}
+	iCode = IpcUdp::GetInstance().StartServer();
+	if (iCode != OI_OK)
+	{
+		LOG_ERROR("udp load start server failed code=%d", iCode);
+		return iCode;
+	}
+	return OI_OK;
 }
 
 void UdpMgr::Start()
@@ -96,7 +108,7 @@ static OI::Coro::TaskResult<bool> EchoOnce(sid_t iSessionId, int32_t iSeq, std::
 	stRequest.sData = sData;
 	::OI::RpcData::UdpEchoRes stResponse;
 	const int32_t iRet = co_await ::OI::Rpc::RpcCall(IpcUdp::GetInstance(), iSessionId, stRequest, stResponse, ::OI::Timer::Seconds(3));
-	co_return iRet == OI_OK && stResponse.iSeq == iSeq && stResponse.sData == sData;
+	co_return iRet == OI_OK&& stResponse.iSeq == iSeq&& stResponse.sData == sData;
 }
 
 static OI::Coro::TaskResult<std::string> Diagnose(sid_t iSessionId, int32_t iSeq)
@@ -138,12 +150,14 @@ OI::Coro::Task UdpMgr::Run()
 	const uint16_t iLocalPort = stManager.LocalPort();
 	fnReport("udp local port=%u bad=%d\n", iLocalPort == 0 ? 1 : 0, (unsigned)iLocalPort);
 
-	const sid_t iSessionId = stManager.OpenPeer(m_sServerIp, m_sServerPort);
-	const sid_t iAgainId = stManager.OpenPeer(m_sServerIp, m_sServerPort);
-	fnReport("udp open dedup bad=%d\n", (iSessionId == INVALID_SID || iSessionId != iAgainId) ? 1 : 0);
+	sid_t iSessionId = INVALID_SID;
+	sid_t iAgainId = INVALID_SID;
+	const int32_t iOpen = stManager.OpenPeer(m_sServerIp, m_sServerPort, iSessionId);
+	const int32_t iAgain = stManager.OpenPeer(m_sServerIp, m_sServerPort, iAgainId);
+	fnReport("udp open dedup bad=%d\n", (iOpen != OI_OK || iAgain != OI_OK || iSessionId == INVALID_SID || iSessionId != iAgainId) ? 1 : 0);
 
 	::OI::Net::NetAddr stAddr;
-	const bool bAddr = stManager.GetPeerAddr(iSessionId, stAddr);
+	const bool bAddr = stManager.GetPeerAddr(iSessionId, stAddr) == OI_OK;
 	fnReport("udp peer addr bad=%d\n", (!bAddr || std::to_string(stAddr.Port()) != m_sServerPort) ? 1 : 0);
 
 	const std::string sSeen = co_await Diagnose(iSessionId, ::OI::RpcData::UDP_PROBE_PEER_ADDR);
@@ -215,7 +229,7 @@ OI::Coro::Task UdpMgr::Run()
 
 	::OI::Base::Bytes stGarbage;
 	stGarbage.Append("garbage-garbage", 15);
-	const bool bGarbageSent = stManager.SendBytes(iSessionId, stGarbage);
+	const bool bGarbageSent = stManager.SendBytes(iSessionId, stGarbage) == OI_OK;
 	const bool bAfter = co_await EchoOnce(iSessionId, 1000001, "after");
 	const std::string sSessions = co_await Diagnose(iSessionId, ::OI::RpcData::UDP_PROBE_SESSIONS);
 	fnReport("udp garbage keeps session sessions=%s bad=%d\n", (bGarbageSent && bAfter && sSessions == "1") ? 0 : 1, sSessions.c_str());
@@ -226,9 +240,10 @@ OI::Coro::Task UdpMgr::Run()
 		co_await OI::Coro::yield(50);
 	}
 	::OI::Net::NetAddr stGone;
-	const bool bClosed = m_iClosedSessionId.load() == iSessionId && !stManager.GetPeerAddr(iSessionId, stGone);
-	const sid_t iReopenId = stManager.OpenPeer(m_sServerIp, m_sServerPort);
-	const bool bReopen = iReopenId != INVALID_SID && iReopenId != iSessionId && co_await EchoOnce(iReopenId, 1000002, "reopen");
+	const bool bClosed = m_iClosedSessionId.load() == iSessionId && stManager.GetPeerAddr(iSessionId, stGone) != OI_OK;
+	sid_t iReopenId = INVALID_SID;
+	const int32_t iReopen = stManager.OpenPeer(m_sServerIp, m_sServerPort, iReopenId);
+	const bool bReopen = iReopen == OI_OK && iReopenId != INVALID_SID && iReopenId != iSessionId && co_await EchoOnce(iReopenId, 1000002, "reopen");
 	if (!bClosed || !bReopen)
 	{
 		std::printf("udp idle closed=%d reopen=%d sid=%d new=%d\n", bClosed ? 1 : 0, bReopen ? 1 : 0, (int)iSessionId, (int)iReopenId);

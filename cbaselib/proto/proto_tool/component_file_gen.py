@@ -31,15 +31,17 @@ class ComponentFileGen:
     
     def GenServerComponentInit(self):
         file_data = r'''
-    if(!__COMPONENT_NAME__::GetInstance().Init())
+    iCode = __COMPONENT_NAME__::GetInstance().Init();
+    if (iCode != OI_OK)
     {
-        printf("__COMPONENT_NAME__ Init error\n");
-        return -1;
+        fprintf(stderr, "__COMPONENT_NAME__ Init failed: code=%d\n", iCode);
+        return iCode;
     }
-    if (!__COMPONENT_NAME__::GetInstance().StartServer())
+    iCode = __COMPONENT_NAME__::GetInstance().StartServer();
+    if (iCode != OI_OK)
     {
-        printf("__COMPONENT_NAME__ StartServer error\n");
-        return -1;
+        fprintf(stderr, "__COMPONENT_NAME__ StartServer failed: code=%d\n", iCode);
+        return iCode;
     }   
 '''     
         return self.DoReplace(file_data)
@@ -47,10 +49,11 @@ class ComponentFileGen:
     
     def GenClientComponentInit(self):
         file_data = r'''
-    if(!__COMPONENT_NAME__::GetInstance().Init())
+    iCode = __COMPONENT_NAME__::GetInstance().Init();
+    if (iCode != OI_OK)
     {
-        printf("__COMPONENT_NAME__ Init error\n");
-        return -1;
+        fprintf(stderr, "__COMPONENT_NAME__ Init failed: code=%d\n", iCode);
+        return iCode;
     }
     __COMPONENT_NAME__::GetInstance().Start();
 '''     
@@ -124,7 +127,7 @@ class __COMPONENT_NAME__ : public OI::Rpc::ProtoSessionManager
 
   public:
 	virtual ~__COMPONENT_NAME__();
-	bool Init() override;
+	int32_t Init() override;
 	const std::string GetIDString() override;
 	// 每秒启动一条协程，可以 co_await。上一条没结束时这一秒跳过。
 	OI::Coro::Task OnSecondUpdate(time_t iNow);
@@ -153,7 +156,7 @@ class __COMPONENT_NAME__ : public OI::Rpc::ProtoMultiClientManager
 
   public:
 	virtual ~__COMPONENT_NAME__();
-	bool Init() override;
+	int32_t Init() override;
 	const std::string GetIDString() override;
 	// 某台连上，连上前暂存的请求已补发，在 poll 线程。
 	void OnPeerConnect(int32_t iInstanceId, sid_t iSessionId) override;
@@ -179,7 +182,7 @@ __COMPONENT_NAME__::~__COMPONENT_NAME__()
 {
 }
 
-bool __COMPONENT_NAME__::Init()
+int32_t __COMPONENT_NAME__::Init()
 {
 	return OI::Rpc::ProtoMultiClientManager::Init();
 }
@@ -216,7 +219,7 @@ __COMPONENT_NAME__::~__COMPONENT_NAME__()
 {
 }
 
-bool __COMPONENT_NAME__::Init()
+int32_t __COMPONENT_NAME__::Init()
 {
 	return OI::Rpc::ProtoSessionManager::Init();
 }

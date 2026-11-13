@@ -38,13 +38,13 @@ class DiagnosticText
 	bool m_bTruncated = false;
 };
 
-// 按配置初始化日志客户端。失败返回 false。
-bool Init();
+// 按配置初始化日志客户端。返回框架错误码。
+int32_t Init();
 // 日志服自己用：不连日志服，整行日志交给 sink 写本地。传 NULL 摘掉，之后只打 stdout。
-typedef bool (*LocalSink)(LOG_LEVEL iLevel, const char* pText, size_t iLength);
+typedef int32_t (*LocalSink)(LOG_LEVEL iLevel, const char* pText, size_t iLength);
 void InitLocal(LocalSink fnSink);
-// 按级别格式化一条日志。写不出去返回 false。
-bool Log(LOG_LEVEL iLevel, const char* pFormat, ...) __attribute__((format(printf, 2, 3)));
+// 按级别格式化一条日志。返回框架错误码。
+int32_t Log(LOG_LEVEL iLevel, const char* pFormat, ...) __attribute__((format(printf, 2, 3)));
 }
 }
 

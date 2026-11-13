@@ -30,6 +30,7 @@ std::string EncodeQuery(const std::string& sValue)
 	for (size_t iIndexLocal = 0; iIndexLocal < sValue.size(); ++iIndexLocal)
 	{
 		unsigned char iCharacter = (unsigned char)sValue[iIndexLocal];
+		// clang-format off
 		bool bPlain = (iCharacter >= 'a' && iCharacter <= 'z')
 			|| (iCharacter >= 'A' && iCharacter <= 'Z')
 			|| (iCharacter >= '0' && iCharacter <= '9')
@@ -42,6 +43,7 @@ std::string EncodeQuery(const std::string& sValue)
 			|| iCharacter == '\''
 			|| iCharacter == '('
 			|| iCharacter == ')';
+		// clang-format on
 		if (bPlain)
 		{
 			sOutput.push_back((char)iCharacter);
@@ -173,16 +175,16 @@ struct Call::Request
 	std::string sBody;                   // 正文。exchange(Ready) 之前写完。
 	std::string sError;                  // 失败原因。成功时为空。
 	std::coroutine_handle<> stHandle;    // 调用方句柄。门已经是 Waiting 才 Schedule。
-	std::atomic<OI::Coro::Gate> iGate;       // 完成门。Idle 还没人认领，Ready 结果已写好，Waiting 调用方已挂起。
+	std::atomic<OI::Coro::Gate> iGate;   // 完成门。Idle 还没人认领，Ready 结果已写好，Waiting 调用方已挂起。
 	std::atomic<int32_t> iDone;          // 结果只发布一次。晚到的超时看见非 0 就返回。
 	std::atomic<bool> bAwaitStarted;     // 一次性闩。第二次 await 或移走后再等直接抛。
 	int32_t iStatus;                     // HTTP 状态码。没拿到状态行是 0。
 	int32_t iTimeoutMilliseconds;        // 从入队起算的超时。
-	bool bFailed;                        // 连接、超时或报文失败。
+	int32_t iCode;                       // 连接、超时或报文失败。
 	~Request();
 
 	Request()
-	    : iGate(OI::Coro::Gate::Idle), iDone(0), bAwaitStarted(false), iStatus(0), iTimeoutMilliseconds(5000), bFailed(false)
+	    : iGate(OI::Coro::Gate::Idle), iDone(0), bAwaitStarted(false), iStatus(0), iTimeoutMilliseconds(5000), iCode(OI_OK)
 	{
 	}
 };
@@ -203,7 +205,7 @@ struct Client::Impl : public ::OI::Net::SessionManager
 	bool m_bClosed;
 	bool m_bReuse;
 
-	void Publish(const std::shared_ptr<Call::Request>& pRequestLocal, bool bFail, const char* pWhy);
+	void Publish(const std::shared_ptr<Call::Request>& pRequestLocal, int32_t iCode, const char* pWhy);
 	void EnqueueOnLoop(const std::shared_ptr<Call::Request>& pRequestLocal);
 	void ArmTimer(const std::shared_ptr<Call::Request>& pRequestLocal);
 	void Pump();
@@ -242,7 +244,7 @@ struct Client::Impl : public ::OI::Net::SessionManager
 	void Enqueue(const std::shared_ptr<Call::Request>& pRequestLocal);
 	void OnTimeout(const std::shared_ptr<Call::Request>& pRequestLocal);
 	void Shutdown();
-	void OnHttpFinished(HttpSession* pSession, bool bFail, const char* pWhy, bool bClose, int32_t iStatusLocal, std::string sBodyLocal);
+	void OnHttpFinished(HttpSession* pSession, int32_t iCode, const char* pWhy, bool bClose, int32_t iStatusLocal, std::string sBodyLocal);
 	void OnIdleBytes(HttpSession* pSession);
 
   protected:
@@ -598,7 +600,7 @@ void HttpSession::Succeed(size_t iConsumed)
 	bool bCloseLocal = m_bCloseAfter;
 	std::string sBodyLocal = std::move(m_sBody);
 	ReleaseIncoming();
-	m_pImpl->OnHttpFinished(this, false, NULL, bCloseLocal, iStatusLocal, std::move(sBodyLocal));
+	m_pImpl->OnHttpFinished(this, OI_OK, NULL, bCloseLocal, iStatusLocal, std::move(sBodyLocal));
 }
 
 void HttpSession::Fail(const char* pWhy)
@@ -610,7 +612,7 @@ void HttpSession::Fail(const char* pWhy)
 	m_bActive = false;
 	int32_t iStatusLocal = m_iStatus;
 	ReleaseIncoming();
-	m_pImpl->OnHttpFinished(this, true, pWhy, true, iStatusLocal, std::string());
+	m_pImpl->OnHttpFinished(this, OI_ERR_PROTOCOL, pWhy, true, iStatusLocal, std::string());
 }
 
 void HttpSession::FinishEof()
@@ -684,7 +686,7 @@ const std::string Client::Impl::GetIDString()
 	return "HttpClient";
 }
 
-void Client::Impl::Publish(const std::shared_ptr<Call::Request>& pRequestLocal, bool bFail, const char* pWhy)
+void Client::Impl::Publish(const std::shared_ptr<Call::Request>& pRequestLocal, int32_t iCode, const char* pWhy)
 {
 	if (!pRequestLocal)
 	{
@@ -694,8 +696,8 @@ void Client::Impl::Publish(const std::shared_ptr<Call::Request>& pRequestLocal, 
 	{
 		return;
 	}
-	pRequestLocal->bFailed = bFail;
-	if (bFail && pRequestLocal->sError.empty() && pWhy)
+	pRequestLocal->iCode = iCode;
+	if (iCode != OI_OK && pRequestLocal->sError.empty() && pWhy)
 	{
 		pRequestLocal->sError = pWhy;
 	}
@@ -724,22 +726,22 @@ void Client::Impl::FailFront(const char* pWhy)
 	}
 	std::shared_ptr<Call::Request> pRequestLocal = m_vQueue.front();
 	m_vQueue.pop_front();
-	Publish(pRequestLocal, true, pWhy);
+	Publish(pRequestLocal, OI_ERR_CONNECT, pWhy);
 }
 
-void Client::Impl::OnHttpFinished(HttpSession* pSession, bool bFail, const char* pWhy, bool bClose, int32_t iStatusLocal, std::string sBodyLocal)
+void Client::Impl::OnHttpFinished(HttpSession* pSession, int32_t iCode, const char* pWhy, bool bClose, int32_t iStatusLocal, std::string sBodyLocal)
 {
 	if (m_pFlight && pSession == m_pSession)
 	{
 		std::shared_ptr<Call::Request> pFlightLocal = std::move(m_pFlight);
 		pFlightLocal->iStatus = iStatusLocal;
-		if (!bFail)
+		if (iCode == OI_OK)
 		{
 			pFlightLocal->sBody = std::move(sBodyLocal);
 		}
-		Publish(pFlightLocal, bFail, pWhy);
+		Publish(pFlightLocal, iCode, pWhy);
 	}
-	bool bDropLocal = bFail || bClose || !m_bReuse;
+	bool bDropLocal = iCode != OI_OK || bClose || !m_bReuse;
 	if (bDropLocal && pSession == m_pSession && pSession && !pSession->IsClosed())
 	{
 		pSession->Abandon();
@@ -773,11 +775,12 @@ void Client::Impl::Pump()
 		m_pFlight = pRequestLocal;
 		m_pSession->BeginResponse();
 		::OI::Base::Bytes stBytes(pRequestLocal->sRequest.data(), pRequestLocal->sRequest.size());
-		if (!SendBytes(m_iSessionId, stBytes))
+		const int32_t iSendStatus = SendBytes(m_iSessionId, stBytes);
+		if (iSendStatus != OI_OK)
 		{
 			m_pFlight.reset();
 			m_pSession->Abandon();
-			Publish(pRequestLocal, true, "send");
+			Publish(pRequestLocal, iSendStatus, "send");
 			if (m_pSession && !m_pSession->IsClosed())
 			{
 				CloseSession(m_iSessionId);
@@ -814,10 +817,8 @@ void Client::Impl::ArmTimer(const std::shared_ptr<Call::Request>& pRequestLocal)
 			{
 				(*pOwned)->pImpl->OnTimeout(*pOwned);
 			}
-		},
-		    pJob.release());
-	},
-	    iTimeout);
+		}, pJob.release());
+	}, iTimeout);
 }
 
 void Client::Impl::OnTimeout(const std::shared_ptr<Call::Request>& pRequestLocal)
@@ -833,7 +834,7 @@ void Client::Impl::OnTimeout(const std::shared_ptr<Call::Request>& pRequestLocal
 			m_pSession->Abandon();
 		}
 		m_pFlight.reset();
-		Publish(pRequestLocal, true, "timeout");
+		Publish(pRequestLocal, OI_ERR_TIMEOUT, "timeout");
 		if (m_pSession && !m_pSession->IsClosed())
 		{
 			CloseSession(m_iSessionId);
@@ -849,7 +850,7 @@ void Client::Impl::OnTimeout(const std::shared_ptr<Call::Request>& pRequestLocal
 		if (*it == pRequestLocal)
 		{
 			m_vQueue.erase(it);
-			Publish(pRequestLocal, true, "timeout");
+			Publish(pRequestLocal, OI_ERR_TIMEOUT, "timeout");
 			break;
 		}
 	}
@@ -859,12 +860,12 @@ void Client::Impl::EnqueueOnLoop(const std::shared_ptr<Call::Request>& pRequestL
 {
 	if (m_bClosed)
 	{
-		Publish(pRequestLocal, true, "closed");
+		Publish(pRequestLocal, OI_ERR_CONNECT, "closed");
 		return;
 	}
 	if (m_iPort <= 0 || m_iPort > 65535 || m_sHost.empty())
 	{
-		Publish(pRequestLocal, true, "host");
+		Publish(pRequestLocal, OI_ERR_INVALID_ARGUMENT, "host");
 		return;
 	}
 	m_vQueue.push_back(pRequestLocal);
@@ -883,8 +884,7 @@ void Client::Impl::Enqueue(const std::shared_ptr<Call::Request>& pRequestLocal)
 		{
 			std::unique_ptr<LoopRequest> pOwned(static_cast<LoopRequest*>(pArgument));
 			pOwned->pImpl->EnqueueOnLoop(pOwned->pRequest);
-		},
-		    pJob.release());
+		}, pJob.release());
 		return;
 	}
 	EnqueueOnLoop(pRequestLocal);
@@ -899,8 +899,7 @@ void Client::Impl::Shutdown()
 		{
 			std::unique_ptr<std::shared_ptr<Impl>> pOwned(static_cast<std::shared_ptr<Impl>*>(pArgument));
 			(*pOwned)->Shutdown();
-		},
-		    pJob.release());
+		}, pJob.release());
 		return;
 	}
 	if (m_bClosed)
@@ -916,11 +915,11 @@ void Client::Impl::Shutdown()
 	std::deque<std::shared_ptr<Call::Request>> vQueueLocal = std::move(m_vQueue);
 	if (pFlightLocal)
 	{
-		Publish(pFlightLocal, true, "closed");
+		Publish(pFlightLocal, OI_ERR_CONNECT, "closed");
 	}
 	for (const auto& pRequestLocal : vQueueLocal)
 	{
-		Publish(pRequestLocal, true, "closed");
+		Publish(pRequestLocal, OI_ERR_CONNECT, "closed");
 	}
 	CancelConnect();
 	CloseAllSessions();
@@ -1026,7 +1025,11 @@ Response Call::await_resume()
 	Response stOutput;
 	stOutput.iStatus = m_pRequest->iStatus;
 	stOutput.sBody = std::move(m_pRequest->sBody);
-	stOutput.bFail = m_pRequest->bFailed || m_pRequest->iStatus == 0;
+	stOutput.iCode = m_pRequest->iCode;
+	if (stOutput.iCode == OI_OK && m_pRequest->iStatus == 0)
+	{
+		stOutput.iCode = OI_ERR_PROTOCOL;
+	}
 	stOutput.sError = std::move(m_pRequest->sError);
 	return stOutput;
 }

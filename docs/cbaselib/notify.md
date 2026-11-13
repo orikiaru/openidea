@@ -18,10 +18,15 @@
 stContext.Notify(stReply);
 
 int32_t iCode = stManager.Notify(iSessionId, stFrame);
-int32_t iUdp = stUdp.Notify(stUdp.OpenPeer(sIp, sPort), stFrame);
+sid_t iUdpSessionId = INVALID_SID;
+int32_t iUdp = stUdp.OpenPeer(sIp, sPort, iUdpSessionId);
+if (iUdp == OI_OK)
+{
+    iUdp = stUdp.Notify(iUdpSessionId, stFrame);
+}
 ```
 
-返回 [`SendBytesResult`](../../cbaselib/net/inc/oi_session_manager.h#L184) 的错误码。编码失败是 `OI_ERR_ENCODE`。会话不在是 `OI_ERR_CONNECT`。
+返回 [`SendBytes`](../../cbaselib/net/inc/oi_session_manager.h#L184) 的错误码。编码失败是 `OI_ERR_ENCODE`。会话不在是 `OI_ERR_CONNECT`。
 
 > **注意：** 一个协议号只注册一种处理：要么 `HandleRpc`，要么 `HandleNotify`。
 

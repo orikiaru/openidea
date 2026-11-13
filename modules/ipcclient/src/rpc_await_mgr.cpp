@@ -37,7 +37,6 @@
 #include <thread>
 #include <vector>
 
-
 template <typename T>
 OI::Coro::TaskResult<bool> RpcAwaitMgr::AwaitSingleUse(std::shared_ptr<T> pCall)
 {
@@ -93,7 +92,7 @@ class SharedConnectProbe : public DeferredRpcProbe
 	}
 };
 
-OI::Coro::TaskResult<bool> RpcAwaitMgr::AwaitConnect(std::shared_ptr<OI::Net::SessionManager::ConnectAwaiter> pConnect)
+OI::Coro::TaskResult<int32_t> RpcAwaitMgr::AwaitConnect(std::shared_ptr<OI::Net::SessionManager::ConnectAwaiter> pConnect)
 {
 	co_return co_await *pConnect;
 }
@@ -169,7 +168,7 @@ OI::Coro::TaskResult<int> RpcAwaitMgr::CheckAwaitOwnership()
 	}, nullptr);
 	auto pConnect = std::make_shared<OI::Net::SessionManager::ConnectAwaiter>(stClient.StartClient());
 	// 每个等待者创建时就跑到挂起，循环结束后 32 个都已登记。
-	std::vector<OI::Coro::TaskResult<bool>> vWaiters;
+	std::vector<OI::Coro::TaskResult<int32_t>> vWaiters;
 	for (int iIndex = 0; iIndex < 32; ++iIndex)
 	{
 		vWaiters.push_back(AwaitConnect(pConnect));
@@ -179,14 +178,14 @@ OI::Coro::TaskResult<int> RpcAwaitMgr::CheckAwaitOwnership()
 		stClient.Finish();
 	}, nullptr);
 	const auto vConnect = co_await OI::Coro::WhenAll(std::move(vWaiters));
-	for (const auto iFailed : vConnect)
+	for (const auto iCode : vConnect)
 	{
-		if (iFailed != 0)
+		if (iCode == OI_OK)
 		{
 			++iBad;
 		}
 	}
-	if (co_await *pConnect)
+	if ((co_await *pConnect) == OI_OK)
 	{
 		++iBad;
 	}
@@ -199,7 +198,7 @@ OI::Coro::TaskResult<int> RpcAwaitMgr::CheckAwaitOwnership()
 	catch (const std::logic_error&)
 	{
 	}
-	if (co_await stMovedConnect)
+	if ((co_await stMovedConnect) == OI_OK)
 	{
 		++iBad;
 	}

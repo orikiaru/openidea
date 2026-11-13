@@ -51,11 +51,11 @@ class Channel
 	// 返回非 OI_OK 时不要调用 OnBytesSend。缓冲里被取走的未写出字节由 SendResult 退回额度。
 	virtual int32_t AllowSend();
 	// 关掉写事件。会话已经关闭时不动。
-	virtual void ForbidSend();
+	virtual int32_t ForbidSend();
 	// 打开读事件。会话已经关闭时不动。
-	virtual void AllowRead();
+	virtual int32_t AllowRead();
 	// 关掉读事件。会话已经关闭时不动。
-	virtual void ForbidRead();
+	virtual int32_t ForbidRead();
 };
 }
 }

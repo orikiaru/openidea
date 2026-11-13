@@ -26,10 +26,10 @@ class AcceptChannel : public Channel
 
   public:
 	// 创建监听套接字并挂上 poll。失败返回 false。
-	static bool StartAccept(SessionManager* pMgr, bool bAsync);
+	static int32_t StartAccept(SessionManager* pMgr, bool bAsync);
 
   private:
-	static bool StartTcpAccept(SessionManager* pMgr, bool bAsync);
+	static int32_t StartTcpAccept(SessionManager* pMgr, bool bAsync);
 };
 }
 }

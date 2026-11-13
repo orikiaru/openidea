@@ -1,6 +1,7 @@
 #pragma once
 #include <coroutine>
 #include <cstdint>
+#include "oi_errno.h"
 #include <memory>
 #include <string>
 #include <utility>
@@ -11,19 +12,19 @@ namespace OI
 namespace Http
 {
 
-// status 为 0 表示没拿到 HTTP 状态行。fail 为真是连接、超时或报文不完整。
+// iStatus 是 HTTP 状态码；iCode 是框架操作错误码。
 struct Response
 {
 	// HTTP 状态码。没拿到状态行是 0。
 	int32_t iStatus;
 	// 响应体原始字节。
 	std::string sBody;
-	// 连接、超时或报文不完整。HTTP 4xx/5xx 本身不算这个。
-	bool bFail;
+	// 连接、超时或报文不完整的具体错误码；HTTP 4xx/5xx 本身不算传输失败。
+	int32_t iCode;
 	// 失败时的简短原因。
 	std::string sError;
 	Response()
-	    : iStatus(0), bFail(true)
+	    : iStatus(0), iCode(OI_ERR_CONNECT)
 	{
 	}
 };

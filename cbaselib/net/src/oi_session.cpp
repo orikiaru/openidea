@@ -14,13 +14,19 @@ namespace OI
 namespace Net
 {
 
-bool Session::Send(const ::OI::Base::Bytes& stBytes)
+int32_t Session::Send(const ::OI::Base::Bytes& stBytes)
 {
-	return SendResult(stBytes) == OI_OK;
+	return SendResult(stBytes);
 }
 
 int32_t Session::SendResult(const ::OI::Base::Bytes& stBytes)
 {
+	const int32_t iThreadStatus = Poll::GetInstance().CheckThreadAccess("Session::SendResult");
+	if (iThreadStatus != OI_OK)
+	{
+		return iThreadStatus;
+	}
+
 	::OI::Thread::MutexGuard stLock(stLocker);
 	if (IsClosed())
 	{
@@ -121,31 +127,58 @@ bool Session::IsClosed()
 
 int32_t Session::AllowSend()
 {
+	const int32_t iThreadStatus = Poll::GetInstance().CheckThreadAccess("Session::AllowSend");
+	if (iThreadStatus != OI_OK)
+	{
+		return iThreadStatus;
+	}
+
 	return pChannel ? pChannel->AllowSend() : OI_OK;
 }
 
-void Session::ForbidSend()
+int32_t Session::ForbidSend()
 {
+	const int32_t iThreadStatus = Poll::GetInstance().CheckThreadAccess("Session::ForbidSend");
+	if (iThreadStatus != OI_OK)
+	{
+		return iThreadStatus;
+	}
+
 	if (pChannel)
 	{
-		pChannel->ForbidSend();
+		return pChannel->ForbidSend();
 	}
+	return OI_OK;
 }
 
-void Session::AllowRead()
+int32_t Session::AllowRead()
 {
+	const int32_t iThreadStatus = Poll::GetInstance().CheckThreadAccess("Session::AllowRead");
+	if (iThreadStatus != OI_OK)
+	{
+		return iThreadStatus;
+	}
+
 	if (pChannel)
 	{
-		pChannel->AllowRead();
+		return pChannel->AllowRead();
 	}
+	return OI_OK;
 }
 
-void Session::ForbidRead()
+int32_t Session::ForbidRead()
 {
+	const int32_t iThreadStatus = Poll::GetInstance().CheckThreadAccess("Session::ForbidRead");
+	if (iThreadStatus != OI_OK)
+	{
+		return iThreadStatus;
+	}
+
 	if (pChannel)
 	{
-		pChannel->ForbidRead();
+		return pChannel->ForbidRead();
 	}
+	return OI_OK;
 }
 
 Session::Session(SessionManager* pMgr)

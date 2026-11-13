@@ -547,11 +547,12 @@ void PeerConnection::Retire()
 
 // ---------------------------------------------------------------- ProtoMultiClientManager
 
-bool ProtoMultiClientManager::Init()
+int32_t ProtoMultiClientManager::Init()
 {
-	if (!ProtoSessionManager::Init())
+	int32_t iCode = ProtoSessionManager::Init();
+	if (iCode != OI_OK)
 	{
-		return false;
+		return iCode;
 	}
 	std::vector<::OI::Base::ServiceInstance> vSeed;
 	bool bListed = false;
@@ -563,18 +564,17 @@ bool ProtoMultiClientManager::Init()
 	if (bListed && !vSeed.empty())
 	{
 		ApplyServiceList(vSeed);
-		return true;
+		return OI_OK;
 	}
 	// 没配注册或注册里还查不到时，先连配置地址，实例号 0；名单下来后按名单替换。
 	ApplyPeers({{0, {GetStrIP(), GetStrPort()}}});
-	return true;
+	return OI_OK;
 }
 
 void ProtoMultiClientManager::BindService(const std::string& sService, std::string&, std::string&)
 {
-	int32_t iCode = OI_ERR_FAIL;
 	std::vector<::OI::Base::ServiceInstance> vList;
-	const bool bPulled = ::OI::Base::RegistryClient::GetInstance().PullSync(sService, iCode, vList) && iCode == OI_OK;
+	const int32_t iPullStatus = ::OI::Base::RegistryClient::GetInstance().PullSync(sService, vList);
 	std::vector<::OI::Base::ServiceInstance> vMatched;
 	for (const auto& stInst : vList)
 	{
@@ -584,7 +584,7 @@ void ProtoMultiClientManager::BindService(const std::string& sService, std::stri
 		}
 	}
 	::OI::Thread::MutexGuard stLock(m_stPeerLocker);
-	m_bListed = bPulled;
+	m_bListed = iPullStatus == OI_OK;
 	m_vSeed.swap(vMatched);
 }
 
@@ -601,8 +601,14 @@ void ProtoMultiClientManager::WatchService(const std::string& sService)
 	::OI::Base::RegistryClient::GetInstance().WatchList(this, sService, vInitial);
 }
 
-void ProtoMultiClientManager::Start()
+int32_t ProtoMultiClientManager::Start()
 {
+	const int32_t iThreadStatus = ::OI::Net::Poll::GetInstance().CheckThreadAccess("ProtoMultiClientManager::Start");
+	if (iThreadStatus != OI_OK)
+	{
+		return iThreadStatus;
+	}
+
 	std::vector<std::shared_ptr<PeerConnection>> vPeers;
 	{
 		::OI::Thread::MutexGuard stLock(m_stPeerLocker);
@@ -616,21 +622,33 @@ void ProtoMultiClientManager::Start()
 	{
 		pPeer->Ensure();
 	}
+	return OI_OK;
 }
 
-bool ProtoMultiClientManager::UseAddress(const std::string& sIp, const std::string& sPortLocal)
+int32_t ProtoMultiClientManager::UseAddress(const std::string& sIp, const std::string& sPortLocal)
 {
+	const int32_t iThreadStatus = ::OI::Net::Poll::GetInstance().CheckThreadAccess("ProtoMultiClientManager::UseAddress");
+	if (iThreadStatus != OI_OK)
+	{
+		return iThreadStatus;
+	}
+
 	if (!sServiceName.empty() || sIp.empty() || sPortLocal.empty())
 	{
-		return false;
+		return OI_ERR_INVALID_ARGUMENT;
 	}
 	DefaultInit(sIp, sPortLocal, GetSessionType());
 	ApplyPeers({{0, {sIp, sPortLocal}}});
-	return true;
+	return OI_OK;
 }
 
 bool ProtoMultiClientManager::IsConnect()
 {
+	if (::OI::Net::Poll::GetInstance().CheckThreadAccess("ProtoMultiClientManager::IsConnect") != OI_OK)
+	{
+		return false;
+	}
+
 	std::vector<std::shared_ptr<PeerConnection>> vPeers;
 	{
 		::OI::Thread::MutexGuard stLock(m_stPeerLocker);
@@ -651,6 +669,11 @@ bool ProtoMultiClientManager::IsConnect()
 
 std::vector<int32_t> ProtoMultiClientManager::InstanceIds()
 {
+	if (::OI::Net::Poll::GetInstance().CheckThreadAccess("ProtoMultiClientManager::InstanceIds") != OI_OK)
+	{
+		return {};
+	}
+
 	std::vector<int32_t> vIds;
 	::OI::Thread::MutexGuard stLock(m_stPeerLocker);
 	vIds.reserve(m_mPeers.size());
@@ -663,6 +686,11 @@ std::vector<int32_t> ProtoMultiClientManager::InstanceIds()
 
 sid_t ProtoMultiClientManager::ConnectedSid(int32_t iInstanceId)
 {
+	if (::OI::Net::Poll::GetInstance().CheckThreadAccess("ProtoMultiClientManager::ConnectedSid") != OI_OK)
+	{
+		return INVALID_SID;
+	}
+
 	std::shared_ptr<PeerConnection> pPeer;
 	{
 		::OI::Thread::MutexGuard stLock(m_stPeerLocker);
@@ -678,6 +706,11 @@ sid_t ProtoMultiClientManager::ConnectedSid(int32_t iInstanceId)
 
 std::shared_ptr<RpcSender> ProtoMultiClientManager::PeerSender(int32_t iInstanceId)
 {
+	if (::OI::Net::Poll::GetInstance().CheckThreadAccess("ProtoMultiClientManager::PeerSender") != OI_OK)
+	{
+		return {};
+	}
+
 	::OI::Thread::MutexGuard stLock(m_stPeerLocker);
 	auto it = m_mPeers.find(iInstanceId);
 	return it == m_mPeers.end() ? nullptr : it->second->SharedSender();
@@ -685,6 +718,11 @@ std::shared_ptr<RpcSender> ProtoMultiClientManager::PeerSender(int32_t iInstance
 
 std::shared_ptr<RpcSender> ProtoMultiClientManager::AnySender()
 {
+	if (::OI::Net::Poll::GetInstance().CheckThreadAccess("ProtoMultiClientManager::AnySender") != OI_OK)
+	{
+		return {};
+	}
+
 	std::vector<std::shared_ptr<PeerConnection>> vPeers;
 	{
 		::OI::Thread::MutexGuard stLock(m_stPeerLocker);
@@ -714,6 +752,11 @@ std::shared_ptr<RpcSender> ProtoMultiClientManager::AnySender()
 
 sid_t ProtoMultiClientManager::ConnectedAny()
 {
+	if (::OI::Net::Poll::GetInstance().CheckThreadAccess("ProtoMultiClientManager::ConnectedAny") != OI_OK)
+	{
+		return INVALID_SID;
+	}
+
 	std::vector<std::shared_ptr<PeerConnection>> vPeers;
 	{
 		::OI::Thread::MutexGuard stLock(m_stPeerLocker);
@@ -742,6 +785,11 @@ sid_t ProtoMultiClientManager::ConnectedAny()
 
 void ProtoMultiClientManager::AllSenders(std::vector<int32_t>& vIds, ServiceRoute& stRoute)
 {
+	if (::OI::Net::Poll::GetInstance().CheckThreadAccess("ProtoMultiClientManager::AllSenders") != OI_OK)
+	{
+		return;
+	}
+
 	vIds.clear();
 	stRoute.vClients.clear();
 	stRoute.vOwners.clear();

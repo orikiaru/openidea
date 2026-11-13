@@ -36,7 +36,6 @@
 #include <thread>
 #include <vector>
 
-
 // 使用真实待连接队列验证条数、字节限制以及取消后的容量恢复。
 struct RpcPendingMgr::PendingClient : OI::Rpc::ProtoClientManager
 {
@@ -87,11 +86,13 @@ struct RpcPendingMgr::PendingClient : OI::Rpc::ProtoClientManager
 bool RpcPendingMgr::SameWaitStats(const OI::Rpc::RpcWaitStats& stBaseline)
 {
 	const auto stNow = OI::Rpc::GetRpcWaitStats();
+	// clang-format off
 	return stNow.iCalls == stBaseline.iCalls
 		&& stNow.iExpirations == stBaseline.iExpirations
 		&& stNow.iBuckets == stBaseline.iBuckets
 		&& stNow.iSessionEntries == stBaseline.iSessionEntries
 		&& stNow.iSessionBuckets == stBaseline.iSessionBuckets;
+	// clang-format on
 }
 
 int RpcPendingMgr::CheckPreconnectSendBudget()
@@ -100,12 +101,12 @@ int RpcPendingMgr::CheckPreconnectSendBudget()
 	OI::Base::Bytes stPayload("12345678", 8);
 	PendingClient stRawPending;
 	stRawPending.SetSendLimit(8);
-	if (!stRawPending.SendRawOrPend(stPayload, 1024) || stRawPending.SendRawOrPend(stPayload, 1024))
+	if (stRawPending.SendRawOrPend(stPayload, 1024) != OI_OK || stRawPending.SendRawOrPend(stPayload, 1024) != OI_ERR_BUSY)
 	{
 		++iBadLocal;
 	}
 	auto pSessionLocal = stRawPending.AttachForTest();
-	if (pSessionLocal->PendingSendBytes() != 8 || stRawPending.SendRaw(stPayload))
+	if (pSessionLocal->PendingSendBytes() != 8 || stRawPending.SendRaw(stPayload) != OI_ERR_BUSY)
 	{
 		++iBadLocal;
 	}

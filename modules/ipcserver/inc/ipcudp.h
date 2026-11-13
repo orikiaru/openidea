@@ -20,7 +20,7 @@ class IpcUdp : public ::OI::Rpc::ProtoSessionManager
 	::OI::Rpc::RpcTask HandleNote(const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::UdpNoteReq& stRequest);
 
   public:
-	bool Init();
+	int32_t Init();
 	virtual const std::string GetIDString();
 
   private:

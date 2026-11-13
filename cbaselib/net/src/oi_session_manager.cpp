@@ -19,13 +19,19 @@ namespace OI
 namespace Net
 {
 
-bool SessionManager::Init()
+int32_t SessionManager::Init()
 {
+	const int32_t iThreadStatus = ::OI::Net::Poll::GetInstance().CheckThreadAccess("SessionManager::Init");
+	if (iThreadStatus != OI_OK)
+	{
+		return iThreadStatus;
+	}
+
 	int64_t iSendLimit = 64 * 1024 * 1024;
 	TryGetConfig(GetIDString() + ".max_send_queue_bytes", iSendLimit);
 	if (iSendLimit <= 0 || (uint64_t)iSendLimit > (std::numeric_limits<size_t>::max)())
 	{
-		return false;
+		return OI_ERR_INVALID_ARGUMENT;
 	}
 	iMaxSendQueueBytes = (size_t)iSendLimit;
 	int64_t iReceiveLimit = 64 * 1024 * 1024 + 8;
@@ -40,16 +46,25 @@ bool SessionManager::Init()
 	    static_cast<uint64_t>(iReceiveLimit) > SIZE_MAX || iFrameTimeout <= 0 || iIdleTimeout <= 0)
 	{
 		fprintf(stderr, "invalid receive limits for %s\n", GetIDString().c_str());
-		return false;
+		return OI_ERR_INVALID_ARGUMENT;
 	}
 	iMaxReceiveBufferBytes = static_cast<size_t>(iReceiveLimit);
 	iMaxFrameBytes = static_cast<size_t>(iFrameLimit);
 	iIncompleteFrameTimeoutMilliseconds = static_cast<uint64_t>(iFrameTimeout);
 	iIdleTimeoutMilliseconds = static_cast<uint64_t>(iIdleTimeout);
 	std::string sIpLocal, sPortLocal, sType;
-	TryGetConfigAndReturnFalse(GetIDString() + ".ip", sIpLocal);
-	TryGetConfigAndReturnFalse(GetIDString() + ".port", sPortLocal);
-	TryGetConfigAndReturnFalse(GetIDString() + ".type", sType);
+	if (!TryGetConfig(GetIDString() + ".ip", sIpLocal))
+	{
+		return OI_ERR_INVALID_ARGUMENT;
+	}
+	if (!TryGetConfig(GetIDString() + ".port", sPortLocal))
+	{
+		return OI_ERR_INVALID_ARGUMENT;
+	}
+	if (!TryGetConfig(GetIDString() + ".type", sType))
+	{
+		return OI_ERR_INVALID_ARGUMENT;
+	}
 
 	std::string sService;
 	if (::OI::Base::Config::GlobalConfig().GetAs(GetIDString() + ".service", sService) && !sService.empty())
@@ -58,21 +73,27 @@ bool SessionManager::Init()
 		sServiceName = sService;
 	}
 
-	assert(GetSessionTypeByString(sType) != SESSION_TYPE_INVALID);
-	DefaultInit(sIpLocal, sPortLocal, GetSessionTypeByString(sType));
+	const SESSION_TYPE iConfiguredType = GetSessionTypeByString(sType);
+	if (iConfiguredType == SESSION_TYPE_INVALID)
+	{
+		fprintf(stderr, "SessionManager::Init invalid session type id=%s code=%d\n",
+		    GetIDString().c_str(), OI_ERR_INVALID_ARGUMENT);
+		return OI_ERR_INVALID_ARGUMENT;
+	}
+	DefaultInit(sIpLocal, sPortLocal, iConfiguredType);
 	sEndpoint = NetAddr::Endpoint(sIpLocal, sPortLocal);
 	if (!sServiceName.empty())
 	{
 		WatchService(sServiceName);
 	}
-	return true;
+	return OI_OK;
 }
 
 void SessionManager::BindService(const std::string& sService, std::string& sIpLocal, std::string& sPortLocal)
 {
 	std::string sFoundIp;
 	std::string sFoundPort;
-	if (::OI::Base::RegistryClient::GetInstance().Lookup(sService, sFoundIp, sFoundPort))
+	if (::OI::Base::RegistryClient::GetInstance().Lookup(sService, sFoundIp, sFoundPort) == OI_OK)
 	{
 		sIpLocal = sFoundIp;
 		sPortLocal = sFoundPort;
@@ -88,14 +109,14 @@ struct SessionManager::ConnectWait
 {
 	OI::Thread::Mutex stMutex;
 	bool bDone = false;
-	bool bResult = false;
+	int32_t iResult = OI_ERR_CONNECT;
 	struct Waiter
 	{
 		std::coroutine_handle<> stHandle;
 		void (*fnSchedule)(std::coroutine_handle<>);
 	};
 	std::vector<Waiter> vWaiters;
-	void Finish(bool bResultLocal)
+	void Finish(int32_t iResultLocal)
 	{
 		std::vector<Waiter> vReady;
 		{
@@ -104,7 +125,7 @@ struct SessionManager::ConnectWait
 			{
 				return;
 			}
-			bResult = bResultLocal;
+			iResult = iResultLocal;
 			bDone = true;
 			vReady.swap(vWaiters);
 		}
@@ -140,12 +161,12 @@ bool SessionManager::ConnectAwaiter::Suspend(std::coroutine_handle<> stHandle, v
 	return true;
 }
 
-bool SessionManager::ConnectAwaiter::await_resume() const noexcept
+int32_t SessionManager::ConnectAwaiter::await_resume() const noexcept
 {
-	return m_pWait->bResult;
+	return m_pWait->iResult;
 }
 
-void SessionManager::FinishConnectWaiters(bool bResultLocal)
+void SessionManager::FinishConnectWaiters(int32_t iResultLocal)
 {
 	auto vWaiters = std::move(m_vConnectWaiters);
 	m_vConnectWaiters.clear();
@@ -153,16 +174,23 @@ void SessionManager::FinishConnectWaiters(bool bResultLocal)
 	{
 		if (auto pWait = pWeak.lock())
 		{
-			pWait->Finish(bResultLocal);
+			pWait->Finish(iResultLocal);
 		}
 	}
 }
 
 void SessionManager::BeginConnect(const std::shared_ptr<ConnectWait>& pWaitLocal)
 {
+	const int32_t iThreadStatus = Poll::GetInstance().CheckThreadAccess("SessionManager::StartClient");
+	if (iThreadStatus != OI_OK)
+	{
+		pWaitLocal->Finish(iThreadStatus);
+		return;
+	}
+
 	if (OI::Thread::ThreadPool::GetInstance().StopRequested())
 	{
-		pWaitLocal->Finish(false);
+		pWaitLocal->Finish(OI_ERR_CONNECT);
 		return;
 	}
 	struct ConnectRequest
@@ -210,12 +238,13 @@ struct ConnectResolver
 		if (pManager->HasEndpoint(pManager->sEndpoint))
 		{
 			pManager->bConnectPending = false;
-			pManager->FinishConnectWaiters(true);
+			pManager->FinishConnectWaiters(OI_OK);
 			return;
 		}
-		if (!ConnectChannel::StartConnect(pManager, true))
+		const int32_t iConnectStatus = ConnectChannel::StartConnect(pManager, true);
+		if (iConnectStatus != OI_OK)
 		{
-			pManager->AbortSession(pJob->iGeneration);
+			pManager->AbortSession(pJob->iGeneration, iConnectStatus);
 		}
 	}
 };
@@ -225,12 +254,12 @@ void SessionManager::StartConnect(const std::shared_ptr<ConnectWait>& pWaitLocal
 	assert(Poll::GetInstance().InLoopThread());
 	if (OI::Thread::ThreadPool::GetInstance().StopRequested() || bServiceDown)
 	{
-		pWaitLocal->Finish(false);
+		pWaitLocal->Finish(OI_ERR_CONNECT);
 		return;
 	}
 	if (!bConnectPending && HasEndpoint(NetAddr::Endpoint(sIpAddress, sPort)))
 	{
-		pWaitLocal->Finish(true);
+		pWaitLocal->Finish(OI_OK);
 		return;
 	}
 	// 当前列表只属于当前未完成的代次。必须先登记，再启动可能立即完成的 connect。
@@ -250,11 +279,16 @@ void SessionManager::StartConnect(const std::shared_ptr<ConnectWait>& pWaitLocal
 	NetAddr::Resolve(sIpAddress, sPort, &ConnectResolver::OnResolved, pJob);
 }
 
-void SessionManager::CloseEndpoint(const std::string& sEndpoint)
+int32_t SessionManager::CloseEndpoint(const std::string& sEndpoint)
 {
+	const int32_t iThreadStatus = Poll::GetInstance().CheckThreadAccess("SessionManager::CloseEndpoint");
+	if (iThreadStatus != OI_OK)
+	{
+		return iThreadStatus;
+	}
 	if (sEndpoint.empty())
 	{
-		return;
+		return OI_ERR_INVALID_ARGUMENT;
 	}
 	std::vector<sid_t> vIds;
 	{
@@ -271,10 +305,16 @@ void SessionManager::CloseEndpoint(const std::string& sEndpoint)
 	{
 		CloseSession(vIds[iIndexLocal]);
 	}
+	return vIds.empty() ? OI_ERR_NOT_FOUND : OI_OK;
 }
 
 bool SessionManager::HasEndpoint(const std::string& sEndpoint)
 {
+	if (Poll::GetInstance().CheckThreadAccess("SessionManager::HasEndpoint") != OI_OK)
+	{
+		return false;
+	}
+
 	::OI::Thread::MutexGuard stLock(stLocker);
 	for (const auto& [iSessionId, pSession] : mSessionMap)
 	{
@@ -286,8 +326,14 @@ bool SessionManager::HasEndpoint(const std::string& sEndpoint)
 	return false;
 }
 
-void SessionManager::CloseAllSessions()
+int32_t SessionManager::CloseAllSessions()
 {
+	const int32_t iThreadStatus = Poll::GetInstance().CheckThreadAccess("SessionManager::CloseAllSessions");
+	if (iThreadStatus != OI_OK)
+	{
+		return iThreadStatus;
+	}
+
 	std::vector<sid_t> vIds;
 	{
 		::OI::Thread::MutexGuard stLock(stLocker);
@@ -300,6 +346,7 @@ void SessionManager::CloseAllSessions()
 	{
 		CloseSession(vIds[iIndexLocal]);
 	}
+	return OI_OK;
 }
 
 void SessionManager::ApplyService(const std::string& sIpLocal, const std::string& sPortLocal, bool bOnlineLocal)
@@ -332,7 +379,7 @@ void SessionManager::ApplyService(const std::string& sIpLocal, const std::string
 		{
 			return;
 		}
-		FinishConnectWaiters(false);
+		FinishConnectWaiters(OI_ERR_CONNECT);
 		++iConnectGeneration;
 		bConnectPending = false;
 		bServiceDown = true;
@@ -352,7 +399,7 @@ void SessionManager::ApplyService(const std::string& sIpLocal, const std::string
 	{
 		return;
 	}
-	FinishConnectWaiters(false);
+	FinishConnectWaiters(OI_ERR_CONNECT);
 	++iConnectGeneration;
 	bConnectPending = false;
 	std::string sPrevious = sEndpoint;
@@ -371,16 +418,26 @@ void SessionManager::ApplyService(const std::string& sIpLocal, const std::string
 	}
 }
 
-bool SessionManager::StartServer(bool bAsync)
+int32_t SessionManager::StartServer(bool bAsync)
 {
-	if (!AcceptChannel::StartAccept(this, bAsync))
+	const int32_t iThreadStatus = Poll::GetInstance().CheckThreadAccess("SessionManager::StartServer");
+	if (iThreadStatus != OI_OK)
 	{
-		return false;
+		return iThreadStatus;
+	}
+	if (!bAsync || iSessionType == SESSION_TYPE_INVALID)
+	{
+		return OI_ERR_INVALID_ARGUMENT;
+	}
+	const int32_t iAcceptStatus = AcceptChannel::StartAccept(this, bAsync);
+	if (iAcceptStatus != OI_OK)
+	{
+		return iAcceptStatus;
 	}
 	// 注册表登记的是 RPC 连接地址，UDP 口不登记。
 	if (iSessionType == SESSION_TYPE_UDP)
 	{
-		return true;
+		return OI_OK;
 	}
 	return ::OI::Base::RegistryClient::GetInstance().Publish(GetIDString(), GetStrIP(), GetStrPort());
 }
@@ -403,19 +460,43 @@ uint16_t SessionManager::LocalPort() const
 	return pUdpChannel ? pUdpChannel->LocalPort() : 0;
 }
 
-sid_t SessionManager::OpenPeer(const std::string& sIp, const std::string& sPortLocal)
+int32_t SessionManager::OpenPeer(const std::string& sIp, const std::string& sPortLocal, sid_t& iSessionId)
 {
-	NetAddr stAddr;
-	if (!pUdpChannel || !stAddr.Init(sIp, sPortLocal))
+	const int32_t iThreadStatus = Poll::GetInstance().CheckThreadAccess("SessionManager::OpenPeer");
+	if (iThreadStatus != OI_OK)
 	{
-		return INVALID_SID;
+		return iThreadStatus;
 	}
-	return pUdpChannel->OpenPeer(stAddr);
+	if (!pUdpChannel)
+	{
+		return OI_ERR_CONNECT;
+	}
+	NetAddr stAddr;
+	if (!stAddr.Init(sIp, sPortLocal))
+	{
+		return OI_ERR_INVALID_ARGUMENT;
+	}
+	const sid_t iOpenedId = pUdpChannel->OpenPeer(stAddr);
+	if (iOpenedId == INVALID_SID)
+	{
+		return OI_ERR_CONNECT;
+	}
+	iSessionId = iOpenedId;
+	return OI_OK;
 }
 
-bool SessionManager::GetPeerAddr(sid_t iSessionId, NetAddr& stAddr)
+int32_t SessionManager::GetPeerAddr(sid_t iSessionId, NetAddr& stAddr)
 {
-	return pUdpChannel && pUdpChannel->GetPeerAddr(iSessionId, stAddr);
+	const int32_t iThreadStatus = Poll::GetInstance().CheckThreadAccess("SessionManager::GetPeerAddr");
+	if (iThreadStatus != OI_OK)
+	{
+		return iThreadStatus;
+	}
+	if (!pUdpChannel)
+	{
+		return OI_ERR_CONNECT;
+	}
+	return pUdpChannel->GetPeerAddr(iSessionId, stAddr);
 }
 
 SessionManager::~SessionManager()
@@ -436,18 +517,29 @@ const std::string SessionManager::GetIDString()
 
 std::shared_ptr<void> SessionManager::HoldSessionTask(sid_t iSessionId)
 {
+	if (Poll::GetInstance().CheckThreadAccess("SessionManager::HoldSessionTask") != OI_OK)
+	{
+		return {};
+	}
+
 	::OI::Thread::MutexGuard stLock(stLocker);
 	auto it = mSessionMap.find(iSessionId);
 	return it == mSessionMap.end() ? nullptr : it->second->HoldTask();
 }
 
-bool SessionManager::SendBytes(sid_t iSessionId, const ::OI::Base::Bytes& stData)
+int32_t SessionManager::SendBytes(sid_t iSessionId, const ::OI::Base::Bytes& stData)
 {
-	return SendBytesResult(iSessionId, stData) == OI_OK;
+	return SendBytesResult(iSessionId, stData);
 }
 
 int32_t SessionManager::SendBytesResult(sid_t iSessionId, const ::OI::Base::Bytes& stData)
 {
+	const int32_t iThreadStatus = Poll::GetInstance().CheckThreadAccess("SessionManager::SendBytesResult");
+	if (iThreadStatus != OI_OK)
+	{
+		return iThreadStatus;
+	}
+
 	Session* pSessionLocal = NULL;
 	{
 		::OI::Thread::MutexGuard stLock(stLocker);
@@ -529,7 +621,7 @@ void SessionManager::CompleteConnect(net_socket_t iDescriptor, uint64_t iGenerat
 	{
 		if (auto pWait = pWeak.lock())
 		{
-			pWait->Finish(true);
+			pWait->Finish(OI_OK);
 		}
 	}
 }
@@ -542,17 +634,17 @@ void SessionManager::CancelConnect()
 	}
 	++iConnectGeneration;
 	bConnectPending = false;
-	FinishConnectWaiters(false);
+	FinishConnectWaiters(OI_ERR_CONNECT);
 }
 
-void SessionManager::AbortSession(uint64_t iGeneration)
+void SessionManager::AbortSession(uint64_t iGeneration, int32_t iCode)
 {
 	if (iGeneration != iConnectGeneration || !bConnectPending)
 	{
 		return;
 	}
 	bConnectPending = false;
-	FinishConnectWaiters(false);
+	FinishConnectWaiters(iCode);
 	{
 		::OI::Thread::MutexGuard stLock(stLocker);
 		++iCurrentSessionId;
@@ -561,8 +653,14 @@ void SessionManager::AbortSession(uint64_t iGeneration)
 	OnConnectFailed();
 }
 
-void SessionManager::CloseSession(sid_t iSessionId)
+int32_t SessionManager::CloseSession(sid_t iSessionId)
 {
+	const int32_t iThreadStatus = Poll::GetInstance().CheckThreadAccess("SessionManager::CloseSession");
+	if (iThreadStatus != OI_OK)
+	{
+		return iThreadStatus;
+	}
+
 	bool bClosedLocal = false;
 	{
 		::OI::Thread::MutexGuard stLock(stLocker);
@@ -580,6 +678,7 @@ void SessionManager::CloseSession(sid_t iSessionId)
 	{
 		OnSessionClosed(iSessionId);
 	}
+	return bClosedLocal ? OI_OK : OI_ERR_NOT_FOUND;
 }
 
 void SessionManager::DelSession(const Session* pSession)

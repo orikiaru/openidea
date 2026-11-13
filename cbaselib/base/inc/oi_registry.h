@@ -50,9 +50,9 @@ class ServiceTable
   public:
 	~ServiceTable();
 	// 让这个管理器跟着名字走。列表变化时改它的地址。
-	void Watch(::OI::Net::SessionManager* pManager, const std::string& sName);
+	int32_t Watch(::OI::Net::SessionManager* pManager, const std::string& sName);
 	// 让这个管理器收这个名字下的整份名单。名单相对 vInitial 有变化时调用 ApplyServiceList。
-	void WatchList(::OI::Net::SessionManager* pManager, const std::string& sName, const std::vector<ServiceInstance>& vInitial);
+	int32_t WatchList(::OI::Net::SessionManager* pManager, const std::string& sName, const std::vector<ServiceInstance>& vInitial);
 	// 当前关心这个名字的管理器。只含跟着单台切换的，不含收整份名单的。
 	std::vector<::OI::Net::SessionManager*> Watchers(const std::string& sName);
 	// 正在关心的服务名。
@@ -113,25 +113,25 @@ class RegistryClient : public ::OI::Net::SessionManager
 
   public:
 	virtual ~RegistryClient();
-	// 没配 [Registry] 或查不到时返回 false，调用方继续用配置里的 ip/port。
-	bool Lookup(const std::string& sName, std::string& sIp, std::string& sPort);
+	// 没配 [Registry] 或查不到时返回错误码，调用方继续用配置里的 ip/port。
+	int32_t Lookup(const std::string& sName, std::string& sIp, std::string& sPort);
 	// 同步拉这个名字下的全部分区。会占住调用线程。协程里用 PullAsync。
 	// Lookup、PullSync、Publish 要真正等待时，在 poll 回调里（含定时器回调）调用会抛 logic_error。
-	bool PullSync(const std::string& sName, int32_t& iCode, std::vector<ServiceInstance>& vList);
+	int32_t PullSync(const std::string& sName, std::vector<ServiceInstance>& vList);
 	// 超时毫秒必须为正；默认 1000ms，超时返回 OI_ERR_TIMEOUT，积压满返回 OI_ERR_BUSY。
 	// 发出拉取后立刻返回。回包、连不上或超时时调用 fnDone，只调用一次，可能在 poll 线程或定时器线程上。fnDone 里不能再等注册表。
-	void PullAsync(const std::string& sName, std::function<void(int32_t, const std::vector<ServiceInstance>&)> fnDone, int64_t iTimeoutMilliseconds = 1000);
+	int32_t PullAsync(const std::string& sName, std::function<void(int32_t, const std::vector<ServiceInstance>&)> fnDone, int64_t iTimeoutMilliseconds = 1000);
 	// 未发送和已发送查询的合计占位数，不包含已完成的回调。
 	size_t GetPendingPullCount();
 	RegistryPullStats GetPullStats();
 	// 统一周期扫描；已发送查询过期时失效整条连接，防止 FIFO 回包错配。
 	void ExpirePulls();
-	// StartServer 成功后登记本进程。返回 false 表示不能起：id 不对，或同名同 id 已经在线。
-	bool Publish(const std::string& sSection, const std::string& sIp, const std::string& sPort);
-	void Watch(::OI::Net::SessionManager* pManager, const std::string& sName);
+	// StartServer 成功后登记本进程。返回框架错误码，无须登记时返回 OI_OK。
+	int32_t Publish(const std::string& sSection, const std::string& sIp, const std::string& sPort);
+	int32_t Watch(::OI::Net::SessionManager* pManager, const std::string& sName);
 	// 收整份名单，vInitial 是调用方已经拿到的那份。新订阅者在下一次成功拉取时收到名单，即使名单未变化。
 	// 没配 [Registry] 时什么都不做。
-	void WatchList(::OI::Net::SessionManager* pManager, const std::string& sName, const std::vector<ServiceInstance>& vInitial);
+	int32_t WatchList(::OI::Net::SessionManager* pManager, const std::string& sName, const std::vector<ServiceInstance>& vInitial);
 	// 按 heartbeat_ms 报一次在线。没连上就去连，连上了还没登记就补登记。
 	void Touch();
 	// 按 pull_ms 把关心的名字整量拉一次。
@@ -147,17 +147,17 @@ class RegistryClient : public ::OI::Net::SessionManager
 	// 配置里有 registry 地址。
 	bool Configured();
 	// 没连上就去连，然后等到连上或超时。
-	bool Ensure();
+	int32_t Ensure();
 	// 按配置地址发起连接。
-	bool Connect();
+	int32_t Connect();
 	// 等到标志为真、连接失败或超时。单线程靠 PollWait 收包，多线程睡在条件变量上。
-	bool WaitFlag(const std::atomic<bool>& bFlag);
+	int32_t WaitFlag(const std::atomic<bool>& bFlag);
 	// 唤醒等在条件变量上的同步调用。
 	void Notify();
-	// 组一帧发给当前会话。没连上返回 false。
-	bool Send(uint32_t iId, const ::OI::Rpc::Serialize& stMessage);
+	// 组一帧发给当前会话，原样返回发送错误码。
+	int32_t Send(uint32_t iId, const ::OI::Rpc::Serialize& stMessage);
 	// 发送本进程的登记包。
-	void SendRegister();
+	int32_t SendRegister();
 	// 按心跳间隔挂周期定时器。只挂一次。
 	void ArmHeartbeat();
 	// 按拉取间隔挂周期定时器。只挂一次。
@@ -201,6 +201,7 @@ class RegistryClient : public ::OI::Net::SessionManager
 	// 回包按发出的顺序回来。同步等的那一份在 Lookup / Publish 里等。
 	struct PendingPull
 	{
+		int32_t iSendStatus = OI_ERR_CONNECT;
 		// 真表示 Lookup 或 Publish 在等这一份，回包要叫醒等待线程。
 		bool bSynchronous;
 		// 超时的单调毫秒。0 表示不单独计时。
@@ -211,7 +212,7 @@ class RegistryClient : public ::OI::Net::SessionManager
 		std::shared_ptr<RegPullState> pState;
 	};
 	// 调用方持有 stPendingMutex，且已经连上。发送失败时不留在队列里。
-	bool EnqueueSentPull(const PendingPull& stPending);
+	int32_t EnqueueSentPull(const PendingPull& stPending);
 	bool CanEnqueuePull();
 	void ArmPullTimeout();
 	// 拉取超时定时器已经挂上。

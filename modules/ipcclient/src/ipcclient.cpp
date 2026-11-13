@@ -7,16 +7,19 @@
 #include "redis_mgr.h"
 #include "udp_mgr.h"
 #include "oi_redis.h"
+#include "oi_log.h"
 
 IpcClient::~IpcClient()
 {
 }
 
-bool IpcClient::Init()
+int32_t IpcClient::Init()
 {
-	if (!::OI::Rpc::ProtoSessionManager::Init())
+	int32_t iCode = ::OI::Rpc::ProtoSessionManager::Init();
+	if (iCode != OI_OK)
 	{
-		return false;
+		LOG_ERROR("ipcclient init protocol manager failed code=%d", iCode);
+		return iCode;
 	}
 	DbMgr::GetInstance().Load();
 	EchoMgr::GetInstance().Load();
@@ -27,32 +30,38 @@ bool IpcClient::Init()
 			return EchoMgr::GetInstance().StackProbe();
 		});
 	}
-	if (!UdpMgr::GetInstance().Load())
+	iCode = UdpMgr::GetInstance().Load();
+	if (iCode != OI_OK)
 	{
-		return false;
+		LOG_ERROR("ipcclient init udp load failed code=%d", iCode);
+		return iCode;
 	}
 	UdpMgr::GetInstance().Start();
-	if (!MultiMgr::GetInstance().Load())
+	iCode = MultiMgr::GetInstance().Load();
+	if (iCode != OI_OK)
 	{
-		return false;
+		LOG_ERROR("ipcclient init multi load failed code=%d", iCode);
+		return iCode;
 	}
 	MultiMgr::GetInstance().Start();
 	RedisMgr::GetInstance().Load();
 	HoldMgr::GetInstance().Load();
 	if (!RedisMgr::GetInstance().Enabled() && !HoldMgr::GetInstance().Enabled())
 	{
-		return true;
+		return OI_OK;
 	}
-	if (!::OI::Redis::RedisClient::GetInstance().Init())
+	iCode = ::OI::Redis::RedisClient::GetInstance().Init();
+	if (iCode != OI_OK)
 	{
-		return false;
+		LOG_ERROR("ipcclient init redis failed code=%d", iCode);
+		return iCode;
 	}
 	::OI::Redis::RedisClient::GetInstance().StartClient();
 	if (RedisMgr::GetInstance().Enabled())
 	{
 		RedisMgr::GetInstance().Start();
 	}
-	return true;
+	return OI_OK;
 }
 
 const std::string IpcClient::GetIDString()

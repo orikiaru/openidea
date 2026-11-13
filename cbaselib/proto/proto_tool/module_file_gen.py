@@ -154,14 +154,20 @@ class ModuleFileGen:
 int main(int argc, char* argv[])
 {
     //加载模块配置，初始化线程池、定时器、IO复用
-    int code = ::OI::Base::StartFramework("__MODULE_CONFIG_RELATIVE_PATH__");
-    if (code != 0)
+    int32_t iCode = ::OI::Base::StartFramework("__MODULE_CONFIG_RELATIVE_PATH__");
+    if (iCode != OI_OK)
     {
-        return code;
+        fprintf(stderr, "StartFramework failed: code=%d\n", iCode);
+        return iCode;
     }
 
     //初始化日志服务
-    ::OI::Log::Init();
+    iCode = ::OI::Log::Init();
+    if (iCode != OI_OK)
+    {
+        fprintf(stderr, "Log Init failed: code=%d\n", iCode);
+        return iCode;
+    }
 
     //添加组件逻辑,如网络组件,自定义单例对象等初始化逻辑
     __MODULE_COMPONENTS_INIT__

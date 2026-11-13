@@ -49,8 +49,8 @@ class SessionManager
 	struct ConnectWait;
 	// 正在等这一代连接结果的协程。完成或失败时一次唤醒。
 	std::vector<std::weak_ptr<ConnectWait>> m_vConnectWaiters;
-	// 把这一代等待者全部唤醒。bResult 表示连上还是失败。
-	void FinishConnectWaiters(bool bResult);
+	// 把这一代等待者全部唤醒。iResult 是本次连接的错误码。
+	void FinishConnectWaiters(int32_t iResult);
 	// 在 poll 线程上登记等待者并发起连接。已经连上就直接成功。
 	void StartConnect(const std::shared_ptr<ConnectWait>& pWait);
 	friend struct ConnectResolver;
@@ -114,7 +114,7 @@ class SessionManager
 		{
 			return Suspend(stHandle, ::OI::Coro::Schedule);
 		}
-		bool await_resume() const noexcept;
+		int32_t await_resume() const noexcept;
 	};
 	SessionManager()
 	    : iCurrentSessionId(0), iSessionType(SESSION_TYPE_TCP), bServiceDown(false), bServiceSeen(false)
@@ -151,10 +151,10 @@ class SessionManager
 	}
 	// UDP：实际绑上的本端端口。还没 StartServer 返回 0。
 	uint16_t LocalPort() const;
-	// UDP：找到或新建到这个字面地址的会话，返回会话号。不解析域名。还没 StartServer 或地址不对返回 INVALID_SID。
-	sid_t OpenPeer(const std::string& sIp, const std::string& sPortLocal);
-	// UDP：会话的对端地址。会话不在返回 false。
-	bool GetPeerAddr(sid_t iSessionId, NetAddr& stAddr);
+	// UDP：找到或新建到这个字面地址的会话，成功写入会话号。不解析域名，失败返回具体错误码。
+	int32_t OpenPeer(const std::string& sIp, const std::string& sPortLocal, sid_t& iSessionId);
+	// UDP：会话的对端地址。会话不在返回 OI_ERR_NOT_FOUND。
+	int32_t GetPeerAddr(sid_t iSessionId, NetAddr& stAddr);
 	const std::string& GetStrIP()
 	{
 		return sIpAddress;
@@ -172,7 +172,7 @@ class SessionManager
 	{
 		return ConnectAwaiter(this);
 	}
-	bool StartServer(bool bAsync = true); //目前不支持同步操作
+	int32_t StartServer(bool bAsync = true); //目前不支持同步操作
 	// 定期拉到的服务列表。online 为假表示这个名字已经从列表里消失。
 	void ApplyService(const std::string& sIp, const std::string& sPortLocal, bool bOnline);
 	// 关注整份名单的管理器收这个名字下的全部实例，名单有变化时才调用。默认什么都不做。
@@ -180,14 +180,14 @@ class SessionManager
 	{
 	}
 	// 关掉当前所有会话。
-	void CloseAllSessions();
+	int32_t CloseAllSessions();
 	// 关掉这个地址上的会话。
-	void CloseEndpoint(const std::string& sEndpoint);
+	int32_t CloseEndpoint(const std::string& sEndpoint);
 	// 是否已经有连到这个地址的会话。
 	bool HasEndpoint(const std::string& sEndpoint);
 
-	// 按会话号发送。成功返回 true。
-	bool SendBytes(sid_t iSessionId, const ::OI::Base::Bytes& stData);
+	// 按会话号发送。成功返回 OI_OK。
+	int32_t SendBytes(sid_t iSessionId, const ::OI::Base::Bytes& stData);
 	// 按会话号发送。会话不在或队列满时返回错误码。
 	int32_t SendBytesResult(sid_t iSessionId, const ::OI::Base::Bytes& stData);
 
@@ -197,7 +197,7 @@ class SessionManager
   public:
 	//主动关闭会话
 	// 按会话号主动关闭。
-	void CloseSession(sid_t iSessionId);
+	int32_t CloseSession(sid_t iSessionId);
 
   protected:
 	friend class NetSession;
@@ -213,7 +213,7 @@ class SessionManager
 	// 同上，并带上对端地址和这条会话自己的收发上限。
 	void AddSession(Session* pSession, const std::string& sEndpoint, size_t iSendBytes, size_t iReceiveBytes);
 	// 这一代连接失败。代次对不上就忽略，避免旧连接改掉新连接。
-	void AbortSession(uint64_t iGeneration);
+	void AbortSession(uint64_t iGeneration, int32_t iCode = OI_ERR_CONNECT);
 	// 放弃还没完成的这一代。晚到的解析或连接结果作废。
 	void CancelConnect();
 	// 这一代连接成功，装上新套接字。代次对不上就关掉新描述符。
@@ -224,7 +224,7 @@ class SessionManager
 	/*---------------以下是需要重写的内容--------------*/
   public:
 	// 子类读自己的配置。默认成功。
-	virtual bool Init();
+	virtual int32_t Init();
 	// 日志里用的管理器名字。
 	virtual const std::string GetIDString();
 

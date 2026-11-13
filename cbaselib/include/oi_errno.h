@@ -18,6 +18,10 @@ enum OI_ERR
 	OI_ERR_PROTOCOL = -10,       // 回执形状不符合命令约定
 	OI_ERR_DECODE = -11,         // 值不能反序列化为指定 rpcdata
 	OI_ERR_ENCODE = -12,
+	OI_ERR_WRONG_THREAD = -13, // 单线程接口从非 poll 线程调用
+	OI_ERR_SOCKET = -14,       // 创建套接字失败，系统原因保留在日志
+	OI_ERR_BIND = -15,         // 绑定本地地址失败
+	OI_ERR_LISTEN = -16,       // 启动监听失败
 };
 
 #define NET_PARSER_ERR_BEGIN (-10000)

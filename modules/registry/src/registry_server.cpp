@@ -187,15 +187,16 @@ std::vector<std::string> RegistryServer::EvalArgs(const char* pLua, const Bindin
 	    stSecond.sValue, std::to_string(m_iExpireMilliseconds), std::to_string(stSecond.iId), stSecond.sName};
 }
 
-bool RegistryServer::Init()
+int32_t RegistryServer::Init()
 {
-	if (!::OI::Net::SessionManager::Init())
+	int32_t iCode = ::OI::Net::SessionManager::Init();
+	if (iCode != OI_OK)
 	{
-		return false;
+		return iCode;
 	}
 	if (!LoadSpace())
 	{
-		return false;
+		return OI_ERR_INVALID_ARGUMENT;
 	}
 	TryGetConfig("Registry.pull_ms", m_iPullMilliseconds);
 	if (m_iPullMilliseconds <= 0)
@@ -207,11 +208,12 @@ bool RegistryServer::Init()
 	{
 		m_iExpireMilliseconds = 3000;
 	}
-	if (!::OI::Redis::RedisClient::GetInstance().Init())
+	iCode = ::OI::Redis::RedisClient::GetInstance().Init();
+	if (iCode != OI_OK)
 	{
 		fprintf(stderr, "registry needs [RedisClient] ip/port/type\n");
 		fflush(stderr);
-		return false;
+		return iCode;
 	}
 	::OI::Redis::RedisClient::GetInstance().StartClient();
 	OI::Coro::StartTask([this](OI::Coro::Token)
@@ -219,7 +221,7 @@ bool RegistryServer::Init()
 		return Boot();
 	});
 	LOG_TRACE("registry space=%s", m_sSpace.c_str());
-	return true;
+	return OI_OK;
 }
 
 OI::Coro::Task RegistryServer::Boot()
@@ -316,7 +318,7 @@ void RegistryServer::PutSnapshot(const Binding& stSecond)
 
 void RegistryServer::Reply(sid_t iSessionId, uint32_t iIdLocal, const ::OI::Rpc::Serialize& stMessage)
 {
-	if (!SendBytes(iSessionId, ::OI::Base::EncodeRegFrame(iIdLocal, stMessage)))
+	if (SendBytes(iSessionId, ::OI::Base::EncodeRegFrame(iIdLocal, stMessage)) != OI_OK)
 	{
 		CloseSession(iSessionId);
 	}

@@ -19,7 +19,7 @@ class RegistryServer : public ::OI::Net::SessionManager
 
   public:
 	virtual ~RegistryServer();
-	bool Init();
+	int32_t Init();
 	virtual const std::string GetIDString();
 	void Handle(::OI::Net::Session* pSession, uint32_t iId, ::OI::Base::BytesStream& stBody);
 	void StartReload();

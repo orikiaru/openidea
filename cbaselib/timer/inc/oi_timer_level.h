@@ -1,4 +1,5 @@
 #pragma once
+#include "oi_errno.h"
 #include <sys/time.h>
 #include <string.h>
 #include <list>
@@ -64,7 +65,7 @@ class TimerLevel
 
 	//通常情况下, timer移除建议在OnTimer返回false移除
 	//在多线程情况下,可能会存在移除过程中, timer被触发的情况, 此时移除将是失败的操作
-	bool RemoveTimer(BaseTimerManager* pManager, BaseTimer* pTimer)
+	int32_t RemoveTimer(BaseTimerManager* pManager, BaseTimer* pTimer)
 	{
 		assert(pTimer->GetLevelOffset() >= 0 && pTimer->GetLevelOffset() < m_iMaxTick);
 
@@ -74,9 +75,9 @@ class TimerLevel
 		if (stIterator != vTimerList.end())
 		{
 			vTimerList.erase(stIterator);
-			return true;
+			return OI_OK;
 		}
-		return false;
+		return OI_ERR_NOT_FOUND;
 	}
 
 	//是否跑完一次循环

@@ -71,7 +71,7 @@ class ThreadPool
 
   public:
 	// 读 [ThreadPool] threadcount。单线程固定 1。键缺失、类型不对或值不大于 0 时返回 false。
-	bool Init();
+	int32_t Init();
 	// 多线程把协程句柄放进运行队列并叫醒一个工人。不分配 CoroTask。
 	void PostCoroutine(std::coroutine_handle<> stHandle);
 	// 进入主循环直到停止。单线程在调用线程里 PumpOnce；多线程拉起工人并等它们退出。
@@ -79,7 +79,7 @@ class ThreadPool
 	// 单线程主循环及同步适配器共用：协程和 IO 都必须推进。
 	void PumpOnce();
 	// 初始化时注册；停止开始后拒绝注册。回调在 poll 上执行且不可阻塞。
-	bool AddStopHandler(void (*fnHandler)());
+	int32_t AddStopHandler(void (*fnHandler)());
 	// 已经 RequestStop，新的停止回调不再接受。
 	bool StopRequested() const
 	{
@@ -106,7 +106,7 @@ class ThreadPool
 	void SetResume(void (*fnFunction)(std::coroutine_handle<>));
 
 	// 多线程开一条独立线程，句柄交给调用方 join。线程函数要等 stOutput 写好才开始跑。单线程直接断言失败。
-	static bool CreateSpecThread(std::thread& stOutput, void* (*fnThreadHandle)(void*), void* pArgument);
+	static int32_t CreateSpecThread(std::thread& stOutput, void* (*fnThreadHandle)(void*), void* pArgument);
 	// 忽略 SIGPIPE 和 SIGHUP，避免对端关掉连接时把进程打死。
 	static void InitIgnoreSig();
 	// 把指定信号恢复成默认处理。

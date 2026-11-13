@@ -58,6 +58,6 @@ class MultiMgr
 	static std::string JoinIds(const std::vector<int32_t>& vIds);
 
   public:
-	bool Load();
+	int32_t Load();
 	void Start();
 };

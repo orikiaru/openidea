@@ -42,15 +42,9 @@ class UDP_PeerChannel : public Channel
 		return false;
 	}
 	int32_t AllowSend() override;
-	void ForbidSend() override
-	{
-	}
-	void AllowRead() override
-	{
-	}
-	void ForbidRead() override
-	{
-	}
+	int32_t ForbidSend() override;
+	int32_t AllowRead() override;
+	int32_t ForbidRead() override;
 };
 
 // 一个绑好的 UDP 口，只在 poll 上挂一次读。管理器的会话按对端地址挂在这里。
@@ -88,7 +82,7 @@ class UDP_Channel : public Channel
   public:
 	UDP_Channel(NetSocket stSocketLocal, SessionManager* pMgr, uint16_t iLocalPort);
 	// 绑管理器配置的地址，挂上 poll，记到管理器上。
-	static bool StartBind(SessionManager* pMgr);
+	static int32_t StartBind(SessionManager* pMgr);
 	uint16_t LocalPort() const
 	{
 		return m_iLocalPort;
@@ -96,7 +90,7 @@ class UDP_Channel : public Channel
 	// 找到或新建到这个地址的会话，返回会话号。任意线程可调。
 	sid_t OpenPeer(const NetAddr& stAddr);
 	// 会话的对端地址。不是本口的会话返回 false。
-	bool GetPeerAddr(sid_t iSessionId, NetAddr& stAddr);
+	int32_t GetPeerAddr(sid_t iSessionId, NetAddr& stAddr);
 	// 对端通道在会话锁里调。把会话待发的字节作为一包发出去。sendto 的结果决定回包：接受整包才扣额度并刷新活跃时间。
 	int32_t Flush(UDP_PeerChannel* pPeer);
 	// 会话已经关了，排到 poll 线程回收。

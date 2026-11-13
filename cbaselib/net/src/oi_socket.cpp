@@ -553,27 +553,27 @@ void NetSocket::SetAsync(bool bAsync)
 	}
 }
 
-bool NetSocket::CreateSocket(SessionManager* pMgr, bool bAsync)
+int32_t NetSocket::CreateSocket(SessionManager* pMgr, bool bAsync)
 {
 	return NetHelper::CreateSocket(*this, pMgr, bAsync);
 }
 
-bool NetSocket::SocketBind(SessionManager* pMgr)
+int32_t NetSocket::SocketBind(SessionManager* pMgr)
 {
 	return NetHelper::SocketBind(*this, pMgr);
 }
 
-bool NetSocket::SocketListen(SessionManager* pMgr)
+int32_t NetSocket::SocketListen(SessionManager* pMgr)
 {
 	return NetHelper::SocketListen(*this, pMgr);
 }
 
-bool NetSocket::SocketListenAndBind(SessionManager* pMgr)
+int32_t NetSocket::SocketListenAndBind(SessionManager* pMgr)
 {
 	return NetHelper::SocketListenAndBind(*this, pMgr);
 }
 
-bool NetSocket::SocketConnect(SessionManager* pMgr)
+int32_t NetSocket::SocketConnect(SessionManager* pMgr)
 {
 	return NetHelper::SocketConnect(*this, pMgr);
 }

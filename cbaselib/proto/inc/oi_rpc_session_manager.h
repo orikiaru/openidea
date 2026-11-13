@@ -14,6 +14,7 @@
 #include "oi_registry.h"
 #include "oi_log.h"
 #include "oi_duration.h"
+#include "oi_poll.h"
 namespace OI
 {
 namespace Rpc
@@ -46,9 +47,19 @@ class ProtoSessionManager : public ::OI::Net::SessionManager
 	ProtoSessionManager()
 	{
 	}
-	bool Init() override
+	int32_t Init() override
 	{
-		return InitRpcAdmission() && ::OI::Net::SessionManager::Init();
+		const int32_t iThreadStatus = ::OI::Net::Poll::GetInstance().CheckThreadAccess("ProtoSessionManager::Init");
+		if (iThreadStatus != OI_OK)
+		{
+			return iThreadStatus;
+		}
+		const int32_t iAdmissionStatus = InitRpcAdmission();
+		if (iAdmissionStatus != OI_OK)
+		{
+			return iAdmissionStatus;
+		}
+		return ::OI::Net::SessionManager::Init();
 	}
 	virtual const std::string GetIDString()
 	{
@@ -138,11 +149,19 @@ class ProtoClientManager : public ProtoSessionManager
 
 	sid_t ConnectedSid()
 	{
+		if (::OI::Net::Poll::GetInstance().CheckThreadAccess("ProtoClientManager::ConnectedSid()") != OI_OK)
+		{
+			return INVALID_SID;
+		}
 		::OI::Thread::SpinLockGuard stLock(m_stClientLocker);
 		return m_bConnected ? m_iSessionId : INVALID_SID;
 	}
 	bool IsConnect()
 	{
+		if (::OI::Net::Poll::GetInstance().CheckThreadAccess("ProtoClientManager::IsConnect()") != OI_OK)
+		{
+			return false;
+		}
 		::OI::Thread::SpinLockGuard stLock(m_stClientLocker);
 		return m_bConnected;
 	}
@@ -158,7 +177,7 @@ class ProtoClientManager : public ProtoSessionManager
 			// 待发总量已受发送额度限制；若连接恰好关闭，保留尚未接纳的部分等重连。
 			while (!m_vPending.empty())
 			{
-				if (!SendBytes(iSessionIdLocal, m_vPending.front()))
+				if (SendBytes(iSessionIdLocal, m_vPending.front()) != OI_OK)
 				{
 					break;
 				}
@@ -242,10 +261,12 @@ class ProtoClientManager : public ProtoSessionManager
 	// 只打名单里的这些分区，结果顺序和分区号一致。没登记的那一格记连接失败。
 	template <typename Res, typename Req>
 	auto CallMany(const std::vector<int32_t>& vZoneIds, const Req& stRequest, ::OI::Timer::MS stTimeout = ::OI::Timer::Seconds(180));
-	bool SendRaw(const ::OI::Base::Bytes& stData);
-	// 没连上先存着，连上时按顺序补发。存满 max_pending_bytes 再来的丢掉，返回 false
-	bool SendRawOrPend(const ::OI::Base::Bytes& stData, size_t iMaxPendingBytes);
-	void Reconnect(int iDelayMilliseconds = 2000);
+	int32_t SendRaw(const ::OI::Base::Bytes& stData);
+	int32_t SendRawResult(const ::OI::Base::Bytes& stData);
+	// 没连上先存着，连上时按顺序补发。超过 max_pending_bytes 返回 OI_ERR_BUSY，不入队
+	int32_t SendRawOrPend(const ::OI::Base::Bytes& stData, size_t iMaxPendingBytes);
+	int32_t SendRawOrPendResult(const ::OI::Base::Bytes& stData, size_t iMaxPendingBytes);
+	int32_t Reconnect(int iDelayMilliseconds = 2000);
 };
 
 // 同一服务名下每台实例各一条常驻连接，断开或连不上自动重连。
@@ -277,14 +298,14 @@ class ProtoMultiClientManager : public ProtoSessionManager
 	}
 
   public:
-	bool Init() override;
+	int32_t Init() override;
 	// 对当前名单里的每台发起建连。之后新登记的实例自动连。
-	void Start();
+	int32_t Start();
 	// 单地址建连不适用于这里。
 	ConnectAwaiter StartClient() = delete;
 	// 写死地址时换一台，Init 之后调用：旧连接退役，在途调用回 OI_ERR_CONNECT；实例号仍是 0，Start 过就马上连新地址。
-	// 配了 service 或地址为空返回 false。地址没变什么都不做。
-	bool UseAddress(const std::string& sIp, const std::string& sPortLocal);
+	// 配了 service 或地址为空返回 OI_ERR_INVALID_ARGUMENT。地址没变什么都不做。
+	int32_t UseAddress(const std::string& sIp, const std::string& sPortLocal);
 	// 名单里至少有一台连着。
 	bool IsConnect();
 	// 当前名单，按实例号升序。

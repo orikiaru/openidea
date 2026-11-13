@@ -15,8 +15,8 @@ class LogClient : public ::OI::Rpc::ProtoClientManager
 
   public:
 	virtual ~LogClient();
-	bool Init();
-	bool SendLog(int iLevel, const char* pText, size_t iTextLength);
+	int32_t Init() override;
+	int32_t SendLog(int iLevel, const char* pText, size_t iTextLength);
 	virtual const std::string GetIDString()
 	{
 		return "LogClient";

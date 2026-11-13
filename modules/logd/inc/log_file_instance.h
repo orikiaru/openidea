@@ -36,9 +36,9 @@ class LogFileInstance
 	LogFileInstance(LogManager* pManager, LOG_LEVEL iLevel);
 	~LogFileInstance();
 	//跨天需要更换文件指针
-	bool CreateNewFile(const char* pPath);
+	int32_t CreateNewFile(const char* pPath);
 	void OnCreateNewFile(FILE* pNewFile);
-	bool StartWriteThread();
+	int32_t StartWriteThread();
 	// 打退出标记并 join。返回时队列里的日志都已写盘并 fflush。
 	void StopWriteThread();
 	void WriteLog();

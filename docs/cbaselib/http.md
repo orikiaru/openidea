@@ -15,9 +15,9 @@
 ```cpp
 ::OI::Http::Client stClient(sHost, iPort);
 ::OI::Http::Response stGot = co_await stClient.Get("/query", vQuery);
-if (stGot.bFail)
+if (stGot.iCode != OI_OK)
 {
-	co_return OI_ERR_FAIL;
+	co_return stGot.iCode;
 }
 ```
 
@@ -25,6 +25,6 @@ if (stGot.bFail)
 
 > **注意：** 同一个 `Client` 默认复用一条连接，请求串行。构造时 `bReuse` 传 `false`，这条请求才写 `Connection: close`。
 
-> **注意：** `bFail` 表示连接、超时或报文不完整。HTTP 4xx/5xx 本身不算失败，状态码在 [`iStatus`](../../cbaselib/http/inc/oi_http.h#L18)，正文在 [`sBody`](../../cbaselib/http/inc/oi_http.h#L20)。
+> **注意：** `iCode` 是操作错误码：成功为 `OI_OK`，连接失败为 `OI_ERR_CONNECT`，超时为 `OI_ERR_TIMEOUT`，无效 host 为 `OI_ERR_INVALID_ARGUMENT`，报文解析失败或截断为 `OI_ERR_PROTOCOL`；发送失败保留原始错误码。HTTP 4xx/5xx 本身不算失败，状态码在 [`iStatus`](../../cbaselib/http/inc/oi_http.h#L18)，正文在 [`sBody`](../../cbaselib/http/inc/oi_http.h#L20)。
 
 > **注意：** 单线程模块链 `http_static`，多线程链 `http_m_static`。完成回调里不直接 `resume`，由 poll 线程 `Schedule` 回来。

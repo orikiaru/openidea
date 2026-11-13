@@ -7,22 +7,30 @@ int main(int iArgumentCount, char* vArguments[])
 {
 	(void)iArgumentCount;
 	(void)vArguments;
-	int iCodeLocal = ::OI::Base::StartFramework("../config/registry.toml");
-	if (iCodeLocal != 0)
+	int32_t iCode = ::OI::Base::StartFramework("../config/registry.toml");
+	if (iCode != OI_OK)
 	{
-		return iCodeLocal;
+		fprintf(stderr, "StartFramework failed: code=%d\n", iCode);
+		return iCode;
 	}
-	::OI::Log::Init();
+	iCode = ::OI::Log::Init();
+	if (iCode != OI_OK)
+	{
+		fprintf(stderr, "Log Init failed: code=%d\n", iCode);
+		return iCode;
+	}
 
-	if (!RegistryServer::GetInstance().Init())
+	iCode = RegistryServer::GetInstance().Init();
+	if (iCode != OI_OK)
 	{
-		printf("RegistryServer Init error\n");
-		return -1;
+		fprintf(stderr, "RegistryServer Init failed: code=%d\n", iCode);
+		return iCode;
 	}
-	if (!RegistryServer::GetInstance().StartServer())
+	iCode = RegistryServer::GetInstance().StartServer();
+	if (iCode != OI_OK)
 	{
-		printf("RegistryServer StartServer error\n");
-		return -1;
+		fprintf(stderr, "RegistryServer StartServer failed: code=%d\n", iCode);
+		return iCode;
 	}
 	printf("registry server listen\n");
 	fflush(stdout);

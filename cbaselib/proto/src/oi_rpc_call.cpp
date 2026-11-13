@@ -419,17 +419,17 @@ RpcWaitStats GetRpcWaitStats()
 	return stStats;
 }
 
-bool InitRpcAdmission()
+int32_t InitRpcAdmission()
 {
 	try
 	{
 		(void)Admission();
-		return true;
+		return OI_OK;
 	}
 	catch (const std::exception& stError)
 	{
 		fprintf(stderr, "invalid RPC admission configuration: %s\n", stError.what());
-		return false;
+		return OI_ERR_INVALID_ARGUMENT;
 	}
 }
 
@@ -468,15 +468,15 @@ bool ClaimRpcSend(uint64_t iCallIdLocal, sid_t iSessionIdLocal)
 }
 
 uint64_t BindRpcCall(::OI::Net::SessionManager* pManagerLocal,
-	sid_t iSessionIdLocal,
-	proto_type_t iResponseIdLocal,
-	std::coroutine_handle<> stHandleLocal,
-	int32_t* pResultLocal,
-	int64_t iTimeoutMilliseconds,
-	std::function<bool(::OI::Base::BytesStream&, sid_t)> fnDecodeLocal,
-	std::function<void()> fnResumeLocal,
-	std::shared_ptr<std::atomic<int32_t>> pGuardLocal,
-	RpcSender* pSenderLocal)
+    sid_t iSessionIdLocal,
+    proto_type_t iResponseIdLocal,
+    std::coroutine_handle<> stHandleLocal,
+    int32_t* pResultLocal,
+    int64_t iTimeoutMilliseconds,
+    std::function<bool(::OI::Base::BytesStream&, sid_t)> fnDecodeLocal,
+    std::function<void()> fnResumeLocal,
+    std::shared_ptr<std::atomic<int32_t>> pGuardLocal,
+    RpcSender* pSenderLocal)
 {
 	std::call_once(g_sweep_once, []()
 	{
@@ -700,7 +700,7 @@ bool DeliverRpc(proto_type_t iId, ::OI::Base::BytesStream& stBodyLocal, ::OI::Ne
 				::OI::Base::BytesStream stReply;
 				stReply << (iRaw & ~(uint64_t)RPC_REQ_MASK) << int32_t(OI_ERR_BUSY);
 				auto stFrame = EncodePbFrame(iId, stReply);
-				if (!pManagerLocal->SendBytes(iSessionIdLocal, stFrame.GetMutableBuff()))
+				if (pManagerLocal->SendBytes(iSessionIdLocal, stFrame.GetMutableBuff()) != OI_OK)
 				{
 					pManagerLocal->CloseSession(iSessionIdLocal);
 				}

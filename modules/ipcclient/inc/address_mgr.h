@@ -12,7 +12,7 @@ class AddressMgr
 	// 字面地址当场解析，不把解析留给 StartClient。
 	int CheckLiteralAddress(const std::string& sPort);
 	// 等这一条地址探测的 StartClient 结束。
-	OI::Coro::TaskResult<int> AwaitAddressConnect(AddressConnectProbe* pProbe);
+	OI::Coro::TaskResult<int32_t> AwaitAddressConnect(AddressConnectProbe* pProbe);
 	// 域名、IPv6、方括号、失败主机，以及 64 个等待者反复开关连接。
 	OI::Coro::TaskResult<int> CheckAddressConnect();
 

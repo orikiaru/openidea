@@ -19,7 +19,7 @@ const std::string IpcUdp::GetIDString()
 	if (stRequest.iSeq == ::OI::RpcData::UDP_PROBE_PEER_ADDR)
 	{
 		::OI::Net::NetAddr stAddr;
-		if (!GetPeerAddr(stContext.iSessionId, stAddr))
+		if (GetPeerAddr(stContext.iSessionId, stAddr) != OI_OK)
 		{
 			co_return OI_ERR_NOT_FOUND;
 		}
@@ -40,7 +40,7 @@ const std::string IpcUdp::GetIDString()
 	co_return stContext.Notify(stRequest);
 }
 
-bool IpcUdp::Init()
+int32_t IpcUdp::Init()
 {
 	OI_RPC_BIND_SELF(UdpEcho, IpcUdp, HandleEcho);
 	OI_NOTIFY_BIND_SELF(UdpNote, IpcUdp, HandleNote);

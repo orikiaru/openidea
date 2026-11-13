@@ -5,7 +5,7 @@ LogServer::~LogServer()
 {
 }
 
-bool LogServer::Init()
+int32_t LogServer::Init()
 {
 	return ::OI::Net::SessionManager::Init();
 }

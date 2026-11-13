@@ -20,11 +20,11 @@ if (iCode != 0)
 {
 	return iCode;
 }
-if (!::OI::Log::Init())
+if (::OI::Log::Init() != OI_OK)
 {
 	return 1;
 }
-if (!RoomServer::GetInstance().Init() || !RoomServer::GetInstance().StartServer())
+if (RoomServer::GetInstance().Init() != OI_OK || RoomServer::GetInstance().StartServer() != OI_OK)
 {
 	return 1;
 }

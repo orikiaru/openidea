@@ -7,22 +7,30 @@ int main(int iArgumentCount, char* vArguments[])
 {
 	(void)iArgumentCount;
 	(void)vArguments;
-	int iCodeLocal = ::OI::Base::StartFramework("../config/redisserver.toml");
-	if (iCodeLocal != 0)
+	int32_t iCode = ::OI::Base::StartFramework("../config/redisserver.toml");
+	if (iCode != OI_OK)
 	{
-		return iCodeLocal;
+		fprintf(stderr, "StartFramework failed: code=%d\n", iCode);
+		return iCode;
 	}
-	::OI::Log::Init();
+	iCode = ::OI::Log::Init();
+	if (iCode != OI_OK)
+	{
+		fprintf(stderr, "Log Init failed: code=%d\n", iCode);
+		return iCode;
+	}
 
-	if (!RedisServer::GetInstance().Init())
+	iCode = RedisServer::GetInstance().Init();
+	if (iCode != OI_OK)
 	{
-		printf("RedisServer Init error\n");
-		return -1;
+		fprintf(stderr, "RedisServer Init failed: code=%d\n", iCode);
+		return iCode;
 	}
-	if (!RedisServer::GetInstance().StartServer())
+	iCode = RedisServer::GetInstance().StartServer();
+	if (iCode != OI_OK)
 	{
-		printf("RedisServer StartServer error\n");
-		return -1;
+		fprintf(stderr, "RedisServer StartServer failed: code=%d\n", iCode);
+		return iCode;
 	}
 	printf("redis server listen\n");
 	fflush(stdout);

@@ -1,3 +1,4 @@
+#include "oi_errno.h"
 #ifdef _WIN32
 #include <winsock2.h>
 #include <windows.h>
@@ -354,7 +355,22 @@ void Poll::StopAndJoin()
 	}
 }
 
-bool Poll::Init()
+int32_t Poll::CheckThreadAccess(const char* pOperation) const
+{
+#ifdef _SINGLE_THREAD_
+	if (!InLoopThread())
+	{
+		fprintf(stderr, "single-thread access rejected operation=%s code=%d\n",
+		    pOperation, OI_ERR_WRONG_THREAD);
+		return OI_ERR_WRONG_THREAD;
+	}
+#else
+	(void)pOperation;
+#endif
+	return OI_OK;
+}
+
+int32_t Poll::Init()
 {
 	// 常驻管理器在 poll 之后构造，析构时先排空它的后台请求。
 	(void)BlockingWorkSessionManager::GetInstance();
@@ -363,7 +379,7 @@ bool Poll::Init()
 #ifdef _SINGLE_THREAD_
 	m_stLoopThread = std::this_thread::get_id();
 	PrepareLoop();
-	return true;
+	return OI_OK;
 #else
 	try
 	{
@@ -373,7 +389,7 @@ bool Poll::Init()
 	{
 		fprintf(stderr, "poll thread create failed\n");
 		fflush(stderr);
-		return false;
+		return OI_ERR_FAIL;
 	}
 	for (;;)
 	{
@@ -388,7 +404,7 @@ bool Poll::Init()
 		}
 		std::this_thread::sleep_for(std::chrono::milliseconds(1));
 	}
-	return true;
+	return OI_OK;
 #endif
 }
 

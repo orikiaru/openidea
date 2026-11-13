@@ -121,8 +121,8 @@ class Session
 		return sEndpoint;
 	}
 
-	// 追加到发送队列并打开写事件。已关闭或队列放不下返回 false。
-	bool Send(const ::OI::Base::Bytes& stBytes);
+	// 追加到发送队列并打开写事件。成功返回 OI_OK，失败返回具体错误码。
+	int32_t Send(const ::OI::Base::Bytes& stBytes);
 	// 和 Send 一样。已关闭返回连接错误，队列放不下返回忙。发送失败且输出缓冲被取走时，退回未写出的额度。
 	int32_t SendResult(const ::OI::Base::Bytes& stBytes);
 	// 改发送队列上限。
@@ -145,9 +145,9 @@ class Session
   protected:
 	// 转给通道打开或关掉对应事件。
 	int32_t AllowSend();
-	void ForbidSend();
-	void AllowRead();
-	void ForbidRead();
+	int32_t ForbidSend();
+	int32_t AllowRead();
+	int32_t ForbidRead();
 	// 子类完成关闭，并记下错误码。
 	virtual void Close(int iError) = 0;
 	virtual void OnClose()

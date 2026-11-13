@@ -129,7 +129,7 @@ std::shared_ptr<RpcSender> RouteManager::Lease(const std::string& sIp, const std
 		if (::OI::Thread::ThreadPool::GetInstance().AddStopHandler([]()
 		{
 			GetInstance().Stop();
-		}))
+		}) == OI_OK)
 		{
 			::OI::Net::Poll::GetInstance().CallOnLoop(&RouteManager::OnArm, nullptr);
 		}

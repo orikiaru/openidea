@@ -37,7 +37,6 @@
 #include <thread>
 #include <vector>
 
-
 // 只统计提交，仍走真实连接、序列化、服务端 Hold 和回包。
 class OutputRpcProbe : public DeferredRpcProbe
 {
@@ -82,7 +81,7 @@ OI::Coro::TaskResult<int> RpcOutputMgr::CheckOutputRpcTask(sid_t iSessionId)
 			return RpcOutputWait::Await(stCall);
 		}));
 	}
-	if (!(co_await stClient.StartClient()))
+	if ((co_await stClient.StartClient()) != OI_OK)
 	{
 		++iBad;
 	}
@@ -184,7 +183,7 @@ OI::Coro::TaskResult<int> RpcOutputMgr::CheckDeferredRpcSession()
 	int iValueCode = OI_ERR_CONNECT;
 	int iOutputCode = OI_ERR_CONNECT;
 	int iPinnedCode = 0;
-	if (!(co_await stClient.StartClient()))
+	if ((co_await stClient.StartClient()) != OI_OK)
 	{
 		++iBad;
 		// 输出接口创建即运行，失败路径也要等任务结束再释放输出。

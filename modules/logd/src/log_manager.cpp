@@ -10,14 +10,14 @@
 #include "oi_log_frame.h"
 #include "log_server_session.h"
 
-bool LogManager::Init()
+int32_t LogManager::Init()
 {
 	int64_t iLimit = 64 * 1024 * 1024;
 	TryGetConfig("Log.max_pending_bytes", iLimit);
 	if (iLimit < ::OI::Log::LOG_FRAME_MAX + 8 || static_cast<uint64_t>(iLimit) > SIZE_MAX)
 	{
 		fprintf(stderr, "logd Log.max_pending_bytes must be at least %d and fit size_t\n", ::OI::Log::LOG_FRAME_MAX + 8);
-		return false;
+		return OI_ERR_INVALID_ARGUMENT;
 	}
 	m_iMaxPendingBytes = static_cast<size_t>(iLimit);
 	m_iLastTimestamp = ::OI::Timer::GetTime();
@@ -30,28 +30,35 @@ bool LogManager::Init()
 	TryGetConfig("Log.root_path", sLogRootPath);
 	m_sLogRootPath = sLogRootPath;
 
-	if (!CheckAndCreateRootPath())
+	int32_t iStatus = CheckAndCreateRootPath();
+	if (iStatus != OI_OK)
 	{
 		LOG_TRACE("LogManager::Init error CheckAndCreateRootPath=%s", m_sLogRootPath.c_str());
-		return false;
+		return iStatus;
 	}
 
-	if (!OpenAllLogFile())
+	iStatus = OpenAllLogFile();
+	if (iStatus != OI_OK)
 	{
 		LOG_TRACE("LogManager::Init error OpenAllLogFile=%s", m_sLogRootPath.c_str());
-		return false;
+		return iStatus;
 	}
 
-	if (!StartLogInstanceWork())
+	iStatus = StartLogInstanceWork();
+	if (iStatus != OI_OK)
 	{
 		LOG_TRACE("LogManager::Init error StartLogInstanceWork");
 		Stop();
-		return false;
+		return iStatus;
 	}
 
 	//每秒触发一定定时器
-	::OI::Timer::BaseTimerManager::GetInstance().AddTimer(this, 1000);
-	return true;
+	iStatus = ::OI::Timer::BaseTimerManager::GetInstance().AddTimer(this, 1000);
+	if (iStatus != OI_OK)
+	{
+		Stop();
+	}
+	return iStatus;
 }
 
 void LogManager::Stop()
@@ -111,13 +118,13 @@ bool LogManager::OnTimer()
 void LogManager::OnCrossDay()
 {
 	// 和写盘失败一样直接停。Release 下 assert 不在，不能接着往昨天的文件里写。
-	if (!CheckAndCreateRootPath())
+	if (CheckAndCreateRootPath() != OI_OK)
 	{
 		fprintf(stderr, "logd cross day mkdir failed: %s\n", m_sCurrentLogPath.c_str());
 		fflush(stderr);
 		std::abort();
 	}
-	if (!OpenAllLogFile())
+	if (OpenAllLogFile() != OI_OK)
 	{
 		fprintf(stderr, "logd cross day open failed: %s\n", m_sCurrentLogPath.c_str());
 		fflush(stderr);
@@ -146,20 +153,21 @@ static std::string GetLogLvName(LOG_LEVEL iLevel)
 	return "unknow_lv";
 }
 
-bool LogManager::OpenLogFile(LOG_LEVEL iLevel)
+int32_t LogManager::OpenLogFile(LOG_LEVEL iLevel)
 {
 	std::string sLogLevelName = GetLogLvName(iLevel);
 	std::string sLogLevelPath = m_sCurrentLogPath + "/" + sLogLevelName;
 	return m_mLogFileMap[iLevel]->CreateNewFile(sLogLevelPath.c_str());
 }
 
-bool LogManager::StartLogInstanceWork()
+int32_t LogManager::StartLogInstanceWork()
 {
 	for (const auto& [sName, pLogFile] : m_mLogFileMap)
 	{
-		if (!pLogFile->StartWriteThread())
+		const int32_t iStatus = pLogFile->StartWriteThread();
+		if (iStatus != OI_OK)
 		{
-			return false;
+			return iStatus;
 		}
 	}
 
@@ -177,13 +185,13 @@ bool LogManager::StartLogInstanceWork()
 		}
 		if (bAllWorking)
 		{
-			return true;
+			return OI_OK;
 		}
 		std::this_thread::yield();
 	}
 }
 
-bool LogManager::OpenAllLogFile()
+int32_t LogManager::OpenAllLogFile()
 {
 	for (int iLevelLv = 0; iLevelLv < LOG_LEVEL::LOG_LEVEL_COUNT; ++iLevelLv)
 	{
@@ -192,15 +200,16 @@ bool LogManager::OpenAllLogFile()
 		{
 			m_mLogFileMap[iLevelLevel] = new LogFileInstance(this, iLevelLevel);
 		}
-		if (!OpenLogFile((LOG_LEVEL)iLevelLv))
+		const int32_t iStatus = OpenLogFile((LOG_LEVEL)iLevelLv);
+		if (iStatus != OI_OK)
 		{
-			return false;
+			return iStatus;
 		}
 	}
-	return true;
+	return OI_OK;
 }
 
-bool LogManager::CheckAndCreateRootPath()
+int32_t LogManager::CheckAndCreateRootPath()
 {
 	char vCurrentPath[64];
 	size_t iLength = strftime(vCurrentPath, sizeof(vCurrentPath) - 1, "%y_%m_%d", &m_stLastCalendarTime);
@@ -210,15 +219,15 @@ bool LogManager::CheckAndCreateRootPath()
 	return ::OI::File::MakeDirs(m_sCurrentLogPath);
 }
 
-bool LogManager::WriteLog(LOG_LEVEL iLevel, const char* pText, size_t iLength,
+int32_t LogManager::WriteLog(LOG_LEVEL iLevel, const char* pText, size_t iLength,
     LogServerSession* pSession)
 {
 	const std::string sTitle = GetLogTitle();
 	::OI::Thread::MutexGuard stLock(m_stBacklogLocker);
-	if (iLevel < 0 || iLevel >= LOG_LEVEL_COUNT ||
+	if (iLevel < 0 || iLevel >= LOG_LEVEL_COUNT || (!pText && iLength > 0) ||
 	    iLength > m_iMaxPendingBytes - sTitle.size())
 	{
-		return false;
+		return OI_ERR_INVALID_ARGUMENT;
 	}
 	const size_t iBytes = iLength + sTitle.size();
 	const bool bFull = iBytes > m_iMaxPendingBytes - m_iPendingBytes;
@@ -230,7 +239,7 @@ bool LogManager::WriteLog(LOG_LEVEL iLevel, const char* pText, size_t iLength,
 		{
 			QueueWaiter(pSession, iBytes);
 		}
-		return false;
+		return OI_ERR_BUSY;
 	}
 	::OI::Base::Bytes stBody;
 	stBody.Reserve(iBytes);
@@ -239,7 +248,7 @@ bool LogManager::WriteLog(LOG_LEVEL iLevel, const char* pText, size_t iLength,
 	m_mLogFileMap.at(iLevel)->AddLog(stBody);
 	m_iPendingBytes += iBytes;
 	m_iPeakPendingBytes = std::max(m_iPeakPendingBytes, m_iPendingBytes);
-	return true;
+	return OI_OK;
 }
 
 void LogManager::QueueWaiter(LogServerSession* pSession, size_t iBytes)

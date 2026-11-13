@@ -50,7 +50,7 @@ struct RpcWaitStats
 // 各分片在途调用的合计。并发请求下不是同一时刻的快照。
 RpcWaitStats GetRpcWaitStats();
 // 读取进程级 RPC 在途限制；非法配置令模块初始化失败。
-bool InitRpcAdmission();
+int32_t InitRpcAdmission();
 
 // 连接还没好，这条调用先别发。调用号已经不在表里返回 false。
 bool MarkRpcAwaitingConnect(uint64_t iCallId);
