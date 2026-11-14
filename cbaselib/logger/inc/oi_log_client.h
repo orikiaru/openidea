@@ -17,18 +17,18 @@ class LogClient : public ::OI::Rpc::ProtoClientManager
 	virtual ~LogClient();
 	int32_t Init() override;
 	int32_t SendLog(int iLevel, const char* pText, size_t iTextLength);
-	virtual const std::string GetIDString()
+	const std::string GetIDString() override
 	{
 		return "LogClient";
 	}
 
   private:
-	virtual ::OI::Net::Session* CloneSession()
+	::OI::Net::Session* CloneSession() override
 	{
 		return new LogClientSession(this);
 	} //自定制回话类型
-	virtual void OnClientConnect(::OI::Net::Session* pSession);
-	virtual void OnClientDisconnect(const ::OI::Net::Session* pSession);
+	void OnClientConnect(::OI::Net::Session* pSession) override;
+	void OnClientDisconnect(const ::OI::Net::Session* pSession) override;
 };
 }
 }

@@ -10,14 +10,14 @@ class ZoneService final : public ::OI::Rpc::ProtoClientManager
 	{
 		sServiceName = std::move(sName);
 	}
-	const std::string GetIDString()
+	const std::string GetIDString() override
 	{
 		return "ZoneService";
 	}
-	void OnClientConnect(::OI::Net::Session*)
+	void OnClientConnect(::OI::Net::Session*) override
 	{
 	}
-	void OnClientDisconnect(const ::OI::Net::Session*)
+	void OnClientDisconnect(const ::OI::Net::Session*) override
 	{
 	}
 };

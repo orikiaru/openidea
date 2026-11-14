@@ -37,7 +37,7 @@ class FnTimer : public BaseTimer
 	    : m_fnFunction(std::move(fnFunction))
 	{
 	}
-	bool OnTimer()
+	bool OnTimer() override
 	{
 		// Update 已释放时间轮锁，直接执行。
 		std::unique_ptr<FnTimer> pSelf(this);

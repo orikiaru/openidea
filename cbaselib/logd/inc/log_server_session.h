@@ -14,10 +14,10 @@ class LogServerSession : public ::OI::Net::NetSession
 	virtual ~LogServerSession()
 	{
 	}
-	void OnDataIn();
+	void OnDataIn() override;
 	void WaitForWrite();
 	void ResumeWrite(bool bShutdown);
-	void OnDataOut()
+	void OnDataOut() override
 	{
 		assert(false && u8"logserver不需要回信");
 	}

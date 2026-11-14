@@ -15,8 +15,8 @@ class TCP_Channel : public NetChannel
 	virtual ~TCP_Channel()
 	{
 	}
-	virtual void DataIn();
-	virtual void DataOut();
+	void DataIn() override;
+	void DataOut() override;
 	//virtual bool TryClose();	//使用基类实现
 };
 }

@@ -29,7 +29,7 @@ class RedisEv : public ::OI::Net::Channel
 	    : ::OI::Net::Channel(stSock, NULL), m_pAsyncContext(pAsyncContext), m_iMask(0), m_bInIo(false), m_bDead(false)
 	{
 	}
-	void DataIn()
+	void DataIn() override
 	{
 		m_bInIo = true;
 		if (m_pAsyncContext)
@@ -37,7 +37,7 @@ class RedisEv : public ::OI::Net::Channel
 			redisAsyncHandleRead(m_pAsyncContext);
 		}
 	}
-	void DataOut()
+	void DataOut() override
 	{
 		m_bInIo = true;
 		if (m_pAsyncContext)
@@ -45,7 +45,7 @@ class RedisEv : public ::OI::Net::Channel
 			redisAsyncHandleWrite(m_pAsyncContext);
 		}
 	}
-	bool TryClose()
+	bool TryClose() override
 	{
 		if (!m_bDead)
 		{

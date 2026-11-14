@@ -14,10 +14,10 @@ class IpcClient : public ::OI::Rpc::ProtoClientManager
 
   public:
 	virtual ~IpcClient();
-	int32_t Init();
-	virtual const std::string GetIDString();
+	int32_t Init() override;
+	const std::string GetIDString() override;
 
   private:
-	virtual void OnClientConnect(::OI::Net::Session* pSession);
-	virtual void OnClientDisconnect(const ::OI::Net::Session* pSession);
+	void OnClientConnect(::OI::Net::Session* pSession) override;
+	void OnClientDisconnect(const ::OI::Net::Session* pSession) override;
 };

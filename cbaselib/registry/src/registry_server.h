@@ -20,13 +20,13 @@ class RegistryServer : public ::OI::Rpc::ProtoSessionManager
 
   public:
 	virtual ~RegistryServer();
-	int32_t Init();
-	virtual const std::string GetIDString();
+	int32_t Init() override;
+	const std::string GetIDString() override;
 	void StartReload();
 
   protected:
-	virtual void OnAddSession(::OI::Net::Session* pSession);
-	virtual void OnDelSession(const ::OI::Net::Session* pSession);
+	void OnAddSession(::OI::Net::Session* pSession) override;
+	void OnDelSession(const ::OI::Net::Session* pSession) override;
 
   private:
 	struct Binding

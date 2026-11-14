@@ -18,11 +18,11 @@ class AcceptChannel : public Channel
 	{
 	}
 	// 有新连接时 accept，并交给管理器建会话。
-	virtual void DataIn();
+	void DataIn() override;
 	// 被报成可写时同样去 accept。监听套接字不写业务数据。
-	virtual void DataOut();
+	void DataOut() override;
 	// 监听通道不从这里回收，始终返回 false。
-	virtual bool TryClose();
+	bool TryClose() override;
 
   public:
 	// 创建监听套接字并挂上 poll。失败返回 false。

@@ -3,10 +3,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <chrono>
+#include <memory>
 #include <thread>
 #include "log_file_instance.h"
 #include "oi_thread.h"
 #include "oi_log.h"
+#include "oi_net_os.h"
 #include "log_manager.h"
 
 #ifdef _SINGLE_THREAD_
@@ -36,7 +38,7 @@ int32_t LogFileInstance::CreateNewFile(const char* pPath)
 	const int iError = fopen_s(&pFile, pPath, "ab+");
 	if (iError != 0 || !pFile)
 	{
-		fprintf(stderr, "logd open %s failed: %s\n", pPath, strerror(iError ? iError : EIO));
+		fprintf(stderr, "logd open %s failed: %s\n", pPath, NetOs_StrError(iError ? iError : EIO));
 		return iError ? iError : EIO;
 	}
 #else
@@ -44,7 +46,7 @@ int32_t LogFileInstance::CreateNewFile(const char* pPath)
 	if (!pFile)
 	{
 		const int iError = errno ? errno : EIO;
-		fprintf(stderr, "logd open %s failed: %s\n", pPath, strerror(iError));
+		fprintf(stderr, "logd open %s failed: %s\n", pPath, NetOs_StrError(iError));
 		return iError;
 	}
 #endif
@@ -140,7 +142,7 @@ static void DiskFailure(const char* pOperation)
 {
 	const int iError = errno;
 	// 不经日志网络告警，避免递归记录。停止进程并明确暴露失败，不能清空后假装已落盘。
-	fprintf(stderr, "logd %s failed: %s\n", pOperation, strerror(iError));
+	fprintf(stderr, "logd %s failed: %s\n", pOperation, NetOs_StrError(iError));
 	fflush(stderr);
 	std::abort();
 }
@@ -149,7 +151,15 @@ static bool WriteAll(FILE* pFile, const char* pData, size_t iSize)
 {
 #ifdef OI_ENABLE_TEST_HOOKS
 	// 只在测试构建生效，只阻塞日志写线程，不阻塞 poll 或业务协程。
+#ifdef _WIN32
+	char* pFaultBuffer = nullptr;
+	size_t iRequiredSize = 0;
+	_dupenv_s(&pFaultBuffer, &iRequiredSize, "OI_TEST_LOG_FAULT");
+	std::unique_ptr<char, decltype(&std::free)> pFaultOwner(pFaultBuffer, &std::free);
+	const char* pFault = pFaultOwner.get();
+#else
 	const char* pFault = std::getenv("OI_TEST_LOG_FAULT");
+#endif
 	if (pFault && std::strcmp(pFault, "full") == 0)
 	{
 #ifdef _WIN32

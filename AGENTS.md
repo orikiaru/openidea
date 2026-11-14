@@ -186,6 +186,7 @@ Redis 也单独测。开关是 `[Test] redis`。先起本机 Redis（`maxmemory 
 
 # C++ 大括号与排版
 
+- 覆盖基类虚函数（析构函数除外）时不写前导 `virtual`，在声明末尾写 `override`；`-Wsuggest-override` 强制检查，clang 把未使用的 lambda 捕获视为编译错误。
 - 自有手写 C++（基础库、模块及自有平台兼容层）使用 Allman 风格，代码块左花括号单独换行。
 - `if`、`else`、`for`（含范围 for）、`while`、`do` 的语句体必须使用 `{}`，单条语句和空语句也不例外；禁止省略大括号。
 - 函数、类、名字空间、lambda 等代码块也展开，不压成一行；不改变初始化列表的语义。

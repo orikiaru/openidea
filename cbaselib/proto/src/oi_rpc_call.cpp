@@ -385,7 +385,7 @@ void SweepRpcCalls()
 class RpcSweepTimer : public ::OI::Timer::BaseTimer
 {
   public:
-	bool OnTimer()
+	bool OnTimer() override
 	{
 		SweepRpcCalls();
 		return true;

@@ -34,14 +34,14 @@ class Parser
 class JBytesParser : public Parser<::OI::Base::Bytes>
 {
   public:
-	virtual ::OI::Base::Bytes* DecodeProtocol(::OI::Base::BytesStream& stObuff)
+	::OI::Base::Bytes* DecodeProtocol(::OI::Base::BytesStream& stObuff) override
 	{
 		::OI::Base::Bytes* pPointer = new ::OI::Base::Bytes();
 		::OI::Base::BytesStream stOutputStream(*pPointer);
 		stOutputStream << stObuff;
 		return pPointer;
 	}
-	virtual ::OI::Base::BytesStream EncodeProtocol(const ::OI::Base::Bytes* pProto)
+	::OI::Base::BytesStream EncodeProtocol(const ::OI::Base::Bytes* pProto) override
 	{
 		return ::OI::Base::Bytes(*pProto);
 	}

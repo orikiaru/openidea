@@ -17,11 +17,11 @@ class IpcUdp : public ::OI::Rpc::ProtoSessionManager
 	}
 
   public:
-	virtual const std::string GetIDString();
+	const std::string GetIDString() override;
 
   private:
-	virtual void OnAddSession(::OI::Net::Session* pSession);
-	virtual void OnDelSession(const ::OI::Net::Session* pSession);
+	void OnAddSession(::OI::Net::Session* pSession) override;
+	void OnDelSession(const ::OI::Net::Session* pSession) override;
 };
 
 // UDP 会话、RPC、单向消息、大包、坏包和空闲回收。关掉就不跑。

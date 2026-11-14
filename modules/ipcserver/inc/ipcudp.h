@@ -20,10 +20,10 @@ class IpcUdp : public ::OI::Rpc::ProtoSessionManager
 	::OI::Rpc::RpcTask HandleNote(const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::UdpNoteReq& stRequest);
 
   public:
-	int32_t Init();
-	virtual const std::string GetIDString();
+	int32_t Init() override;
+	const std::string GetIDString() override;
 
   private:
-	virtual void OnAddSession(::OI::Net::Session* pSession);
-	virtual void OnDelSession(const ::OI::Net::Session* pSession);
+	void OnAddSession(::OI::Net::Session* pSession) override;
+	void OnDelSession(const ::OI::Net::Session* pSession) override;
 };

@@ -24,8 +24,8 @@ class ProtoSession : public ::OI::Net::NetSession
 		m_iFrameBytes = iBytes;
 		m_iFrameTimeoutMilliseconds = iTimeoutMilliseconds;
 	}
-	virtual void OnDataIn();  //raw_data->real_data   decode or decrypt
-	virtual void OnDataOut(); //real_data->raw_data 	encode or encrypt
+	void OnDataIn() override;  //raw_data->real_data   decode or decrypt
+	void OnDataOut() override; //real_data->raw_data 	encode or encrypt
 	void OnClose() override;
 };
 }

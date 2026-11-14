@@ -11,16 +11,16 @@ class LogServer : public ::OI::Rpc::ProtoSessionManager
 
   public:
 	virtual ~LogServer();
-	int32_t Init();
-	virtual const std::string GetIDString()
+	int32_t Init() override;
+	const std::string GetIDString() override
 	{
 		return "LogServer";
 	}
 
   private:
-	virtual void OnAddSession(::OI::Net::Session* pSession);
-	virtual void OnDelSession(const ::OI::Net::Session* pSession);
-	virtual ::OI::Net::Session* CloneSession()
+	void OnAddSession(::OI::Net::Session* pSession) override;
+	void OnDelSession(const ::OI::Net::Session* pSession) override;
+	::OI::Net::Session* CloneSession() override
 	{
 		return new LogServerSession(this);
 	} //自定制回话类型

@@ -685,7 +685,7 @@ void SessionManager::DelSession(const Session* pSession)
 {
 	{
 		::OI::Thread::MutexGuard stLock(stLocker);
-		auto stIterator = mSessionMap.find(pSession->GetSessionID());
+		[[maybe_unused]] auto stIterator = mSessionMap.find(pSession->GetSessionID());
 		assert(stIterator == mSessionMap.end());
 	}
 	//已经解绑,此时有Session锁

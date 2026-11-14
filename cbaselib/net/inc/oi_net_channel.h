@@ -20,9 +20,9 @@ class NetChannel : public Channel
 	NetChannel(NetSocket, Session* pSession);
 	virtual ~NetChannel();
 	//epoll事件回调接口
-	virtual void DataIn() = 0;  //real_data_handle
-	virtual void DataOut() = 0; //real_data_send
-	virtual bool TryClose();
+	void DataIn() override = 0;  //real_data_handle
+	void DataOut() override = 0; //real_data_send
+	bool TryClose() override;
 	//自定义销毁接口,默认为销毁会话并销毁自身
 	virtual void Destroy();
 };

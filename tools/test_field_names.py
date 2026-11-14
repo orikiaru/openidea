@@ -64,6 +64,13 @@ class FieldNamesTest(unittest.TestCase):
         self.assertNotIn("vNumbers.clear()", generated)
         self.assertNotIn("mFlags.clear()", generated)
 
+    def test_generated_serialization_overrides(self):
+        for text in ("rpcdata Empty { }", "rpcdata Example { 0 int32_t iCount; }"):
+            generated = SerializeDataFileGen(ParseProtoText(text)[0]).GenDataFile()
+            self.assertIn("::OI::Base::BytesStream& serialize(::OI::Base::BytesStream& os) const override", generated)
+            self.assertIn("::OI::Base::BytesStream& deserialize(::OI::Base::BytesStream& os) override", generated)
+            self.assertNotIn("virtual ::OI::Base::BytesStream&", generated)
+
     def test_deserialize_field_table_is_sorted_and_empty_is_supported(self):
         data = ParseProtoText("rpcdata Example { 20 int32_t iLast; 7 string sFirst; 13 vector<int32_t> vMiddle; }")[0]
         generated = SerializeDataFileGen(data).GenDataFile()

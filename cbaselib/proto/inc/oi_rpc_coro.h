@@ -102,6 +102,7 @@ OI::Coro::Task RunHandledRpc(F fnFunction, proto_type_t iResponseId, OI::Coro::T
 		RpcContext stContext{iToken, *pManager, iSessionId};
 		auto stInvoke = [pFunction = &fnFunction, pRequest = &stRequestLocal, pResponse = &stResponseLocal, pContext = &stContext]()
 		{
+			(void)pContext;
 			if constexpr (std::is_invocable_v<F&, Req&, Res&>)
 			{
 				return (*pFunction)(*pRequest, *pResponse);
@@ -189,7 +190,7 @@ template <typename Req, typename Res, typename F>
 void HandleRpc(F fnFunction)
 {
 	const proto_type_t iResponseIdLocal = RpcProtoId<Res>::iValue;
-	BindRpcHandler(RpcProtoId<Req>::iValue, [fnFunction, iResponseIdLocal](OI::Coro::Token iToken, ::OI::Net::SessionManager* pManager, sid_t iSessionId, ::OI::Base::BytesStream stBody) -> OI::Coro::Task
+	BindRpcHandler(RpcProtoId<Req>::iValue, [fnFunction](OI::Coro::Token iToken, ::OI::Net::SessionManager* pManager, sid_t iSessionId, ::OI::Base::BytesStream stBody) -> OI::Coro::Task
 	{
 		return RunHandledRpc<Req, Res>(fnFunction, iResponseIdLocal, iToken, pManager, iSessionId, std::move(stBody));
 	});

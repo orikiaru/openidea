@@ -12,8 +12,8 @@ class RedisClientSession : public ::OI::Net::NetSession
 	    : ::OI::Net::NetSession(pManager)
 	{
 	}
-	virtual void OnDataIn();
-	virtual void OnDataOut();
+	void OnDataIn() override;
+	void OnDataOut() override;
 };
 }
 }

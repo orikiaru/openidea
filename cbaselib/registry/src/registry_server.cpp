@@ -116,7 +116,7 @@ std::string StrOf(const redisReply* pR)
 class ReloadTimer : public ::OI::Timer::BaseTimer
 {
   public:
-	bool OnTimer()
+	bool OnTimer() override
 	{
 		RegistryServer::GetInstance().StartReload();
 		return true;

@@ -58,6 +58,15 @@ python tools/build.py --mode st
 
 Windows 用 `build-win`、Visual Studio 17 2022、x64、Release。Linux 用 `$HOME/openidea-build-gcc13`、gcc-13。`--mode st` 只把 ipcclient/ipcserver 编成单线程，不会自动编回多线程。产物仍由最外层 `CMakeLists.txt` 放到 `deploy/bin`。
 
+WSL 的 clang 严格编译使用独立目录，分别配置单线程和多线程并构建全部目标：
+
+```sh
+cmake -S . -B "$HOME/openidea-build-clang" -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang -DOI_IPC_SINGLE_THREAD=ON
+cmake --build "$HOME/openidea-build-clang" --parallel
+cmake -S . -B "$HOME/openidea-build-clang" -DOI_IPC_SINGLE_THREAD=OFF
+cmake --build "$HOME/openidea-build-clang" --parallel
+```
+
 ## 3.1 推荐的一键矩阵
 
 ### Windows 原生 Redis 下载

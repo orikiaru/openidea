@@ -61,7 +61,7 @@ class ProtoSessionManager : public ::OI::Net::SessionManager
 		}
 		return ::OI::Net::SessionManager::Init();
 	}
-	virtual const std::string GetIDString()
+	const std::string GetIDString() override
 	{
 		return "ProtoSessionManager";
 	}
@@ -71,15 +71,15 @@ class ProtoSessionManager : public ::OI::Net::SessionManager
 	{
 		return RpcNotify(*this, iSessionId, stMessage);
 	}
-	virtual ::OI::Net::Session* CloneSession()
+	::OI::Net::Session* CloneSession() override
 	{
 		return new ProtoSession(this);
 	} //自定制回话类型
-	virtual void OnAddSession(::OI::Net::Session* pSession)
+	void OnAddSession(::OI::Net::Session* pSession) override
 	{
 		LOG_INFO("ProtoSessionManager::OnAddSession sid=%d", pSession->GetSessionID());
 	}
-	virtual void OnDelSession(const ::OI::Net::Session* pSession)
+	void OnDelSession(const ::OI::Net::Session* pSession) override
 	{
 		LOG_INFO("ProtoSessionManager::OnDelSession sid=%d, error=%d", pSession->GetSessionID(), pSession->GetError());
 	}
@@ -165,7 +165,7 @@ class ProtoClientManager : public ProtoSessionManager
 		::OI::Thread::SpinLockGuard stLock(m_stClientLocker);
 		return m_bConnected;
 	}
-	virtual void OnAddSession(::OI::Net::Session* pSession)
+	void OnAddSession(::OI::Net::Session* pSession) override
 	{
 		sid_t iSessionIdLocal = INVALID_SID;
 		{
@@ -189,7 +189,7 @@ class ProtoClientManager : public ProtoSessionManager
 		FlushHeldCalls(iSessionIdLocal);
 		OnClientConnect(pSession);
 	}
-	virtual void OnConnectFailed()
+	void OnConnectFailed() override
 	{
 		if (!AutoReconnect() || bServiceDown || sEndpoint.empty())
 		{
@@ -198,11 +198,11 @@ class ProtoClientManager : public ProtoSessionManager
 		}
 		Reconnect();
 	}
-	virtual void OnServiceDown()
+	void OnServiceDown() override
 	{
 		FailHeldCalls();
 	}
-	virtual int32_t UnavailableCode()
+	int32_t UnavailableCode() override
 	{
 		return IsConnect() ? OI_ERR_FAIL : OI_ERR_CONNECT;
 	}
@@ -223,7 +223,7 @@ class ProtoClientManager : public ProtoSessionManager
 	void DropPendingCall(uint64_t iCallId) override;
 	void FlushHeldCalls(sid_t iSessionId);
 	void FailHeldCalls();
-	virtual void OnDelSession(const ::OI::Net::Session* pSession)
+	void OnDelSession(const ::OI::Net::Session* pSession) override
 	{
 		bool bReconnect = false;
 		{

@@ -107,12 +107,12 @@ class RedisClient : public ::OI::Rpc::ProtoClientManager
 
   public:
 	virtual ~RedisClient();
-	virtual const std::string GetIDString()
+	const std::string GetIDString() override
 	{
 		return "RedisClient";
 	}
 	// 读 Redis 地址、超时和在途上限。
-	virtual int32_t Init();
+	int32_t Init() override;
 	// 组一条 RESP 调用。pOutput 可空，空则结果只留在 co_await 的返回值里。
 	RedisCall Call(std::vector<std::string> vArguments, RedisResult* pOutput);
 	// 阻塞到回执或超时。多线程不能在 poll 线程上调。
@@ -131,11 +131,11 @@ class RedisClient : public ::OI::Rpc::ProtoClientManager
 
   private:
 	// 新建一条 Redis 会话。
-	virtual ::OI::Net::Session* CloneSession();
+	::OI::Net::Session* CloneSession() override;
 	// 换上新的解析器，并把还在等的调用按断开结掉。
-	virtual void OnClientConnect(::OI::Net::Session* pSession);
+	void OnClientConnect(::OI::Net::Session* pSession) override;
 	// 这条会话断开时，结掉记在它上面的调用。
-	virtual void OnClientDisconnect(const ::OI::Net::Session* pSession);
+	void OnClientDisconnect(const ::OI::Net::Session* pSession) override;
 	// 连接就绪后把调用发出去。
 	static void Submit(void* pState);
 	// 放进按顺序等回执的队列。满了就按忙结掉。

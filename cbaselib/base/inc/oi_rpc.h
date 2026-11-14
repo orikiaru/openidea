@@ -42,8 +42,8 @@ class Serialize
 class RpcData : public Serialize
 {
   public:
-	virtual ::OI::Base::BytesStream& serialize(::OI::Base::BytesStream& stOutputStream) const = 0;
-	virtual ::OI::Base::BytesStream& deserialize(::OI::Base::BytesStream& stOutputStream) = 0;
+	::OI::Base::BytesStream& serialize(::OI::Base::BytesStream& stOutputStream) const override = 0;
+	::OI::Base::BytesStream& deserialize(::OI::Base::BytesStream& stOutputStream) override = 0;
 };
 }
 }

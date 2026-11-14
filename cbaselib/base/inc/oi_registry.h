@@ -123,13 +123,13 @@ class RegistryClient : public ::OI::Net::SessionManager
 	bool Configured();
 	// 每秒一次，上一次没结束就跳过：没连就连，没登记就登记，到点心跳，到点或被催促时整量拉取。
 	::OI::Coro::Task OnSecondUpdate(time_t iNow);
-	virtual const std::string GetIDString();
+	const std::string GetIDString() override;
 
   protected:
-	virtual ::OI::Net::Session* CloneSession();
-	virtual void OnAddSession(::OI::Net::Session* pSession);
-	virtual void OnDelSession(const ::OI::Net::Session* pSession);
-	virtual void OnConnectFailed();
+	::OI::Net::Session* CloneSession() override;
+	void OnAddSession(::OI::Net::Session* pSession) override;
+	void OnDelSession(const ::OI::Net::Session* pSession) override;
+	void OnConnectFailed() override;
 	void OnSessionClosed(sid_t iSessionIdLocal) override;
 
   private:

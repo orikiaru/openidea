@@ -120,7 +120,7 @@ OI::Coro::TaskResult<int> RpcAwaitMgr::CheckAwaitOwnership()
 	auto pRpc = std::make_shared<decltype(stRpc)>(std::move(stRpc));
 	try
 	{
-		co_await stRpc;
+		(void)(co_await stRpc);
 		++iBad;
 	}
 	catch (const std::logic_error&)

@@ -18,6 +18,6 @@ class RedisServerSession : public ::OI::Net::NetSession
 		m_iLink = iLink;
 	}
 	bool ResumeRead();
-	virtual void OnDataIn();
-	virtual void OnDataOut();
+	void OnDataIn() override;
+	void OnDataOut() override;
 };

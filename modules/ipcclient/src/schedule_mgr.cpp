@@ -47,7 +47,7 @@ OI::Coro::TaskResult<int> ScheduleMgr::CheckSchedulerFairness()
 	const int64_t iFairnessLimit = ::OI::Timer::MS(::OI::Timer::Seconds(3)).iMilliseconds;
 	for (int iIndexLocal = 0; iIndexLocal < 64; ++iIndexLocal)
 	{
-		stBusyScope.Start([&bOrdinaryDone, iFairnessBegin, iFairnessLimit](OI::Coro::Token, OI::Coro::StopToken stStop) -> OI::Coro::Task
+		stBusyScope.Start([&bOrdinaryDone, iFairnessBegin](OI::Coro::Token, OI::Coro::StopToken stStop) -> OI::Coro::Task
 		{
 			while (!bOrdinaryDone.load() && !stStop.StopRequested() && ::OI::Timer::SteadyMilliseconds() - iFairnessBegin < iFairnessLimit)
 			{

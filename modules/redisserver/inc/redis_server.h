@@ -48,11 +48,11 @@ class RedisServer : public ::OI::Net::SessionManager
 
   public:
 	virtual ~RedisServer();
-	virtual const std::string GetIDString()
+	const std::string GetIDString() override
 	{
 		return "RedisServer";
 	}
-	virtual int32_t Init();
+	int32_t Init() override;
 	// cmd 是一条完整的 RESP 命令，原样转给上游
 	// false 表示额度不足，调用方保留当前完整命令并暂停读取。
 	bool Issue(int32_t iLink, sid_t iSessionId, const char* pCmd, size_t iLength);
@@ -66,7 +66,7 @@ class RedisServer : public ::OI::Net::SessionManager
 	void ArmReconnect(RedisLink* pLink);
 
   private:
-	virtual ::OI::Net::Session* CloneSession();
-	virtual void OnAddSession(::OI::Net::Session* pSession);
-	virtual void OnDelSession(const ::OI::Net::Session* pSession);
+	::OI::Net::Session* CloneSession() override;
+	void OnAddSession(::OI::Net::Session* pSession) override;
+	void OnDelSession(const ::OI::Net::Session* pSession) override;
 };

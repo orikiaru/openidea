@@ -8,12 +8,14 @@
 
 | 平台 | 线程 | CPU | 频率（MHz） | 通过 | 收尾 |
 | --- | --- | --- | --- | --- | --- |
-| 本机 Windows | 多线程 | AMD Ryzen 7 9800X3D，8 核 16 线程 | 约 5040 | 20 | 仍是多线程，约 396 秒。`hold registry budget miss code=-3 elapsed_ms=936 bad=0` |
-| 本机 Windows | 单线程 | 同上 | 约 5040 | 20 | 已编回多线程，约 457 秒。`hold registry budget miss code=-3 elapsed_ms=923 bad=0` |
-| 本机 WSL | 多线程 | 同上 | 约 5040 | 20 | 仍是多线程，约 286 秒。`hold registry budget miss code=-3 elapsed_ms=903 bad=0` |
-| 本机 WSL | 单线程 | 同上 | 约 5040 | 20 | 已编回多线程，约 281 秒。`hold registry budget miss code=-3 elapsed_ms=913 bad=0` |
+| 本机 Windows | 多线程 | AMD Ryzen 7 9800X3D，8 核 16 线程 | 约 4639 | 20 | 已编回多线程，约 345 秒。`hold timer update tick=3 second=1 overlap=0/0 skipped=10 bad=0` |
+| 本机 Windows | 单线程 | 同上 | 约 4639 | 20 | 已编回多线程，约 398 秒。`hold timer update tick=3 second=1 overlap=0/0 skipped=10 bad=0` |
+| 远程 Linux 4 核 | 多线程 | Intel Xeon Platinum 8255C | 2494 | 20 | 已编回多线程。`hold timer update tick=4 second=1 overlap=0/0 skipped=16 bad=0` |
+| 远程 Linux 2 核 | 单线程 | Intel Xeon Gold 6271C | 约 2594（历史实测） | 20 | 专用单线程机器，按 `--no-restore` 未编回多线程；测试后 SSH 超时，最终清理状态未能确认。 |
 
-四组并行跑，另加 mysql 用例各 1 项也都通过。频率按 Windows 性能计数器 `% Processor Performance`（约 107%）乘标称 4700 估算。
+四组并行跑。Windows 频率按测试后的 `% Processor Performance` 三次采样均值（约 98.7%）乘标称 4700 估算；远程单线程机器的频率沿用下方历史实测，本次因 SSH 超时未能复测。首次 Windows 两路因进程正常退出超时失败，改用新控制台重跑后通过。
+
+四组完成后为消除 MSVC 告警修改了 Windows 日志测试钩子，补跑 Windows 多线程 `log`、`log-backpressure`、`disk-full` 均通过；日志服固定多线程。
 
 ## 显式用例
 

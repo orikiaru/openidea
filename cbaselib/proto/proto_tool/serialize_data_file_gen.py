@@ -125,11 +125,11 @@ public:
     {
         __MEMBER_INIT_LIST__
     }
-    virtual ::OI::Base::BytesStream& serialize(::OI::Base::BytesStream& os) const
+    ::OI::Base::BytesStream& serialize(::OI::Base::BytesStream& os) const override
     {
 __PB_SERIALIZE__        return os;
     }
-    virtual ::OI::Base::BytesStream& deserialize(::OI::Base::BytesStream& os)
+    ::OI::Base::BytesStream& deserialize(::OI::Base::BytesStream& os) override
     {
 __PB_DESERIALIZE__    }
 __COMPARE____JSON_METHODS____DB_METHODS__};

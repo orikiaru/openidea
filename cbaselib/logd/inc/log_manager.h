@@ -73,6 +73,6 @@ class LogManager : public ::OI::Timer::BaseTimer
 	int32_t CheckAndCreateRootPath();
 	int32_t OpenLogFile(LOG_LEVEL iLevel);
 	void OnCrossDay();
-	virtual bool OnTimer();
+	bool OnTimer() override;
 	std::string GetLogTitle();
 };
