@@ -28,6 +28,11 @@ else()
 	if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 11)
 		list(APPEND _CXX_OPTION_ -fcoroutines)
 	endif()
+	# AppleClang 不认识 GCC 的 -Wno-literal-suffix，-Werror 还会把没写 override 的虚函数当成错误。
+	if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+		list(INSERT _CXX_OPTION_ 0 -Wno-unknown-warning-option)
+		list(APPEND _CXX_OPTION_ -Wno-inconsistent-missing-override -Wno-unused-lambda-capture)
+	endif()
 	# 只加到 C++。这些选项进了 C 文件后，gcc 会直接拒绝编译 libuv。
 	foreach(_opt IN LISTS _CXX_OPTION_)
 		add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:${_opt}>")
