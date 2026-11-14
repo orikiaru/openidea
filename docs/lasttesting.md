@@ -17,6 +17,15 @@
 
 四组完成后为消除 MSVC 告警修改了 Windows 日志测试钩子，补跑 Windows 多线程 `log`、`log-backpressure`、`disk-full` 均通过；日志服固定多线程。
 
+提交 `12a194c` 后，2 核单线程机器仍连不上，改在远程 4 核机器上顺序复测 Linux 两种线程模式，源码为该提交：
+
+| 平台 | 线程 | CPU | 频率（MHz） | 通过 | 收尾 |
+| --- | --- | --- | --- | --- | --- |
+| 远程 Linux 4 核 | 单线程 | Intel Xeon Platinum 8255C | 2494（同机历史实测，本次未复测） | 20 | 约 483 秒，之后编回多线程。`hold timer update tick=3 second=1 overlap=0/0 skipped=9 bad=0` |
+| 远程 Linux 4 核 | 多线程 | 同上 | 同上 | 20 | 约 366 秒，已编回多线程，测试钩子关闭。回声 `ok=1000000 mismatch=0 rpc_fail=0`，`hold timer update tick=1 second=1 overlap=0/0 skipped=4 bad=0` |
+
+两次运行前后的清理都返回 0，没有本项目测试残留。2 核机器上一轮的清理状态仍未确认。
+
 ## 显式用例
 
 都是退出码 0。协程 `bad=0`。
