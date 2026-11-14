@@ -165,6 +165,9 @@ class FieldNamesTest(unittest.TestCase):
         self.assertTrue(self.load_proto("rpcdata Child { 0 int32_t iNumber; } rpcdata Row db { 0 int64_t iId; 1 vector<int32_t> vNumbers; 2 Child stChild; 3 map<string, int32_t> mFlags; }"))
         self.assertFalse(self.load_proto("rpcdata Bad db { 0 Missing stChild; }"))
         self.assertFalse(self.load_proto("rpcdata Row db { 0 vector<bool> vFlags; }"))
+        self.assertFalse(self.load_proto("rpcdata Row { 0 vector<bool> vFlags; }"))
+        self.assertFalse(self.load_proto("rpcdata Row { 0 map<int32_t, vector<bool>> mFlags; }"))
+        self.assertFalse(self.load_proto("rpcdata Row { 0 vector<vector<bool>> vFlags; }"))
         self.assertFalse(self.load_proto("rpcdata Child { 0 int32_t iNumber; } rpcdata Row json { 0 Child stChild; }"))
         self.assertFalse(self.load_proto("rpcdata Child { 0 int32_t iNumber; } rpcdata Row json db { 0 Child stChild; }"))
         self.assertTrue(self.load_proto("rpcdata Child json { 0 int32_t iNumber; } rpcdata Row json db { 0 Child stChild; }"))
@@ -224,6 +227,13 @@ class FieldNamesTest(unittest.TestCase):
         self.assertFalse(self.load_proto("rpcdata Row db { 0 [dbkey] [dbtype BLOB] string sName; }"))
         self.assertFalse(self.load_proto("rpcdata Row db { 0 [dbkey] vector<int32_t> vNumbers; }"))
         self.assertFalse(self.load_proto("rpcdata Child json { 0 int32_t iNumber; } rpcdata Row json db { 0 [dbkey] [dbjson] Child stChild; }"))
+        # utf8mb4 InnoDB 主键整体不超过 3072 字节：VARCHAR 每字符 4 字节，二进制按长度，多列合计。
+        self.assertTrue(self.load_proto("rpcdata Row db { 0 [dbkey] [dbtype VARCHAR 768] string sName; }"))
+        self.assertFalse(self.load_proto("rpcdata Row db { 0 [dbkey] [dbtype VARCHAR 769] string sName; }"))
+        self.assertTrue(self.load_proto("rpcdata Row db { 0 [dbkey] [dbtype VARBINARY 3072] Bytes stCode; }"))
+        self.assertFalse(self.load_proto("rpcdata Row db { 0 [dbkey] [dbtype VARBINARY 65535] Bytes stCode; }"))
+        self.assertFalse(self.load_proto("rpcdata Row db { 0 [dbkey] int64_t iId; 1 [dbkey] [dbtype VARBINARY 3072] Bytes stCode; }"))
+        self.assertTrue(self.load_proto("rpcdata Row db { 0 [dbtype VARBINARY 65535] Bytes stRaw; }"))
         # 列类型要和字段对得上：数值不能换，二进制值不能存文本，JSON 不能存二进制。
         self.assertFalse(self.load_proto("rpcdata Row db { 0 [dbtype VARCHAR 8] int32_t iCount; }"))
         self.assertFalse(self.load_proto("rpcdata Row db { 0 [dbtype TEXT] Bytes stRaw; }"))

@@ -49,8 +49,4 @@
 
 - 序列化格式变更要写明：`b269fb7` 起 vector/map 改为每字段一条、字段体为数量加元素，裸 `<<`/`>>` rpcdata 加长度前缀，`ReadFields` 对重复字段号抛 `ParserException`。旧版编出的报文和旧版存进 Redis / MySQL 的 PB blob 全部读不回来，`FromDbBlob` 显式拒绝多条目。项目尚无跨语言对端时可以接受，要在文档里记成不兼容变更，避免误以为平滑升级。
 - `db` 用例从 `all` 移除后连接池异常路径无覆盖：fake 驱动能注入的驱动抛异常→不健康连接剔除、失败调用不改输出、事务回滚语义，现在没有任何用例跑；Windows 端也没有任何 DB 行映射检查（`mysql` 只在 Linux 显式跑）。决定是补回一个轻量 fake 用例，还是在 `docs/testing.md` 记成有意取舍。PB 编码黄金字节已由 `hold binary container` 补进 `all`，DB 特有部分仍只在 mysql。
-- 单线程下 `Poll::CheckThreadAccess` 依赖 `Poll::Init` 先跑：`m_stLoopThread` 在 Init 里才记录，Init 前任何带守卫的调用（`SessionManager::Init`、`AddTimer`、`AddStopHandler` 等）一律返回 `OI_ERR_WRONG_THREAD`。把「ST 下守卫接口必须在 `Poll::Init` 之后调用」写进 `docs/`，或在 `CheckThreadAccess` 里区分「poll 未启动」与「确实跨线程」。
 - `ThreadPool::AddStopHandler` 停止后返回 `OI_ERR_CONNECT` 语义不准，换个对得上的错误码或加注释。
-- `[dbkey]` 的 `VARCHAR`/`VARBINARY` 长度生成期不设上限：utf8mb4 InnoDB 主键索引限 3072 字节，`VARCHAR(65535)`/`VARBINARY(65535)` 建表必然失败。在 `CheckDbKeyAndType` 或 `NormalizeDbType` 按主键列收紧到 VARBINARY 3072、utf8mb4 VARCHAR 768 以内。
-- `OI::Db::EncodeDbValue` 对空 `Bytes` 走 `Blob(pData, pData + 0)`，`Data()` 为 nullptr 时是理论 UB；补空值特判，和 `FromDbText` 的空 blob 特判对齐。
-- `vector<bool>` 现在靠 `BytesStream` 的 `static_assert` 在编译期炸模板错误，生成器不挡；在 `proto_tool` 里提前拒绝，报错更直观。

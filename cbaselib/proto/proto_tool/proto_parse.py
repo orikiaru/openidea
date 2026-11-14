@@ -24,6 +24,26 @@ ORDERED_SCALARS = {
 JSON_MAP_KEYS = {"std::string", "int32_t", "uint32_t", "uint64_t"}
 JSON_SCALARS = ORDERED_SCALARS | {"Bytes"}
 
+DB_KEY_MAX_BYTES = 3072
+
+# 主键列在索引里占的字节：utf8mb4 文本每字符 4 字节，二进制按长度，数值和 bool 按 8 字节上限算。
+def DbKeyBytes(db_type):
+    if not db_type:
+        return 8
+    match = re.fullmatch(r"([A-Z]+)\((\d+)\)", db_type)
+    if not match:
+        return 8
+    length = int(match.group(2))
+    return length * 4 if match.group(1) in ("VARCHAR", "CHAR") else length
+
+# vector<bool> 是标准库特化，序列化层不支持。任何一层出现都在生成期拒绝。
+def HasVectorBool(parsed):
+    if parsed[0] == "vector":
+        return parsed[1] == ("name", "bool") or HasVectorBool(parsed[1])
+    if parsed[0] == "map":
+        return HasVectorBool(parsed[1]) or HasVectorBool(parsed[2])
+    return False
+
 def NormType(text):
     return re.sub(r"\s+", "", text or "")
 
@@ -309,6 +329,9 @@ class ProtocolGen:
                 return False
             for member in data.members:
                 parsed = ParseType(member.GetType())
+                if HasVectorBool(parsed):
+                    loginfo("vector<bool> is not supported, use vector<int32_t> owner=", data.GetName(), ",field=", member.GetName(), ",type=", member.GetType())
+                    return False
                 for key in IterMapKeys(parsed):
                     if not self.TypeOrdered(key, set()):
                         loginfo("map key has no comparator owner=", data.GetName(), ",field=", member.GetName(), ",key=", key)
@@ -326,6 +349,7 @@ class ProtocolGen:
                         loginfo("json field is not representable name=", data.GetName(), ",field=", member.GetName(), ",type=", member.GetType())
                         return False
             if data.has_db:
+                key_bytes = 0
                 for member in data.members:
                     if not member.db_name:
                         continue
@@ -343,6 +367,12 @@ class ProtocolGen:
                         return False
                     if not self.CheckDbKeyAndType(data, member, parsed):
                         return False
+                    if member.db_key:
+                        key_bytes += DbKeyBytes(member.db_type)
+                # 表是 utf8mb4 的 InnoDB，整个主键索引不超过 3072 字节，否则建表必然失败。
+                if key_bytes > DB_KEY_MAX_BYTES:
+                    loginfo("dbkey too long proto=", data.GetName(), ",bytes=", key_bytes, ",max=", DB_KEY_MAX_BYTES)
+                    return False
             data.json_ok = data.has_json
         return True
     
