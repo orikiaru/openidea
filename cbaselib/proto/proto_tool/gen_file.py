@@ -1,6 +1,4 @@
 
-
-from ast import Str
 import os
 from module_data_parse import ModuleGen
 from common import loginfo
