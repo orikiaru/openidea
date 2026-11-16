@@ -18,7 +18,7 @@ description: >-
 
 文件不存在，或某台机器缺 `ip`、`user` 时，先问用户。用户不提供，就改用 WSL（`docs/testing.md` 第 3 节），之后一直用 WSL，直到用户再次明确说用远程机器。
 
-`hosts[]` 里 `role` 为 `mt` 的机器编译 Release 并跑多线程，`jobs` 用记录值。`role` 为 `st` 的机器只跑单线程，测完必须由矩阵编回多线程。一台机器不要同时跑两种模式。两台机器可以同时各跑自己的模式，但不要共用构建目录。
+`hosts[]` 里 `role` 为 `mt` 的机器默认编译 Release 并跑多线程，`jobs` 用记录值。`role` 为 `st` 的机器默认只跑单线程。单线程构建目录是多线程目录名加 `-st`（默认 `$HOME/openidea-build-gcc13-st`），不要把同一目录改回另一种模式再编。一台机器不要同时跑两种模式。两台机器可以同时各跑自己的模式，但不要共用构建目录。
 
 可选字段有则用，没有就按下面探测，不要猜另一台机器的路径：`identity`、`cmake`、`redis`、`source`、`build`。默认私钥是 `%USERPROFILE%\.ssh\id_rsa`，源码 `$HOME/openidea`，构建目录 `$HOME/openidea-build-gcc13`。
 
@@ -83,7 +83,7 @@ python3 tools/test_matrix.py --platform native --mode <mt|st> --jobs <jobs> --ca
 
 全量大约数分钟到二十分钟。SSH 等到进程结束，或 `setsid` 放到后台后只轮询结果文件，不要在编译或用例中途重开。
 
-`--mode st` 结束后读构建目录的 `CMakeCache.txt`，确认 `OI_IPC_SINGLE_THREAD:BOOL=OFF`，并且 `summary.json` 的 `restored` 为 true。恢复构建成功不等于用例通过。
+单线程用 `--mode st`，构建目录是 `$HOME/openidea-build-gcc13-st`，结束后该目录的 `CMakeCache.txt` 仍是 `OI_IPC_SINGLE_THREAD:BOOL=ON`。多线程目录保持 `OFF`。不要再编回另一种模式。`summary.json` 的 `restore_skipped` 为 true，`restored` 为 false。编译成功不等于用例通过。
 
 ## 回报
 

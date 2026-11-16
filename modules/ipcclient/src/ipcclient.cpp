@@ -1,6 +1,7 @@
 #include "ipcclient.h"
 #include "echo_mgr.h"
 #include "coro_mgr.h"
+#include "empty_mgr.h"
 #include "db_mgr.h"
 #include "hold_mgr.h"
 #include "log_mgr.h"
@@ -82,6 +83,8 @@ void IpcClient::OnClientConnect(::OI::Net::Session* pSession)
 	LogMgr::GetInstance().Load();
 	EchoMgr::GetInstance().Start(pSession->GetSessionID());
 	CoroMgr::GetInstance().Start();
+	EmptyMgr::GetInstance().Load();
+	EmptyMgr::GetInstance().Start();
 	LogMgr::GetInstance().Start();
 	HoldMgr::GetInstance().Start(pSession->GetSessionID());
 	DbMgr::GetInstance().Start();

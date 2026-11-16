@@ -1,6 +1,8 @@
 #include "ipcserver.h"
 #include "oi_rpcdata_allechoreq.h"
 #include "oi_rpcdata_allechores.h"
+#include "oi_rpcdata_emptyreq.h"
+#include "oi_rpcdata_emptyres.h"
 #include "oi_rpcdata_holdreq.h"
 #include "oi_rpcdata_holdres.h"
 #include "oi_rpcdata_peernotereq.h"
@@ -28,6 +30,13 @@ static OI_RPC_SYNC_HANDLER(AllEcho, HandleAllEcho)
 {
 	stResponse.stData = stRequest.stData;
 	stResponse.iCode = 1;
+	return 0;
+}
+
+static OI_RPC_SYNC_HANDLER(Empty, HandleEmpty)
+{
+	(void)stRequest;
+	(void)stResponse;
 	return 0;
 }
 
@@ -115,6 +124,7 @@ int32_t IpcServer::Init()
 {
 	TryGetConfig("Service.id", m_iServiceId);
 	OI_RPC_BIND(AllEcho, HandleAllEcho);
+	OI_RPC_BIND(Empty, HandleEmpty);
 	OI_RPC_BIND(Hold, HandleHold);
 	OI_RPC_BIND_SELF(PeerProbe, IpcServer, HandlePeerProbe);
 	bool bEncodingRegression = false;

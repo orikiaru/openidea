@@ -18,7 +18,7 @@ description: >-
 
 文件不存在，或某台机器缺 `ip`、`user` 时，先问用户。用户不提供，就改用 WSL（`docs/testing.md` 第 3 节），之后一直用 WSL，直到用户再次明确说用远程机器。
 
-`hosts[]` 里 `role` 为 `mt` 的机器编译 Release 并跑多线程，`jobs` 用记录值。`role` 为 `st` 的机器固定只跑单线程，矩阵加 `--no-restore`，测完不编回多线程，构建目录一直是单线程。一台机器不要同时跑两种模式。两台机器可以同时各跑自己的模式，但不要共用构建目录。
+`hosts[]` 里 `role` 为 `mt` 的机器默认编译 Release 并跑多线程，`jobs` 用记录值。`role` 为 `st` 的机器默认只跑单线程。单线程构建目录是多线程目录名加 `-st`（默认 `$HOME/openidea-build-gcc13-st`），不要把同一目录改回另一种模式再编。一台机器不要同时跑两种模式。两台机器可以同时各跑自己的模式，但不要共用构建目录。
 
 可选字段有则用，没有就按下面探测，不要猜另一台机器的路径：`identity`、`cmake`、`redis`、`source`、`build`。默认私钥是 `%USERPROFILE%\.ssh\id_rsa`，源码 `$HOME/openidea`，构建目录 `$HOME/openidea-build-gcc13`。
 
@@ -95,7 +95,7 @@ python3 tools/test_matrix.py --platform native --mode <mt|st> --jobs <jobs> --ca
 
 全量大约数分钟到二十分钟。长任务只用 `setsid nohup python3 tools/test_matrix.py ... > runner.log 2>&1 &` 启动，判断结束只看 artifacts 里 `summary.json` 的 `completed` 字段或 `test_matrix` 进程是否还在，不要自己另造退出码文件。不要在编译或用例中途重开。
 
-`st` 机器用 `--mode st --no-restore`，结束后 `summary.json` 的 `restore_skipped` 为 true，`CMakeCache.txt` 仍是 `OI_IPC_SINGLE_THREAD:BOOL=ON`。`mt` 机器结束后 `restored` 为 true。恢复构建成功不等于用例通过。
+单线程用 `--mode st`，构建目录是 `$HOME/openidea-build-gcc13-st`，结束后该目录的 `CMakeCache.txt` 仍是 `OI_IPC_SINGLE_THREAD:BOOL=ON`。多线程目录保持 `OFF`。不要再编回另一种模式。`summary.json` 的 `restore_skipped` 为 true，`restored` 为 false。编译成功不等于用例通过。
 
 只在显式要求时跑的用例（例如 `mysql`）直接加在上面的 `test_matrix.py` 命令上：`--mysqld "$MYSQL/bin/mysqld" --define OI_MYSQL_INCLUDE_DIR="$MYSQL/include" --define OI_MYSQL_LIBRARY="$MYSQL/lib/libmysqlclient.so"`。缺 `libaio` 时把已有兼容库目录加进 `LD_LIBRARY_PATH`。不要单独先编译再跑 mysql。
 

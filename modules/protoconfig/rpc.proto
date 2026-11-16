@@ -122,3 +122,12 @@ rpc UdpEcho { id 3003; request UdpEchoReq; response UdpEchoRes; timeout 25; }
 rpc UdpNote { id 3004; request UdpNoteReq; response UdpNoteRes; timeout 25; }
 rpc PeerProbe { id 3005; request PeerProbeReq; response PeerProbeRes; timeout 25; }
 rpc PeerNote { id 3006; request PeerNoteReq; response PeerNoteRes; timeout 25; }
+
+// 空包压测。两边都没有字段，只走收发和回包。
+rpcdata EmptyReq {
+}
+
+rpcdata EmptyRes {
+}
+
+rpc Empty { id 3007; request EmptyReq; response EmptyRes; timeout 25; }

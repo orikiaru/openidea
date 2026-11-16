@@ -1,4 +1,4 @@
-"""Build/test/restore the native ST+MT matrix. See docs/testing.md."""
+"""Build and test the native ST+MT matrix. See docs/testing.md."""
 import argparse
 import datetime
 import hashlib
@@ -148,7 +148,7 @@ def main():
     parser.add_argument("--clock-faults", action="store_true", help="Linux optional wall-clock fault cases")
     parser.add_argument("--vs-instance", help="Optional CMake generator instance: path[,version=x.y.z.w]")
     parser.add_argument("--no-restore", action="store_true",
-                        help="dedicated remote single-thread Linux host only: keep the ST build, skip rebuilding MT")
+                        help="ignored; single-thread and multi-thread already use separate build directories")
     parser.add_argument("--mysqld", help="Linux: build with OI_ENABLE_MYSQL=ON and run the mysql case before each mode's tests")
     parser.add_argument("--define", action="append", default=[], metavar="NAME=VALUE",
                         help="extra CMake cache entry for every configure, e.g. OI_MYSQL_LIBRARY=/opt/mysql/lib/libmysqlclient.so")
@@ -157,9 +157,6 @@ def main():
         parser.error("--mysqld runs on the Linux side only")
     if any("=" not in item for item in args.define):
         parser.error("--define expects NAME=VALUE")
-    # 本机和 WSL 的 deploy/bin 还要给别的测试用，必须编回多线程；只有固定单线程的远程机器可以不编回。
-    if args.no_restore and (WINDOWS or args.platform != "native" or args.mode != "st"):
-        parser.error("--no-restore is only for --platform native --mode st on a dedicated Linux host")
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     output = (args.artifacts or Path.home() / "openidea-test-results" / stamp).resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -238,9 +235,7 @@ def main():
     metadata["status"] = subprocess.check_output(["git", *safe, "status", "--short"], cwd=ROOT, text=True)
     (output / "environment.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     failed = False
-    configured = False
     completed = False
-    restored = False
     pending = None
     try:
         cmake = find_cmake(args.cmake)
@@ -257,7 +252,6 @@ def main():
         if args.mysqld:
             configure.append("-DOI_ENABLE_MYSQL=ON")
         configure += ["-D" + item for item in args.define]
-        build_command = [cmake, "--build", build, "--config", "Release", "-j", args.jobs]
         binary = ROOT / "deploy/bin/Release" if WINDOWS else ROOT / "deploy/bin"
         if run("field-names", [sys.executable, ROOT / "tools/test_field_names.py"]):
             failed = True
@@ -277,10 +271,13 @@ def main():
             (output / "toolchain.txt").write_text(gap, encoding="utf-8")
             failed = True
         for mode in () if gap else (("mt", "st") if args.mode == "all" else (args.mode,)):
-            configured = True
+            # 单线程用同级的「目录名-st」，不把多线程那份目录配回去再编。
+            mode_build = build.with_name(build.name + "-st") if mode == "st" else build
+            mode_configure = [cmake, "-S", ROOT, "-B", mode_build, *configure[5:]]
+            mode_build_command = [cmake, "--build", mode_build, "--config", "Release", "-j", args.jobs]
             flags = ["-DOI_IPC_SINGLE_THREAD=" + ("ON" if mode == "st" else "OFF"),
                      "-DOI_ENABLE_TEST_HOOKS=" + ("ON" if WINDOWS else "OFF")]
-            if run(mode + "-configure", configure + flags) or run(mode + "-build", build_command):
+            if run(mode + "-configure", mode_configure + flags) or run(mode + "-build", mode_build_command):
                 failed = True
                 break
             if args.mysqld:
@@ -313,22 +310,10 @@ def main():
         pending = error
         print("ERROR", repr(error), flush=True)
     finally:
-        try:
-            if configured and not args.no_restore:
-                code = run("restore-configure", configure + ["-DOI_IPC_SINGLE_THREAD=OFF", "-DOI_ENABLE_TEST_HOOKS=OFF"])
-                if not code:
-                    restored = run("restore-build", build_command) == 0
-        except BaseException as error:
-            print("RESTORE ERROR", repr(error), flush=True)
-            summary["restore_error"] = repr(error)
-            if pending is None:
-                pending = error
-        finally:
-            summary.update(passed=completed and (restored or args.no_restore), completed=completed, restored=restored,
-                           restore_skipped=args.no_restore)
-            if pending is not None:
-                summary["error"] = repr(pending)
-            summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        summary.update(passed=completed, completed=completed, restored=False, restore_skipped=True)
+        if pending is not None:
+            summary["error"] = repr(pending)
+        summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     if pending is not None:
         (output / "error.txt").write_text(repr(pending), encoding="utf-8")
         if not isinstance(pending, Exception):

@@ -32,6 +32,7 @@ db = false
 udp = false
 multi = false
 coro = false
+empty = false
 
 # 协程压力。默认关掉，不进 --case all。要测时把 coro 改成 true，或跑 --case coro。
 [TestCoro]
@@ -68,6 +69,12 @@ notes = 1000
 [TestEcho]
 total = 1000000
 inflight = 2048 # 同时在途的回声数，不要超过服务端 [Rpc] session_max_inflight_count
+timeout_ms = 180000
+
+# 空包压测。默认关掉，只有显式 --case empty 才开，不进 all。
+[TestEmpty]
+total = 1000000
+inflight = 2048 # 同时在途的空包数，一条协议一个协程，不要超过服务端 [Rpc] session_max_inflight_count
 timeout_ms = 180000
 
 [TestLog]

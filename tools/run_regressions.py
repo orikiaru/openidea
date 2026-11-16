@@ -45,7 +45,7 @@ UDP_PORT = 17983
 # --port-offset 平移的端口；多份工作目录并行跑时各用一段，互不抢占。
 BASE_PORTS = (REDIS_PORT, LOGD_PORT, IPC_PORT, IPC_FALLBACK_PORT, REDIS_SERVER_PORT, REGISTRY_PORT, UDP_PORT) + GAME_PORTS
 PORT_OFFSET = 0
-CLIENT_SECONDS = {"hold": 120, "coro": 180}
+CLIENT_SECONDS = {"hold": 120, "coro": 180, "empty": 180}
 
 
 @contextlib.contextmanager
@@ -379,7 +379,7 @@ def run(case, args):
                 if case == "redis-limit":
                     text = text.replace("[RedisClient]", "[RedisClient]\nmax_pending = 1")
                     text = replace(text, "tasks", "0")
-                for flag in ("echo", "log", "redis", "hold", "udp", "multi", "db", "coro"):
+                for flag in ("echo", "log", "redis", "hold", "udp", "multi", "db", "coro", "empty"):
                     text = replace(text, flag, "true" if mode == flag else "false")
                 if mode == "hold":
                     text = replace(text, "pull_ms", "60000")
@@ -657,6 +657,8 @@ def run(case, args):
             elif mode == "echo":
                 assert "ok=1000000 mismatch=0 rpc_fail=0" in text
                 assert text.count("ipc client connect sid=") == 1, "echo test started more than once"
+            elif mode == "empty":
+                assert re.search(r"empty mode=\S+ total=1000000 ms=\d+ rate=\d+/s rpc_fail=0", text)
             elif mode == "multi":
                 assert "multi watcher unchanged recovered=1 bad=0" in text
                 assert "multi notify early accepted=0 delivered=1 bad=0" in text
@@ -974,7 +976,7 @@ class EnvironmentBlocked(RuntimeError):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case", default="all", choices=("all", "mysql", "coro", "echo", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "clock-forward", "clock-back", "registry", "udp", "multi", "web"))
+    parser.add_argument("--case", default="all", choices=("all", "mysql", "coro", "echo", "empty", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "clock-forward", "clock-back", "registry", "udp", "multi", "web"))
     parser.add_argument("--bin-dir", type=Path, default=REPO / "deploy/bin")
     parser.add_argument("--redis-binary", type=Path, help="default: redis-server on PATH")
     parser.add_argument("--clock-fault-so", type=Path)

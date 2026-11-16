@@ -43,7 +43,7 @@ Linux：优先用仓库根目录 `.local/linux-hosts.json` 里的远程机器。
 python tools/parallel_matrix.py --windows-redis-binary C:/tools/redis/redis-server.exe --artifacts C:/Users/Admin/openidea-test-results/parallel
 ```
 
-`--lane windows-mt` 之类只跑其中一路，可分给多个 subagent 各跑一路。临时目录前缀带偏移（`oi-regression-p<偏移>-`），每路清理进程只匹配自己那份工作目录和自己的前缀，不要动别的路。每份各自编译、测试并恢复 MT，不碰主工作目录的 `deploy/bin`；改动跑通后主目录仍要按第 3 节编回 MT。
+`--lane windows-mt` 之类只跑其中一路，可分给多个 subagent 各跑一路。临时目录前缀带偏移（`oi-regression-p<偏移>-`），每路清理进程只匹配自己那份工作目录和自己的前缀，不要动别的路。每份各自编译、测试，单线程和多线程用各自的构建目录，不把目录改回去重编，也不碰主工作目录的 `deploy/bin`。
 
 Windows 侧测试 Redis 用 Windows 原生 `redis-server.exe`（[redis-windows](https://github.com/redis-windows/redis-windows/releases) 的 msys2 便携包，解压即用，不装服务），`--platform both` 用 `--windows-redis-binary` 指定，直接跑 `run_regressions.py` 时用 `--redis-binary`。不要再用 `--redis-wsl`：WSL 的 localhost 转发和 NAT 内网地址在大块双向流量下都会卡死（纯 Python 收发也复现，64MB 下行只收到 3.6MB 就停住），Redis 回压、hold、registry 会假失败。怀疑链路时先用不经被测代码的探针：`tools/diag/redis_link_probe.py --native <exe>` 或 `--wsl [--host <WSL 地址>]` 测大块 ECHO 和 BLPOP 后 PING；`tools/diag/tcp_bulk.py` 测纯 TCP 下行、上行、双向各 64MiB，输出 `STALL` 即链路问题。Redis 为脚本独立启动的临时实例，内存上限 1536MiB、关闭持久化，绝不借用现有数据库。
 
@@ -112,7 +112,7 @@ python3 tools/test_matrix.py --build-dir "$HOME/openidea-build-gcc13" --asan --c
 python tools/test_matrix.py --platform both --wsl-user root --linux-build-dir /root/openidea-build-gcc13 --redis-binary /usr/local/bin/redis-server --windows-redis-binary C:/tools/redis/redis-server.exe --artifacts C:/Users/Admin/openidea-test-results/manual-run
 ```
 
-矩阵脚本会：记录源码身份 → 配置 MT → 编译所有模块 → 跑全部用例 → 配置 ST → 编译 → 跑同样用例 → 可选扩展测试 → 在 finally 中恢复 MT 且关闭测试注入并重新编译。任何一步失败，最终退出码非零。平台间串行运行。
+矩阵脚本会：记录源码身份 → 在多线程目录配置并编译 → 跑全部用例 → 在同级的单线程目录（目录名加 `-st`）配置并编译 → 跑同样用例 → 可选扩展测试。不把任一目录改回另一种线程模式。任何一步失败，最终退出码非零。平台间串行运行。
 
 默认结果在用户目录 `openidea-test-results/<时间>/`，支持 `--artifacts`。不要将批量日志数据提交进 Git。
 
@@ -149,7 +149,8 @@ Windows 的日志故障测试要求该产物以 `-DOI_ENABLE_TEST_HOOKS=ON` 构�
 主要成功标记：
 
 - echo / registry：`ok=1000000 mismatch=0 rpc_fail=0`，连接只启动一次。客户端同时在途的请求数由 `[TestEcho] inflight` 限定（默认 2048），必须低于服务端 `[Rpc] session_max_inflight_count`，否则多线程下会被回 `OI_ERR_BUSY`。
-- 客户端时限：跑 hold 那套的用例（含 rpc-admission、clock）120 秒，Redis 压力类和 redis-shutdown 20 秒，其余 60 秒。超时按失败处理并打印客户端输出。
+- empty：显式 `--case empty` 才跑，不包含在 `all`。仓库配置 `[Test] empty = false`。请求和回复都没有字段。每条协议单独 `StartTask`，在途数由 `[TestEmpty] inflight`（默认 2048）限制。主协程每 1 毫秒 `yield` 一次看完成数，完成数用互斥锁保护。日志只留一行 `empty mode=... total=1000000 ms=... rate=.../s rpc_fail=0`。
+- 客户端时限：跑 hold 那套的用例（含 rpc-admission、clock）120 秒，Redis 压力类和 redis-shutdown 20 秒，coro、empty 各 180 秒，其余 60 秒。超时按失败处理并打印客户端输出。
 - log：逐条核对实际磁盘记录、字节数和内容；端到端速度以落盘字节除以客户端开始到文件最后增长的时间，不能拿 enqueue_rate 代替。
 - redis：`redis integrity ok`、压力统计 `bad=0`；同时验证毫秒 TTL、单次请求等待、脚本隔离、断线、队列超时及限流。
 - hold：`hold done bad=0`；覆盖多等待者、异常、RPC 接纳上限、请求生命周期、服务名/分区路由及批量调用。测试脚本额外启动两个 gameserver 分区（1001/1002），不能只起默认 ipcserver 就冒充全量。
@@ -176,11 +177,11 @@ git diff --check
 
 结果目录包含：environment.json（环境、HEAD、diff 摘要）、matrix.json（每一步命令和退出码）、每一步日志、每个用例的进程输出、results.json（逐例通过/失败）、summary.json（整体结果）。同时运行两端时还有 platforms.json。
 
-矩阵启动时先使旧汇总失效；只有本次所有步骤完成、恢复 MT 并关闭测试注入且重新构建成功，`summary.json` 才能标记 `passed: true`。中断、配置失败、恢复异常都算未通过，分别检查 `completed`、`restored` 和异常字段；不得把恢复构建成功当作测试通过。固定只跑单线程的远程 Linux 机器用 `--mode st --no-restore`：不编回多线程，`restore_skipped` 为 true，用例全过即通过；Windows、`--platform both` 和其他模式拒绝这个开关，本机和 WSL 仍必须恢复。`tools/test_matrix_outcomes.py` 用模拟子进程覆盖这些异常分支，矩阵自动执行。
+矩阵启动时先使旧汇总失效；只有本次所有步骤完成，`summary.json` 才能标记 `passed: true`。中断和配置失败算未通过，检查 `completed` 和异常字段。单线程和多线程各用各的构建目录，不再编回另一种模式；`restore_skipped` 为 true，`restored` 为 false。`--no-restore` 保留但不起作用。`tools/test_matrix_outcomes.py` 用模拟子进程覆盖这些分支，矩阵自动执行。
 
 进程收尾会逐一尝试正常退出；控制台通知失败或超时后，仅强制结束当前用例持有的进程，并继续回收其他进程、关闭输出和保留诊断日志。强制回收仍记为失败，不算正常退出；如果用例本身已有异常，保留原始异常，同时输出清理错误。正常 Hold 回归还会在选路后、发送前切换订阅管理器的分区，检查单次与批量目标不变，输出 `hold route target stability bad=0`。
 
-交给下一位 AI 时必须列出：实际测试的平台/编译器/线程模式、结果目录、失败或阻塞项、是否恢复 MT、是否关闭测试注入、是否清理临时数据。缺 SDK、缺 Redis、编译失败或操作被拦截，都只能记录为阻塞/失败；不能写“全量通过”。
+交给下一位 AI 时必须列出：实际测试的平台/编译器/线程模式、用的构建目录、结果目录、失败或阻塞项、是否关闭测试注入、是否清理临时数据。缺 SDK、缺 Redis、编译失败或操作被拦截，都只能记录为阻塞/失败；不能写“全量通过”。
 
 ## 7. 四路并行的 subagent 提示词范本
 
@@ -193,9 +194,9 @@ git diff --check
 | `<LANE>` | `<OFFSET>` | `<OTHERS>` | `<MODE_NOTE>` |
 | --- | --- | --- | --- |
 | windows-mt | 0 | windows-st / linux-mt / linux-st | 在 F:\oi-par\windows-mt 编译 MT |
-| windows-st | 1000 | windows-mt / linux-mt / linux-st | 在 F:\oi-par\windows-st 编译 ST，最后恢复 MT |
+| windows-st | 1000 | windows-mt / linux-mt / linux-st | 在 F:\oi-par\windows-st 编译 ST |
 | linux-mt | 2000 | windows-mt / windows-st / linux-st | 在 WSL /root/oi-par/linux-mt 编译 MT，Redis 用 /usr/local/bin/redis-server |
-| linux-st | 3000 | windows-mt / windows-st / linux-mt | 在 WSL /root/oi-par/linux-st 编译 ST，最后恢复 MT，Redis 用 /usr/local/bin/redis-server |
+| linux-st | 3000 | windows-mt / windows-st / linux-mt | 在 WSL /root/oi-par/linux-st 编译 ST，Redis 用 /usr/local/bin/redis-server |
 
 范本：
 
