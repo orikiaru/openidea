@@ -114,14 +114,11 @@ void ProtoSession::OnDataIn()
 			}
 			break;
 		}
-		::OI::Base::BytesStream stBody;
 		CancelIncompleteTimer();
-		if (iSize > 0)
 		{
-			stBody.Append(stOutputStream.GetCurPtr(), iSize);
+			::OI::Base::BytesStream::ReadLimit stLimit(stOutputStream, iSize, true);
+			DeliverRpc((proto_type_t)iIdLocal, stOutputStream, pSessionManager, iSessionId);
 		}
-		stOutputStream.AddCurPos(iSize);
-		DeliverRpc((proto_type_t)iIdLocal, stBody, pSessionManager, iSessionId);
 	}
 	stInputBuffer.Swap(stOutputStream);
 	stInputBuffer.Erase(0, stOutputStream.GetCurPos());

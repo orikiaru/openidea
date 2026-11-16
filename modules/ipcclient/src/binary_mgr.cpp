@@ -166,6 +166,61 @@ int BinaryMgr::CheckBinaryContainers()
 			&& vNestedOut == vNested && mNestedOut.size() == 2 && mNestedOut.at("a").size() == 2
 			&& mNestedOut.at("a")[1].iMark == 29 && mNestedOut.at("empty").empty()
 			&& iSequence == 7 && iSibling == 71 && stNested.RemainSize() == 0, "nested containers and sibling");
+
+		const unsigned char vNestedGolden[] = {
+			11,0,0,0, 21,0,0,0, 0,0,0,0, 4,0,0,0, 7,0,0,0, 1,0,0,0, 1,0,0,0, 'x',
+			12,0,0,0, 29,0,0,0, 1,0,0,0, 21,0,0,0, 0,0,0,0, 4,0,0,0, 7,0,0,0, 1,0,0,0, 1,0,0,0, 'x',
+			14,0,0,0, 34,0,0,0, 1,0,0,0, 1,0,0,0, 'k', 21,0,0,0, 0,0,0,0, 4,0,0,0, 7,0,0,0, 1,0,0,0, 1,0,0,0, 'x'};
+		OI::Base::BytesStream stGolden(reinterpret_cast<const char*>(vNestedGolden), sizeof(vNestedGolden));
+		OI::RpcData::AllTypesData stGoldenData;
+		stGoldenData.deserialize(stGolden);
+		fnCheck(stGolden.RemainSize() == 0 && stGoldenData.stChild.iNumber == 7 && stGoldenData.stChild.sText == "x"
+			&& stGoldenData.vChildren.size() == 1 && stGoldenData.vChildren[0].iNumber == 7
+			&& stGoldenData.vChildren[0].sText == "x" && stGoldenData.mNamed.size() == 1
+			&& stGoldenData.mNamed.at("k").iNumber == 7 && stGoldenData.mNamed.at("k").sText == "x",
+			"nested object vector map golden decode");
+
+		OI::Base::BytesStream stBrokenNested;
+		stBrokenNested << uint32_t{0} << uint32_t{4} << uint8_t{1};
+		OI::Base::BytesStream stBrokenBody;
+		stBrokenBody.WritePb(11, static_cast<const OI::Base::Bytes&>(stBrokenNested));
+		OI::Base::BytesStream stFrames;
+		stFrames.WritePb(1, static_cast<const OI::Base::Bytes&>(stBrokenBody));
+		stFrames.WritePb(2, int32_t{42});
+		stFrames.ReadPbHeader(iSequence, iSize);
+		bool bNestedRejected = false;
+		{
+			OI::Base::BytesStream::ReadLimit stFrameLimit(stFrames, iSize, true);
+			try
+			{
+				OI::RpcData::AllTypesData stBrokenData;
+				stBrokenData.deserialize(stFrames);
+			}
+			catch (const OI::Base::ParserException&)
+			{
+				bNestedRejected = true;
+			}
+			fnCheck(stFrames.RemainSize() == stBrokenNested.Size(), "nested exception restores outer frame limit");
+		}
+		stFrames.ReadPbHeader(iSequence, iSize);
+		stFrames.ReadPb(iSize, iSibling);
+		fnCheck(bNestedRejected && iSequence == 2 && iSibling == 42 && stFrames.RemainSize() == 0,
+			"nested exception skips to next frame");
+
+		OI::Base::BytesStream stPartialFrames;
+		stPartialFrames.WritePb(1, uint64_t{123});
+		stPartialFrames.WritePb(2, int32_t{42});
+		stPartialFrames.ReadPbHeader(iSequence, iSize);
+		{
+			OI::Base::BytesStream::ReadLimit stFrameLimit(stPartialFrames, iSize, true);
+			uint32_t iPart = 0;
+			stPartialFrames >> iPart;
+			fnCheck(iPart == 123 && stPartialFrames.RemainSize() == 4, "partial frame read");
+		}
+		stPartialFrames.ReadPbHeader(iSequence, iSize);
+		stPartialFrames.ReadPb(iSize, iSibling);
+		fnCheck(iSequence == 2 && iSibling == 42 && stPartialFrames.RemainSize() == 0,
+			"partial frame handler skips to next frame");
 		OI::Base::BytesStream stObjects;
 		stObjects << stFirst << stSecond;
 		OI::RpcData::HoldReq stFirstOut;

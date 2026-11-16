@@ -122,11 +122,8 @@ OI::Coro::TaskResult<int> RpcPendingMgr::CheckRpcContext(PendingClient& stPendin
 	using Req = OI::RpcData::HoldReq;
 	using Res = OI::RpcData::HoldRes;
 	int iBadLocal = 0;
-	OI::Base::BytesStream stBody;
-	stBody << (uint64_t(1) | uint64_t(RPC_REQ_MASK));
 	Req stRequestLocal;
 	stRequestLocal.iMark = 73;
-	stRequestLocal.serialize(stBody);
 	int iCallbacks = 0;
 	auto fnContextHandler = [&](const OI::Rpc::RpcContext& stContext, const Req& stRequest, Res&) -> OI::Rpc::RpcTask
 	{
@@ -138,7 +135,8 @@ OI::Coro::TaskResult<int> RpcPendingMgr::CheckRpcContext(PendingClient& stPendin
 		++iCallbacks;
 		co_return 1001;
 	};
-	co_await OI::Rpc::RunHandledRpc<Req, Res>(fnContextHandler, OI::Rpc::RpcProtoId<Res>::iValue, 88, &stPending, 77, std::move(stBody));
+	co_await OI::Rpc::RunHandledRpc<Req, Res>(fnContextHandler, OI::Rpc::RpcProtoId<Res>::iValue, 88, &stPending, 77,
+	    uint64_t(1) | uint64_t(RPC_REQ_MASK), std::move(stRequestLocal));
 	if (iCallbacks != 1)
 	{
 		++iBadLocal;

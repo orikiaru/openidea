@@ -3,6 +3,8 @@
 #include "oi_bytes_stream.h"
 #include "oi_session_manager.h"
 #include <functional>
+#include <memory>
+#include <utility>
 namespace OI
 {
 namespace Rpc
@@ -32,6 +34,32 @@ struct RpcSender
 		fnDrop(pContext, iCallId);
 	}
 };
+
+struct RpcAdmissionLease
+{
+	std::pair<::OI::Net::SessionManager*, sid_t> stKey;
+	size_t iBytes = 0;
+	bool bAcquired = false;
+	RpcAdmissionLease() = default;
+	RpcAdmissionLease(const RpcAdmissionLease&) = delete;
+	RpcAdmissionLease(RpcAdmissionLease&& stOther) noexcept
+	    : stKey(stOther.stKey), iBytes(stOther.iBytes), bAcquired(std::exchange(stOther.bAcquired, false))
+	{
+	}
+	~RpcAdmissionLease();
+};
+
+// 处理函数拿到的游标已经越过调用号；额度和会话租约随根协程闭包存活。
+struct RpcDelivery
+{
+	::OI::Net::SessionManager* pManager = nullptr;
+	sid_t iSessionId = INVALID_SID;
+	uint64_t iRawCallId = 0;
+	RpcAdmissionLease stLease;
+	std::shared_ptr<void> pOwner;
+};
+using RpcHandleFn = std::function<void(::OI::Base::BytesStream&, RpcDelivery&&)>;
+void BindRpcHandler(proto_type_t iId, RpcHandleFn fnHandle);
 
 // 分片逐个取快照，用于诊断；有并发请求时不保证全局同一时刻的一致性。
 struct RpcWaitStats

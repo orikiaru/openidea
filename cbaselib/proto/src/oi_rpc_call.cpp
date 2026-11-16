@@ -30,8 +30,6 @@ namespace Rpc
 
 namespace
 {
-typedef std::function<OI::Coro::Task(OI::Coro::Token, ::OI::Net::SessionManager*, sid_t, ::OI::Base::BytesStream)> RpcHandleFn;
-
 struct RpcAdmission
 {
 	struct Usage
@@ -70,36 +68,6 @@ RpcAdmission& Admission()
 	static RpcAdmission stAdmission;
 	return stAdmission;
 }
-
-struct RpcAdmissionLease
-{
-	std::pair<::OI::Net::SessionManager*, sid_t> stKey;
-	size_t iBytes = 0;
-	bool bAcquired = false;
-	RpcAdmissionLease() = default;
-	RpcAdmissionLease(const RpcAdmissionLease&) = delete;
-	RpcAdmissionLease(RpcAdmissionLease&& stOther) noexcept
-	    : stKey(stOther.stKey), iBytes(stOther.iBytes), bAcquired(std::exchange(stOther.bAcquired, false))
-	{
-	}
-	~RpcAdmissionLease()
-	{
-		if (!bAcquired)
-		{
-			return;
-		}
-		auto& stAdmission = Admission();
-		::OI::Thread::MutexGuard stLock(stAdmission.stMutex);
-		auto it = stAdmission.mSessions.find(stKey);
-		--stAdmission.stTotal.iCount;
-		stAdmission.stTotal.iBytes -= iBytes;
-		it->second.iBytes -= iBytes;
-		if (--it->second.iCount == 0)
-		{
-			stAdmission.mSessions.erase(it);
-		}
-	}
-};
 
 std::optional<RpcAdmissionLease> AcquireRpc(::OI::Net::SessionManager* pManagerLocal, sid_t iSessionIdLocal, size_t iBytesLocal)
 {
@@ -398,6 +366,24 @@ void ArmRpcSweep(void*)
 }
 }
 
+RpcAdmissionLease::~RpcAdmissionLease()
+{
+	if (!bAcquired)
+	{
+		return;
+	}
+	auto& stAdmission = Admission();
+	::OI::Thread::MutexGuard stLock(stAdmission.stMutex);
+	auto it = stAdmission.mSessions.find(stKey);
+	--stAdmission.stTotal.iCount;
+	stAdmission.stTotal.iBytes -= iBytes;
+	it->second.iBytes -= iBytes;
+	if (--it->second.iCount == 0)
+	{
+		stAdmission.mSessions.erase(it);
+	}
+}
+
 RpcWaitStats GetRpcWaitStats()
 {
 	RpcWaitStats stStats{};
@@ -646,13 +632,12 @@ void BindRpcHandler(proto_type_t iId, RpcHandleFn fnHandle)
 bool DeliverRpc(proto_type_t iId, ::OI::Base::BytesStream& stBodyLocal, ::OI::Net::SessionManager* pManagerLocal, sid_t iSessionIdLocal)
 {
 	uint64_t iRaw = 0;
+	const size_t iBodyBytes = stBodyLocal.RemainSize();
 	bool bIsRequest = false;
 	bool bIsNotify = false;
 	try
 	{
-		stBodyLocal.StartTransaction();
 		stBodyLocal >> iRaw;
-		stBodyLocal.RollBack();
 		// 调用号 0 是单向消息：和请求一样交给处理协程，不回包。
 		bIsNotify = iRaw == 0;
 		bIsRequest = (iRaw & (uint64_t)RPC_REQ_MASK) != 0 || bIsNotify;
@@ -678,9 +663,7 @@ bool DeliverRpc(proto_type_t iId, ::OI::Base::BytesStream& stBodyLocal, ::OI::Ne
 	{
 		if (!bIsRequest)
 		{
-			uint64_t iCallIdLocal = 0;
-			stBodyLocal >> iCallIdLocal;
-			iCallIdLocal &= ~(uint64_t)RPC_REQ_MASK;
+			uint64_t iCallIdLocal = iRaw & ~(uint64_t)RPC_REQ_MASK;
 			RpcCoroSlot stSlot;
 			if (!TakeRpcSlot(iCallIdLocal, stSlot, pManagerLocal, iSessionIdLocal, iId))
 			{
@@ -690,7 +673,7 @@ bool DeliverRpc(proto_type_t iId, ::OI::Base::BytesStream& stBodyLocal, ::OI::Ne
 		}
 		else
 		{
-			auto stLease = AcquireRpc(pManagerLocal, iSessionIdLocal, stBodyLocal.Size());
+			auto stLease = AcquireRpc(pManagerLocal, iSessionIdLocal, iBodyBytes);
 			if (!stLease && bIsNotify)
 			{
 				return true;
@@ -706,11 +689,8 @@ bool DeliverRpc(proto_type_t iId, ::OI::Base::BytesStream& stBodyLocal, ::OI::Ne
 				}
 				return true;
 			}
-			// lease 随根协程闭包存活；业务异常、回包失败和正常结束均自动归还额度。
-			OI::Coro::StartTask([stLease = std::move(stLease), pOwner = pManagerLocal->HoldSessionTask(iSessionIdLocal), pHandle, pManagerLocal, iSessionIdLocal, stBody = std::move(stBodyLocal)](OI::Coro::Token iToken) mutable
-			{
-				return (*pHandle)(iToken, pManagerLocal, iSessionIdLocal, std::move(stBody));
-			});
+			RpcDelivery stDelivery{pManagerLocal, iSessionIdLocal, iRaw, std::move(*stLease), pManagerLocal->HoldSessionTask(iSessionIdLocal)};
+			(*pHandle)(stBodyLocal, std::move(stDelivery));
 		}
 	}
 	catch (::OI::Base::ParserException&)

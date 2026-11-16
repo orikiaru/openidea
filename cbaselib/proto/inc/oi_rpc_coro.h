@@ -68,37 +68,22 @@ struct RpcContext
 template <typename T>
 struct RpcProtoId;
 
-void BindRpcHandler(proto_type_t iId, std::function<OI::Coro::Task(OI::Coro::Token, ::OI::Net::SessionManager*, sid_t, ::OI::Base::BytesStream)> fnHandle);
-
 // 请求和回包共用一个协议号。调用号最高位是 1 表示请求，回包清掉这一位。
 // 请求：调用号 + Req；回执：调用号 + int32_t retcode + 成功时的 Res。
 // 0 成功，负数保留给框架错误，正数用于业务错误。失败不序列化 Res。
 
-// 业务任务外面这一层：解包，co_await 业务任务，再把带调用号的回包写出去。
+// 业务任务外面这一层：co_await 业务任务，再把带调用号的回包写出去。
 template <typename Req, typename Res, typename F>
-OI::Coro::Task RunHandledRpc(F fnFunction, proto_type_t iResponseId, OI::Coro::Token iToken, ::OI::Net::SessionManager* pManager, sid_t iSessionId, ::OI::Base::BytesStream stBody)
+OI::Coro::Task RunHandledRpc(F fnFunction, proto_type_t iResponseId, OI::Coro::Token iToken, ::OI::Net::SessionManager* pManager, sid_t iSessionId, uint64_t iRawCallId, Req stRequestLocal)
 {
-	uint64_t iCallIdLocal = 0;
-	try
-	{
-		stBody >> iCallIdLocal;
-	}
-	catch (::OI::Base::ParserException&)
-	{
-		ReportRpcError(iToken, 0, iSessionId, iResponseId, "decode_call_id", std::current_exception());
-		co_return;
-	}
 	// 单向消息发到了请求处理函数上：照常处理，不回包，免得回执被对端当成又一条单向消息。
-	const bool bNotify = iCallIdLocal == 0;
-	iCallIdLocal &= ~(uint64_t)RPC_REQ_MASK;
-	Req stRequestLocal{};
+	const bool bNotify = iRawCallId == 0;
+	const uint64_t iCallIdLocal = iRawCallId & ~(uint64_t)RPC_REQ_MASK;
 	Res stResponseLocal{};
 	int32_t iRetcode = 0;
-	const char* pStage = "decode_request";
+	const char* pStage = "handler";
 	try
 	{
-		stRequestLocal.deserialize(stBody);
-		pStage = "handler";
 		RpcContext stContext{iToken, *pManager, iSessionId};
 		auto stInvoke = [pFunction = &fnFunction, pRequest = &stRequestLocal, pResponse = &stResponseLocal, pContext = &stContext]()
 		{
@@ -187,13 +172,65 @@ OI::Coro::Task RunHandledRpc(F fnFunction, proto_type_t iResponseId, OI::Coro::T
 }
 
 template <typename Req, typename Res, typename F>
+RpcHandleFn MakeRpcHandler(F fnFunction, proto_type_t iResponseId)
+{
+	return [fnFunction = std::move(fnFunction), iResponseId](::OI::Base::BytesStream& stBody, RpcDelivery&& stDelivery) mutable
+	{
+		std::optional<Req> stRequest;
+		try
+		{
+			stRequest.emplace();
+			stRequest->deserialize(stBody);
+		}
+		catch (...)
+		{
+			const uint64_t iCallId = stDelivery.iRawCallId & ~(uint64_t)RPC_REQ_MASK;
+			ReportRpcError(0, iCallId, stDelivery.iSessionId, iResponseId, "decode_request", std::current_exception());
+			if (stDelivery.iRawCallId == 0)
+			{
+				return;
+			}
+			::OI::Base::BytesStream stFrame;
+			try
+			{
+				::OI::Base::BytesStream stFailure;
+				stFailure << iCallId << int32_t(OI_ERR_FAIL);
+				stFrame = EncodePbFrame(iResponseId, stFailure);
+			}
+			catch (...)
+			{
+				ReportRpcError(0, iCallId, stDelivery.iSessionId, iResponseId, "encode_failure_reply", std::current_exception());
+				OI::Coro::ReportTaskError(0, std::current_exception());
+				stDelivery.pManager->CloseSession(stDelivery.iSessionId);
+				return;
+			}
+			try
+			{
+				if (stDelivery.pManager->SendBytes(stDelivery.iSessionId, stFrame.GetMutableBuff()) != OI_OK)
+				{
+					stDelivery.pManager->CloseSession(stDelivery.iSessionId);
+				}
+			}
+			catch (...)
+			{
+				ReportRpcError(0, iCallId, stDelivery.iSessionId, iResponseId, "send_response", std::current_exception());
+				OI::Coro::ReportTaskError(0, std::current_exception());
+				stDelivery.pManager->CloseSession(stDelivery.iSessionId);
+			}
+			return;
+		}
+		OI::Coro::StartTask([fnFunction, iResponseId, stDelivery = std::move(stDelivery), stRequest = std::move(*stRequest)](OI::Coro::Token iToken) mutable
+		{
+			return RunHandledRpc<Req, Res>(fnFunction, iResponseId, iToken, stDelivery.pManager,
+			    stDelivery.iSessionId, stDelivery.iRawCallId, std::move(stRequest));
+		});
+	};
+}
+
+template <typename Req, typename Res, typename F>
 void HandleRpc(F fnFunction)
 {
-	const proto_type_t iResponseIdLocal = RpcProtoId<Res>::iValue;
-	BindRpcHandler(RpcProtoId<Req>::iValue, [fnFunction](OI::Coro::Token iToken, ::OI::Net::SessionManager* pManager, sid_t iSessionId, ::OI::Base::BytesStream stBody) -> OI::Coro::Task
-	{
-		return RunHandledRpc<Req, Res>(fnFunction, iResponseIdLocal, iToken, pManager, iSessionId, std::move(stBody));
-	});
+	BindRpcHandler(RpcProtoId<Req>::iValue, MakeRpcHandler<Req, Res>(std::move(fnFunction), RpcProtoId<Res>::iValue));
 }
 
 // 请求类型已关联响应，无需在注册处重复指定。
@@ -205,7 +242,7 @@ void HandleRpc(F fnFunction)
 
 // 调用号 0 不回包；RPC 包装通知复用默认响应与错误处理。
 template <typename Msg, typename F>
-OI::Coro::Task RunHandledNotify(F fnFunction, OI::Coro::Token iToken, ::OI::Net::SessionManager* pManager, sid_t iSessionId, ::OI::Base::BytesStream stBody)
+void HandleNotify(F fnFunction)
 {
 	using Response = typename RpcProtoId<Msg>::Response;
 	auto fnAdapter = [fnFunction = std::move(fnFunction)](const RpcContext& stContext, Msg& stMessage, Response&) mutable
@@ -219,16 +256,7 @@ OI::Coro::Task RunHandledNotify(F fnFunction, OI::Coro::Token iToken, ::OI::Net:
 			return fnFunction(stContext, stMessage);
 		}
 	};
-	return RunHandledRpc<Msg, Response>(std::move(fnAdapter), RpcProtoId<Msg>::iValue, iToken, pManager, iSessionId, std::move(stBody));
-}
-
-template <typename Msg, typename F>
-void HandleNotify(F fnFunction)
-{
-	BindRpcHandler(RpcProtoId<Msg>::iValue, [fnFunction](OI::Coro::Token iToken, ::OI::Net::SessionManager* pManager, sid_t iSessionId, ::OI::Base::BytesStream stBody) -> OI::Coro::Task
-	{
-		return RunHandledNotify<Msg>(fnFunction, iToken, pManager, iSessionId, std::move(stBody));
-	});
+	BindRpcHandler(RpcProtoId<Msg>::iValue, MakeRpcHandler<Msg, Response>(std::move(fnAdapter), RpcProtoId<Msg>::iValue));
 }
 
 // 发一条单向消息，不等回包。返回 SendBytesResult 的错误码，编码失败是 OI_ERR_ENCODE。
@@ -291,9 +319,10 @@ struct [[nodiscard]] RpcCallAwaiter
 	std::atomic<OI::Coro::Gate> iGate;
 	std::atomic<bool> bAwaitStarted{false}; // 一次性闩。第二次 await 或移动已提交对象直接抛，不进完成门。
 	bool bDispatched = false;               // Dispatch 已经 BindRpcCall。析构时槽还在就摘掉。
-	// 回包原样留到 await_resume 再解，解包跑在工人上，不占 IO 线程。
-	::OI::Base::BytesStream stReply;
-	bool bReplied; // 真表示 stReply 里有回包，await_resume 再解。
+	Res stDecoded{};
+	int32_t iReplyCode = OI_ERR_FAIL;
+	std::exception_ptr stDecodeError;
+	bool bReplied;
 	sid_t iReplySessionId = INVALID_SID;
 	OI::Coro::Token iAwaitToken = 0;
 	std::exception_ptr stSubmissionError;
@@ -345,6 +374,24 @@ struct [[nodiscard]] RpcCallAwaiter
 	{
 		return false;
 	}
+	void DecodeReply(::OI::Base::BytesStream& stInput, sid_t iSourceSession)
+	{
+		iReplySessionId = iSourceSession;
+		try
+		{
+			stInput >> iReplyCode;
+			if (iReplyCode == 0)
+			{
+				stDecoded.deserialize(stInput);
+			}
+		}
+		catch (...)
+		{
+			iReplyCode = OI_ERR_FAIL;
+			stDecodeError = std::current_exception();
+		}
+		bReplied = true;
+	}
 	template <typename Promise>
 	bool await_suspend(std::coroutine_handle<Promise> stHandle)
 	{
@@ -373,9 +420,7 @@ struct [[nodiscard]] RpcCallAwaiter
 		pGuard = std::make_shared<std::atomic<int32_t>>(0);
 		uint64_t iCallIdLocal = BindRpcCall(pManager, iSessionId, RpcProtoId<Res>::iValue, stHandle, &iResult, iTimeoutMilliseconds, [this](::OI::Base::BytesStream& stInput, sid_t iSourceSession)
 		{
-			iReplySessionId = iSourceSession;
-			stReply = std::move(stInput);
-			bReplied = true;
+			DecodeReply(stInput, iSourceSession);
 			return true;
 		}, [this]()
 		{
@@ -442,20 +487,14 @@ struct [[nodiscard]] RpcCallAwaiter
 		}
 		if (bReplied)
 		{
-			try
+			iResult = iReplyCode;
+			if (stDecodeError)
 			{
-				stReply >> iResult;
-				if (iResult == 0)
-				{
-					Res stDecoded{};
-					stDecoded.deserialize(stReply);
-					*pResponse = std::move(stDecoded);
-				}
+				ReportRpcError(iAwaitToken, iCallId, iReplySessionId, RpcProtoId<Res>::iValue, "decode_response", stDecodeError);
 			}
-			catch (::OI::Base::ParserException&)
+			if (iResult == 0)
 			{
-				iResult = OI_ERR_FAIL;
-				ReportRpcError(iAwaitToken, iCallId, iReplySessionId, RpcProtoId<Res>::iValue, "decode_response", std::current_exception());
+				*pResponse = std::move(stDecoded);
 			}
 		}
 		return iResult;

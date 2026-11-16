@@ -213,14 +213,24 @@ def rpc_ingress_faults():
             assert proto == 3002 and struct.unpack_from("<Q", response)[0] == call_id
             assert struct.unpack_from("<i", response, 8)[0] == 0, response
             time.sleep(0.3)  # 完整包必须取消旧计时器，下一包重新计时。
-    # 合法外层帧、损坏的字段头：进入真实 RPC 解包失败路径，回执仍须正确配对。
+    # 半读的单向帧、畸形嵌套帧和正常帧一起发送；每会话只允许一个在途请求。
     with socket.create_connection(("127.0.0.1", IPC_PORT), timeout=2) as stream:
-        body = struct.pack("<Q", (1 << 63) | 424242) + b"\x00"
-        stream.sendall(struct.pack("<II", 3002, len(body)) + body)
+        partial = struct.pack("<Q", 0) + b"\x01\x02\x03\x04"
+        body = struct.pack("<QII", (1 << 63) | 424242, 0, 9) + struct.pack("<II", 0, 4) + b"\x01"
+        valid = struct.pack("<QIIiIIi", (1 << 63) | 424243, 0, 4, 0, 1, 4, 42)
+        stream.sendall(struct.pack("<II", 31000, len(partial)) + partial
+                       + struct.pack("<II", 3001, len(body)) + body
+                       + struct.pack("<II", 3002, len(valid)) + valid)
         proto, size = struct.unpack("<II", receive(stream, 8))
         response = receive(stream, size)
-        assert proto == 3002 and struct.unpack_from("<Q", response)[0] == 424242
-        assert size == 12 and struct.unpack_from("<i", response, 8)[0] != 0
+        assert proto == 3001 and struct.unpack_from("<Q", response)[0] == 424242, "malformed nested response pairing"
+        assert size == 12 and struct.unpack_from("<i", response, 8)[0] == -1, "malformed nested response must be OI_ERR_FAIL"
+        proto, size = struct.unpack("<II", receive(stream, 8))
+        response = receive(stream, size)
+        assert proto == 3002 and struct.unpack_from("<Q", response)[0] == 424243, "next frame response pairing"
+        assert struct.unpack_from("<i", response, 8)[0] == 0, "admission not released or next frame lost"
+        assert struct.unpack_from("<IIi", response, 12) == (0, 4, 42), "next frame payload"
+    print("rpc ingress partial-handler nested-failure next-frame admission-release PASS", flush=True)
     print("rpc ingress oversized/partial/drip/boundary/rearm PASS", flush=True)
 
 
@@ -347,6 +357,8 @@ def run(case, args):
                 text = replace(text, "max_frame_bytes", "65536")
                 text = replace(text, "max_receive_buffer_bytes", "65544")
                 text = replace(text, "incomplete_frame_timeout_ms", "250")
+                text = replace(text, "session_max_inflight_count", "1")
+                text += "\n[Regression]\nrpc_read_limit = true\n"
             if name == "redisserver" and case == "redis":
                 text = replace(text, "connections", "1")
             if name == "redisserver" and pressure:
@@ -558,6 +570,14 @@ def run(case, args):
                 reset_connections()
             if case == "rpc-ingress":
                 rpc_ingress_faults()
+                stop(server)
+                server.wait(timeout=10)
+                assert server.returncode == 0, "ingress probe server failed to stop"
+                procs.remove(server)
+                server_config = cfg / "ipcserver.toml"
+                server_config.write_text(replace(server_config.read_text(encoding="utf-8"), "session_max_inflight_count", "4096"), encoding="utf-8")
+                server, serverpath = start("ipcserver-echo", [str(work / ("ipcserver" + SUFFIX))])
+                ready(server, serverpath, "ipc server listen")
             env = os.environ.copy()
             if case.startswith("clock-"):
                 if not args.clock_fault_so:
@@ -845,7 +865,7 @@ def run(case, args):
                     assert re.search(r"redis failure stage=server_reply request=[1-9]\d* sid=\d+ command=EVAL reason=.*test error", diagnostics), "Lua error missing from logd disk"
                     assert re.search(r"redis upstream disconnect index=0 host=127\.0\.0\.1 port=" + str(REDIS_PORT) + r" status=-1 error=[1-9]\d* reason=.+ truncated=0", diagnostics), "original hiredis disconnect error missing from logd disk"
                 elif case == "rpc-ingress":
-                    assert re.search(r"rpc failure stage=decode_request token=[1-9]\d* call=424242 sid=\d+ proto=3002 ret=-?\d+ reason=ParserException", diagnostics), "RPC parse context missing from logd disk"
+                    assert re.search(r"rpc failure stage=decode_request token=0 call=424242 sid=\d+ proto=3001 ret=-?\d+ reason=ParserException", diagnostics), "RPC parse context missing from logd disk"
                 else:
                     for stage, reason in (("handler", "injected server handler failure"), ("encode_response", "injected server response encoding failure")):
                         assert re.search(r"rpc failure stage=" + stage + r" token=[1-9]\d* call=[1-9]\d* sid=\d+ proto=3002 ret=-?\d+ reason=" + reason, diagnostics), "RPC exception context missing from logd disk: " + stage

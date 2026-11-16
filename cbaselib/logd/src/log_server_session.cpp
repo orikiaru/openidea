@@ -31,18 +31,23 @@ void LogServerSession::OnDataIn()
 		// 每轮最多约 1MiB/1024 帧；超过预算的大帧允许独占一轮，不能切开日志。
 		if (iUsed > 0 && (iUsed + iFrameBytes > 1024 * 1024 || iFrames >= 1024))
 		{
-			::OI::Base::BytesStream stPeek(stPacket.GetCurPtr() + sizeof(uint32_t) * 2, iDeclared);
 			::OI::RpcData::LogRecord stPeekRecord;
 			try
 			{
-				uint64_t iCallId = 0;
-				stPeek >> iCallId;
-				if (iCallId != 0)
 				{
-					PassiveClose(PARSER_ERR_OTHER);
-					return;
+					stPacket.StartTransaction();
+					stPacket.AddCurPos(sizeof(uint32_t) * 2);
+					::OI::Base::BytesStream::ReadLimit stLimit(stPacket, iDeclared);
+					uint64_t iCallId = 0;
+					stPacket >> iCallId;
+					if (iCallId != 0)
+					{
+						PassiveClose(PARSER_ERR_OTHER);
+						return;
+					}
+					stPeekRecord.deserialize(stPacket);
 				}
-				stPeekRecord.deserialize(stPeek);
+				stPacket.RollBack();
 			}
 			catch (...)
 			{
@@ -61,19 +66,18 @@ void LogServerSession::OnDataIn()
 			PassiveClose(PARSER_ERR_OTHER);
 			return;
 		}
-		::OI::Base::BytesStream stBody(stPacket.GetCurPtr(), iSize);
-		stPacket.AddCurPos(iSize);
 		::OI::RpcData::LogRecord stRecord;
 		try
 		{
+			::OI::Base::BytesStream::ReadLimit stLimit(stPacket, iSize, true);
 			uint64_t iCallId = 0;
-			stBody >> iCallId;
+			stPacket >> iCallId;
 			if (iCallId != 0)
 			{
 				PassiveClose(PARSER_ERR_OTHER);
 				return;
 			}
-			stRecord.deserialize(stBody);
+			stRecord.deserialize(stPacket);
 		}
 		catch (...)
 		{

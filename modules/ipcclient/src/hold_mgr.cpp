@@ -153,11 +153,12 @@ OI::Coro::TaskResult<int> HoldMgr::CheckStandardizedReply()
 	{
 		stResponseLocal.iMark = 876;
 		auto stBroken = ::OI::Rpc::MakeRpcCallAwaiter(stManagerLocal, stRequestLocal, stResponseLocal);
-		stBroken.bReplied = true;
+		::OI::Base::BytesStream stReply;
 		if (iMalformed)
 		{
-			stBroken.stReply << int32_t(0) << uint8_t(1);
+			stReply << int32_t(0) << uint8_t(1);
 		}
+		stBroken.DecodeReply(stReply, INVALID_SID);
 		if (stBroken.await_resume() != OI_ERR_FAIL || stResponseLocal.iMark != 876)
 		{
 			++iBadLocal;

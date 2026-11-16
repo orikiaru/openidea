@@ -132,10 +132,17 @@ int32_t IpcServer::Init()
 	if (bEncodingRegression)
 	{
 		OI::Rpc::BindRpcHandler(OI::Rpc::RpcProtoId<OI::RpcData::HoldReq>::iValue,
-		    [](OI::Coro::Token iToken, OI::Net::SessionManager* pManager, sid_t iSessionId, OI::Base::BytesStream stBody)
+		    OI::Rpc::MakeRpcHandler<OI::RpcData::HoldReq, EncodingFailureResponse>(HandleEncodingRegression,
+		        OI::Rpc::RpcProtoId<OI::RpcData::HoldRes>::iValue));
+	}
+	bool bReadLimitRegression = false;
+	TryGetConfig("Regression.rpc_read_limit", bReadLimitRegression);
+	if (bReadLimitRegression)
+	{
+		OI::Rpc::BindRpcHandler(31000, [](OI::Base::BytesStream& stBody, OI::Rpc::RpcDelivery&&)
 		{
-			return OI::Rpc::RunHandledRpc<OI::RpcData::HoldReq, EncodingFailureResponse>(HandleEncodingRegression,
-			    OI::Rpc::RpcProtoId<OI::RpcData::HoldRes>::iValue, iToken, pManager, iSessionId, std::move(stBody));
+			uint8_t iPart = 0;
+			stBody >> iPart;
 		});
 	}
 	return ::OI::Rpc::ProtoSessionManager::Init();

@@ -107,10 +107,11 @@ OI::Coro::TaskResult<int> RpcAwaitMgr::CheckAwaitOwnership()
 	auto stDecodeProbe = OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequest);
 	OI::RpcData::HoldRes stDecodedSource;
 	stDecodedSource.iMark = 456;
-	stDecodeProbe.stReply << int32_t(0);
-	stDecodedSource.serialize(stDecodeProbe.stReply);
+	OI::Base::BytesStream stReply;
+	stReply << int32_t(0);
+	stDecodedSource.serialize(stReply);
+	stDecodeProbe.DecodeReply(stReply, INVALID_SID);
 	stDecodeProbe.pResponse = &stDecodeProbe.stResponse;
-	stDecodeProbe.bReplied = true;
 	auto stDecodedResult = stDecodeProbe.await_resume();
 	if (stDecodedResult.GetRet() != 0 || stDecodedResult.GetRes().iMark != 456)
 	{

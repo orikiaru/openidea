@@ -26,6 +26,15 @@
 
 两次运行前后的清理都返回 0，没有本项目测试残留。2 核机器上一轮的清理状态仍未确认。
 
+2026-11-16 读取上限及 IO 线程解码改造，只运行 Linux 两组 `--case all`；Windows 单、多线程仅编译，未跑回归，因此不替换上面的四组全量记录。
+
+| 平台 | 线程 | CPU | 实测频率（MHz） | 通过 | 收尾 |
+| --- | --- | --- | --- | --- | --- |
+| 远程 Linux 4 核 | 多线程 | Intel Xeon Platinum 8255C | 2494 | 20/20 | MT，测试钩子关闭；`hold timer update tick=2 second=1 overlap=0/0 skipped=10 bad=0` |
+| 远程 Linux 2 核 | 单线程 | Intel Xeon Gold 6271C | 2594 | 20/20 | 专用 ST 目录，测试钩子关闭；`hold timer update tick=3 second=1 overlap=0/0 skipped=9 bad=0` |
+
+两组清理均返回 0。4 核另跑 MySQL 用例通过：`mysql row mapping bad=0`、`mysql rows bad=0`、`mysql done bad=0`。
+
 ## 显式用例
 
 都是退出码 0。协程 `bad=0`。

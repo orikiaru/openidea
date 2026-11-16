@@ -40,7 +40,7 @@ BytesStream& BytesStream::operator>>(std::string& sFirst)
 {
 	size_t iSize = ReadLenPrefix(*this);
 	sFirst.assign(GetCurPtr(), iSize);
-	m_iCurrentPosition += iSize;
+	AddCurPos(iSize);
 	return *this;
 }
 
@@ -55,7 +55,7 @@ BytesStream& BytesStream::operator>>(Bytes& stFirst)
 	size_t iSize = ReadLenPrefix(*this);
 	stFirst.Clear();
 	stFirst.Append(GetCurPtr(), iSize);
-	m_iCurrentPosition += iSize;
+	AddCurPos(iSize);
 	return *this;
 }
 
@@ -115,7 +115,7 @@ PbHeaderState BytesStream::PreparePbHeader(uint32_t& iSequence, uint32_t& iSize)
 	{
 		return PB_HEADER_BAD;
 	}
-	if (RemainSize() < sizeof(uint32_t) * 2 + (size_t)iSizeValue)
+	if (RemainSize() - sizeof(uint32_t) * 2 < (size_t)iSizeValue)
 	{
 		return PB_HEADER_NEED_MORE;
 	}
@@ -194,11 +194,7 @@ void BytesStream::ReadPbHeader(uint32_t& iSequence, uint32_t& iSize)
 
 void BytesStream::SkipPb(uint32_t iSize)
 {
-	if (RemainSize() < iSize)
-	{
-		throw ParserException();
-	}
-	m_iCurrentPosition += iSize;
+	AddCurPos(iSize);
 }
 
 BytesStream& BytesStream::WritePb(uint32_t iSequence, const std::string& sValue)
@@ -253,7 +249,7 @@ void BytesStream::ReadPb(uint32_t iSize, std::string& sValue)
 	{
 		sValue.assign(GetCurPtr(), iSize);
 	}
-	m_iCurrentPosition += iSize;
+	AddCurPos(iSize);
 }
 
 void BytesStream::ReadPb(uint32_t iSize, Bytes& stValue)
@@ -267,26 +263,17 @@ void BytesStream::ReadPb(uint32_t iSize, Bytes& stValue)
 	{
 		stValue.Append(GetCurPtr(), iSize);
 	}
-	m_iCurrentPosition += iSize;
+	AddCurPos(iSize);
 }
 
 void BytesStream::ReadPb(uint32_t iSize, ::OI::Rpc::Serialize& stValue)
 {
-	if (RemainSize() < iSize)
+	ReadLimit stLimit(*this, iSize);
+	stValue.deserialize(*this);
+	if (RemainSize() != 0)
 	{
 		throw ParserException();
 	}
-	BytesStream stSub;
-	if (iSize > 0)
-	{
-		stSub.Append(GetCurPtr(), iSize);
-	}
-	stValue.deserialize(stSub);
-	if (stSub.RemainSize() != 0)
-	{
-		throw ParserException();
-	}
-	m_iCurrentPosition += iSize;
 }
 }
 }

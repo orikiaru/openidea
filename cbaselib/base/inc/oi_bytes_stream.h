@@ -94,6 +94,7 @@ class BytesStream : public Bytes
 	size_t m_iCurrentPosition;
 	// StartTransaction 记下的游标。RollBack 回到这里。
 	size_t m_iSnapshotPosition;
+	size_t m_iLimit = SIZE_MAX;
 
   public:
 	BytesStream()
@@ -113,6 +114,7 @@ class BytesStream : public Bytes
 		Bytes::Clear();
 		m_iCurrentPosition = 0;
 		m_iSnapshotPosition = 0;
+		m_iLimit = SIZE_MAX;
 	}
 	Bytes& GetMutableBuff()
 	{
@@ -128,6 +130,10 @@ class BytesStream : public Bytes
 	}
 	void AddCurPos(size_t iOffset)
 	{
+		if (iOffset > RemainSize())
+		{
+			throw ParserException();
+		}
 		m_iCurrentPosition += iOffset;
 	}
 	char* GetCurPtr()
@@ -136,8 +142,45 @@ class BytesStream : public Bytes
 	}
 	size_t RemainSize() const
 	{
-		return Size() - m_iCurrentPosition;
+		return std::min(Size(), m_iLimit) - m_iCurrentPosition;
 	}
+
+	size_t PushLimit(size_t iSize)
+	{
+		if (iSize > RemainSize())
+		{
+			throw ParserException();
+		}
+		const size_t iOld = m_iLimit;
+		m_iLimit = m_iCurrentPosition + iSize;
+		return iOld;
+	}
+	void PopLimit(size_t iOld)
+	{
+		m_iLimit = iOld;
+	}
+	class ReadLimit
+	{
+		BytesStream& m_stStream;
+		size_t m_iOld;
+		bool m_bSkip;
+
+	  public:
+		ReadLimit(BytesStream& stStream, size_t iSize, bool bSkip = false)
+		    : m_stStream(stStream), m_iOld(stStream.PushLimit(iSize)), m_bSkip(bSkip)
+		{
+		}
+		ReadLimit(const ReadLimit&) = delete;
+		ReadLimit& operator=(const ReadLimit&) = delete;
+		~ReadLimit()
+		{
+			if (m_bSkip)
+			{
+				m_stStream.AddCurPos(m_stStream.RemainSize());
+			}
+			m_stStream.PopLimit(m_iOld);
+		}
+	};
 
 	// 记下当前读游标，半包解析失败时可以退回去。
 	void StartTransaction()
@@ -147,6 +190,10 @@ class BytesStream : public Bytes
 	// 读游标退回最近一次 StartTransaction。
 	void RollBack()
 	{
+		if (m_iSnapshotPosition > std::min(Size(), m_iLimit))
+		{
+			throw ParserException();
+		}
 		m_iCurrentPosition = m_iSnapshotPosition;
 	}
 
@@ -183,7 +230,6 @@ class BytesStream : public Bytes
 		m_iCurrentPosition += sizeof(T);
 		return *this;
 	}
-
 	BytesStream& operator<<(const std::string& sFirst);
 	BytesStream& operator<<(const Bytes& stFirst);
 	BytesStream& operator<<(const BytesStream& stFirst); //全量写入，内容本身已经是序列化结果
@@ -192,7 +238,6 @@ class BytesStream : public Bytes
 
 	BytesStream& operator>>(std::string& sFirst);
 	BytesStream& operator>>(Bytes& stFirst);
-
 	BytesStream& operator>>(::OI::Rpc::Serialize& stFirst);
 
 	template <typename T>
@@ -306,24 +351,11 @@ class BytesStream : public Bytes
 	typename std::enable_if<PbFixedTrait<T>::bValue, void>::type
 	ReadPb(uint32_t iSize, T& stValueLocal)
 	{
-		if (iSize != (uint32_t)sizeof(T) || RemainSize() < iSize)
+		if (iSize != (uint32_t)sizeof(T))
 		{
 			throw ParserException();
 		}
-		if constexpr (std::is_same_v<T, bool>)
-		{
-			const auto iValue = static_cast<unsigned char>(*GetCurPtr());
-			if (iValue > 1)
-			{
-				throw ParserException();
-			}
-			stValueLocal = iValue != 0;
-		}
-		else
-		{
-			stValueLocal = LoadLittleEndian<T>(GetCurPtr());
-		}
-		m_iCurrentPosition += iSize;
+		(*this) >> stValueLocal;
 	}
 	void ReadPb(uint32_t iSize, std::string& sValue);
 	void ReadPb(uint32_t iSize, Bytes& stValueLocal);
@@ -354,19 +386,14 @@ class BytesStream : public Bytes
 	template <typename T>
 	void ReadPbContainer(uint32_t iSize, T& stValueLocal)
 	{
-		if (RemainSize() < iSize)
-		{
-			throw ParserException();
-		}
-		BytesStream stPayload(GetCurPtr(), iSize);
+		ReadLimit stLimit(*this, iSize);
 		T stDecoded;
-		stPayload >> stDecoded;
-		if (stPayload.RemainSize() != 0)
+		(*this) >> stDecoded;
+		if (RemainSize() != 0)
 		{
 			throw ParserException();
 		}
 		stValueLocal = std::move(stDecoded);
-		m_iCurrentPosition += iSize;
 	}
 };
 }

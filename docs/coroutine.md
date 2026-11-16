@@ -74,7 +74,7 @@ if (iRet == 0)
 
 ## 服务端
 
-`HandleRpc` 包一层：解包，`co_await` 业务任务，再把回包写出去。请求和回包的包体都以 8 字节调用号开头，客户端按调用号认回包，所以回包不用按接受顺序排队，处理完就发。
+`HandleRpc` 在 IO 线程按帧边界原地解包，请求对象和会话、在途额度租约交给根协程；协程 `co_await` 业务任务，再把回包写出去。请求和回包的包体都以 8 字节调用号开头，客户端按调用号认回包，所以回包不用按接受顺序排队，处理完就发。
 
 ```cpp
 HandleRpc<AllEchoReq>([](const AllEchoReq& req, AllEchoRes& res) -> OI::Rpc::RpcTask {
@@ -91,6 +91,8 @@ HandleRpc<AllEchoReq>([](const AllEchoReq& req, AllEchoRes& res) -> OI::Rpc::Rpc
 ## 客户端
 
 连接建立后用 `StartTask` 拉起任务，任务里 `co_await RpcCall`。等待键是每次调用新分配的调用号，等待表按调用号分片加锁。回包、超时或发送失败只有一个会把这条协程 `Schedule` 回来。迟到的回包发现调用号已经取走，就丢掉，不会配给下一次调用。
+
+回包在 IO 线程按帧边界解到等待器私有对象，协程恢复后成功才交给调用方的输出；解包失败返回 `OI_ERR_FAIL`，不覆盖输出。
 
 新接口的时长参数是 `OI::Timer::MS`，用 `OI::Timer::Milliseconds(500)`、`Seconds(10)`、`Minutes`、`Hours`、`Days` 构造，默认 `Seconds(180)`。超时统一使用带单位的时长类型，不再接受裸整数秒。由 200 毫秒周期按毫秒分桶扫描，因此 `MS` 不代表毫秒级唤醒精度。非正超时表示不设截止时间，断连仍会结束等待。`yield` 接受毫秒整数，也接受 `MS`。
 
