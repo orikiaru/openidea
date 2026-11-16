@@ -1,4 +1,4 @@
-// Nested/frame/flat decode benchmark: g++-13 -O2 -std=c++20 -DNDEBUG -Icbaselib/base/inc -Icbaselib/include tools/nested_decode_bench.cpp cbaselib/base/src/oi_bytes.cpp cbaselib/base/src/oi_bytes_stream.cpp -o nested_decode_bench (add -DOI_BENCH_READ_LIMIT for the new reader).
+// Nested/frame/flat decode benchmark: g++-13 -O2 -std=c++20 -DNDEBUG -Icbaselib/base/inc -Icbaselib/include tools/nested_decode_bench.cpp cbaselib/base/src/oi_bytes.cpp cbaselib/base/src/oi_bytes_stream.cpp -o nested_decode_bench (add -DOI_BENCH_READ_LIMIT for the new reader; -DOI_BENCH_SWITCH for switch dispatch).
 #include "oi_rpc.h"
 #include <array>
 #include <chrono>
@@ -27,6 +27,46 @@ struct Leaf : OI::Rpc::RpcData
 	}
 	BytesStream& deserialize(BytesStream& stInput) override
 	{
+#ifdef OI_BENCH_SWITCH
+		std::array<uint8_t, 3> vSeen{};
+		while (stInput.RemainSize() > 0)
+		{
+			uint32_t iSequence = 0;
+			uint32_t iSize = 0;
+			stInput.ReadPbHeader(iSequence, iSize);
+			switch (iSequence)
+			{
+			case 0:
+				if (vSeen[0] != 0)
+				{
+					throw OI::Base::ParserException();
+				}
+				vSeen[0] = 1;
+				stInput.ReadPb(iSize, iA);
+				break;
+			case 1:
+				if (vSeen[1] != 0)
+				{
+					throw OI::Base::ParserException();
+				}
+				vSeen[1] = 1;
+				stInput.ReadPb(iSize, iB);
+				break;
+			case 2:
+				if (vSeen[2] != 0)
+				{
+					throw OI::Base::ParserException();
+				}
+				vSeen[2] = 1;
+				stInput.ReadPb(iSize, sName);
+				break;
+			default:
+				stInput.SkipPb(iSize);
+				break;
+			}
+		}
+		return stInput;
+#else
 		static constexpr std::array<OI::Base::PbField, 3> vFields = {{
 		    OI_PB_FIELD(Leaf, 0, iA),
 		    OI_PB_FIELD(Leaf, 1, iB),
@@ -34,6 +74,7 @@ struct Leaf : OI::Rpc::RpcData
 		}};
 		std::array<uint8_t, 3> vSeen{};
 		return stInput.ReadFields(this, vFields, vSeen);
+#endif
 	}
 };
 
@@ -52,6 +93,46 @@ struct Mid : OI::Rpc::RpcData
 	}
 	BytesStream& deserialize(BytesStream& stInput) override
 	{
+#ifdef OI_BENCH_SWITCH
+		std::array<uint8_t, 3> vSeen{};
+		while (stInput.RemainSize() > 0)
+		{
+			uint32_t iSequence = 0;
+			uint32_t iSize = 0;
+			stInput.ReadPbHeader(iSequence, iSize);
+			switch (iSequence)
+			{
+			case 0:
+				if (vSeen[0] != 0)
+				{
+					throw OI::Base::ParserException();
+				}
+				vSeen[0] = 1;
+				stInput.ReadPb(iSize, iId);
+				break;
+			case 1:
+				if (vSeen[1] != 0)
+				{
+					throw OI::Base::ParserException();
+				}
+				vSeen[1] = 1;
+				stInput.ReadPb(iSize, stLeaf);
+				break;
+			case 2:
+				if (vSeen[2] != 0)
+				{
+					throw OI::Base::ParserException();
+				}
+				vSeen[2] = 1;
+				stInput.ReadPb(iSize, vLeaves);
+				break;
+			default:
+				stInput.SkipPb(iSize);
+				break;
+			}
+		}
+		return stInput;
+#else
 		static constexpr std::array<OI::Base::PbField, 3> vFields = {{
 		    OI_PB_FIELD(Mid, 0, iId),
 		    OI_PB_FIELD(Mid, 1, stLeaf),
@@ -59,6 +140,7 @@ struct Mid : OI::Rpc::RpcData
 		}};
 		std::array<uint8_t, 3> vSeen{};
 		return stInput.ReadFields(this, vFields, vSeen);
+#endif
 	}
 };
 
@@ -81,6 +163,62 @@ struct Top : OI::Rpc::RpcData
 	}
 	BytesStream& deserialize(BytesStream& stInput) override
 	{
+#ifdef OI_BENCH_SWITCH
+		std::array<uint8_t, 5> vSeen{};
+		while (stInput.RemainSize() > 0)
+		{
+			uint32_t iSequence = 0;
+			uint32_t iSize = 0;
+			stInput.ReadPbHeader(iSequence, iSize);
+			switch (iSequence)
+			{
+			case 0:
+				if (vSeen[0] != 0)
+				{
+					throw OI::Base::ParserException();
+				}
+				vSeen[0] = 1;
+				stInput.ReadPb(iSize, iId);
+				break;
+			case 1:
+				if (vSeen[1] != 0)
+				{
+					throw OI::Base::ParserException();
+				}
+				vSeen[1] = 1;
+				stInput.ReadPb(iSize, stMid);
+				break;
+			case 2:
+				if (vSeen[2] != 0)
+				{
+					throw OI::Base::ParserException();
+				}
+				vSeen[2] = 1;
+				stInput.ReadPb(iSize, vMids);
+				break;
+			case 3:
+				if (vSeen[3] != 0)
+				{
+					throw OI::Base::ParserException();
+				}
+				vSeen[3] = 1;
+				stInput.ReadPb(iSize, mLeaves);
+				break;
+			case 4:
+				if (vSeen[4] != 0)
+				{
+					throw OI::Base::ParserException();
+				}
+				vSeen[4] = 1;
+				stInput.ReadPb(iSize, stBlob);
+				break;
+			default:
+				stInput.SkipPb(iSize);
+				break;
+			}
+		}
+		return stInput;
+#else
 		static constexpr std::array<OI::Base::PbField, 5> vFields = {{
 		    OI_PB_FIELD(Top, 0, iId),
 		    OI_PB_FIELD(Top, 1, stMid),
@@ -90,6 +228,7 @@ struct Top : OI::Rpc::RpcData
 		}};
 		std::array<uint8_t, 5> vSeen{};
 		return stInput.ReadFields(this, vFields, vSeen);
+#endif
 	}
 };
 
@@ -113,6 +252,12 @@ struct Top : OI::Rpc::RpcData
 #define FLAT_DECLARE(N) int32_t iValue##N{};
 #define FLAT_ENCODE(N) stOutput.WritePb(N, iValue##N);
 #define FLAT_DECODE(N) OI_PB_FIELD(Flat, N, iValue##N),
+#define FLAT_SWITCH(N) \
+	case N: \
+		if (vSeen[N] != 0) { throw OI::Base::ParserException(); } \
+		vSeen[N] = 1; \
+		stInput.ReadPb(iSize, iValue##N); \
+		break;
 #define FLAT_FILL(N) iValue##N = N + 1;
 #define FLAT_COMPARE(N) if (iValue##N != stOther.iValue##N) return false;
 struct Flat : OI::Rpc::RpcData
@@ -126,11 +271,29 @@ struct Flat : OI::Rpc::RpcData
 	}
 	BytesStream& deserialize(BytesStream& stInput) override
 	{
+#ifdef OI_BENCH_SWITCH
+		std::array<uint8_t, 128> vSeen{};
+		while (stInput.RemainSize() > 0)
+		{
+			uint32_t iSequence = 0;
+			uint32_t iSize = 0;
+			stInput.ReadPbHeader(iSequence, iSize);
+			switch (iSequence)
+			{
+				FLAT_FIELDS(FLAT_SWITCH)
+			default:
+				stInput.SkipPb(iSize);
+				break;
+			}
+		}
+		return stInput;
+#else
 		static constexpr std::array<OI::Base::PbField, 128> vFields = {{
 		    FLAT_FIELDS(FLAT_DECODE)
 		}};
 		std::array<uint8_t, 128> vSeen{};
 		return stInput.ReadFields(this, vFields, vSeen);
+#endif
 	}
 	void Fill()
 	{
@@ -145,6 +308,7 @@ struct Flat : OI::Rpc::RpcData
 #undef FLAT_COMPARE
 #undef FLAT_FILL
 #undef FLAT_DECODE
+#undef FLAT_SWITCH
 #undef FLAT_ENCODE
 #undef FLAT_DECLARE
 #undef FLAT_FIELDS

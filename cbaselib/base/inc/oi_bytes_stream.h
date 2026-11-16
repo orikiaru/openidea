@@ -324,9 +324,38 @@ class BytesStream : public Bytes
 	// 每个字段只占一条；vector/map 的字段体是数量加元素，嵌套值自行编码。
 	// 字段头、长度前缀、定宽整数、枚举、float、double 都是小端，不看主机字节序。
 	BytesStream& WritePbRaw(uint32_t iSequence, const void* pData, uint32_t iSize);
-	PbHeaderState PreparePbHeader(uint32_t& iSequence, uint32_t& iSize);
-	void ReadPbHeader(uint32_t& iSequence, uint32_t& iSize);
-	void SkipPb(uint32_t iSize);
+	PbHeaderState PreparePbHeader(uint32_t& iSequence, uint32_t& iSize)
+	{
+		if (RemainSize() < sizeof(uint32_t) * 2)
+		{
+			return PB_HEADER_NEED_MORE;
+		}
+		uint32_t iSequenceValue = LoadLittleEndian<uint32_t>(GetCurPtr());
+		uint32_t iSizeValue = LoadLittleEndian<uint32_t>(GetCurPtr() + sizeof(uint32_t));
+		if ((int32_t)iSizeValue < 0)
+		{
+			return PB_HEADER_BAD;
+		}
+		if (RemainSize() - sizeof(uint32_t) * 2 < (size_t)iSizeValue)
+		{
+			return PB_HEADER_NEED_MORE;
+		}
+		m_iCurrentPosition += sizeof(uint32_t) * 2;
+		iSequence = iSequenceValue;
+		iSize = iSizeValue;
+		return PB_HEADER_OK;
+	}
+	void ReadPbHeader(uint32_t& iSequence, uint32_t& iSize)
+	{
+		if (PreparePbHeader(iSequence, iSize) != PB_HEADER_OK)
+		{
+			throw ParserException();
+		}
+	}
+	void SkipPb(uint32_t iSize)
+	{
+		AddCurPos(iSize);
+	}
 
 	template <typename T>
 	typename std::enable_if<PbFixedTrait<T>::bValue, BytesStream&>::type

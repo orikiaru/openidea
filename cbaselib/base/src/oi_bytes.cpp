@@ -129,26 +129,6 @@ void Bytes::Grow(size_t iNeed)
 	m_iHead = 0;
 }
 
-char* Bytes::Mutable()
-{
-	return m_pMemory ? m_pMemory + m_iHead : &m_iEmptyCharacter;
-}
-
-const char* Bytes::Data() const
-{
-	return m_pMemory ? m_pMemory + m_iHead : &m_iEmptyCharacter;
-}
-
-char* Bytes::Begin()
-{
-	return Mutable();
-}
-
-char* Bytes::End()
-{
-	return Begin() + m_iSize;
-}
-
 size_t Bytes::Reserve(size_t iSize)
 {
 	Grow(iSize);

@@ -27,7 +27,10 @@ class Bytes
 	// 容量不够时换一块更大的。
 	void Grow(size_t iNeed);
 	// 可写起点。
-	char* Mutable();
+	char* Mutable()
+	{
+		return m_pMemory ? m_pMemory + m_iHead : &m_iEmptyCharacter;
+	}
 	// 源区间是否落在本缓冲里。插入时用来避免覆盖自己。
 	bool Overlaps(const void* pData) const;
 
@@ -68,11 +71,20 @@ class Bytes
 	size_t Replace(size_t iOffset, const void* pData, size_t iLength);
 
 	// 有效数据起点，只读。空缓冲不返回空指针。
-	const char* Data() const;
+	const char* Data() const
+	{
+		return m_pMemory ? m_pMemory + m_iHead : &m_iEmptyCharacter;
+	}
 	// 可写起点，范围到 Capacity()。
-	char* Begin();
+	char* Begin()
+	{
+		return Mutable();
+	}
 	// 指向有效数据的末尾，这个位置本身不能读
-	char* End();
+	char* End()
+	{
+		return Begin() + m_iSize;
+	}
 
 	size_t Size() const
 	{

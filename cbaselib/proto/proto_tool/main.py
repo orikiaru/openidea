@@ -16,24 +16,40 @@ def SplitArgs(argv):
     cut = argv.index("--")
     return argv[1:cut], argv[cut + 1:]
 
-def GenDataOnly(proto_files, output):
+def ExtractPbDispatch(argv):
+    dispatch = "macro"
+    result = argv[:1]
+    for index, arg in enumerate(argv[1:], 1):
+        if arg == "--":
+            result.extend(argv[index:])
+            break
+        if arg.startswith("--pb-dispatch="):
+            dispatch = arg.split("=", 1)[1]
+            if dispatch not in ("macro", "switch"):
+                loginfo("invalid --pb-dispatch:", dispatch)
+                return None, None
+        else:
+            result.append(arg)
+    return dispatch, result
+
+def GenDataOnly(proto_files, output, pb_dispatch):
     if not proto_files:
         loginfo("need at least one proto file")
         return False
     proto = ProtocolGen(proto_files)
     if not proto.Gen():
         return False
-    file_gen = GenFile(None, proto, output, '', '')
+    file_gen = GenFile(None, proto, output, '', '', pb_dispatch)
     return file_gen.GenSerailizeIncludeFile()
 
-def RunModules(proto_files, module_file, module_header_path, module_path, module_depoly_path, module_manifest_path):
+def RunModules(proto_files, module_file, module_header_path, module_path, module_depoly_path, module_manifest_path, pb_dispatch):
     proto = ProtocolGen(proto_files)
     if not proto.Gen():
         return -1
     module = ModuleGen(proto, module_file)
     if not module.Gen():
         return -2
-    file_gen = GenFile(module, proto, module_header_path + '/', module_path + '/', module_depoly_path + '/')
+    file_gen = GenFile(module, proto, module_header_path + '/', module_path + '/', module_depoly_path + '/', pb_dispatch)
     if not file_gen.Gen(module_manifest_path):
         return -3
     return 0
@@ -43,6 +59,9 @@ def RunModules(proto_files, module_file, module_header_path, module_path, module
 if __name__ == "__main__":
     loginfo("local path = ", work_path)
 
+    pb_dispatch, sys.argv = ExtractPbDispatch(sys.argv)
+    if pb_dispatch is None:
+        sys.exit(1)
     split = SplitArgs(sys.argv)
     if split is not None:
         head, proto_files = split
@@ -50,16 +69,16 @@ if __name__ == "__main__":
             if len(head) != 2:
                 loginfo("data-only needs output directory then -- proto files")
                 sys.exit(1)
-            sys.exit(0 if GenDataOnly(proto_files, head[1]) else 1)
+            sys.exit(0 if GenDataOnly(proto_files, head[1], pb_dispatch) else 1)
         if len(head) not in (4, 5) or not proto_files:
             loginfo("need module, include, module dir, deploy, optional manifest, --, proto files")
             sys.exit(1)
         manifest = head[4] if len(head) == 5 else None
-        sys.exit(RunModules(proto_files, head[0], head[1], head[2], head[3], manifest))
+        sys.exit(RunModules(proto_files, head[0], head[1], head[2], head[3], manifest, pb_dispatch))
 
     # 基础库内部协议只生成现有 rpcdata/枚举，不生成应用模块。
     if len(sys.argv) == 4 and sys.argv[1] == '--data-only':
-        sys.exit(0 if GenDataOnly([sys.argv[2]], sys.argv[3]) else 1)
+        sys.exit(0 if GenDataOnly([sys.argv[2]], sys.argv[3], pb_dispatch) else 1)
 
     command_params = []
     #命令行参数要有 协议目录,协议生成根目录,协议公用序列化接口目录
@@ -81,4 +100,4 @@ if __name__ == "__main__":
     module_path         = command_params[3]         #module的生成目录,包括module基础代码,module的组件基础代码,module组件涉及的协议的处理代码
     module_depoly_path  = command_params[4]         #程序部署路径
     module_manifest_path = sys.argv[6] if len(sys.argv) > 6 else None
-    exit(RunModules([proto_xml_file_path], module_file, module_header_path, module_path, module_depoly_path, module_manifest_path))
+    exit(RunModules([proto_xml_file_path], module_file, module_header_path, module_path, module_depoly_path, module_manifest_path, pb_dispatch))

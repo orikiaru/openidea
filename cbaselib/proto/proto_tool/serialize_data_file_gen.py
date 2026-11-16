@@ -6,8 +6,9 @@ def QualType(t):
     return re.sub(r'\bBytes\b', '::OI::Base::Bytes', t)
 
 class SerializeDataFileGen:
-    def __init__(self, data: SerializeData):
+    def __init__(self, data: SerializeData, pb_dispatch="macro"):
         self.data = data
+        self.pb_dispatch = pb_dispatch
         self.class_name = data.GetName()
         self.member_init_param_list = ""            # Protocol(const A& l_a = A())
         self.member_init_list = ""                  #" member = l_member "      构造赋值用
@@ -59,6 +60,46 @@ class SerializeDataFileGen:
     def GetPbDeserialize(self):
         fields = sorted((self.GetFieldSeq(index, member), member)
                         for index, member in enumerate(self.data.members))
+        if self.pb_dispatch == "switch":
+            lines = []
+            if fields:
+                lines.append("        std::array<uint8_t, %d> seen{};" % len(fields))
+            lines.extend([
+                "        while (os.RemainSize() > 0)",
+                "        {",
+                "            uint32_t field_seq = 0;",
+                "            uint32_t field_size = 0;",
+                "            os.ReadPbHeader(field_seq, field_size);",
+            ])
+            if fields:
+                lines.extend([
+                    "            switch (field_seq)",
+                    "            {",
+                ])
+                for index, (sequence, member) in enumerate(fields):
+                    lines.extend([
+                        "            case %d:" % sequence,
+                        "                if (seen[%d] != 0)" % index,
+                        "                {",
+                        "                    throw ::OI::Base::ParserException();",
+                        "                }",
+                        "                seen[%d] = 1;" % index,
+                        "                os.ReadPb(field_size, %s);" % member.name,
+                        "                break;",
+                    ])
+                lines.extend([
+                    "            default:",
+                    "                os.SkipPb(field_size);",
+                    "                break;",
+                    "            }",
+                ])
+            else:
+                lines.append("            os.SkipPb(field_size);")
+            lines.extend([
+                "        }",
+                "        return os;",
+            ])
+            return "\n".join(lines) + "\n"
         lines = ["        static constexpr std::array<::OI::Base::PbField, %d> fields = {{" % len(fields)]
         for sequence, member in fields:
             lines.append("            OI_PB_FIELD(%s, %d, %s),"

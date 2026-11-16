@@ -89,6 +89,31 @@ class FieldNamesTest(unittest.TestCase):
         self.assertNotIn("switch (field_seq)", empty)
         self.assertNotIn("while (os.RemainSize()", empty)
 
+    def test_dispatch_variants(self):
+        data = ParseProtoText("rpcdata Example { 20 int32_t iLast; 7 string sFirst; 13 vector<int32_t> vMiddle; }")[0]
+        macro = SerializeDataFileGen(data, "macro").GetPbDeserialize()
+        switch = SerializeDataFileGen(data, "switch").GetPbDeserialize()
+        self.assertEqual(macro, SerializeDataFileGen(data).GetPbDeserialize())
+        self.assertIn("OI_PB_FIELD(Example, 7, sFirst)", macro)
+        self.assertIn("return os.ReadFields(this, fields, seen);", macro)
+        self.assertNotIn("OI_PB_FIELD", switch)
+        self.assertIn("std::array<uint8_t, 3> seen{};", switch)
+        self.assertIn("switch (field_seq)", switch)
+        self.assertEqual([switch.index("case %d:" % seq) for seq in (7, 13, 20)],
+                         sorted(switch.index("case %d:" % seq) for seq in (7, 13, 20)))
+        for index, name in enumerate(("sFirst", "vMiddle", "iLast")):
+            self.assertIn("if (seen[%d] != 0)" % index, switch)
+            self.assertIn("seen[%d] = 1;" % index, switch)
+            self.assertIn("os.ReadPb(field_size, %s);" % name, switch)
+        self.assertIn("throw ::OI::Base::ParserException();", switch)
+        self.assertIn("default:\n                os.SkipPb(field_size);", switch)
+        empty = SerializeDataFileGen(ParseProtoText("rpcdata Empty { }")[0], "switch").GetPbDeserialize()
+        self.assertNotIn("seen", empty)
+        self.assertNotIn("case ", empty)
+        self.assertNotIn("switch (", empty)
+        self.assertIn("os.ReadPbHeader(field_seq, field_size);", empty)
+        self.assertIn("os.SkipPb(field_size);", empty)
+
     def test_codec_markers_skip_fields_and_blob_complex_values(self):
         text = "rpcdata Child json { 0 int32_t iNumber; } rpcdata Example json db { 7 [json count, db id] int32_t iCount; 20 string sName; 3 [nojson] int32_t iSecret; 4 [nodb] string sCache; 5 vector<int32_t> vNumbers; 6 map<string, int32_t> mFlags; 8 [db child] Child stChild; }"
         data = ParseProtoText(text)[1]
@@ -293,6 +318,47 @@ class FieldNamesTest(unittest.TestCase):
 
 
 class ModuleGeneratorTest(unittest.TestCase):
+    def test_dispatch_command_line(self):
+        root = Path(__file__).resolve().parents[1]
+        main = root / "cbaselib/proto/proto_tool/main.py"
+        with tempfile.TemporaryDirectory() as directory:
+            temp = Path(directory)
+            proto = temp / "example.proto"
+            proto.write_text("rpcdata Example { 7 int32_t iCount; }\n", encoding="utf-8")
+            module = temp / "module.proto"
+            module.write_text("module Empty { }\n", encoding="utf-8")
+            for mode in ("macro", "switch"):
+                for form in ("data-old", "data-new", "module-old", "module-new"):
+                    output = temp / (mode + "-" + form)
+                    flag = "--pb-dispatch=" + mode
+                    if form == "data-old":
+                        args = ["--data-only", flag, str(proto), str(output)]
+                    elif form == "data-new":
+                        args = [flag, "--data-only", str(output), "--", str(proto)]
+                    else:
+                        tail = [str(module), str(output), str(temp / "modules"),
+                                str(temp / "deploy"), str(temp / "manifest.cmake")]
+                        args = [str(proto), flag] + tail if form == "module-old" else tail + [flag, "--", str(proto)]
+                    result = subprocess.run([sys.executable, str(main)] + args,
+                                            cwd=root, capture_output=True, text=True, errors="replace")
+                    self.assertEqual(result.returncode, 0, (mode, form, result.stdout, result.stderr))
+                    generated = (output / "oi_rpcdata_example.h").read_text(encoding="utf-8")
+                    self.assertEqual("switch (field_seq)" in generated, mode == "switch")
+                    self.assertEqual("OI_PB_FIELD(Example, 7, iCount)" in generated, mode == "macro")
+            invalid = subprocess.run([sys.executable, str(main), "--pb-dispatch=invalid",
+                                      "--data-only", str(proto), str(temp / "invalid")],
+                                     cwd=root, capture_output=True, text=True, errors="replace")
+            self.assertEqual(invalid.returncode, 1)
+            self.assertIn("invalid --pb-dispatch:", invalid.stdout)
+            after_delimiter = temp / "--pb-dispatch=switch"
+            after_delimiter.write_text(proto.read_text(encoding="utf-8"), encoding="utf-8")
+            result = subprocess.run([sys.executable, str(main), "--data-only", str(temp / "boundary"),
+                                     "--", after_delimiter.name],
+                                    cwd=temp, capture_output=True, text=True, errors="replace")
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            generated = (temp / "boundary/oi_rpcdata_example.h").read_text(encoding="utf-8")
+            self.assertIn("OI_PB_FIELD(Example, 7, iCount)", generated)
+
     def run_generator(self, modules, split_proto=False):
         root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as temp:

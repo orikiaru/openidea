@@ -10,6 +10,11 @@ set(OI_FRAMEWORK_INCLUDED TRUE)
 get_filename_component(OI_FRAMEWORK_DIR "${CMAKE_CURRENT_LIST_DIR}" ABSOLUTE)
 set(BASE_LIB_PATH "${OI_FRAMEWORK_DIR}/cbaselib")
 set(PROTO_TOOL_DIR "${BASE_LIB_PATH}/proto/proto_tool")
+set(OI_PB_DISPATCH "macro" CACHE STRING "协议解码的字段分发：macro 编译快，switch 解码快、编译慢")
+set_property(CACHE OI_PB_DISPATCH PROPERTY STRINGS macro switch)
+if(NOT OI_PB_DISPATCH STREQUAL "macro" AND NOT OI_PB_DISPATCH STREQUAL "switch")
+	message(FATAL_ERROR "OI_PB_DISPATCH must be macro or switch: ${OI_PB_DISPATCH}")
+endif()
 
 if(MSVC)
 	add_compile_options(/W3)
@@ -88,7 +93,7 @@ set(OI_FRAMEWORK_PROTO_FILES "${BASE_LIB_PATH}/proto/protocol/framework.proto")
 file(GLOB OI_PROTO_TOOL_SOURCES "${PROTO_TOOL_DIR}/*.py")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${OI_FRAMEWORK_PROTO_FILES} ${OI_PROTO_TOOL_SOURCES})
 execute_process(
-	COMMAND "${PYTHON_BIN}" "${PROTO_TOOL_DIR}/main.py" --data-only
+	COMMAND "${PYTHON_BIN}" "${PROTO_TOOL_DIR}/main.py" "--pb-dispatch=${OI_PB_DISPATCH}" --data-only
 		"${BASE_LIB_PATH}/base/inc/framework_protocol" -- ${OI_FRAMEWORK_PROTO_FILES}
 	RESULT_VARIABLE OI_FRAMEWORK_PROTO_GEN
 )

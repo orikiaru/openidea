@@ -103,28 +103,6 @@ BytesStream& BytesStream::WritePbRaw(uint32_t iSequence, const void* pData, uint
 	return *this;
 }
 
-PbHeaderState BytesStream::PreparePbHeader(uint32_t& iSequence, uint32_t& iSize)
-{
-	if (RemainSize() < sizeof(uint32_t) * 2)
-	{
-		return PB_HEADER_NEED_MORE;
-	}
-	uint32_t iSequenceValue = LoadLittleEndian<uint32_t>(GetCurPtr());
-	uint32_t iSizeValue = LoadLittleEndian<uint32_t>(GetCurPtr() + sizeof(uint32_t));
-	if ((int32_t)iSizeValue < 0)
-	{
-		return PB_HEADER_BAD;
-	}
-	if (RemainSize() - sizeof(uint32_t) * 2 < (size_t)iSizeValue)
-	{
-		return PB_HEADER_NEED_MORE;
-	}
-	m_iCurrentPosition += sizeof(uint32_t) * 2;
-	iSequence = iSequenceValue;
-	iSize = iSizeValue;
-	return PB_HEADER_OK;
-}
-
 BytesStream& BytesStream::ReadFields(void* pObject, std::span<const PbField> vFields, std::span<uint8_t> vSeen)
 {
 	if (vSeen.size() != vFields.size() || (!pObject && !vFields.empty()))
@@ -182,19 +160,6 @@ BytesStream& BytesStream::ReadFieldsByMap(void* pObject, const std::map<uint32_t
 		vSeen[it->first] = 1;
 	}
 	return *this;
-}
-
-void BytesStream::ReadPbHeader(uint32_t& iSequence, uint32_t& iSize)
-{
-	if (PreparePbHeader(iSequence, iSize) != PB_HEADER_OK)
-	{
-		throw ParserException();
-	}
-}
-
-void BytesStream::SkipPb(uint32_t iSize)
-{
-	AddCurPos(iSize);
 }
 
 BytesStream& BytesStream::WritePb(uint32_t iSequence, const std::string& sValue)

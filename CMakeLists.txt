@@ -35,6 +35,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${PROTO_INPUTS})
 set(OI_MODULE_MANIFEST "${CMAKE_CURRENT_BINARY_DIR}/oi_modules.cmake")
 execute_process(
     COMMAND "${PYTHON_BIN}" "${PROTO_TOOL_DIR}/main.py"
+        "--pb-dispatch=${OI_PB_DISPATCH}"
         "${OI_PROTO_CONFIG}/module.proto"
         "${MODULES_PATH}/include" "${MODULES_PATH}" "${DEPOLY_PATH}" "${OI_MODULE_MANIFEST}"
         -- ${OI_PROTO_FILES}

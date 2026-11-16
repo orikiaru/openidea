@@ -10,12 +10,13 @@ from serialize_data_file_gen import SerializeDataFileGen
 from proto_parse import ProtocolGen
 
 class GenFile:
-    def __init__(self, module_parse:ModuleGen, proto_parse:ProtocolGen, module_include_path:str, module_path:str, module_depoly_path:str) -> None:
+    def __init__(self, module_parse:ModuleGen, proto_parse:ProtocolGen, module_include_path:str, module_path:str, module_depoly_path:str, pb_dispatch:str) -> None:
         self.module_parse = module_parse
         self.proto_parse = proto_parse
         self.module_include_path = module_include_path
         self.module_path = module_path
         self.module_depoly_path = module_depoly_path
+        self.pb_dispatch = pb_dispatch
     def Gen(self, module_manifest_path=None):
         if(not self.GenSerailizeIncludeFile()):
             return False
@@ -40,7 +41,7 @@ class GenFile:
         if(not os.access(write_path, os.F_OK)):
             os.makedirs(write_path)
         for p in self.proto_parse.serialize_datas:
-            fp = SerializeDataFileGen(p)
+            fp = SerializeDataFileGen(p, self.pb_dispatch)
             data_file = fp.GenDataFile()
 
             if(p.GetType() == SerializeDataType.PROTOCOL):
