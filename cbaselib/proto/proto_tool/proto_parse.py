@@ -27,14 +27,20 @@ JSON_SCALARS = ORDERED_SCALARS | {"Bytes"}
 DB_KEY_MAX_BYTES = 3072
 
 # 主键列在索引里占的字节：utf8mb4 文本每字符 4 字节，二进制按长度，数值和 bool 按 8 字节上限算。
+# VARCHAR / VARBINARY 还要加长度前缀，最大字节数超过 255 是 2 字节，否则 1 字节。CHAR / BINARY 定长，不加。
 def DbKeyBytes(db_type):
     if not db_type:
         return 8
     match = re.fullmatch(r"([A-Z]+)\((\d+)\)", db_type)
     if not match:
         return 8
+    name = match.group(1)
     length = int(match.group(2))
-    return length * 4 if match.group(1) in ("VARCHAR", "CHAR") else length
+    if name in ("VARCHAR", "CHAR"):
+        length *= 4
+    if name in ("VARCHAR", "VARBINARY"):
+        length += 2 if length > 255 else 1
+    return length
 
 # vector<bool> 是标准库特化，序列化层不支持。任何一层出现都在生成期拒绝。
 def HasVectorBool(parsed):

@@ -234,10 +234,11 @@ class FieldNamesTest(unittest.TestCase):
         self.assertFalse(self.load_proto("rpcdata Row db { 0 [dbkey] [dbtype BLOB] string sName; }"))
         self.assertFalse(self.load_proto("rpcdata Row db { 0 [dbkey] vector<int32_t> vNumbers; }"))
         self.assertFalse(self.load_proto("rpcdata Child json { 0 int32_t iNumber; } rpcdata Row json db { 0 [dbkey] [dbjson] Child stChild; }"))
-        # utf8mb4 InnoDB 主键整体不超过 3072 字节：VARCHAR 每字符 4 字节，二进制按长度，多列合计。
-        self.assertTrue(self.load_proto("rpcdata Row db { 0 [dbkey] [dbtype VARCHAR 768] string sName; }"))
-        self.assertFalse(self.load_proto("rpcdata Row db { 0 [dbkey] [dbtype VARCHAR 769] string sName; }"))
-        self.assertTrue(self.load_proto("rpcdata Row db { 0 [dbkey] [dbtype VARBINARY 3072] Bytes stCode; }"))
+        # utf8mb4 InnoDB 主键整体不超过 3072 字节。文本每字符 4 字节，变长列再加长度前缀，多列合计。
+        self.assertTrue(self.load_proto("rpcdata Row db { 0 [dbkey] [dbtype VARCHAR 767] string sName; }"))
+        self.assertFalse(self.load_proto("rpcdata Row db { 0 [dbkey] [dbtype VARCHAR 768] string sName; }"))
+        self.assertTrue(self.load_proto("rpcdata Row db { 0 [dbkey] [dbtype VARBINARY 3070] Bytes stCode; }"))
+        self.assertFalse(self.load_proto("rpcdata Row db { 0 [dbkey] [dbtype VARBINARY 3072] Bytes stCode; }"))
         self.assertFalse(self.load_proto("rpcdata Row db { 0 [dbkey] [dbtype VARBINARY 65535] Bytes stCode; }"))
         self.assertFalse(self.load_proto("rpcdata Row db { 0 [dbkey] int64_t iId; 1 [dbkey] [dbtype VARBINARY 3072] Bytes stCode; }"))
         self.assertTrue(self.load_proto("rpcdata Row db { 0 [dbtype VARBINARY 65535] Bytes stRaw; }"))
