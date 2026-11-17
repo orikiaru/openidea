@@ -46,10 +46,13 @@ class MultiMgr
 	DECLARE_SINGLETON(MultiMgr)
 	MultiMgr();
 	bool m_bEnabled;
+	bool m_bPool;
 	MultiClient m_stFixed;
 	MultiClient m_stPeers;
 
 	OI::Coro::Task Run();
+	// 本地名单或 registry 拉到的名单上，CallAny 要打到每一台。
+	OI::Coro::Task Pool();
 	// 写死地址换到 2 号再换回来。返回 0 表示都对上。
 	OI::Coro::TaskResult<int32_t> SwapFixed();
 	// 成功回服务端的 [Service] id，失败回错误码，标记对不上回 OI_ERR_FAIL。

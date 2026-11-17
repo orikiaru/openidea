@@ -122,11 +122,19 @@ def main():
             subprocess.run(client, env=env, check=True, timeout=30)
             env.update(OI_TEST_MYSQL_HOST="127.0.0.1", OI_TEST_MYSQL_PORT=str(port),
                        OI_TEST_MYSQL_USER="root", OI_TEST_MYSQL_PASSWORD="", OI_TEST_MYSQL_DATABASE="oi_regression")
+            env["OI_TEST_MYSQL_CLIENT"] = str(mysql)
             command = [sys.executable, str(REPO / "tools" / "run_regressions.py"), "--case", "mysql",
                        "--bin-dir", str(args.bin_dir), "--port-offset", str(args.port_offset)]
             if args.artifacts:
                 command += ["--artifacts", str(args.artifacts)]
-            return subprocess.run(command, cwd=REPO, env=env, check=False).returncode
+            code = subprocess.run(command, cwd=REPO, env=env, check=False).returncode
+            if code != 0:
+                return code
+            pool = [sys.executable, str(REPO / "tools" / "run_regressions.py"), "--case", "registry-static",
+                    "--bin-dir", str(args.bin_dir), "--port-offset", str(args.port_offset)]
+            if args.artifacts:
+                pool += ["--artifacts", str(args.artifacts)]
+            return subprocess.run(pool, cwd=REPO, env=env, check=False).returncode
         finally:
             if process is not None and process.poll() is None:
                 process.terminate()

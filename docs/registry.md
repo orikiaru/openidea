@@ -1,10 +1,25 @@
 # 服务注册
 
-注册只走 `registry` 进程。应用不碰 Redis，只连 registry：启动时登记，定时报在线，定时整量拉取自己关心的名字。registry 只起一份，单线程，代码在 `cbaselib/registry`。
+业务进程只要两样东西：一份连接名单，以及自己要不要上报地址。静态还是动态只配在 registry 进程上。
+
+没有 `Registry.ip` 时用本地名单。`[Registry] instances` 一行一个：`名字 实例号 ip 端口`，分区服再跟分区号。同名同实例号重复、格式不对，启动失败。`CallAll` 按这份名单每一台打一份。名单里的实例一直算在线，挂了靠建连失败暴露。本进程不在名单里，或地址和对外地址不一致，打错误日志，不拒绝启动，也不上报。
+
+```toml
+[Registry]
+instances = [
+    "gameserver 1001 10.0.0.1 17981 1001",
+    "gameserver 1002 10.0.0.2 17981 1002",
+    "ipcserver 1 127.0.0.1 17981",
+]
+```
+
+配了 `Registry.ip` 就连 registry。拉取回包里有名单，还有 `bReport`。为真就登记自己的地址并按秒心跳，为假只使用名单。查询失败时缓存保持原状。
+
+下面是 registry 进程。它只起一份，单线程，代码在 `cbaselib/registry`。`Registry.config` 不写或是 `dynamic` 时是动态配置，业务进程要上报。`config = "static"` 时是静态配置，名单在表 `oi_service_instance`，由运维维护，业务进程只拉。现在动态配置用 Redis，静态配置用 MySQL；换引擎不改这两个名字。静态配置的库连接用 `Registry.db_host`、`db_port`、`db_user`、`db_password`、`db_database`，可选 `db_tls_ca`，并且构建要带 MySQL 客户端。
 
 ## 注册空间
 
-所有键都在 `oi:{project.env}:` 下面，`project` 和 `env` 只写在 `registry.toml` 的 `[Registry]`。测试环境和正式环境各起各的 registry，哪怕连同一台 Redis 也互相看不见。没写这两项，或写了字母、数字、`_`、`-` 以外的字符，registry 拒绝启动。花括号是 Redis Cluster 的哈希标签，同一空间的键落在同一个槽里。
+这一节只在动态配置时用到。所有键都在 `oi:{project.env}:` 下面，`project` 和 `env` 只写在 `registry.toml` 的 `[Registry]`。测试环境和正式环境各起各的 registry，哪怕连同一台 Redis 也互相看不见。没写这两项，或写了字母、数字、`_`、`-` 以外的字符，registry 拒绝启动。花括号是 Redis Cluster 的哈希标签，同一空间的键落在同一个槽里。
 
 | 键 | 内容 |
 | --- | --- |
@@ -12,7 +27,7 @@
 | `svc:<name>` | 这个名字下登记过的 id 集合 |
 | `svc:<name>:<id>` | 一份实例，值是 `ip port`，分区服再跟分区号，带 `expire_ms` 的过期 |
 
-## registry 怎么连 Redis
+## 动态配置现在连 Redis
 
 用 `RedisClient`，直接连真正的 Redis，配置在 `registry.toml` 的 `[RedisClient]`，不写 `service`。每条登记、续期、撤销和整量拉取都是 `co_await CallRedis` 一段 Lua，等 Redis 的时候 poll 照转，别的连接照常收发。`timeout_ms` 要比 `expire_ms` 短，Redis 卡住时服务还来得及重新登记。
 
@@ -30,7 +45,7 @@ Redis 连不上或卡住时，登记和续期回失败，客户端下一次心�
 
 ## 调用方
 
-配置里写了 `<段名>.service` 时，`SessionManager::Init` 先 `Lookup` 同步拉一次这个名字，查不到再用同一段的 ip/port。之后 `RegistryClient` 的单例秒更新 `OnSecondUpdate` 按 `pull_ms` 整量拉取关心的名字，运行期选路只读本地缓存。registry 每隔 `pull_ms` 用一段 Lua 从 Redis 整量取一次，过期的 id 和空了的名字顺手摘掉，客户端来拉时直接给这份。一个名字下有多份实例时选 id 最小的，连上之后固定走它，它下线了才换。
+配置里写了 `<段名>.service` 时，`SessionManager::Init` 先 `Lookup` 同步拉一次这个名字，查不到再用同一段的 ip/port。之后 `RegistryClient` 的单例秒更新 `OnSecondUpdate` 按 `pull_ms` 整量拉取关心的名字，运行期选路只读本地缓存。动态配置下，registry 每隔 `pull_ms` 从当前引擎整量取一次，过期的 id 和空了的名字顺手摘掉，客户端来拉时直接给这份。静态配置按同样的间隔重读名单表。一个名字下有多份实例时选 id 最小的，连上之后固定走它，它下线了才换。
 
 连接是不是同一条，用 `NetAddr::Endpoint` 做键。IPv4 是 `ip:port`，IPv6 是 `[ip]:port`。换到新地址时只拆掉连着旧地址的会话，其他服务的会话不动。地址没变就不动。
 

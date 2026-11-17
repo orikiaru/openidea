@@ -306,6 +306,7 @@ class RawHttpRegression(socketserver.BaseRequestHandler):
 def run(case, args):
     mode = "hold" if case.startswith(("clock-", "rpc-admission-")) else ("echo" if case in ("reset", "registry", "rpc-ingress") else case)
     mode = "db" if case == "mysql" else mode
+    mode = "pool" if case in ("local", "registry-static") else mode
     mode = "log" if case in ("disk-full", "log-backpressure") else mode
     mode = "redis" if case.startswith("redis-") else mode
     fairness = case == "redis-fairness"
@@ -340,7 +341,7 @@ def run(case, args):
         work, cfg, logs = root / "bin", root / "config", root / "logs"
         for p in (work, cfg, logs):
             p.mkdir()
-        for name in ("logd", "ipcclient", "ipcserver", "redisserver") + (("registry",) if case == "registry" or mode in ("hold", "multi") else ()):
+        for name in ("logd", "ipcclient", "ipcserver", "redisserver") + (("registry",) if case in ("registry", "registry-static") or mode in ("hold", "multi") else ()):
             shutil.copy2(args.bin_dir / (name + SUFFIX), work / (name + SUFFIX))
             text = shift_ports((REPO / "deploy/config" / (name + ".toml")).read_text(encoding="utf-8-sig"))
             if name in ("redisserver", "registry"):
@@ -361,6 +362,17 @@ def run(case, args):
                 text += "\n[Regression]\nrpc_read_limit = true\n"
             if name == "redisserver" and case == "redis":
                 text = replace(text, "connections", "1")
+            if name == "registry" and case == "registry-static":
+                required = ("OI_TEST_MYSQL_HOST", "OI_TEST_MYSQL_PORT", "OI_TEST_MYSQL_USER", "OI_TEST_MYSQL_DATABASE")
+                missing = [item for item in required if not os.environ.get(item)]
+                if missing:
+                    raise EnvironmentBlocked("registry static missing " + ",".join(missing))
+                text = text.replace(
+                    'config = "dynamic"',
+                    'config = "static"\ndb_host = "%s"\ndb_port = %s\ndb_user = "%s"\ndb_password = "%s"\ndb_database = "%s"' % (
+                        os.environ["OI_TEST_MYSQL_HOST"], os.environ["OI_TEST_MYSQL_PORT"], os.environ["OI_TEST_MYSQL_USER"],
+                        os.environ.get("OI_TEST_MYSQL_PASSWORD", ""), os.environ["OI_TEST_MYSQL_DATABASE"]),
+                    1)
             if name == "redisserver" and pressure:
                 text = replace(text, "connections", "1")
                 maximum_bytes = 1024**2 if case.endswith("bytes") else 8 * 1024**2
@@ -391,8 +403,15 @@ def run(case, args):
                 if case == "redis-limit":
                     text = text.replace("[RedisClient]", "[RedisClient]\nmax_pending = 1")
                     text = replace(text, "tasks", "0")
-                for flag in ("echo", "log", "redis", "hold", "udp", "multi", "db", "coro", "empty"):
+                for flag in ("echo", "log", "redis", "hold", "udp", "multi", "pool", "db", "coro", "empty"):
                     text = replace(text, flag, "true" if mode == flag else "false")
+                if case == "local":
+                    # 只去掉注册地址这三行。点号不能跨行，否则会把后面的 LogClient 一起删掉。
+                    text = re.sub(
+                        r'(?m)^\[Registry\]\nip = "[^"]*"\nport = "[^"]*"\ntype = "[^"]*"\n',
+                        '[Registry]\ninstances = [\n    "peerserver 1 127.0.0.1 %d",\n    "peerserver 2 127.0.0.1 %d",\n]\n' % GAME_PORTS,
+                        text,
+                        count=1)
                 if mode == "hold":
                     text = replace(text, "pull_ms", "60000")
                     text = replace(text, "max_clients", "8")
@@ -480,6 +499,27 @@ def run(case, args):
                             return
                         raise RuntimeError(logpath.read_text(encoding="utf-8", errors="replace"))
                     time.sleep(0.05)
+            if case == "registry-static":
+                mysql = os.environ.get("OI_TEST_MYSQL_CLIENT") or shutil.which("mysql")
+                if not mysql:
+                    raise EnvironmentBlocked("registry static needs OI_TEST_MYSQL_CLIENT or mysql on PATH")
+                sql = (
+                    "CREATE TABLE IF NOT EXISTS oi_service_instance ("
+                    "`name` VARCHAR(64) NOT NULL, `id` INT NOT NULL, `ip` VARCHAR(64) NOT NULL, "
+                    "`port` VARCHAR(8) NOT NULL, `zone` VARCHAR(32) NOT NULL, PRIMARY KEY (`name`, `id`)"
+                    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4; "
+                    "DELETE FROM oi_service_instance WHERE `name`='peerserver'; "
+                    "INSERT INTO oi_service_instance (`name`, `id`, `ip`, `port`, `zone`) VALUES "
+                    "('peerserver', 1, '127.0.0.1', '%d', ''), ('peerserver', 2, '127.0.0.1', '%d', '');"
+                ) % GAME_PORTS
+                command = [mysql, "--no-defaults", "--protocol=tcp", "--host", os.environ["OI_TEST_MYSQL_HOST"],
+                           "--port", os.environ["OI_TEST_MYSQL_PORT"], "--user", os.environ["OI_TEST_MYSQL_USER"],
+                           "--database", os.environ["OI_TEST_MYSQL_DATABASE"], "--execute", sql]
+                if os.environ.get("OI_TEST_MYSQL_PASSWORD"):
+                    command.insert(-2, "--password=" + os.environ["OI_TEST_MYSQL_PASSWORD"])
+                subprocess.run(command, check=True, timeout=30)
+                registry, registry_path = start("registry")
+                ready(registry, registry_path, "registry server listen")
             if mode in ("redis", "hold", "multi") or case == "registry":
                 redis_conf = root / "redis.conf"
                 redis_conf.write_text('bind 127.0.0.1\nport %d\nsave ""\nappendonly no\n' % REDIS_PORT +
@@ -536,7 +576,7 @@ def run(case, args):
                 if case == "registry" or mode in ("hold", "multi"):
                     registry, registry_path = start("registry")
                     ready(registry, registry_path, "registry server listen")
-                if case not in ("registry", "multi"):
+                if case not in ("registry", "multi", "local", "registry-static"):
                     rs, rsp = start("redisserver")
                     ready(rs, rsp, "redis server listen")
             server, serverpath = start("ipcserver")
@@ -553,8 +593,8 @@ def run(case, args):
                     path.write_text(text, encoding="utf-8")
                     proc, output = start("gameserver-" + zone, [str(work / ("ipcserver" + SUFFIX)), str(path)])
                     ready(proc, output, "ipc server listen")
-            if mode == "multi":
-                # 同名两台全局服，实例号 1、2。客户端起来前都已登记。
+            if mode in ("multi", "pool"):
+                # 同名两台全局服，实例号 1、2。multi 在客户端起来前登记；local 用配置名单，registry-static 用表里的名单。
                 for instance, port in zip((1, 2), GAME_PORTS):
                     text = (cfg / "ipcserver.toml").read_text(encoding="utf-8")
                     text = text.replace('name = "ipcserver"', 'name = "peerserver"', 1)
@@ -562,6 +602,12 @@ def run(case, args):
                     text = text.replace('port = "%d"' % IPC_PORT, 'port = "%d"' % port, 1)
                     text = text.replace('port = "%d"' % UDP_PORT, 'port = "0"', 1)
                     path = cfg / ("peerserver-%d.toml" % instance)
+                    if case == "local":
+                        text = re.sub(
+                            r'(?m)^\[Registry\]\nip = "[^"]*"\nport = "[^"]*"\ntype = "[^"]*"\n',
+                            "[Registry]\n",
+                            text,
+                            count=1)
                     path.write_text(text, encoding="utf-8")
                     proc, output = start("peerserver-%d" % instance, [str(work / ("ipcserver" + SUFFIX)), str(path)])
                     ready(proc, output, "ipc server listen")
@@ -679,6 +725,10 @@ def run(case, args):
                 assert text.count("ipc client connect sid=") == 1, "echo test started more than once"
             elif mode == "empty":
                 assert re.search(r"empty mode=\S+ total=1000000 ms=\d+ rate=\d+/s rpc_fail=0", text)
+            elif mode == "pool":
+                assert re.search(r"pool call any one=[1-9]\d* two=[1-9]\d* failed=0 bad=0", text)
+                assert "pool call all slots=2 bad=0" in text
+                assert "pool done bad=0" in text
             elif mode == "multi":
                 assert "multi watcher unchanged recovered=1 bad=0" in text
                 assert "multi notify early accepted=0 delivered=1 bad=0" in text
@@ -996,7 +1046,7 @@ class EnvironmentBlocked(RuntimeError):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case", default="all", choices=("all", "mysql", "coro", "echo", "empty", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "clock-forward", "clock-back", "registry", "udp", "multi", "web"))
+    parser.add_argument("--case", default="all", choices=("all", "mysql", "coro", "echo", "empty", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "clock-forward", "clock-back", "registry", "udp", "multi", "local", "registry-static", "web"))
     parser.add_argument("--bin-dir", type=Path, default=REPO / "deploy/bin")
     parser.add_argument("--redis-binary", type=Path, help="default: redis-server on PATH")
     parser.add_argument("--clock-fault-so", type=Path)
@@ -1023,7 +1073,7 @@ if __name__ == "__main__":
             probe.bind(("127.0.0.1", port))
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
         probe.bind(("127.0.0.1", UDP_PORT))
-    cases = ("echo", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "registry", "udp", "multi", "web") if options.case == "all" else (options.case,)
+    cases = ("echo", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "registry", "udp", "multi", "local", "web") if options.case == "all" else (options.case,)
     results = []
     for item in cases:
         started = time.monotonic()

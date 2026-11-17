@@ -81,7 +81,7 @@ RegistryClient::RegistryClient()
     : m_bConnected(false), m_bConnecting(false), m_bFailed(false), m_iSessionId(INVALID_SID), m_bAddressReady(false),
       m_iServiceId(0), m_bPublished(false), m_bRegistered(false), m_bLost(false), m_bActive(false), m_bPullWanted(false),
       m_bRefresh(false), m_iHeartbeatMilliseconds(1000), m_iPullMilliseconds(1000), m_iNextHeartbeatMilliseconds(0),
-      m_iNextPullMilliseconds(0)
+      m_iNextPullMilliseconds(0), m_bReportKnown(false), m_bReport(false)
 {
 }
 
@@ -104,10 +104,94 @@ void RegistryClient::OnSessionClosed(sid_t iSessionIdLocal)
 	::OI::Rpc::FailRpcCalls(this, iSessionIdLocal);
 }
 
+int32_t RegistryClient::EnsureSource()
+{
+	if (m_bSourceReady)
+	{
+		return m_iSourceStatus;
+	}
+	::OI::Thread::MutexGuard stLock(m_stPublishMutex);
+	if (m_bSourceReady)
+	{
+		return m_iSourceStatus;
+	}
+	std::string sIpLocal;
+	if (::OI::Base::Config::GlobalConfig().GetAs("Registry.ip", sIpLocal) && !sIpLocal.empty())
+	{
+		m_eSource = Source::Registry;
+		m_iSourceStatus = OI_OK;
+	}
+	else
+	{
+		m_iSourceStatus = m_stStatic.Load();
+		if (m_iSourceStatus == OI_OK && !m_stStatic.Empty())
+		{
+			m_eSource = Source::Local;
+		}
+		else
+		{
+			m_eSource = Source::None;
+		}
+	}
+	m_bSourceReady = true;
+	return m_iSourceStatus;
+}
+
+void RegistryClient::NoteReport(bool bReport)
+{
+	m_bReport.store(bReport, std::memory_order_relaxed);
+	m_bReportKnown.store(true, std::memory_order_release);
+}
+
+int32_t RegistryClient::ProbeReport()
+{
+	struct State
+	{
+		std::atomic<bool> bDone{false};
+		int32_t iCode = OI_ERR_FAIL;
+		bool bReport = false;
+	};
+	auto pState = std::make_shared<State>();
+	std::vector<std::string> vNames;
+	if (!m_sServiceName.empty())
+	{
+		vNames.push_back(m_sServiceName);
+	}
+	::OI::RpcData::RegPull stRequest(std::move(vNames));
+	CallRegistry<::OI::RpcData::RegPull>(stRequest, kWaitMs, [this, pState](int32_t iCode, ::OI::RpcData::RegPullRes& stResponse)
+	{
+		if (iCode == OI_OK)
+		{
+			pState->bReport = stResponse.bReport;
+		}
+		pState->iCode = iCode;
+		pState->bDone.store(true, std::memory_order_release);
+		Notify();
+	});
+	const int32_t iWaitStatus = WaitDone(pState->bDone);
+	if (iWaitStatus != OI_OK)
+	{
+		return iWaitStatus;
+	}
+	if (pState->iCode == OI_OK)
+	{
+		NoteReport(pState->bReport);
+	}
+	return pState->iCode;
+}
+
 bool RegistryClient::Configured()
 {
-	std::string sIpLocal;
-	return ::OI::Base::Config::GlobalConfig().GetAs("Registry.ip", sIpLocal) && !sIpLocal.empty();
+	if (EnsureSource() != OI_OK)
+	{
+		return true;
+	}
+	return m_eSource != Source::None;
+}
+
+int32_t RegistryClient::ConfigStatus()
+{
+	return EnsureSource();
 }
 
 void RegistryClient::Notify()
@@ -352,8 +436,18 @@ void RegistryClient::Activate()
 
 ::OI::Coro::Task RegistryClient::OnSecondUpdate(time_t)
 {
-	if (!m_bActive.load(std::memory_order_acquire) || !Configured())
+	if (EnsureSource() != OI_OK || m_eSource == Source::None || !m_bActive.load(std::memory_order_acquire))
 	{
+		co_return;
+	}
+	const int64_t iNowMilliseconds = ::OI::Timer::SteadyMilliseconds() + 500;
+	if (m_eSource == Source::Local)
+	{
+		if (m_bPullWanted.exchange(false) || iNowMilliseconds >= m_iNextPullMilliseconds)
+		{
+			m_iNextPullMilliseconds = iNowMilliseconds + m_iPullMilliseconds;
+			m_stStatic.ApplyWatched();
+		}
 		co_return;
 	}
 	if (!m_bConnected.load())
@@ -369,9 +463,24 @@ void RegistryClient::Activate()
 		m_iNextHeartbeatMilliseconds = 0;
 		m_iNextPullMilliseconds = 0;
 	}
+	// 先问要不要上报。还没问到就先不上报。
+	if (!m_bReportKnown.load(std::memory_order_acquire))
+	{
+		std::vector<std::string> vProbe;
+		if (!m_sServiceName.empty())
+		{
+			vProbe.push_back(m_sServiceName);
+		}
+		::OI::RpcData::RegPullRes stProbe;
+		const int32_t iProbe = co_await ::OI::Rpc::RpcCall(*this, m_iSessionId.load(), ::OI::RpcData::RegPull(vProbe), stProbe, ::OI::Timer::Milliseconds(kWaitMs));
+		if (iProbe == OI_OK)
+		{
+			NoteReport(stProbe.bReport);
+		}
+	}
 	// 每秒才跑一次，提前半秒算到点，间隔不会被拖成两秒。
-	const int64_t iNowMilliseconds = ::OI::Timer::SteadyMilliseconds() + 500;
-	if (m_bPublished.load() && !m_bLost.load() && iNowMilliseconds >= m_iNextHeartbeatMilliseconds)
+	const bool bSkipReport = m_bReportKnown.load(std::memory_order_acquire) && !m_bReport.load(std::memory_order_acquire);
+	if (!bSkipReport && m_bPublished.load() && !m_bLost.load() && iNowMilliseconds >= m_iNextHeartbeatMilliseconds)
 	{
 		m_iNextHeartbeatMilliseconds = iNowMilliseconds + m_iHeartbeatMilliseconds;
 		int32_t iCode = OI_ERR_FAIL;
@@ -381,7 +490,7 @@ void RegistryClient::Activate()
 			iCode = co_await ::OI::Rpc::RpcCall(*this, m_iSessionId.load(), ::OI::RpcData::RegHeartbeat(m_sServiceName, m_iServiceId), stResponse, ::OI::Timer::Milliseconds(kWaitMs));
 			if (iCode != OI_OK)
 			{
-				// registry 重启过，或 Redis 暂时不可用。下一次重新登记。
+				// registry 重启过，或暂时不可用。下一次重新登记。
 				m_bRegistered = false;
 			}
 		}
@@ -407,9 +516,10 @@ void RegistryClient::Activate()
 		{
 			::OI::RpcData::RegPullRes stResponse;
 			const int32_t iCode = co_await ::OI::Rpc::RpcCall(*this, m_iSessionId.load(), ::OI::RpcData::RegPull(vNames), stResponse, ::OI::Timer::Milliseconds(kWaitMs));
-			// registry 自己连不上 Redis 时不知道真实情况，缓存保持原状，下一秒重拉。
+			// registry 暂时给不了名单，缓存保持原状，下一秒重拉。
 			if (iCode == OI_OK)
 			{
+				NoteReport(stResponse.bReport);
 				ServiceTable::GetInstance().Apply(vNames, ToInstances(stResponse.vList));
 			}
 			else
@@ -472,9 +582,21 @@ int32_t RegistryClient::PullSync(const std::string& sNameLocal, std::vector<Serv
 		return iThreadStatus;
 	}
 	vList.clear();
-	if (sNameLocal.empty() || !Configured())
+	const int32_t iSourceStatus = EnsureSource();
+	if (iSourceStatus != OI_OK)
+	{
+		return iSourceStatus;
+	}
+	if (sNameLocal.empty() || m_eSource == Source::None)
 	{
 		return sNameLocal.empty() ? OI_ERR_INVALID_ARGUMENT : OI_ERR_NOT_FOUND;
+	}
+	if (m_eSource == Source::Local)
+	{
+		Activate();
+		m_stStatic.Collect(sNameLocal, vList);
+		ServiceTable::GetInstance().Store(sNameLocal, vList);
+		return OI_OK;
 	}
 	RejectPollCallback("PullSync");
 	Activate();
@@ -498,6 +620,7 @@ int32_t RegistryClient::PullSync(const std::string& sNameLocal, std::vector<Serv
 		{
 			if (iCode == OI_OK)
 			{
+				NoteReport(stResponse.bReport);
 				pState->vList = ToInstances(stResponse.vList);
 			}
 			pState->iCode = iCode;
@@ -576,7 +699,12 @@ int32_t RegistryClient::Watch(::OI::Net::SessionManager* pManager, const std::st
 	{
 		return OI_ERR_INVALID_ARGUMENT;
 	}
-	if (!Configured())
+	const int32_t iSourceStatus = EnsureSource();
+	if (iSourceStatus != OI_OK)
+	{
+		return iSourceStatus;
+	}
+	if (m_eSource == Source::None)
 	{
 		return OI_OK;
 	}
@@ -600,7 +728,12 @@ int32_t RegistryClient::WatchList(::OI::Net::SessionManager* pManager, const std
 	{
 		return OI_ERR_INVALID_ARGUMENT;
 	}
-	if (!Configured())
+	const int32_t iSourceStatus = EnsureSource();
+	if (iSourceStatus != OI_OK)
+	{
+		return iSourceStatus;
+	}
+	if (m_eSource == Source::None)
 	{
 		return OI_OK;
 	}
@@ -620,7 +753,16 @@ int32_t RegistryClient::Publish(const std::string& sSection, const std::string& 
 	{
 		return iThreadStatus;
 	}
-	if (sSection == "Registry" || !Configured())
+	if (sSection == "Registry")
+	{
+		return OI_OK;
+	}
+	const int32_t iSourceStatus = EnsureSource();
+	if (iSourceStatus != OI_OK)
+	{
+		return iSourceStatus;
+	}
+	if (m_eSource == Source::None)
 	{
 		return OI_OK;
 	}
@@ -678,6 +820,12 @@ int32_t RegistryClient::Publish(const std::string& sSection, const std::string& 
 		}
 		return OI_OK;
 	}
+	if (m_eSource == Source::Local)
+	{
+		m_stStatic.CheckSelf(sNameLocal, iIdLocal, sAdvertiseIp, sAdvertisePort);
+		Activate();
+		return OI_OK;
+	}
 	RejectPollCallback("Publish");
 	::OI::Thread::MutexGuard stPublishLock(m_stPublishMutex);
 	if (m_bPublished.load())
@@ -689,6 +837,15 @@ int32_t RegistryClient::Publish(const std::string& sSection, const std::string& 
 	m_sServiceIp = sAdvertiseIp;
 	m_sServicePort = sAdvertisePort;
 	m_sServiceZone = sZoneLocal;
+	if (Ensure() == OI_OK)
+	{
+		ProbeReport();
+	}
+	if (m_bReportKnown.load(std::memory_order_acquire) && !m_bReport.load(std::memory_order_acquire))
+	{
+		Activate();
+		return OI_OK;
+	}
 	struct State
 	{
 		std::atomic<bool> bDone{false};

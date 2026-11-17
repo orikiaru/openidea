@@ -70,6 +70,13 @@ int32_t SessionManager::Init()
 	if (::OI::Base::Config::GlobalConfig().GetAs(GetIDString() + ".service", sService) && !sService.empty())
 	{
 		BindService(sService, sIpLocal, sPortLocal);
+		const int32_t iRegistryStatus = ::OI::Base::RegistryClient::GetInstance().ConfigStatus();
+		if (iRegistryStatus != OI_OK)
+		{
+			fprintf(stderr, "SessionManager::Init registry service=%s code=%d\n", sService.c_str(), iRegistryStatus);
+			fflush(stderr);
+			return iRegistryStatus;
+		}
 		sServiceName = sService;
 	}
 

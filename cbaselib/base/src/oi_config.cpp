@@ -1,5 +1,6 @@
 #include "cpptoml.h"
 #include "oi_config.h"
+#include "oi_errno.h"
 #include <iostream>
 
 namespace OI

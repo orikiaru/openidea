@@ -1,12 +1,12 @@
 #pragma once
 #include "oi_bytes_stream.h"
+#include "oi_coro.h"
 #include "oi_session_manager.h"
 #include "oi_singleton.h"
 #include <atomic>
 #include <cstdint>
 #include <functional>
 #include <map>
-#include <memory>
 #include <string>
 #include <vector>
 
@@ -96,6 +96,22 @@ class ServiceTable
 	std::map<std::string, State> m_mServices;
 };
 
+// 没有 Registry.ip 时用的本地名单。一行一个实例，不连 registry。
+class StaticRegistry
+{
+  public:
+	int32_t Load();
+	bool Empty() const;
+	void Collect(const std::string& sName, std::vector<ServiceInstance>& vList) const;
+	void ApplyWatched() const;
+	void CheckSelf(const std::string& sName, int32_t iId, const std::string& sIp, const std::string& sPort) const;
+
+  private:
+	std::vector<ServiceInstance> m_vInstances;
+	bool m_bLoaded = false;
+	int32_t m_iStatus = OI_OK;
+};
+
 // 连 registry 的客户端。应用层只在配置里写 service。
 // 起服时同步登记、同步拉取一次，之后连接、补登记、心跳、整量拉取都由内部 Update 周期处理，结果写进 ServiceTable。
 // 运行期选路只读本地缓存，不向 registry 发请求。
@@ -119,8 +135,10 @@ class RegistryClient : public ::OI::Net::SessionManager
 	int32_t Watch(::OI::Net::SessionManager* pManager, const std::string& sName);
 	// 会话管理器收整份名单，vInitial 是它已经拿到的那份。新订阅者在下一次成功拉取时收到名单，即使名单未变化。
 	int32_t WatchList(::OI::Net::SessionManager* pManager, const std::string& sName, const std::vector<ServiceInstance>& vInitial);
-	// 配置里有 registry 地址。
+	// 配了 Registry.ip，或没有 registry 但写了本地 instances。名单配置不合法时也返回真，调用方再取 ConfigStatus。
 	bool Configured();
+	// 本地名单是否能用。不合法返回错误码。
+	int32_t ConfigStatus();
 	// 每秒一次，上一次没结束就跳过：没连就连，没登记就登记，到点心跳，到点或被催促时整量拉取。
 	::OI::Coro::Task OnSecondUpdate(time_t iNow);
 	const std::string GetIDString() override;
@@ -133,6 +151,18 @@ class RegistryClient : public ::OI::Net::SessionManager
 	void OnSessionClosed(sid_t iSessionIdLocal) override;
 
   private:
+	enum class Source
+	{
+		None,
+		Local,
+		Registry,
+	};
+	// 有 Registry.ip 就连 registry。没有就用本地 instances，一份都没有就是不启用。
+	int32_t EnsureSource();
+	// 成功拉取后记下要不要上报本进程地址。
+	void NoteReport(bool bReport);
+	// 同步拉一次，只为了知道要不要上报。调用前要已经连上。
+	int32_t ProbeReport();
 	// 读心跳和拉取间隔，打开 OnTickUpdate。用过注册表才打开。
 	void Activate();
 	// 没连上就去连，然后等到连上或超时。
@@ -185,6 +215,13 @@ class RegistryClient : public ::OI::Net::SessionManager
 	// 只在 OnTickUpdate 里读写，同一时刻只有一条在跑。
 	int64_t m_iNextHeartbeatMilliseconds;
 	int64_t m_iNextPullMilliseconds;
+	Source m_eSource = Source::None;
+	bool m_bSourceReady = false;
+	int32_t m_iSourceStatus = OI_OK;
+	// 拉到过回包之后，m_bReport 才有效。
+	std::atomic<bool> m_bReportKnown;
+	std::atomic<bool> m_bReport;
+	StaticRegistry m_stStatic;
 };
 
 }

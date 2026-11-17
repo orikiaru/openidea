@@ -4,6 +4,7 @@ name = "ipcclient"
 id = 1
 
 # 注册进程的地址。查不到服务名时仍用下面各段的 ip/port。
+# 不写 ip 就用下面的 instances，不起 registry，也不上报。配了 ip 就去 registry 拉名单。
 [Registry]
 ip = "127.0.0.1"
 port = "17990"
@@ -31,6 +32,7 @@ hold = false
 db = false
 udp = false
 multi = false
+pool = false
 coro = false
 empty = false
 

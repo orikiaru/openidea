@@ -43,8 +43,8 @@ else()
 	endforeach()
 endif()
 
-set(BASE_M_LIBS db_m_static timer_m_static logger_m_static redis_m_static net_m_static proto_m_static base_m_static net_m_static timer_m_static hiredis_static)
-set(BASE_LIBS db_static timer_static logger_static redis_static net_static proto_static base_static net_static timer_static hiredis_static)
+set(BASE_M_LIBS db_m_static timer_m_static logger_m_static redis_m_static net_m_static proto_m_static base_m_static net_m_static timer_m_static hiredis_static db_m_static)
+set(BASE_LIBS db_static timer_static logger_static redis_static net_static proto_static base_static net_static timer_static hiredis_static db_static)
 option(OI_ENABLE_MYSQL "Build the MySQL database driver" OFF)
 
 # libuv 只编静态库，跟工程一起编译

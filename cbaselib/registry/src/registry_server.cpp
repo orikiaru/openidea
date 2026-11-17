@@ -12,8 +12,16 @@
 #include "oi_config.h"
 #include "oi_log.h"
 #include "oi_timer_manager.h"
+#include "oi_blocking_pool.h"
+#include "oi_db.h"
+#include "oi_db_row.h"
+#include "oi_db_table.h"
+#include "oi_mysql.h"
+#include "framework_protocol/oi_rpcdata_servicelease.h"
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
+#include <string>
 
 // 表、绑定和快照只在 poll 线程上动，协程也在这条线程上恢复，所以不加锁。
 #ifndef _SINGLE_THREAD_
@@ -125,7 +133,7 @@ class ReloadTimer : public ::OI::Timer::BaseTimer
 }
 
 RegistryServer::RegistryServer()
-    : m_bSnapshotOk(false), m_bReloading(false), m_iPullMilliseconds(1000), m_iExpireMilliseconds(3000)
+    : m_bSnapshotOk(false), m_bReloading(false), m_iPullMilliseconds(1000), m_iExpireMilliseconds(3000), m_bReport(true)
 {
 }
 RegistryServer::~RegistryServer()
@@ -174,8 +182,27 @@ int32_t RegistryServer::Init()
 	{
 		return iCode;
 	}
-	if (!LoadSpace())
+	std::string sRetired;
+	if (::OI::Base::Config::GlobalConfig().GetAs("Registry.store", sRetired))
 	{
+		fprintf(stderr, "registry 不再读 Registry.store，改用 Registry.config，取值 dynamic 或 static\n");
+		fflush(stderr);
+		return OI_ERR_INVALID_ARGUMENT;
+	}
+	std::string sConfig = "dynamic";
+	::OI::Base::Config::GlobalConfig().GetAs("Registry.config", sConfig);
+	if (sConfig.empty() || sConfig == "dynamic")
+	{
+		m_bReport = true;
+	}
+	else if (sConfig == "static")
+	{
+		m_bReport = false;
+	}
+	else
+	{
+		fprintf(stderr, "registry config=%s 只能是 dynamic 或 static\n", sConfig.c_str());
+		fflush(stderr);
 		return OI_ERR_INVALID_ARGUMENT;
 	}
 	::OI::Rpc::HandleRpc<::OI::RpcData::RegRegister>([](const ::OI::Rpc::RpcContext& stContext, ::OI::RpcData::RegRegister& stRequest, ::OI::RpcData::RegRegisterRes&)
@@ -199,6 +226,24 @@ int32_t RegistryServer::Init()
 	if (m_iExpireMilliseconds <= 0)
 	{
 		m_iExpireMilliseconds = 3000;
+	}
+	if (!m_bReport)
+	{
+		iCode = OpenMysql();
+		if (iCode != OI_OK)
+		{
+			return iCode;
+		}
+		OI::Coro::StartTask([this](OI::Coro::Token)
+		{
+			return BootMysql();
+		});
+		LOG_TRACE("registry config=static");
+		return OI_OK;
+	}
+	if (!LoadSpace())
+	{
+		return OI_ERR_INVALID_ARGUMENT;
 	}
 	iCode = ::OI::Redis::RedisClient::GetInstance().Init();
 	if (iCode != OI_OK)
@@ -229,6 +274,55 @@ OI::Coro::Task RegistryServer::Boot()
 	}
 	StartReload();
 	::OI::Timer::BaseTimerManager::GetInstance().AddTimer(new ReloadTimer(), m_iPullMilliseconds);
+}
+
+OI::Coro::Task RegistryServer::BootMysql()
+{
+	StartReload();
+	::OI::Timer::BaseTimerManager::GetInstance().AddTimer(new ReloadTimer(), m_iPullMilliseconds);
+	co_return;
+}
+
+int32_t RegistryServer::OpenMysql()
+{
+#ifndef OI_ENABLE_MYSQL
+	fprintf(stderr, "registry config=static 需要带 MySQL 客户端的构建\n");
+	fflush(stderr);
+	LOG_ERROR("registry config=static requires the mysql client");
+	return OI_ERR_FAIL;
+#else
+	OI::Mysql::Config stConfig;
+	::OI::Base::Config::GlobalConfig().GetAs("Registry.db_host", stConfig.sHost);
+	if (stConfig.sHost.empty())
+	{
+		stConfig.sHost = "127.0.0.1";
+	}
+	int32_t iPort = 3306;
+	::OI::Base::Config::GlobalConfig().GetAs("Registry.db_port", iPort);
+	if (iPort <= 0 || iPort > 65535)
+	{
+		fprintf(stderr, "registry db_port 不合法\n");
+		fflush(stderr);
+		return OI_ERR_INVALID_ARGUMENT;
+	}
+	stConfig.iPort = static_cast<uint32_t>(iPort);
+	if (!::OI::Base::Config::GlobalConfig().GetAs("Registry.db_user", stConfig.sUser) || stConfig.sUser.empty() || !::OI::Base::Config::GlobalConfig().GetAs("Registry.db_database", stConfig.sDatabase) || stConfig.sDatabase.empty())
+	{
+		fprintf(stderr, "registry config=static 需要 Registry.db_user 和 Registry.db_database\n");
+		fflush(stderr);
+		LOG_ERROR("registry static missing user or database");
+		return OI_ERR_INVALID_ARGUMENT;
+	}
+	::OI::Base::Config::GlobalConfig().GetAs("Registry.db_password", stConfig.sPassword);
+	::OI::Base::Config::GlobalConfig().GetAs("Registry.db_tls_ca", stConfig.sTlsCaFile);
+	const int32_t iPool = ::OI::Thread::ConfigureBlockingPool(::OI::Thread::BlockingType::Mysql, 1, 16);
+	if (iPool != OI_OK && iPool != OI_ERR_BUSY)
+	{
+		return iPool;
+	}
+	m_pMysql = std::make_unique<OI::Db::Client>(OI::Mysql::MakeDriver(std::move(stConfig)), 1);
+	return OI_OK;
+#endif
 }
 
 void RegistryServer::OnAddSession(::OI::Net::Session* pSession)
@@ -310,6 +404,14 @@ void RegistryServer::StartReload()
 		return;
 	}
 	m_bReloading = true;
+	if (!m_bReport)
+	{
+		OI::Coro::StartTask([this](OI::Coro::Token)
+		{
+			return ReloadMysql();
+		});
+		return;
+	}
 	OI::Coro::StartTask([this](OI::Coro::Token)
 	{
 		return Reload();
@@ -353,8 +455,77 @@ OI::Coro::Task RegistryServer::Reload()
 	m_bSnapshotOk = true;
 }
 
+OI::Coro::Task RegistryServer::ReloadMysql()
+{
+#ifndef OI_ENABLE_MYSQL
+	m_bReloading = false;
+	co_return;
+#else
+	if (m_pMysql == nullptr)
+	{
+		m_bReloading = false;
+		co_return;
+	}
+	OI::Db::Statement stSelect;
+	const std::vector<OI::Db::ColumnSpec> vColumns = OI::Db::DescribeRow(::OI::RpcData::ServiceLease{});
+	std::string sNames;
+	for (const OI::Db::ColumnSpec& stColumn : vColumns)
+	{
+		if (!sNames.empty())
+		{
+			sNames += ",";
+		}
+		sNames += OI::Db::QuoteName(stColumn.sName);
+	}
+	if (sNames.empty())
+	{
+		m_bReloading = false;
+		LOG_ERROR("registry static select build failed");
+		co_return;
+	}
+	stSelect.sSql = "SELECT " + sNames + " FROM " + OI::Db::QuoteName("oi_service_instance");
+	OI::Db::Result stResult;
+	OI::Db::Error stError;
+	const int32_t iCode = co_await m_pMysql->Call(std::move(stSelect), stResult, stError);
+	m_bReloading = false;
+	if (iCode != OI_OK)
+	{
+		const std::string sMessage = stError.sMessage.size() > 200 ? stError.sMessage.substr(0, 200) : stError.sMessage;
+		LOG_ERROR("registry static pull stage=%s native=%u message=%s", stError.sStage.c_str(), stError.iNativeCode, sMessage.c_str());
+		co_return;
+	}
+	std::vector<::OI::Base::ServiceInstance> vList;
+	vList.reserve(stResult.vRows.size());
+	for (size_t iRow = 0; iRow < stResult.vRows.size(); ++iRow)
+	{
+		::OI::Db::CellMap mCells;
+		::OI::RpcData::ServiceLease stRow;
+		if (!::OI::Db::RowCells(stResult, iRow, mCells) || !stRow.FromDbMap(mCells) || stRow.sName.empty() || stRow.iId <= 0 || stRow.sIp.empty() || stRow.sPort.empty())
+		{
+			LOG_ERROR("registry static pull bad row=%zu", iRow);
+			co_return;
+		}
+		::OI::Base::ServiceInstance stInst;
+		stInst.sName = stRow.sName;
+		stInst.iId = stRow.iId;
+		stInst.sIp = stRow.sIp;
+		stInst.sPort = stRow.sPort;
+		stInst.sZone = stRow.sZone;
+		vList.push_back(std::move(stInst));
+	}
+	m_vSnapshot.swap(vList);
+	m_bSnapshotOk = true;
+	co_return;
+#endif
+}
+
 ::OI::Rpc::RpcTask RegistryServer::Register(sid_t iSessionId, ::OI::RpcData::RegRegister stRequest)
 {
+	if (!m_bReport)
+	{
+		LOG_ERROR("registry does not accept register");
+		co_return OI_ERR_FAIL;
+	}
 	if (!ValidSpacePart(stRequest.sName) || stRequest.iId <= 0 || stRequest.sIp.empty() || stRequest.sPort.empty() || (!stRequest.sZone.empty() && !ValidSpacePart(stRequest.sZone)))
 	{
 		co_return OI_ERR_FAIL;
@@ -413,6 +584,11 @@ OI::Coro::Task RegistryServer::Reload()
 
 ::OI::Rpc::RpcTask RegistryServer::Refresh(sid_t iSessionId, ::OI::RpcData::RegHeartbeat stRequest)
 {
+	if (!m_bReport)
+	{
+		LOG_ERROR("registry does not accept heartbeat");
+		co_return OI_ERR_FAIL;
+	}
 	Binding stSecond;
 	{
 		Binding* pBinding = FindBinding(iSessionId, stRequest.sName, stRequest.iId);
@@ -497,6 +673,7 @@ OI::Coro::Task RegistryServer::Withdraw(Binding stSecond)
 
 int32_t RegistryServer::Pull(::OI::RpcData::RegPull& stRequest, ::OI::RpcData::RegPullRes& stResponse)
 {
+	stResponse.bReport = m_bReport;
 	if (!m_bSnapshotOk)
 	{
 		return OI_ERR_FAIL;

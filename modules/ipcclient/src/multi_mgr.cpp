@@ -83,16 +83,21 @@ int32_t MultiClient::Disconnects(int32_t iInstanceId)
 }
 
 MultiMgr::MultiMgr()
-    : m_bEnabled(false), m_stFixed("IpcMultiFixed"), m_stPeers("IpcMulti")
+    : m_bEnabled(false), m_bPool(false), m_stFixed("IpcMultiFixed"), m_stPeers("IpcMulti")
 {
 }
 
 int32_t MultiMgr::Load()
 {
 	TryGetConfig("Test.multi", m_bEnabled);
-	if (!m_bEnabled)
+	TryGetConfig("Test.pool", m_bPool);
+	if (!m_bEnabled && !m_bPool)
 	{
 		return OI_OK;
+	}
+	if (!m_bEnabled)
+	{
+		return m_stPeers.Init();
 	}
 	OI_NOTIFY_BIND_SELF(PeerNote, MultiClient, HandleNote);
 	int32_t iCode = m_stFixed.Init();
@@ -112,6 +117,15 @@ int32_t MultiMgr::Load()
 
 void MultiMgr::Start()
 {
+	if (m_bPool)
+	{
+		TestBoard::GetInstance().Arm();
+		OI::Coro::StartTask([](OI::Coro::Token)
+		{
+			return MultiMgr::GetInstance().Pool();
+		});
+		return;
+	}
 	if (!m_bEnabled)
 	{
 		return;
@@ -232,6 +246,47 @@ OI::Coro::TaskResult<int32_t> MultiMgr::SwapFixed()
 	    bConnected ? 1 : 0, iBad);
 	std::fflush(stdout);
 	co_return iBad;
+}
+
+OI::Coro::Task MultiMgr::Pool()
+{
+	m_stPeers.Start();
+	const bool bUp = co_await WaitFor([this]()
+	{
+		return m_stPeers.InstanceIds() == std::vector<int32_t>{1, 2} && m_stPeers.Connects(1) >= 1 && m_stPeers.Connects(2) >= 1;
+	}, 15000);
+	std::map<int32_t, int32_t> mHits;
+	int32_t iAnyBad = 0;
+	for (int32_t iIndex = 0; iIndex < 20; ++iIndex)
+	{
+		::OI::RpcData::PeerProbeReq stRequest;
+		stRequest.iTag = 20 + iIndex;
+		::OI::RpcData::PeerProbeRes stResponse;
+		const int32_t iRet = co_await m_stPeers.CallAny(stRequest, stResponse, ::OI::Timer::Seconds(3));
+		if (iRet != OI_OK || stResponse.iTag != stRequest.iTag)
+		{
+			++iAnyBad;
+			continue;
+		}
+		++mHits[stResponse.iServiceId];
+	}
+	const bool bAny = bUp && iAnyBad == 0 && mHits[1] > 0 && mHits[2] > 0;
+	std::printf("pool call any one=%d two=%d failed=%d bad=%d\n", mHits[1], mHits[2], iAnyBad, bAny ? 0 : 1);
+	::OI::RpcData::PeerProbeReq stAllRequest;
+	stAllRequest.iTag = 40;
+	auto vAll = co_await m_stPeers.CallAll<::OI::RpcData::PeerProbeRes>(stAllRequest, ::OI::Timer::Seconds(3));
+	bool bAllOk = vAll.size() == 2;
+	for (size_t iIndex = 0; bAllOk && iIndex < vAll.size(); ++iIndex)
+	{
+		const auto& stPeer = vAll[iIndex];
+		bAllOk = stPeer.iInstanceId == (int32_t)iIndex + 1 && stPeer.stResult.GetRet() == OI_OK && stPeer.stResult.GetRes().iTag == 40 && stPeer.stResult.GetRes().iServiceId == stPeer.iInstanceId;
+	}
+	std::printf("pool call all slots=%d bad=%d\n", (int32_t)vAll.size(), bAllOk ? 0 : 1);
+	const int32_t iBadTotal = (bAny && bAllOk) ? 0 : 1;
+	std::printf("pool done bad=%d\n", iBadTotal);
+	std::fflush(stdout);
+	TestBoard::GetInstance().Done(iBadTotal == 0 ? 0 : 1);
+	co_return;
 }
 
 OI::Coro::Task MultiMgr::Run()

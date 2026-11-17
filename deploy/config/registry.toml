@@ -11,12 +11,15 @@ port = "17990"
 type = "tcp"
 project = "openidea"
 env = "dev"
+# dynamic：动态配置，业务进程上报自己的地址。static：静态配置，名单由运维维护，业务进程只拉。
+# 不写 config 就是 dynamic。static 另配 db_host、db_port、db_user、db_password、db_database，可选 db_tls_ca。
+config = "dynamic"
 # 心跳停了这么久就判下线。登记的连接断了当场下线，不用等。
 expire_ms = 3000
-# 隔这么久从 Redis 整量拉一次，客户端来拉时直接给这份
+# 隔这么久整量拉一次名单，客户端来拉时直接给这份
 pull_ms = 1000
 
-# 注册表写到这台 Redis。直接连真正的 Redis，不经 redisserver，也不写 service。
+# 动态配置现在写到这台 Redis。直接连真正的 Redis，不经 redisserver，也不写 service。
 # 超时要比 expire_ms 短，Redis 卡住时客户端还来得及重新登记。
 [RedisClient]
 ip = "127.0.0.1"

@@ -5,14 +5,22 @@
 #include "oi_rpc_session_manager.h"
 #include "oi_singleton.h"
 #include <map>
+#include <memory>
 #include <set>
 #include <string>
 #include <vector>
 
-// 注册进程。登记写进 Redis，登记的连接断了当场删掉。按 pull_ms 整量拉一次整理好，客户端来拉时直接给。
-// Redis 走 RedisClient 协程，等 Redis 的时候 poll 照转。
-// 所有键都在 oi:{project.env}: 下面，不同项目、不同环境互不可见。
-// svc 是名字集合，svc:<name> 是这个名字的 id 集合，svc:<name>:<id> 是一份实例，值是 "ip port" 或 "ip port 分区"。
+namespace OI
+{
+namespace Db
+{
+class Client;
+}
+}
+
+// 注册进程。config=dynamic 是动态配置，接受登记，连接断了当场删掉。config=static 是静态配置，只读名单，不接受登记。
+// 业务进程拉到的是地址名单，以及要不要上报自己。用哪套引擎只配在这个进程上。
+// 动态配置的键都在 oi:{project.env}: 下面。svc 是名字集合，svc:<name> 是 id 集合，svc:<name>:<id> 是一份实例。
 class RegistryServer : public ::OI::Rpc::ProtoSessionManager
 {
 	DECLARE_SINGLETON(RegistryServer)
@@ -46,7 +54,10 @@ class RegistryServer : public ::OI::Rpc::ProtoSessionManager
 		REG_RENEWED = 2
 	};
 	OI::Coro::Task Boot();
+	OI::Coro::Task BootMysql();
+	int32_t OpenMysql();
 	OI::Coro::Task Reload();
+	OI::Coro::Task ReloadMysql();
 	::OI::Rpc::RpcTask Register(sid_t iSessionId, ::OI::RpcData::RegRegister stRequest);
 	::OI::Rpc::RpcTask Refresh(sid_t iSessionId, ::OI::RpcData::RegHeartbeat stRequest);
 	int32_t Pull(::OI::RpcData::RegPull& stRequest, ::OI::RpcData::RegPullRes& stResponse);
@@ -67,4 +78,7 @@ class RegistryServer : public ::OI::Rpc::ProtoSessionManager
 	int32_t m_iExpireMilliseconds;
 	std::string m_sSpace;
 	std::string m_sPrefix;
+	// 动态配置为真，业务进程要上报自己的地址。静态配置为假。
+	bool m_bReport;
+	std::unique_ptr<::OI::Db::Client> m_pMysql;
 };

@@ -57,6 +57,17 @@ rpcdata RegPull {
 
 rpcdata RegPullRes {
     0 vector<RegInstance> vList;
+    // 为真就上报本进程的地址。名单从哪来由 registry 自己决定，业务进程不用知道。
+    1 bool bReport;
+}
+
+// 静态配置读这张表。地址由运维维护，进程不登记。
+rpcdata ServiceLease db {
+    0 [db name] [dbkey] [dbtype VARCHAR 64] string sName;
+    1 [db id] [dbkey] int32_t iId;
+    2 [db ip] [dbtype VARCHAR 64] string sIp;
+    3 [db port] [dbtype VARCHAR 8] string sPort;
+    4 [db zone] [dbtype VARCHAR 32] string sZone;
 }
 
 rpc LogRemote { id -1001; request LogRecord; response LogAck; }
