@@ -57,8 +57,8 @@ rpcdata RegPull {
 
 rpcdata RegPullRes {
     0 vector<RegInstance> vList;
-    // 为真就上报本进程的地址。名单从哪来由 registry 自己决定，业务进程不用知道。
-    1 bool bReport;
+    // 为真是静态名单，业务进程不上报；旧 registry 不带此字段，默认 false 照常上报。
+    2 bool bStatic;
 }
 
 // 静态配置读这张表。地址由运维维护，进程不登记。

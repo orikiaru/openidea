@@ -13,7 +13,7 @@ instances = [
 ]
 ```
 
-配了 `Registry.ip` 就连 registry。拉取回包里有名单，还有 `bReport`。为真就登记自己的地址并按秒心跳，为假只使用名单。查询失败时缓存保持原状。
+配了 `Registry.ip` 就连 registry。拉取回包里有名单，还有 `bStatic`。为真只使用名单，为假登记自己的地址并按秒心跳；旧 registry 不带该字段时默认登记。查询失败时缓存保持原状。
 
 下面是 registry 进程。它只起一份，单线程，代码在 `cbaselib/registry`。`Registry.config` 不写或是 `dynamic` 时是动态配置，业务进程要上报。`config = "static"` 时是静态配置，名单在表 `oi_service_instance`，由运维维护，业务进程只拉。现在动态配置用 Redis，静态配置用 MySQL；换引擎不改这两个名字。静态配置的库连接用 `Registry.db_host`、`db_port`、`db_user`、`db_password`、`db_database`，可选 `db_tls_ca`，并且构建要带 MySQL 客户端。
 
@@ -116,7 +116,7 @@ Redis 连不上或卡住时，登记和续期回失败，客户端下一次心�
 
 通知复制消息并启动任务，通过现有 RPC 路径发送，默认超时 180 秒。返回 `OI_OK` 仅表示任务已启动，不代表对端收到；发送、回执或超时失败由任务错误处理器报告。
 
-服务端推下来的消息登记在接收它的管理器上：自己的 `Init` 里写 `HandleNotify(&类::成员)`，别处写 `管理器.HandleNotify(&类::成员)`。`OI_RPC_SELF(类型)` 拿到的就是这个管理器。`InstanceIds()` 给当前名单，`ConnectedSid(实例号)` 给这台当前的会话，`IsConnect()` 表示至少有一台连着。
+服务端推下来的消息登记在接收它的管理器上：自己的 `Init` 里写 `RegisterNotifyHandler(&类::成员)`，别处写 `管理器.RegisterNotifyHandler(&类::成员)`。`OI_RPC_SELF(类型)` 拿到的就是这个管理器。`InstanceIds()` 给当前名单，`ConnectedSid(实例号)` 给这台当前的会话，`IsConnect()` 表示至少有一台连着。
 
 写死地址时运行中要换服务器，在 `Init` 之后调 `UseAddress(ip, port)`：旧连接退役，在途调用回 `OI_ERR_CONNECT`，实例号仍是 0，`Start` 过就马上连新地址，`GetStrIP()`、`GetStrPort()` 跟着变。配了 `service` 时返回 `OI_ERR_INVALID_ARGUMENT`；成功返回 `OI_OK`，地址没变什么都不做。
 

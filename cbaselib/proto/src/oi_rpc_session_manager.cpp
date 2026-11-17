@@ -2,12 +2,14 @@
 #include "oi_base.h"
 #include "oi_rpc_coro.h"
 #include <algorithm>
+#include <cstdio>
+#include <stdexcept>
 namespace OI
 {
 namespace Rpc
 {
 
-int32_t ProtoSessionManager::BindRpcHandler(proto_type_t iId, RpcHandleFn fnHandle)
+void ProtoSessionManager::BindRpcHandler(proto_type_t iId, RpcHandleFn fnHandle)
 {
 	bool bInserted = false;
 	{
@@ -17,9 +19,10 @@ int32_t ProtoSessionManager::BindRpcHandler(proto_type_t iId, RpcHandleFn fnHand
 	if (!bInserted)
 	{
 		LOG_ERROR("rpc handler already bound manager=%s proto=%u", GetIDString().c_str(), (unsigned)iId);
-		return OI_ERR_EXIST;
+		fprintf(stderr, "rpc handler already bound manager=%s proto=%u\n", GetIDString().c_str(), (unsigned)iId);
+		fflush(stderr);
+		throw std::logic_error("rpc handler already bound manager=" + GetIDString() + " proto=" + std::to_string((unsigned)iId));
 	}
-	return OI_OK;
 }
 
 const RpcHandleFn* ProtoSessionManager::FindRpcHandler(proto_type_t iId)

@@ -24,7 +24,7 @@ C++20 网络进程框架。业务写协议和协程，收发、回包配对、�
 
 1. `rpc.proto` 写请求、回复和一条 `rpc`。字段号手写，生成器不补号。
 2. 进程 `StartFramework` 读 toml，拉起 poll、定时器和协程。
-3. 收这条连接的会话管理器在自己的 `Init` 里 `HandleRpc(fn)` 或 `HandleRpc(&类::成员)` 注册。处理表按管理器各存一份。
+3. 收这条连接的会话管理器在自己的 `Init` 里 `RegisterRpcHandler(fn)` 或 `RegisterRpcHandler(&类::成员)` 注册。处理表按管理器各存一份。
 4. 请求进来，框架按协议号交给处理函数。函数填回复，返回 `0`。失败只回错误码，不带回复体。
 5. 客户端把回复对象传进 `RpcCall` 或 `CallAny`，`co_await` 得到错误码。返回码是 `0` 再读回复。非 `0` 时回复保持调用前的值。
 6. 这一次调用按调用号认回包。超时、断线、对端忙都是明确的错误码，框架不自动重放。
@@ -37,8 +37,8 @@ static OI_RPC_SYNC_HANDLER(AllEcho, HandleAllEcho)
     return 0;
 }
 
-// IpcServer::Init。在别处则写 管理器.HandleRpc(fn)。
-HandleRpc(HandleAllEcho);
+// IpcServer::Init。在别处则写 管理器.RegisterRpcHandler(fn)。
+RegisterRpcHandler(HandleAllEcho);
 ```
 
 ```cpp

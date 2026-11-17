@@ -6,9 +6,9 @@
 
 | 用途 | 声明 |
 | --- | --- |
-| 从形参推出，含成员函数 | [`HandleRpc`](../../cbaselib/proto/inc/oi_rpc_coro.h#L312) |
-| 显式请求类型 | [`HandleRpc`](../../cbaselib/proto/inc/oi_rpc_coro.h#L305) |
-| 显式请求和回包 | [`HandleRpc`](../../cbaselib/proto/inc/oi_rpc_coro.h#L299) |
+| 从形参推出，含成员函数 | [`RegisterRpcHandler`](../../cbaselib/proto/inc/oi_rpc_coro.h#L312) |
+| 显式请求类型 | [`RegisterRpcHandler`](../../cbaselib/proto/inc/oi_rpc_coro.h#L305) |
+| 显式请求和回包 | [`RegisterRpcHandler`](../../cbaselib/proto/inc/oi_rpc_coro.h#L299) |
 | 协程处理函数 | [`OI_RPC_HANDLER`](../../cbaselib/proto/inc/oi_rpc_coro.h#L1460) |
 | 同步处理函数 | [`OI_RPC_SYNC_HANDLER`](../../cbaselib/proto/inc/oi_rpc_coro.h#L1462) |
 | 带会话上下文 | [`OI_RPC_CONTEXT_HANDLER`](../../cbaselib/proto/inc/oi_rpc_coro.h#L1464) |
@@ -26,7 +26,7 @@
 
 int32_t RoomServer::Init()
 {
-	HandleRpc(&RoomServer::HandleJoin);
+	RegisterRpcHandler(&RoomServer::HandleJoin);
 	return ::OI::Rpc::ProtoSessionManager::Init();
 }
 ```
@@ -41,9 +41,9 @@ if (iRet != OI_OK)
 
 > **注意：** 处理函数 `co_return` 错误码。回包不再另带一个 `iCode`。失败时框架不序列化回复体。
 
-> **注意：** 注册是会话管理器的成员。在自己的 `Init` 里写 `HandleRpc(fn)` 或 `HandleRpc(&类::成员)`；在别处写 `管理器.HandleRpc(fn)`。请求处理表是 `ProtoSessionManager` 的私有锁和 map，按管理器各存一份，登记 `BindRpcHandler`，查找 `FindRpcHandler`（实现在 `oi_rpc_session_manager.cpp`）。只有登记到接收该连接的那个管理器上才生效。同一管理器重复登记同一协议号返回 `OI_ERR_EXIST` 并记日志，不覆盖。
+> **注意：** 注册是会话管理器的成员。在自己的 `Init` 里写 `RegisterRpcHandler(fn)` 或 `RegisterRpcHandler(&类::成员)`；在别处写 `管理器.RegisterRpcHandler(fn)`。请求处理表是 `ProtoSessionManager` 的私有锁和 map，按管理器各存一份，登记 `BindRpcHandler`，查找 `FindRpcHandler`（实现在 `oi_rpc_session_manager.cpp`）。只有登记到接收该连接的那个管理器上才生效。同一管理器重复登记同一协议号记日志并抛 `std::logic_error`，不覆盖，模块初始化失败退出。
 
-> **注意：** `HandleRpc(fn)` 从形参推出类型。显式写 `HandleRpc<Req>(fn)` 或 `HandleRpc<Req, Res>(fn)`，这两个重载收自由函数或 lambda。成员函数在登记时把当前管理器 `dynamic_cast` 成所属类：当前对象必须是该类或其派生，否则返回 `OI_ERR_INVALID_ARGUMENT`。该类还须继承 `ProtoSessionManager`。函数体里拿组件用 `OI_RPC_SELF(Type)`，它转换 `stContext.stManager`，对象要活过所有在途请求。
+> **注意：** `RegisterRpcHandler(fn)` 从形参推出类型。显式写 `RegisterRpcHandler<Req>(fn)` 或 `RegisterRpcHandler<Req, Res>(fn)`，这两个重载收自由函数或 lambda。成员函数在登记时把当前管理器 `dynamic_cast` 成所属类：当前对象必须是该类或其派生，否则抛 `std::logic_error`。该类还须继承 `ProtoSessionManager`。函数体里拿组件用 `OI_RPC_SELF(Type)`，它转换 `stContext.stManager`，对象要活过所有在途请求。
 
 > **注意：** 输出引用版 `RpcCall` 先看返回码，再读输出。非 0 时输出保持调用前的值。时长用 [`OI::Timer::MS`](../../cbaselib/timer/inc/oi_duration.h#L65)，默认 [`Seconds(180)`](../../cbaselib/proto/inc/oi_rpc_coro.h#L722)。
 

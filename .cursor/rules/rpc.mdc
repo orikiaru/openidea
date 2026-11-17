@@ -1,5 +1,5 @@
 ---
-description: RPC、RpcCall、HandleRpc、回包、调用号、超时。改协议调用前先读 docs/coroutine.md 的服务端和客户端，对照 AllEcho 和 Hold。
+description: RPC、RpcCall、RegisterRpcHandler、回包、调用号、超时。改协议调用前先读 docs/coroutine.md 的服务端和客户端，对照 AllEcho 和 Hold。
 alwaysApply: false
 ---
 
@@ -11,4 +11,4 @@ alwaysApply: false
 
 按服务名用 `CallAny`、`Call`、`CallAll`、`CallMany`，见 `docs/registry.md`。`CallAll` 和 `CallMany` 先 `Submit` 再等。
 
-服务端注册用 `HandleRpc(处理函数)`，类型从形参推出，见 `modules/ipcserver/src/ipcserver.cpp` 的 `AllEcho`。要推迟回包用同文件的 `Hold`：`co_await OI::Coro::yield(stRequest.iDelayMilliseconds)` 再写 `stResponse`。
+服务端注册用 `RegisterRpcHandler(处理函数)`，类型从形参推出，见 `modules/ipcserver/src/ipcserver.cpp` 的 `AllEcho`。要推迟回包用同文件的 `Hold`：`co_await OI::Coro::yield(stRequest.iDelayMilliseconds)` 再写 `stResponse`。

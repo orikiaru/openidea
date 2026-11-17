@@ -24,7 +24,7 @@ sequenceDiagram
     Main->>Log: Init
     Main->>App: Init
     alt 服务端
-        App->>App: HandleRpc 登记处理函数
+        App->>App: RegisterRpcHandler 登记处理函数
         App->>App: SessionManager.Init 读 ip port type
         Main->>App: StartServer
     else 客户端

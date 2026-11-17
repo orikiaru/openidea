@@ -42,8 +42,8 @@ const std::string IpcUdp::GetIDString()
 
 int32_t IpcUdp::Init()
 {
-	HandleRpc(&IpcUdp::HandleEcho);
-	HandleNotify(&IpcUdp::HandleNote);
+	RegisterRpcHandler(&IpcUdp::HandleEcho);
+	RegisterNotifyHandler(&IpcUdp::HandleNote);
 	return ::OI::Rpc::ProtoSessionManager::Init();
 }
 

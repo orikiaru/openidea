@@ -420,7 +420,7 @@ OI::Coro::TaskResult<int> RouteMgr::CheckRoutePoolCapacity()
 // 登记反向 Hold，供入站租约那一项使用。反向请求从路由连接进来，登记在 RouteManager 上。
 void RouteMgr::Prepare()
 {
-	OI::Rpc::RouteManager::GetInstance().HandleRpc(HandleReverseHold);
+	OI::Rpc::RouteManager::GetInstance().RegisterRpcHandler(HandleReverseHold);
 }
 
 // 选路之后、发送之前换区。单次和批量的目标连接保持选路当时的结果。

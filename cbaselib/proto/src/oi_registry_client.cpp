@@ -96,12 +96,12 @@ const std::string RegistryClient::GetIDString()
 
 int32_t RegistryClient::EnsureSource()
 {
-	if (m_bSourceReady)
+	if (m_bSourceReady.load(std::memory_order_acquire))
 	{
 		return m_iSourceStatus;
 	}
 	::OI::Thread::MutexGuard stLock(m_stPublishMutex);
-	if (m_bSourceReady)
+	if (m_bSourceReady.load(std::memory_order_acquire))
 	{
 		return m_iSourceStatus;
 	}
@@ -123,7 +123,7 @@ int32_t RegistryClient::EnsureSource()
 			m_eSource = Source::None;
 		}
 	}
-	m_bSourceReady = true;
+	m_bSourceReady.store(true, std::memory_order_release);
 	return m_iSourceStatus;
 }
 
@@ -152,7 +152,7 @@ int32_t RegistryClient::ProbeReport()
 	{
 		if (iCode == OI_OK)
 		{
-			pState->bReport = stResponse.bReport;
+			pState->bReport = !stResponse.bStatic;
 		}
 		pState->iCode = iCode;
 		pState->bDone.store(true, std::memory_order_release);
@@ -465,7 +465,7 @@ void RegistryClient::Activate()
 		const int32_t iProbe = co_await ::OI::Rpc::RpcCall(*this, m_iSessionId.load(), ::OI::RpcData::RegPull(vProbe), stProbe, ::OI::Timer::Milliseconds(kWaitMs));
 		if (iProbe == OI_OK)
 		{
-			NoteReport(stProbe.bReport);
+			NoteReport(!stProbe.bStatic);
 		}
 	}
 	// 每秒才跑一次，提前半秒算到点，间隔不会被拖成两秒。
@@ -509,7 +509,7 @@ void RegistryClient::Activate()
 			// registry 暂时给不了名单，缓存保持原状，下一秒重拉。
 			if (iCode == OI_OK)
 			{
-				NoteReport(stResponse.bReport);
+				NoteReport(!stResponse.bStatic);
 				ServiceTable::GetInstance().Apply(vNames, ToInstances(stResponse.vList));
 			}
 			else
@@ -610,7 +610,7 @@ int32_t RegistryClient::PullSync(const std::string& sNameLocal, std::vector<Serv
 		{
 			if (iCode == OI_OK)
 			{
-				NoteReport(stResponse.bReport);
+				NoteReport(!stResponse.bStatic);
 				pState->vList = ToInstances(stResponse.vList);
 			}
 			pState->iCode = iCode;
@@ -833,6 +833,12 @@ int32_t RegistryClient::Publish(const std::string& sSection, const std::string& 
 	}
 	if (m_bReportKnown.load(std::memory_order_acquire) && !m_bReport.load(std::memory_order_acquire))
 	{
+		{
+			::OI::Thread::MutexGuard stLock(m_stStateMutex);
+			m_bRegistered = false;
+			m_bPublished = true;
+		}
+		LOG_TRACE("registry publish %s id=%d static, skip report", m_sServiceName.c_str(), m_iServiceId);
 		Activate();
 		return OI_OK;
 	}

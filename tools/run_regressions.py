@@ -586,6 +586,20 @@ def run(case, args):
                 if case not in ("registry", "multi", "local", "registry-static"):
                     rs, rsp = start("redisserver")
                     ready(rs, rsp, "redis server listen")
+            if case == "rpc-ingress":
+                duplicate_config = cfg / "ipcserver-duplicate.toml"
+                duplicate_config.write_text((cfg / "ipcserver.toml").read_text(encoding="utf-8")
+                                            + "\nrpc_duplicate_handler = true\n", encoding="utf-8")
+                duplicate, duplicate_path = start("ipcserver-duplicate", [str(work / ("ipcserver" + SUFFIX)), str(duplicate_config)])
+                duplicate.wait(timeout=15)
+                procs.remove(duplicate)
+                output = duplicate_path.read_text(encoding="utf-8", errors="replace")
+                expected = 0xFFFFFFFF if WINDOWS else 255
+                assert duplicate.returncode == expected, "duplicate registration exit code=%s\n%s" % (duplicate.returncode, output)
+                assert "rpc handler already bound manager=IpcServer proto=3001" in output, output
+                assert "module init failed: rpc handler already bound manager=IpcServer proto=3001" in output, output
+                assert "ipc server listen" not in output, output
+                print("rpc duplicate registration startup failure PASS", flush=True)
             server, serverpath = start("ipcserver")
             ready(server, serverpath, "ipc server listen")
             if mode == "hold":

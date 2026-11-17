@@ -16,6 +16,7 @@
 #include "oi_rpcdata_allechores.h"
 #include "oi_rpcdata_holdreq.h"
 #include "oi_rpcdata_holdres.h"
+#include "framework_protocol/oi_rpcdata_regpullres.h"
 #include "oi_db_row.h"
 #include <map>
 #include "ipcclient.h"
@@ -96,6 +97,37 @@ int BinaryMgr::CheckBinaryContainers()
 	};
 	try
 	{
+		for (int iLegacy = 0; iLegacy < 3; ++iLegacy)
+		{
+			OI::Base::BytesStream stLegacy;
+			stLegacy.WritePb(0, std::vector<OI::RpcData::RegInstance>{});
+			if (iLegacy != 0)
+			{
+				stLegacy.WritePb(1, iLegacy == 2);
+			}
+			OI::RpcData::RegPullRes stLegacyResponse;
+			stLegacyResponse.deserialize(stLegacy);
+			fnCheck(!stLegacyResponse.bStatic && stLegacyResponse.vList.empty() && stLegacy.RemainSize() == 0,
+				"registry legacy and old report field default to reporting");
+		}
+		OI::RpcData::RegPullRes stStaticResponse;
+		stStaticResponse.bStatic = true;
+		OI::Base::BytesStream stStaticWire;
+		stStaticResponse.serialize(stStaticWire);
+		uint32_t iStaticSequence = 0;
+		uint32_t iStaticSize = 0;
+		stStaticWire.ReadPbHeader(iStaticSequence, iStaticSize);
+		stStaticWire.SkipPb(iStaticSize);
+		stStaticWire.ReadPbHeader(iStaticSequence, iStaticSize);
+		bool bStatic = false;
+		stStaticWire.ReadPb(iStaticSize, bStatic);
+		fnCheck(iStaticSequence == 2 && bStatic && stStaticWire.RemainSize() == 0, "registry static field 2 wire");
+		OI::Base::BytesStream stStaticInput;
+		stStaticInput.WritePb(2, true);
+		OI::RpcData::RegPullRes stStaticDecoded;
+		stStaticDecoded.deserialize(stStaticInput);
+		fnCheck(stStaticDecoded.bStatic && stStaticInput.RemainSize() == 0, "registry static decode");
+
 		const std::vector<int32_t> vNumbers = {1, -2};
 		OI::Base::BytesStream stWire;
 		stWire.WritePb(7, vNumbers);

@@ -1,6 +1,8 @@
 #include <stdio.h>
+#include <exception>
 #include "oi_net.h"
 #include "oi_base.h"
+#include "oi_poll.h"
 #include "ipcclient.h"
 
 int main(int iArgumentCount, char* vArguments[])
@@ -18,13 +20,30 @@ int main(int iArgumentCount, char* vArguments[])
 		return iCode;
 	}
 
-	iCode = IpcClient::GetInstance().Init();
-	if (iCode != OI_OK)
+	try
 	{
-		fprintf(stderr, "IpcClient Init failed: code=%d\n", iCode);
-		return iCode;
+		iCode = IpcClient::GetInstance().Init();
+		if (iCode != OI_OK)
+		{
+			fprintf(stderr, "IpcClient Init failed: code=%d\n", iCode);
+			return iCode;
+		}
+		IpcClient::GetInstance().StartClient();
 	}
-	IpcClient::GetInstance().StartClient();
+	catch (const std::exception& stError)
+	{
+		fprintf(stderr, "module init failed: %s\n", stError.what());
+		fflush(stderr);
+		::OI::Net::Poll::GetInstance().StopAndJoin();
+		return OI_ERR_FAIL;
+	}
+	catch (...)
+	{
+		fprintf(stderr, "module init failed: unknown exception\n");
+		fflush(stderr);
+		::OI::Net::Poll::GetInstance().StopAndJoin();
+		return OI_ERR_FAIL;
+	}
 
 	return ::OI::Base::RunFramework();
 }

@@ -114,7 +114,7 @@ class RegistryClient : public ::OI::Rpc::ProtoSessionManager
 	int64_t m_iNextHeartbeatMilliseconds;
 	int64_t m_iNextPullMilliseconds;
 	Source m_eSource = Source::None;
-	bool m_bSourceReady = false;
+	std::atomic<bool> m_bSourceReady{false};
 	int32_t m_iSourceStatus = OI_OK;
 	// 拉到过回包之后，m_bReport 才有效。
 	std::atomic<bool> m_bReportKnown;

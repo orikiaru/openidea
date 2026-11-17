@@ -123,9 +123,15 @@ static OI::Rpc::RpcTask HandleEncodingRegression(const OI::Rpc::RpcContext& stCo
 int32_t IpcServer::Init()
 {
 	TryGetConfig("Service.id", m_iServiceId);
-	HandleRpc(HandleAllEcho);
-	HandleRpc(HandleEmpty);
-	HandleRpc(&IpcServer::HandlePeerProbe);
+	RegisterRpcHandler(HandleAllEcho);
+	bool bDuplicateRegression = false;
+	TryGetConfig("Regression.rpc_duplicate_handler", bDuplicateRegression);
+	if (bDuplicateRegression)
+	{
+		RegisterRpcHandler(HandleAllEcho);
+	}
+	RegisterRpcHandler(HandleEmpty);
+	RegisterRpcHandler(&IpcServer::HandlePeerProbe);
 	bool bEncodingRegression = false;
 	TryGetConfig("Regression.encoding_failure", bEncodingRegression);
 	if (bEncodingRegression)
@@ -136,7 +142,7 @@ int32_t IpcServer::Init()
 	}
 	else
 	{
-		HandleRpc(HandleHold);
+		RegisterRpcHandler(HandleHold);
 	}
 	bool bReadLimitRegression = false;
 	TryGetConfig("Regression.rpc_read_limit", bReadLimitRegression);

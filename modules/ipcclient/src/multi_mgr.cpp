@@ -99,8 +99,8 @@ int32_t MultiMgr::Load()
 	{
 		return m_stPeers.Init();
 	}
-	m_stFixed.HandleNotify(&MultiClient::HandleNote);
-	m_stPeers.HandleNotify(&MultiClient::HandleNote);
+	m_stFixed.RegisterNotifyHandler(&MultiClient::HandleNote);
+	m_stPeers.RegisterNotifyHandler(&MultiClient::HandleNote);
 	int32_t iCode = m_stFixed.Init();
 	if (iCode != OI_OK)
 	{

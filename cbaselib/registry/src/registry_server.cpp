@@ -205,15 +205,15 @@ int32_t RegistryServer::Init()
 		fflush(stderr);
 		return OI_ERR_INVALID_ARGUMENT;
 	}
-	HandleRpc([](const ::OI::Rpc::RpcContext& stContext, ::OI::RpcData::RegRegister& stRequest, ::OI::RpcData::RegRegisterRes&)
+	RegisterRpcHandler([](const ::OI::Rpc::RpcContext& stContext, ::OI::RpcData::RegRegister& stRequest, ::OI::RpcData::RegRegisterRes&)
 	{
 		return RegistryServer::GetInstance().Register(stContext.iSessionId, stRequest);
 	});
-	HandleRpc([](const ::OI::Rpc::RpcContext& stContext, ::OI::RpcData::RegHeartbeat& stRequest, ::OI::RpcData::RegHeartbeatRes&)
+	RegisterRpcHandler([](const ::OI::Rpc::RpcContext& stContext, ::OI::RpcData::RegHeartbeat& stRequest, ::OI::RpcData::RegHeartbeatRes&)
 	{
 		return RegistryServer::GetInstance().Refresh(stContext.iSessionId, stRequest);
 	});
-	HandleRpc([](::OI::RpcData::RegPull& stRequest, ::OI::RpcData::RegPullRes& stResponse)
+	RegisterRpcHandler([](::OI::RpcData::RegPull& stRequest, ::OI::RpcData::RegPullRes& stResponse)
 	{
 		return RegistryServer::GetInstance().Pull(stRequest, stResponse);
 	});
@@ -673,7 +673,7 @@ OI::Coro::Task RegistryServer::Withdraw(Binding stSecond)
 
 int32_t RegistryServer::Pull(::OI::RpcData::RegPull& stRequest, ::OI::RpcData::RegPullRes& stResponse)
 {
-	stResponse.bReport = m_bReport;
+	stResponse.bStatic = !m_bReport;
 	if (!m_bSnapshotOk)
 	{
 		return OI_ERR_FAIL;

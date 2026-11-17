@@ -1,6 +1,8 @@
 #include <stdio.h>
+#include <exception>
 #include "oi_net.h"
 #include "oi_base.h"
+#include "oi_poll.h"
 #include "ipcserver.h"
 #include "ipcudp.h"
 
@@ -24,34 +26,51 @@ int main(int iArgumentCount, char* vArguments[])
 		return iCode;
 	}
 
-	iCode = IpcServer::GetInstance().Init();
-	if (iCode != OI_OK)
+	try
 	{
-		fprintf(stderr, "IpcServer Init failed: code=%d\n", iCode);
-		return iCode;
+		iCode = IpcServer::GetInstance().Init();
+		if (iCode != OI_OK)
+		{
+			fprintf(stderr, "IpcServer Init failed: code=%d\n", iCode);
+			return iCode;
+		}
+		iCode = IpcServer::GetInstance().StartServer();
+		if (iCode != OI_OK)
+		{
+			fprintf(stderr, "IpcServer StartServer failed: code=%d\n", iCode);
+			return iCode;
+		}
+		iCode = IpcUdp::GetInstance().Init();
+		if (iCode != OI_OK)
+		{
+			fprintf(stderr, "IpcUdp Init failed: code=%d\n", iCode);
+			return iCode;
+		}
+		iCode = IpcUdp::GetInstance().StartServer();
+		if (iCode != OI_OK)
+		{
+			fprintf(stderr, "IpcUdp StartServer failed: code=%d\n", iCode);
+			return iCode;
+		}
+		printf("ipc udp listen port=%u\n", (unsigned)IpcUdp::GetInstance().LocalPort());
+		printf("ipc server listen\n");
+		fflush(stdout);
+		IpcServer::GetInstance().StartHttpProbe();
 	}
-	iCode = IpcServer::GetInstance().StartServer();
-	if (iCode != OI_OK)
+	catch (const std::exception& stError)
 	{
-		fprintf(stderr, "IpcServer StartServer failed: code=%d\n", iCode);
-		return iCode;
+		fprintf(stderr, "module init failed: %s\n", stError.what());
+		fflush(stderr);
+		::OI::Net::Poll::GetInstance().StopAndJoin();
+		return OI_ERR_FAIL;
 	}
-	iCode = IpcUdp::GetInstance().Init();
-	if (iCode != OI_OK)
+	catch (...)
 	{
-		fprintf(stderr, "IpcUdp Init failed: code=%d\n", iCode);
-		return iCode;
+		fprintf(stderr, "module init failed: unknown exception\n");
+		fflush(stderr);
+		::OI::Net::Poll::GetInstance().StopAndJoin();
+		return OI_ERR_FAIL;
 	}
-	iCode = IpcUdp::GetInstance().StartServer();
-	if (iCode != OI_OK)
-	{
-		fprintf(stderr, "IpcUdp StartServer failed: code=%d\n", iCode);
-		return iCode;
-	}
-	printf("ipc udp listen port=%u\n", (unsigned)IpcUdp::GetInstance().LocalPort());
-	printf("ipc server listen\n");
-	fflush(stdout);
-	IpcServer::GetInstance().StartHttpProbe();
 
 	return ::OI::Base::RunFramework();
 }

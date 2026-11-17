@@ -52,7 +52,7 @@ int32_t UdpMgr::Load()
 	{
 		m_pNoteSeen[iIndex].store(0);
 	}
-	IpcUdp::GetInstance().HandleNotify([](const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::UdpNoteReq& stRequest)
+	IpcUdp::GetInstance().RegisterNotifyHandler([](const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::UdpNoteReq& stRequest)
 	{
 		return UdpMgr::GetInstance().HandleNote(stContext, stRequest);
 	});

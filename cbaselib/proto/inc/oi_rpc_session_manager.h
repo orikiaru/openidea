@@ -46,23 +46,23 @@ class ProtoSessionManager : public ::OI::Net::SessionManager
 	}
 
   public:
-	// 同一管理器上一个协议号只能登记一次，重复返回 OI_ERR_EXIST，原处理函数不变。
-	int32_t BindRpcHandler(proto_type_t iId, RpcHandleFn fnHandle);
+	// 同一管理器上一个协议号只能登记一次，重复抛 std::logic_error，原处理函数不变。
+	void BindRpcHandler(proto_type_t iId, RpcHandleFn fnHandle);
 	// 没登记返回空。
 	const RpcHandleFn* FindRpcHandler(proto_type_t iId);
 	// 以下定义在 oi_rpc_coro.h。处理函数形参是 (req, res) 或 (const RpcContext&, req, res)，类型从形参推出；
-	// 也可传本管理器类的成员函数，如 HandleRpc(&IpcServer::HandlePeerProbe)。带 auto 形参的写 HandleRpc<Req>。
+	// 也可传本管理器类的成员函数，如 RegisterRpcHandler(&IpcServer::HandlePeerProbe)。带 auto 形参的写 RegisterRpcHandler<Req>。
 	template <typename F>
-	int32_t HandleRpc(F fnFunction);
+	void RegisterRpcHandler(F fnFunction);
 	template <typename Req, typename F>
-	int32_t HandleRpc(F fnFunction);
+	void RegisterRpcHandler(F fnFunction);
 	template <typename Req, typename Res, typename F>
-	int32_t HandleRpc(F fnFunction);
+	void RegisterRpcHandler(F fnFunction);
 	// 单向消息，形参是 (msg) 或 (const RpcContext&, msg)，同样可传成员函数。
 	template <typename F>
-	int32_t HandleNotify(F fnFunction);
+	void RegisterNotifyHandler(F fnFunction);
 	template <typename Msg, typename F>
-	int32_t HandleNotify(F fnFunction);
+	void RegisterNotifyHandler(F fnFunction);
 	ProtoSessionManager()
 	{
 	}

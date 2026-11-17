@@ -12,6 +12,8 @@ from proto_parse import ProtocolGen
 from proto_text import ParseProtoText
 from serialize_data_parse import SerializeData, SerializeDataType
 from serialize_data_file_gen import SerializeDataFileGen
+from module_data_parse import Module, Component
+from module_file_gen import ModuleFileGen
 
 
 from check_field_names import class_key
@@ -318,6 +320,33 @@ class FieldNamesTest(unittest.TestCase):
 
 
 class ModuleGeneratorTest(unittest.TestCase):
+    def test_generated_main_catches_component_initialization(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            module = Module()
+            module.name = "Example"
+            component = Component()
+            component.name = "Worker"
+            component.type = "Server"
+            module.components[component.name] = component
+            (root / "example/src").mkdir(parents=True)
+            generator = ModuleFileGen(module, str(root), str(root))
+            self.assertTrue(generator.GenModuleFile())
+            main = (root / "example/src/main.cpp").read_text(encoding="utf-8")
+            self.assertIn("#include <exception>", main)
+            start = main.index("    try\n    {")
+            init = main.index("        iCode = Worker::GetInstance().Init();")
+            catch = main.index("    catch (const std::exception& stError)")
+            unknown = main.index("    catch (...)")
+            run = main.index("    return ::OI::Base::RunFramework();")
+            self.assertLess(start, init)
+            self.assertLess(init, catch)
+            self.assertLess(catch, unknown)
+            self.assertLess(unknown, run)
+            self.assertIn('fprintf(stderr, "module init failed: %s\\n", stError.what());', main)
+            self.assertIn('fprintf(stderr, "module init failed: unknown exception\\n");', main)
+            self.assertEqual(main.count("::OI::Net::Poll::GetInstance().StopAndJoin();"), 2)
+
     def test_dispatch_command_line(self):
         root = Path(__file__).resolve().parents[1]
         main = root / "cbaselib/proto/proto_tool/main.py"

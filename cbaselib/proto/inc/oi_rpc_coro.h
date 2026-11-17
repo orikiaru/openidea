@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <atomic>
 #include <coroutine>
+#include <cstdio>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -223,7 +224,7 @@ RpcHandleFn MakeRpcHandler(F fnFunction, proto_type_t iResponseId)
 	};
 }
 
-// 从处理函数的形参取出请求和回包类型。只认非模板的 lambda、函数、函数指针和成员函数；带 auto 形参的写 HandleRpc<Req>。
+// 从处理函数的形参取出请求和回包类型。只认非模板的 lambda、函数、函数指针和成员函数；带 auto 形参的写 RegisterRpcHandler<Req>。
 template <typename T>
 struct RpcCallableArgs
 {
@@ -296,22 +297,22 @@ template <typename F>
 constexpr bool kRpcNotifyDeducible = requires { typename RpcNotifyTypes<typename RpcHandlerArgs<F>::Args>::Message; };
 
 template <typename Req, typename Res, typename F>
-int32_t ProtoSessionManager::HandleRpc(F fnFunction)
+void ProtoSessionManager::RegisterRpcHandler(F fnFunction)
 {
-	return BindRpcHandler(RpcProtoId<Req>::iValue, MakeRpcHandler<Req, Res>(std::move(fnFunction), RpcProtoId<Res>::iValue));
+	BindRpcHandler(RpcProtoId<Req>::iValue, MakeRpcHandler<Req, Res>(std::move(fnFunction), RpcProtoId<Res>::iValue));
 }
 
 template <typename Req, typename F>
-int32_t ProtoSessionManager::HandleRpc(F fnFunction)
+void ProtoSessionManager::RegisterRpcHandler(F fnFunction)
 {
-	return HandleRpc<Req, typename RpcProtoId<Req>::Response>(std::move(fnFunction));
+	RegisterRpcHandler<Req, typename RpcProtoId<Req>::Response>(std::move(fnFunction));
 }
 
 // 成员函数不在注册时找对象：登记时确认本管理器就是 C，处理时直接调本管理器的成员。
 template <typename F>
-int32_t ProtoSessionManager::HandleRpc(F fnFunction)
+void ProtoSessionManager::RegisterRpcHandler(F fnFunction)
 {
-	static_assert(kRpcHandlerDeducible<F>, "RPC handler must accept (req, res) or (const RpcContext&, req, res); generic lambdas need HandleRpc<Req>");
+	static_assert(kRpcHandlerDeducible<F>, "RPC handler must accept (req, res) or (const RpcContext&, req, res); generic lambdas need RegisterRpcHandler<Req>");
 	using Args = typename RpcHandlerArgs<F>::Args;
 	using Req = typename RpcHandlerTypes<Args>::Request;
 	using Res = typename RpcHandlerTypes<Args>::Response;
@@ -325,9 +326,11 @@ int32_t ProtoSessionManager::HandleRpc(F fnFunction)
 		if (pSelf == nullptr)
 		{
 			LOG_ERROR("rpc member handler class mismatch manager=%s proto=%u", GetIDString().c_str(), (unsigned)RpcProtoId<Req>::iValue);
-			return OI_ERR_INVALID_ARGUMENT;
+			fprintf(stderr, "rpc member handler class mismatch manager=%s proto=%u\n", GetIDString().c_str(), (unsigned)RpcProtoId<Req>::iValue);
+			fflush(stderr);
+			throw std::logic_error("rpc member handler class mismatch manager=" + GetIDString() + " proto=" + std::to_string((unsigned)RpcProtoId<Req>::iValue));
 		}
-		return HandleRpc<Req, Res>([pSelf, fnFunction](const RpcContext& stContext, Req& stRequest, Res& stResponse) -> R
+		RegisterRpcHandler<Req, Res>([pSelf, fnFunction](const RpcContext& stContext, Req& stRequest, Res& stResponse) -> R
 		{
 			if constexpr (std::tuple_size_v<Args> == 3)
 			{
@@ -341,13 +344,13 @@ int32_t ProtoSessionManager::HandleRpc(F fnFunction)
 	}
 	else
 	{
-		return HandleRpc<Req, Res>(std::move(fnFunction));
+		RegisterRpcHandler<Req, Res>(std::move(fnFunction));
 	}
 }
 
 // 调用号 0 不回包；RPC 包装通知复用默认响应与错误处理。
 template <typename Msg, typename F>
-int32_t ProtoSessionManager::HandleNotify(F fnFunction)
+void ProtoSessionManager::RegisterNotifyHandler(F fnFunction)
 {
 	using Response = typename RpcProtoId<Msg>::Response;
 	auto fnAdapter = [fnFunction = std::move(fnFunction)](const RpcContext& stContext, Msg& stMessage, Response&) mutable
@@ -361,13 +364,13 @@ int32_t ProtoSessionManager::HandleNotify(F fnFunction)
 			return fnFunction(stContext, stMessage);
 		}
 	};
-	return BindRpcHandler(RpcProtoId<Msg>::iValue, MakeRpcHandler<Msg, Response>(std::move(fnAdapter), RpcProtoId<Msg>::iValue));
+	BindRpcHandler(RpcProtoId<Msg>::iValue, MakeRpcHandler<Msg, Response>(std::move(fnAdapter), RpcProtoId<Msg>::iValue));
 }
 
 template <typename F>
-int32_t ProtoSessionManager::HandleNotify(F fnFunction)
+void ProtoSessionManager::RegisterNotifyHandler(F fnFunction)
 {
-	static_assert(kRpcNotifyDeducible<F>, "notify handler must accept (msg) or (const RpcContext&, msg); generic lambdas need HandleNotify<Msg>");
+	static_assert(kRpcNotifyDeducible<F>, "notify handler must accept (msg) or (const RpcContext&, msg); generic lambdas need RegisterNotifyHandler<Msg>");
 	using Args = typename RpcHandlerArgs<F>::Args;
 	using Msg = typename RpcNotifyTypes<Args>::Message;
 	if constexpr (std::is_member_function_pointer_v<F>)
@@ -379,9 +382,11 @@ int32_t ProtoSessionManager::HandleNotify(F fnFunction)
 		if (pSelf == nullptr)
 		{
 			LOG_ERROR("notify member handler class mismatch manager=%s proto=%u", GetIDString().c_str(), (unsigned)RpcProtoId<Msg>::iValue);
-			return OI_ERR_INVALID_ARGUMENT;
+			fprintf(stderr, "notify member handler class mismatch manager=%s proto=%u\n", GetIDString().c_str(), (unsigned)RpcProtoId<Msg>::iValue);
+			fflush(stderr);
+			throw std::logic_error("notify member handler class mismatch manager=" + GetIDString() + " proto=" + std::to_string((unsigned)RpcProtoId<Msg>::iValue));
 		}
-		return HandleNotify<Msg>([pSelf, fnFunction](const RpcContext& stContext, Msg& stMessage) -> R
+		RegisterNotifyHandler<Msg>([pSelf, fnFunction](const RpcContext& stContext, Msg& stMessage) -> R
 		{
 			if constexpr (std::tuple_size_v<Args> == 2)
 			{
@@ -395,7 +400,7 @@ int32_t ProtoSessionManager::HandleNotify(F fnFunction)
 	}
 	else
 	{
-		return HandleNotify<Msg>(std::move(fnFunction));
+		RegisterNotifyHandler<Msg>(std::move(fnFunction));
 	}
 }
 

@@ -1,6 +1,8 @@
 #include <stdio.h>
+#include <exception>
 #include "oi_net.h"
 #include "oi_base.h"
+#include "oi_poll.h"
 #include "log_server.h"
 #include "log_manager.h"
 
@@ -28,21 +30,42 @@ int main(int iArgumentCount, char* vArguments[])
 	}
 	::OI::Log::InitLocal(WriteSelfLog);
 
-	iCode = LogServer::GetInstance().Init();
-	if (iCode != OI_OK)
+	try
 	{
-		fprintf(stderr, "LogServer Init failed: code=%d\n", iCode);
-		::OI::Log::InitLocal(NULL);
-		LogManager::GetInstance().Stop();
-		return iCode;
+		iCode = LogServer::GetInstance().Init();
+		if (iCode != OI_OK)
+		{
+			fprintf(stderr, "LogServer Init failed: code=%d\n", iCode);
+			::OI::Log::InitLocal(NULL);
+			LogManager::GetInstance().Stop();
+			return iCode;
+		}
+		iCode = LogServer::GetInstance().StartServer();
+		if (iCode != OI_OK)
+		{
+			fprintf(stderr, "LogServer StartServer failed: code=%d\n", iCode);
+			::OI::Log::InitLocal(NULL);
+			LogManager::GetInstance().Stop();
+			return iCode;
+		}
 	}
-	iCode = LogServer::GetInstance().StartServer();
-	if (iCode != OI_OK)
+	catch (const std::exception& stError)
 	{
-		fprintf(stderr, "LogServer StartServer failed: code=%d\n", iCode);
+		fprintf(stderr, "module init failed: %s\n", stError.what());
+		fflush(stderr);
+		::OI::Net::Poll::GetInstance().StopAndJoin();
 		::OI::Log::InitLocal(NULL);
 		LogManager::GetInstance().Stop();
-		return iCode;
+		return OI_ERR_FAIL;
+	}
+	catch (...)
+	{
+		fprintf(stderr, "module init failed: unknown exception\n");
+		fflush(stderr);
+		::OI::Net::Poll::GetInstance().StopAndJoin();
+		::OI::Log::InitLocal(NULL);
+		LogManager::GetInstance().Stop();
+		return OI_ERR_FAIL;
 	}
 
 	iCode = ::OI::Base::RunFramework();
