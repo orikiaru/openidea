@@ -29,6 +29,10 @@ SSH_OPTS = (
     "PreferredAuthentications=publickey",
     "-o",
     "ConnectTimeout=15",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=3",
 )
 
 # 顶层目录/文件名，或任意路径段名。

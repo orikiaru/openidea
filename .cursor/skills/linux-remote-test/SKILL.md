@@ -27,10 +27,10 @@ description: >-
 只走公钥。SSH 参数固定：
 
 ```text
-ssh -i <identity> -o IdentitiesOnly=yes -o BatchMode=yes -o PreferredAuthentications=publickey -o ConnectTimeout=15 <user>@<ip>
+ssh -i <identity> -o IdentitiesOnly=yes -o BatchMode=yes -o PreferredAuthentications=publickey -o ConnectTimeout=15 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 <user>@<ip>
 ```
 
-`BatchMode` 失败就停，告诉用户公钥没登上。不要改用密码，不要把密码写进命令。
+`ServerAliveInterval` 不能省：连接无声断开时，没有心跳的 ssh 会一直挂着，查询永远不返回。`BatchMode` 失败就停，告诉用户公钥没登上。不要改用密码，不要把密码写进命令。
 
 在 PowerShell 里发远程脚本：用单引号 here-string，去掉 CR，管道给 `ssh <user>@<ip> "bash -s"`。不要用 `&&`，不要用 bash heredoc，远程脚本里的 `$` 不要让 PowerShell 展开。
 
