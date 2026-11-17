@@ -600,6 +600,18 @@ def run(case, args):
                 assert "module init failed: rpc handler already bound manager=IpcServer proto=3001" in output, output
                 assert "ipc server listen" not in output, output
                 print("rpc duplicate registration startup failure PASS", flush=True)
+                failed_config = cfg / "ipcserver-init-fail.toml"
+                failed_config.write_text((cfg / "ipcserver.toml").read_text(encoding="utf-8")
+                                         + "\nrpc_init_fail = true\n", encoding="utf-8")
+                failed, failed_path = start("ipcserver-init-fail", [str(work / ("ipcserver" + SUFFIX)), str(failed_config)])
+                failed.wait(timeout=15)
+                procs.remove(failed)
+                output = failed_path.read_text(encoding="utf-8", errors="replace")
+                assert failed.returncode == expected, "init failure exit code=%s\n%s" % (failed.returncode, output)
+                assert "IpcServer Init failed: code=-1" in output, output
+                assert "pure virtual" not in output and "terminate called" not in output, output
+                assert "ipc server listen" not in output, output
+                print("rpc init error startup failure PASS", flush=True)
             server, serverpath = start("ipcserver")
             ready(server, serverpath, "ipc server listen")
             if mode == "hold":

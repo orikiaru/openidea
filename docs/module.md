@@ -57,7 +57,7 @@ JSON 会穿透。嵌套的 `rpcdata`、`vector`、`map` 按内层继续生成，
 - 组件的 `inc/*.h` 和 `src/*.cpp`
 - `deploy/config/<name>.toml`
 
-生成的 main 把组件初始化包在 try/catch 里，启动期异常打印原因、停止 poll 后以 `OI_ERR_FAIL` 退出。
+生成的 main 把组件初始化包在 try/catch 里；启动期任何失败（错误码或异常）先 `StopFramework()` 停掉 poll 线程再返回，避免退出时静态析构和 poll 线程并发。
 
 生成的组件都是单例（`DECLARE_SINGLETON`），带 `OI::Coro::Task OnSecondUpdate(time_t)`，默认函数体是 `co_return;`。日历秒变化时 `StartTask` 启动，只启动、不等待。Server 继承 `ProtoSessionManager`；Client 继承 `ProtoMultiClientManager`，配置段多一个 `service`，留空只连 ip/port 这一台，填了服务名就连注册表里的每一台，见 [服务注册](registry.md) 的“每台各连一条”。
 

@@ -2,7 +2,6 @@
 #include <exception>
 #include "oi_net.h"
 #include "oi_base.h"
-#include "oi_poll.h"
 #include "registry_server.h"
 
 int main(int iArgumentCount, char* vArguments[])
@@ -19,39 +18,47 @@ int main(int iArgumentCount, char* vArguments[])
 	if (iCode != OI_OK)
 	{
 		fprintf(stderr, "Log Init failed: code=%d\n", iCode);
+		::OI::Base::StopFramework();
 		return iCode;
 	}
 
-	try
+	iCode = [&]() -> int32_t
 	{
-		iCode = RegistryServer::GetInstance().Init();
-		if (iCode != OI_OK)
+		try
 		{
-			fprintf(stderr, "RegistryServer Init failed: code=%d\n", iCode);
-			return iCode;
+			iCode = RegistryServer::GetInstance().Init();
+			if (iCode != OI_OK)
+			{
+				fprintf(stderr, "RegistryServer Init failed: code=%d\n", iCode);
+				return iCode;
+			}
+			iCode = RegistryServer::GetInstance().StartServer();
+			if (iCode != OI_OK)
+			{
+				fprintf(stderr, "RegistryServer StartServer failed: code=%d\n", iCode);
+				return iCode;
+			}
+			printf("registry server listen\n");
+			fflush(stdout);
 		}
-		iCode = RegistryServer::GetInstance().StartServer();
-		if (iCode != OI_OK)
+		catch (const std::exception& stError)
 		{
-			fprintf(stderr, "RegistryServer StartServer failed: code=%d\n", iCode);
-			return iCode;
+			fprintf(stderr, "module init failed: %s\n", stError.what());
+			fflush(stderr);
+			return OI_ERR_FAIL;
 		}
-		printf("registry server listen\n");
-		fflush(stdout);
-	}
-	catch (const std::exception& stError)
+		catch (...)
+		{
+			fprintf(stderr, "module init failed: unknown exception\n");
+			fflush(stderr);
+			return OI_ERR_FAIL;
+		}
+		return OI_OK;
+	}();
+	if (iCode != OI_OK)
 	{
-		fprintf(stderr, "module init failed: %s\n", stError.what());
-		fflush(stderr);
-		::OI::Net::Poll::GetInstance().StopAndJoin();
-		return OI_ERR_FAIL;
-	}
-	catch (...)
-	{
-		fprintf(stderr, "module init failed: unknown exception\n");
-		fflush(stderr);
-		::OI::Net::Poll::GetInstance().StopAndJoin();
-		return OI_ERR_FAIL;
+		::OI::Base::StopFramework();
+		return iCode;
 	}
 
 	return ::OI::Base::RunFramework();

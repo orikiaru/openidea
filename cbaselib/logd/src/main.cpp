@@ -2,7 +2,6 @@
 #include <exception>
 #include "oi_net.h"
 #include "oi_base.h"
-#include "oi_poll.h"
 #include "log_server.h"
 #include "log_manager.h"
 
@@ -21,51 +20,56 @@ int main(int iArgumentCount, char* vArguments[])
 		return iCode;
 	}
 
-	// 写线程起来之前的日志只打 stdout
-	iCode = LogManager::GetInstance().Init();
+	LogManager* pLogManager = nullptr;
+	iCode = [&]() -> int32_t
+	{
+		try
+		{
+			// 写线程起来之前的日志只打 stdout
+			pLogManager = &LogManager::GetInstance();
+			iCode = pLogManager->Init();
+			if (iCode != OI_OK)
+			{
+				fprintf(stderr, "LogManager Init failed: code=%d\n", iCode);
+				return iCode;
+			}
+			::OI::Log::InitLocal(WriteSelfLog);
+			iCode = LogServer::GetInstance().Init();
+			if (iCode != OI_OK)
+			{
+				fprintf(stderr, "LogServer Init failed: code=%d\n", iCode);
+				return iCode;
+			}
+			iCode = LogServer::GetInstance().StartServer();
+			if (iCode != OI_OK)
+			{
+				fprintf(stderr, "LogServer StartServer failed: code=%d\n", iCode);
+				return iCode;
+			}
+		}
+		catch (const std::exception& stError)
+		{
+			fprintf(stderr, "module init failed: %s\n", stError.what());
+			fflush(stderr);
+			return OI_ERR_FAIL;
+		}
+		catch (...)
+		{
+			fprintf(stderr, "module init failed: unknown exception\n");
+			fflush(stderr);
+			return OI_ERR_FAIL;
+		}
+		return OI_OK;
+	}();
 	if (iCode != OI_OK)
 	{
-		fprintf(stderr, "LogManager Init failed: code=%d\n", iCode);
+		::OI::Base::StopFramework();
+		::OI::Log::InitLocal(NULL);
+		if (pLogManager)
+		{
+			pLogManager->Stop();
+		}
 		return iCode;
-	}
-	::OI::Log::InitLocal(WriteSelfLog);
-
-	try
-	{
-		iCode = LogServer::GetInstance().Init();
-		if (iCode != OI_OK)
-		{
-			fprintf(stderr, "LogServer Init failed: code=%d\n", iCode);
-			::OI::Log::InitLocal(NULL);
-			LogManager::GetInstance().Stop();
-			return iCode;
-		}
-		iCode = LogServer::GetInstance().StartServer();
-		if (iCode != OI_OK)
-		{
-			fprintf(stderr, "LogServer StartServer failed: code=%d\n", iCode);
-			::OI::Log::InitLocal(NULL);
-			LogManager::GetInstance().Stop();
-			return iCode;
-		}
-	}
-	catch (const std::exception& stError)
-	{
-		fprintf(stderr, "module init failed: %s\n", stError.what());
-		fflush(stderr);
-		::OI::Net::Poll::GetInstance().StopAndJoin();
-		::OI::Log::InitLocal(NULL);
-		LogManager::GetInstance().Stop();
-		return OI_ERR_FAIL;
-	}
-	catch (...)
-	{
-		fprintf(stderr, "module init failed: unknown exception\n");
-		fflush(stderr);
-		::OI::Net::Poll::GetInstance().StopAndJoin();
-		::OI::Log::InitLocal(NULL);
-		LogManager::GetInstance().Stop();
-		return OI_ERR_FAIL;
 	}
 
 	iCode = ::OI::Base::RunFramework();

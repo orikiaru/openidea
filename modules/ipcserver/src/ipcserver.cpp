@@ -122,6 +122,12 @@ static OI::Rpc::RpcTask HandleEncodingRegression(const OI::Rpc::RpcContext& stCo
 
 int32_t IpcServer::Init()
 {
+	bool bInitFail = false;
+	TryGetConfig("Regression.rpc_init_fail", bInitFail);
+	if (bInitFail)
+	{
+		return OI_ERR_FAIL;
+	}
 	TryGetConfig("Service.id", m_iServiceId);
 	RegisterRpcHandler(HandleAllEcho);
 	bool bDuplicateRegression = false;

@@ -47,6 +47,11 @@ int32_t StartFramework(const char* pConfigPath)
 	return OI_OK;
 }
 
+void StopFramework()
+{
+	::OI::Net::Poll::GetInstance().StopAndJoin();
+}
+
 int RunFramework()
 {
 	SingletonUpdates::Instance().Start();
