@@ -8,6 +8,7 @@
 /deploy/bin
 /*.obj
 /build-win
+/build-win-st
 /build-clangd
 /build-clangd-win
 /build-clangd-linux

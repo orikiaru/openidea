@@ -4,36 +4,16 @@
 
 ## 全量
 
-2026-11-14。四组都是 `--case all` 的 20 项，不含协程压力和序列化压力。用例：echo、log、log-backpressure、redis、redis-limit、redis-shutdown、redis-queue-timeout、rpc-ingress、redis-backpressure-bytes、redis-backpressure-count、redis-fairness、hold、rpc-admission-count、rpc-admission-bytes、reset、disk-full、registry、udp、multi、web。
+2026-11-17，提交 `a241d00`（RpcCallManager 单例、处理表并入 ProtoSessionManager）。四组都是 `--case all` 的 21 项，不含协程压力和序列化压力。用例：echo、log、log-backpressure、redis、redis-limit、redis-shutdown、redis-queue-timeout、rpc-ingress、redis-backpressure-bytes、redis-backpressure-count、redis-fairness、hold、rpc-admission-count、rpc-admission-bytes、reset、disk-full、registry、udp、multi、local、web。
 
 | 平台 | 线程 | CPU | 频率（MHz） | 通过 | 收尾 |
 | --- | --- | --- | --- | --- | --- |
-| 本机 Windows | 多线程 | AMD Ryzen 7 9800X3D，8 核 16 线程 | 约 4639 | 20 | 已编回多线程，约 345 秒。`hold timer update tick=3 second=1 overlap=0/0 skipped=10 bad=0` |
-| 本机 Windows | 单线程 | 同上 | 约 4639 | 20 | 已编回多线程，约 398 秒。`hold timer update tick=3 second=1 overlap=0/0 skipped=10 bad=0` |
-| 远程 Linux 4 核 | 多线程 | Intel Xeon Platinum 8255C | 2494 | 20 | 已编回多线程。`hold timer update tick=4 second=1 overlap=0/0 skipped=16 bad=0` |
-| 远程 Linux 2 核 | 单线程 | Intel Xeon Gold 6271C | 约 2594（历史实测） | 20 | 专用单线程机器，按 `--no-restore` 未编回多线程；测试后 SSH 超时，最终清理状态未能确认。 |
+| 本机 Windows | 多线程 | Intel Core i9-11900K，标称 3500 | 约 4515 | 21 | 约 406 秒。回声 `ok=1000000 mismatch=0 rpc_fail=0`，`hold timer update tick=4 second=1 overlap=0/0 skipped=16 bad=0` |
+| 本机 Windows | 单线程 | 同上 | 约 4515 | 21 | 约 437 秒，`build-win-st` 专用目录。`hold timer update tick=1 second=1 overlap=0/0 skipped=4 bad=0` |
+| 远程 Linux 4 核 | 多线程 | Intel Xeon Platinum 8255C | 2494 | 21 | 约 378 秒，gcc 零告警。另跑 MySQL、registry-static 通过。`hold timer update tick=3 second=1 overlap=0/0 skipped=8 bad=0` |
+| 远程 Linux 2 核 | 单线程 | Intel Xeon Gold 6271C | 2594 | 21 | 专用单线程目录，20:17:40 完成。另跑 MySQL、registry-static 通过。`hold timer update tick=4 second=1 overlap=0/0 skipped=16 bad=0` |
 
-四组并行跑。Windows 频率按测试后的 `% Processor Performance` 三次采样均值（约 98.7%）乘标称 4700 估算；远程单线程机器的频率沿用下方历史实测，本次因 SSH 超时未能复测。首次 Windows 两路因进程正常退出超时失败，改用新控制台重跑后通过。
-
-四组完成后为消除 MSVC 告警修改了 Windows 日志测试钩子，补跑 Windows 多线程 `log`、`log-backpressure`、`disk-full` 均通过；日志服固定多线程。
-
-提交 `12a194c` 后，2 核单线程机器仍连不上，改在远程 4 核机器上顺序复测 Linux 两种线程模式，源码为该提交：
-
-| 平台 | 线程 | CPU | 频率（MHz） | 通过 | 收尾 |
-| --- | --- | --- | --- | --- | --- |
-| 远程 Linux 4 核 | 单线程 | Intel Xeon Platinum 8255C | 2494（同机历史实测，本次未复测） | 20 | 约 483 秒，之后编回多线程。`hold timer update tick=3 second=1 overlap=0/0 skipped=9 bad=0` |
-| 远程 Linux 4 核 | 多线程 | 同上 | 同上 | 20 | 约 366 秒，已编回多线程，测试钩子关闭。回声 `ok=1000000 mismatch=0 rpc_fail=0`，`hold timer update tick=1 second=1 overlap=0/0 skipped=4 bad=0` |
-
-两次运行前后的清理都返回 0，没有本项目测试残留。2 核机器上一轮的清理状态仍未确认。
-
-2026-11-16 读取上限及 IO 线程解码改造，只运行 Linux 两组 `--case all`；Windows 单、多线程仅编译，未跑回归，因此不替换上面的四组全量记录。
-
-| 平台 | 线程 | CPU | 实测频率（MHz） | 通过 | 收尾 |
-| --- | --- | --- | --- | --- | --- |
-| 远程 Linux 4 核 | 多线程 | Intel Xeon Platinum 8255C | 2494 | 20/20 | MT，测试钩子关闭；`hold timer update tick=2 second=1 overlap=0/0 skipped=10 bad=0` |
-| 远程 Linux 2 核 | 单线程 | Intel Xeon Gold 6271C | 2594 | 20/20 | 专用 ST 目录，测试钩子关闭；`hold timer update tick=3 second=1 overlap=0/0 skipped=9 bad=0` |
-
-两组清理均返回 0。4 核另跑 MySQL 用例通过：`mysql row mapping bad=0`、`mysql rows bad=0`、`mysql done bad=0`。
+四组并行跑，前后清理都返回 0。Linux 频率读 `/proc/cpuinfo`；Windows 按 `% Processor Performance` 三次采样均值（约 129%）乘标称 3500 估算。Windows 多线程构建启用 MySQL，前几轮因 `libmysql.dll` 及其依赖的 OpenSSL 没进 exe 目录失败（0xC0000135），改 `framework.cmake` 拷运行库、`run_regressions.py` 把 DLL 带进临时 `bin` 后，Windows 两组用最终代码重跑通过。
 
 ## 显式用例
 
