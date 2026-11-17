@@ -36,7 +36,6 @@
 #include <thread>
 #include <vector>
 
-
 OI::Coro::TaskResult<int> EncodeMgr::CheckServerEncoding()
 {
 	int iBadLocal = 0;
@@ -73,7 +72,7 @@ OI::Coro::TaskResult<int> EncodeMgr::CheckServerEncoding()
 	}
 	LOG_TRACE("hold client malformed response sid=%llu bad=%d", (unsigned long long)IpcClient::GetInstance().ConnectedSid(), iBadLocal);
 	stRequest.iMark = 92;
-	auto stRecovered = co_await IpcClient::GetInstance().CallAny<OI::RpcData::HoldRes>(stRequest, OI::Timer::Seconds(2));
+	auto stRecovered = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequest, OI::Timer::Seconds(2));
 	if (stRecovered.GetRet() != 0 || stRecovered.GetRes().iMark != 92)
 	{
 		++iBadLocal;

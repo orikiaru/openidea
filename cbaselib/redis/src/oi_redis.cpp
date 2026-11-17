@@ -1,6 +1,6 @@
 #include "oi_redis.h"
 #include "oi_redis_session.h"
-#include "oi_rpc_coro.h"
+#include "oi_rpc_session_manager.h"
 #include "oi_poll.h"
 #include "oi_timer_manager.h"
 #include "oi_config.h"

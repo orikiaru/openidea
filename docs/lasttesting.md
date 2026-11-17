@@ -4,16 +4,16 @@
 
 ## 全量
 
-2026-11-17，提交 `a241d00`（RpcCallManager 单例、处理表并入 ProtoSessionManager）。四组都是 `--case all` 的 21 项，不含协程压力和序列化压力。用例：echo、log、log-backpressure、redis、redis-limit、redis-shutdown、redis-queue-timeout、rpc-ingress、redis-backpressure-bytes、redis-backpressure-count、redis-fairness、hold、rpc-admission-count、rpc-admission-bytes、reset、disk-full、registry、udp、multi、local、web。
+2026-11-18，`197a4c3` 之后的 RPC 路由瘦身提交（RouteManager/ProtoMultiClientManager 收拢、Notify 补齐、去掉 RpcCall("名.区") 与 RpcCallBatch），提交前的工作区。四组都是 `--case all` 的 21 项，不含协程压力和序列化压力，也不含矩阵前置检查、MySQL、registry-static。用例：echo、log、log-backpressure、redis、redis-limit、redis-shutdown、redis-queue-timeout、rpc-ingress、redis-backpressure-bytes、redis-backpressure-count、redis-fairness、hold、rpc-admission-count、rpc-admission-bytes、reset、disk-full、registry、udp、multi、local、web。
 
 | 平台 | 线程 | CPU | 频率（MHz） | 通过 | 收尾 |
 | --- | --- | --- | --- | --- | --- |
-| 本机 Windows | 多线程 | Intel Core i9-11900K，标称 3500 | 约 4515 | 21 | 约 406 秒。回声 `ok=1000000 mismatch=0 rpc_fail=0`，`hold timer update tick=4 second=1 overlap=0/0 skipped=16 bad=0` |
-| 本机 Windows | 单线程 | 同上 | 约 4515 | 21 | 约 437 秒，`build-win-st` 专用目录。`hold timer update tick=1 second=1 overlap=0/0 skipped=4 bad=0` |
-| 远程 Linux 4 核 | 多线程 | Intel Xeon Platinum 8255C | 2494 | 21 | 约 378 秒，gcc 零告警。另跑 MySQL、registry-static 通过。`hold timer update tick=3 second=1 overlap=0/0 skipped=8 bad=0` |
-| 远程 Linux 2 核 | 单线程 | Intel Xeon Gold 6271C | 2594 | 21 | 专用单线程目录，20:17:40 完成。另跑 MySQL、registry-static 通过。`hold timer update tick=4 second=1 overlap=0/0 skipped=16 bad=0` |
+| 本机 Windows | 多线程 | AMD Ryzen 7 9800X3D，8 核 16 线程，标称 4700 | 约 4419 | 21 | 约 366 秒。Visual Studio 17 2022 x64，`build-win`。回声 `ok=1000000 mismatch=0 rpc_fail=0`，`hold timer update tick=2 second=1 overlap=0/0 skipped=4 bad=0` |
+| 本机 Windows | 单线程 | 同上 | 约 4419 | 21 | 约 436 秒，`build-win-st` 专用目录。`hold timer update tick=3 second=1 overlap=0/0 skipped=12 bad=0` |
+| 本机 WSL | 多线程 | 同上 | 约 4419 | 21 | 约 298 秒，GCC 13。另跑 MySQL、registry-static 通过。`hold timer update tick=3 second=1 overlap=0/0 skipped=10 bad=0` |
+| 本机 WSL | 单线程 | 同上 | 约 4419 | 21 | 约 269 秒，专用单线程目录，GCC 13。另跑 MySQL、registry-static 通过。`hold timer update tick=4 second=1 overlap=0/0 skipped=16 bad=0` |
 
-四组并行跑，前后清理都返回 0。Linux 频率读 `/proc/cpuinfo`；Windows 按 `% Processor Performance` 三次采样均值（约 129%）乘标称 3500 估算。Windows 多线程构建启用 MySQL，前几轮因 `libmysql.dll` 及其依赖的 OpenSSL 没进 exe 目录失败（0xC0000135），改 `framework.cmake` 拷运行库、`run_regressions.py` 把 DLL 带进临时 `bin` 后，Windows 两组用最终代码重跑通过。
+四组并行跑。Windows 两路是 Visual Studio 17 2022 x64 Release；Linux 两路是本机 WSL 的 GCC 13 Release，不是远程机器，和 Windows 同一颗 CPU。表中秒数是各路 `parallel.json` 的整路耗时，含前置检查、配置、编译和用例。前置检查六项（field-names、inheritance-tests、inheritance、process-fixtures、test-safety、matrix-outcomes）四路退出码都是 0，不计入上面的 21。MySQL 与 registry-static 只在 WSL 两路另跑并通过，也不计入 21；MySQL 客户端日志为 `mysql done bad=0`。Windows 两路打开测试注入（`-DOI_ENABLE_TEST_HOOKS=ON`），WSL 两路关闭测试注入并打开 MySQL（`-DOI_ENABLE_MYSQL=ON`）。频率是全量结束后的空闲或轻载采样，不是跑测试当时的频率：`Get-Counter '\Processor Information(_Total)\% Processor Performance'` 五次为 94.36%、93.66%、94.28%、94.45%、93.41%，均值约 94.03%，乘 `Win32_Processor.MaxClockSpeed` 标称 4700，约 4419 MHz。`CurrentClockSpeed` 仍报 4700，没有拿它当实测频率。
 
 ## 显式用例
 

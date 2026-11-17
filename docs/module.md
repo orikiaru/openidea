@@ -59,7 +59,7 @@ JSON 会穿透。嵌套的 `rpcdata`、`vector`、`map` 按内层继续生成，
 
 生成的 main 把组件初始化包在 try/catch 里；启动期任何失败（错误码或异常）先 `StopFramework()` 停掉 poll 线程再返回，避免退出时静态析构和 poll 线程并发。
 
-生成的组件都是单例（`DECLARE_SINGLETON`），带 `OI::Coro::Task OnSecondUpdate(time_t)`，默认函数体是 `co_return;`。日历秒变化时 `StartTask` 启动，只启动、不等待。Server 继承 `ProtoSessionManager`；Client 继承 `ProtoMultiClientManager`，配置段多一个 `service`，留空只连 ip/port 这一台，填了服务名就连注册表里的每一台，见 [服务注册](registry.md) 的“每台各连一条”。
+生成的组件都是单例（`DECLARE_SINGLETON`），带 `OI::Coro::Task OnSecondUpdate(time_t)`，默认函数体是 `co_return;`。日历秒变化时 `StartTask` 启动，只启动、不等待。Server 继承 `ProtoSessionManager`；Client 继承 `ProtoMultiClientManager`，配置段多一个 `service`。留空时若写了 `instances = ["实例号 ip 端口 [分区]", ...]` 就按这份名单连，配了它就不要求 ip/port；没写 instances 只连 ip/port 这一台，实例号 0。填了服务名就连注册表里的每一台，见 [服务注册](registry.md) 的“每台各连一条”。
 
 `module.proto` 是模块注册的唯一来源；CMake 使用生成的清单添加模块，不需要再维护一份手写列表。模块名必须匹配 ASCII 格式 `[A-Za-z0-9_][A-Za-z0-9_-]*`，忽略大小写后不能重复；生成目录及清单使用小写名称。
 
@@ -73,7 +73,7 @@ RPC 帧在 IO 线程按读取上限原地解码；嵌套结构和容器复用同
 
 服务端在组件 `Init` 里 `RegisterRpcHandler`，客户端在连上之后 `co_await RpcCall`。写法见 [协程](coroutine.md)。
 
-现成例子是 `AllEcho`：`ipcserver` 用 `OI_RPC_SYNC_HANDLER` 把 `stData` 抄进回复并写 `iCode = 1`，`ipcclient` 连上后用 `CallAny` 按条发出去并核对回复。`Hold` 用来看超时和回包同时到：服务端 `co_await OI::Coro::yield(stRequest.iDelayMilliseconds)` 再回，客户端按调用号认这一次。按服务名打一台或一批见 [服务注册](registry.md)。
+现成例子是 `AllEcho`：`ipcserver` 的同步处理函数 `HandleAllEcho` 把 `stData` 抄进回复并写 `iCode = 1`，`ipcclient` 连上后用 `Call` 按条发出去并核对回复。`Hold` 用来看超时和回包同时到：服务端 `co_await OI::Coro::yield(stRequest.iDelayMilliseconds)` 再回，客户端按调用号认这一次。按服务名打一台或一批见 [服务注册](registry.md)。
 
 ## ipcclient 的测试开关
 

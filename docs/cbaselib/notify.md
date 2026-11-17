@@ -13,8 +13,6 @@
 | 客户端当前会话 | [`ConnectedSid`](../../cbaselib/proto/inc/oi_rpc_session_manager.h#L140) |
 | 从形参推出，含成员函数 | [`RegisterNotifyHandler`](../../cbaselib/proto/inc/oi_rpc_coro.h#L368) |
 | 显式消息类型 | [`RegisterNotifyHandler`](../../cbaselib/proto/inc/oi_rpc_coro.h#L350) |
-| 声明处理函数 | [`OI_NOTIFY_HANDLER`](../../cbaselib/proto/inc/oi_rpc_coro.h#L1470) |
-
 ```cpp
 stContext.Notify(stReply);
 

@@ -36,7 +36,6 @@
 #include <thread>
 #include <vector>
 
-
 // 在 poll 执行域里模拟旧建连完成/失败，不能取消当前代次或新增会话。
 class ConnectGenerationProbe : public OI::Net::SessionManager
 {
@@ -88,7 +87,7 @@ OI::Coro::TaskResult<int> IsolationMgr::IsolationCall(int iIndex)
 	OI::Log::LogClient::GetInstance().StartClient();
 	OI::RpcData::HoldReq stRequest;
 	stRequest.iMark = 10000 + iIndex;
-	auto stResult = co_await IpcClient::GetInstance().CallAny<OI::RpcData::HoldRes>(stRequest, OI::Timer::Seconds(3));
+	auto stResult = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequest, OI::Timer::Seconds(3));
 	if (stResult.GetRet() != 0 || stResult.GetRes().iMark != stRequest.iMark)
 	{
 		++iBad;

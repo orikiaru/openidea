@@ -1,8 +1,7 @@
 #include "rpc_service_mgr.h"
 #include "hold_test.h"
-#include "oi_rpc_coro.h"
+#include "oi_rpc_session_manager.h"
 #include "rpc_probe.h"
-#include "zone_service.h"
 #include "oi_http.h"
 #include "oi_log_client.h"
 #include "oi_log.h"
@@ -17,6 +16,10 @@
 #include "oi_rpcdata_allechores.h"
 #include "oi_rpcdata_holdreq.h"
 #include "oi_rpcdata_holdres.h"
+#include "oi_rpcdata_peernotereq.h"
+#include "oi_rpcdata_peerprobereq.h"
+#include "oi_rpcdata_peerproberes.h"
+#include "oi_thread.h"
 #include "ipcclient.h"
 #include "rpc_ids.h"
 #include "oi_redis.h"
@@ -37,7 +40,6 @@
 #include <string>
 #include <thread>
 #include <vector>
-
 
 // 仅本回归持有的堆资源，不改变 Hold 的线上字段或协议号。
 struct HoldRequestResource
@@ -84,13 +86,13 @@ struct RpcProtoId<ResourceHoldRequest> : RpcProtoId<OI::RpcData::HoldReq>
 }
 }
 
-template <typename T>
-OI::Coro::TaskResult<RpcServiceMgr::NamedOutcome> RpcServiceMgr::AwaitNamedHold(T stCall)
+template <typename T, typename Res>
+OI::Coro::TaskResult<RpcServiceMgr::NamedOutcome> RpcServiceMgr::AwaitNamedHold(T stCall, const Res& stOutput)
 {
 	try
 	{
-		auto stReply = co_await stCall;
-		co_return stReply.GetRet() == 0 && stReply.GetRes().iMark == 77 ? NamedOutcome::Success : NamedOutcome::Failed;
+		const int32_t iCode = co_await stCall;
+		co_return iCode == 0 && stOutput.iMark == 77 ? NamedOutcome::Success : NamedOutcome::Failed;
 	}
 	catch (const std::logic_error&)
 	{
@@ -101,13 +103,13 @@ OI::Coro::TaskResult<RpcServiceMgr::NamedOutcome> RpcServiceMgr::AwaitNamedHold(
 OI::Coro::TaskResult<int> RpcServiceMgr::CheckCompletedRpcRequests(sid_t iSessionId)
 {
 	int iBad = 0;
-	static ZoneService stGames("gameserver");
+	auto& stRoute = OI::Rpc::RouteManager::GetInstance();
 	auto& stManager = IpcClient::GetInstance();
 	auto pDestroyed = std::make_shared<std::atomic<int>>(0);
 	std::vector<OI::RpcData::HoldRes> vOutputs(20);
 	std::vector<std::weak_ptr<HoldRequestResource>> vResources;
 	std::vector<OI::Coro::TaskResult<int32_t>> vTasks;
-	// 六个公开输出入口各测成功、业务失败、序列化异常，再测超时和选路失败。
+	// 本连接、指定会话、客户端 Call、服务名、分区 1001、分区 1002，各测成功、业务失败、序列化异常，再测超时和选路失败。
 	for (int iIndex = 0; iIndex < 20; ++iIndex)
 	{
 		ResourceHoldRequest stRequest;
@@ -129,13 +131,13 @@ OI::Coro::TaskResult<int> RpcServiceMgr::CheckCompletedRpcRequests(sid_t iSessio
 			vTasks.push_back(stManager.Call(std::move(stRequest), vOutputs[iIndex], OI::Timer::Seconds(3)));
 			break;
 		case 3:
-			vTasks.push_back(stGames.CallAny(std::move(stRequest), vOutputs[iIndex], OI::Timer::Seconds(3)));
+			vTasks.push_back(stRoute.Call("gameserver", std::move(stRequest), vOutputs[iIndex], OI::Timer::Seconds(3)));
 			break;
 		case 4:
-			vTasks.push_back(stGames.Call(1001, std::move(stRequest), vOutputs[iIndex], OI::Timer::Seconds(3)));
+			vTasks.push_back(stRoute.Call("gameserver", 1001, std::move(stRequest), vOutputs[iIndex], OI::Timer::Seconds(3)));
 			break;
 		case 5:
-			vTasks.push_back(OI::Rpc::RpcCall(std::string("gameserver.1002"), std::move(stRequest), vOutputs[iIndex], OI::Timer::Seconds(3)));
+			vTasks.push_back(stRoute.Call("gameserver", 1002, std::move(stRequest), vOutputs[iIndex], OI::Timer::Seconds(3)));
 			break;
 		default:
 			if (iIndex == 18)
@@ -145,7 +147,7 @@ OI::Coro::TaskResult<int> RpcServiceMgr::CheckCompletedRpcRequests(sid_t iSessio
 			}
 			else
 			{
-				vTasks.push_back(stGames.Call(9999, std::move(stRequest), vOutputs[iIndex], OI::Timer::Seconds(3)));
+				vTasks.push_back(stRoute.Call("gameserver", 9999, std::move(stRequest), vOutputs[iIndex], OI::Timer::Seconds(3)));
 			}
 			break;
 		}
@@ -198,20 +200,19 @@ OI::Coro::TaskResult<int> RpcServiceMgr::CheckCompletedRpcRequests(sid_t iSessio
 OI::Coro::TaskResult<int> RpcServiceMgr::CheckNamedOutputRpcTask()
 {
 	int iBad = 0;
-	static ZoneService stGames("gameserver");
-	auto& stManager = IpcClient::GetInstance();
+	auto& stRoute = OI::Rpc::RouteManager::GetInstance();
 	OI::RpcData::HoldReq stRequest;
 	stRequest.iMark = 811;
 	OI::RpcData::HoldRes stOutput;
 	stOutput.iMark = -1;
-	auto stAny = stManager.CallAny(stRequest, stOutput, OI::Timer::Seconds(3));
+	auto stAny = stRoute.Call("ipcserver", stRequest, stOutput, OI::Timer::Seconds(3));
 	static_assert(std::is_same_v<decltype(stAny), OI::Coro::TaskResult<int32_t>>);
 	if (co_await stAny != 0 || stOutput.iMark != 811)
 	{
 		++iBad;
 	}
 	stRequest.iMark = 812;
-	auto stZone = stGames.Call(1001, stRequest, stOutput, OI::Timer::Seconds(3));
+	auto stZone = stRoute.Call("gameserver", 1001, stRequest, stOutput, OI::Timer::Seconds(3));
 	static_assert(std::is_same_v<decltype(stZone), OI::Coro::TaskResult<int32_t>>);
 	if (co_await stZone != 0 || stOutput.iMark != 812)
 	{
@@ -223,9 +224,9 @@ OI::Coro::TaskResult<int> RpcServiceMgr::CheckNamedOutputRpcTask()
 		OI::RpcData::HoldReq stLocal;
 		stLocal.iDelayMilliseconds = 100;
 		stLocal.iMark = 813;
-		std::string sName = "gameserver.1002";
-		auto stTask = OI::Rpc::RpcCall(sName, stLocal, *pOutput, OI::Timer::Seconds(3));
-		sName = "missing.9999";
+		std::string sName = "gameserver";
+		auto stTask = OI::Rpc::RouteManager::GetInstance().Call(sName, 1002, stLocal, *pOutput, OI::Timer::Seconds(3));
+		sName = "missing";
 		stLocal.iMark = -813;
 		return stTask;
 	};
@@ -253,15 +254,11 @@ OI::Coro::TaskResult<int> RpcServiceMgr::CheckNamedOutputRpcTask()
 		++iBad;
 	}
 	stRequest.iDelayMilliseconds = -1;
-	if (co_await stGames.CallAny(stRequest, stOutput, OI::Timer::Seconds(3)) != 1001 || stOutput.iMark != 814)
+	if (co_await stRoute.Call("gameserver", stRequest, stOutput, OI::Timer::Seconds(3)) != 1001 || stOutput.iMark != 814)
 	{
 		++iBad;
 	}
-	if (co_await stGames.Call(9999, stRequest, stOutput, OI::Timer::Seconds(3)) != OI_ERR_CONNECT || stOutput.iMark != 814)
-	{
-		++iBad;
-	}
-	if (co_await OI::Rpc::RpcCall(std::string("gameserver.*"), stRequest, stOutput, OI::Timer::Seconds(3)) != OI_ERR_FAIL || stOutput.iMark != 814)
+	if (co_await stRoute.Call("gameserver", 9999, stRequest, stOutput, OI::Timer::Seconds(3)) != OI_ERR_CONNECT || stOutput.iMark != 814)
 	{
 		++iBad;
 	}
@@ -273,8 +270,7 @@ OI::Coro::TaskResult<int> RpcServiceMgr::CheckNamedOutputRpcTask()
 OI::Coro::TaskResult<int> RpcServiceMgr::CheckNamedServiceRpc()
 {
 	int iBad = 0;
-	static ZoneService stGames("gameserver");
-	auto& stIpc = IpcClient::GetInstance();
+	auto& stRoute = OI::Rpc::RouteManager::GetInstance();
 	::OI::RpcData::AllEchoReq stRequest;
 	int iGlobal = 0;
 	int iAny = 0;
@@ -282,13 +278,16 @@ OI::Coro::TaskResult<int> RpcServiceMgr::CheckNamedServiceRpc()
 	int iBatch = 0;
 	for (int iTry = 0; iTry < 10; ++iTry)
 	{
-		auto stGlobal = co_await stIpc.CallAny<::OI::RpcData::AllEchoRes>(stRequest, ::OI::Timer::Seconds(3));
-		auto stAny = co_await stGames.CallAny<::OI::RpcData::AllEchoRes>(stRequest, ::OI::Timer::Seconds(3));
-		auto stZone = co_await stGames.Call<::OI::RpcData::AllEchoRes>(1001, stRequest, ::OI::Timer::Seconds(3));
-		auto vBatch = co_await stGames.CallAll<::OI::RpcData::AllEchoRes>(stRequest, ::OI::Timer::Seconds(3));
-		iGlobal = stGlobal.GetRet() == 0 && stGlobal.GetRes().iCode == 1 ? 1 : 0;
-		iAny = stAny.GetRet() == 0 && stAny.GetRes().iCode == 1 ? 1 : 0;
-		iZone = stZone.GetRet() == 0 && stZone.GetRes().iCode == 1 ? 1 : 0;
+		::OI::RpcData::AllEchoRes stGlobalRes;
+		::OI::RpcData::AllEchoRes stAnyRes;
+		::OI::RpcData::AllEchoRes stZoneRes;
+		const int32_t iGlobalCode = co_await stRoute.Call("ipcserver", stRequest, stGlobalRes, ::OI::Timer::Seconds(3));
+		const int32_t iAnyCode = co_await stRoute.Call("gameserver", stRequest, stAnyRes, ::OI::Timer::Seconds(3));
+		const int32_t iZoneCode = co_await stRoute.Call("gameserver", 1001, stRequest, stZoneRes, ::OI::Timer::Seconds(3));
+		auto vBatch = co_await stRoute.CallAll<::OI::RpcData::AllEchoRes>("gameserver", stRequest, ::OI::Timer::Seconds(3));
+		iGlobal = iGlobalCode == 0 && stGlobalRes.iCode == 1 ? 1 : 0;
+		iAny = iAnyCode == 0 && stAnyRes.iCode == 1 ? 1 : 0;
+		iZone = iZoneCode == 0 && stZoneRes.iCode == 1 ? 1 : 0;
 		iBatch = 0;
 		for (const auto& stItem : vBatch)
 		{
@@ -307,20 +306,22 @@ OI::Coro::TaskResult<int> RpcServiceMgr::CheckNamedServiceRpc()
 	{
 		++iBad;
 	}
-	auto stWrongZone = co_await stIpc.Call<::OI::RpcData::AllEchoRes>(1001, stRequest, ::OI::Timer::Seconds(3));
-	int iWrong = stWrongZone.GetRet() == OI_ERR_FAIL ? 1 : 0;
+	::OI::RpcData::AllEchoRes stWrongRes;
+	const int32_t iWrongCode = co_await stRoute.Call("ipcserver", 1001, stRequest, stWrongRes, ::OI::Timer::Seconds(3));
+	int iWrong = iWrongCode == OI_ERR_FAIL ? 1 : 0;
 	if (iWrong != 1)
 	{
 		++iBad;
 	}
-	auto stMissed = co_await stGames.Call<::OI::RpcData::AllEchoRes>(9999, stRequest, ::OI::Timer::Seconds(3));
-	int iMiss = stMissed.GetRet() == OI_ERR_CONNECT ? 1 : 0;
+	::OI::RpcData::AllEchoRes stMissedRes;
+	const int32_t iMissedCode = co_await stRoute.Call("gameserver", 9999, stRequest, stMissedRes, ::OI::Timer::Seconds(3));
+	int iMiss = iMissedCode == OI_ERR_CONNECT ? 1 : 0;
 	if (iMiss != 1)
 	{
 		++iBad;
 	}
 	std::vector<int32_t> vBothZones{1001, 1002};
-	auto vMany = co_await stGames.CallMany<::OI::RpcData::AllEchoRes>(vBothZones, stRequest, ::OI::Timer::Seconds(3));
+	auto vMany = co_await stRoute.CallMany<::OI::RpcData::AllEchoRes>("gameserver", vBothZones, stRequest, ::OI::Timer::Seconds(3));
 	int iMany = 0;
 	if (vMany.size() == vBothZones.size())
 	{
@@ -333,10 +334,10 @@ OI::Coro::TaskResult<int> RpcServiceMgr::CheckNamedServiceRpc()
 		}
 	}
 	std::vector<int32_t> vPartialZones{1001, 9999};
-	auto vPartial = co_await stGames.CallMany<::OI::RpcData::AllEchoRes>(vPartialZones, stRequest, ::OI::Timer::Seconds(3));
+	auto vPartial = co_await stRoute.CallMany<::OI::RpcData::AllEchoRes>("gameserver", vPartialZones, stRequest, ::OI::Timer::Seconds(3));
 	int iSlot = vPartial.size() == 2 && vPartial[0].GetRet() == 0 && vPartial[0].GetRes().iCode == 1 && vPartial[1].GetRet() == OI_ERR_CONNECT ? 1 : 0;
-	auto vEmptyMany = co_await stGames.CallMany<::OI::RpcData::AllEchoRes>(std::vector<int32_t>{}, stRequest, ::OI::Timer::Seconds(3));
-	auto vGlobalMany = co_await stIpc.CallMany<::OI::RpcData::AllEchoRes>(vBothZones, stRequest, ::OI::Timer::Seconds(3));
+	auto vEmptyMany = co_await stRoute.CallMany<::OI::RpcData::AllEchoRes>("gameserver", std::vector<int32_t>{}, stRequest, ::OI::Timer::Seconds(3));
+	auto vGlobalMany = co_await stRoute.CallMany<::OI::RpcData::AllEchoRes>("ipcserver", vBothZones, stRequest, ::OI::Timer::Seconds(3));
 	if (iMany != 2 || iSlot != 1 || !vEmptyMany.empty() || vGlobalMany.size() != 2 ||
 	    vGlobalMany[0].GetRet() != OI_ERR_FAIL || vGlobalMany[1].GetRet() != OI_ERR_FAIL)
 	{
@@ -346,7 +347,7 @@ OI::Coro::TaskResult<int> RpcServiceMgr::CheckNamedServiceRpc()
 	stHold.iDelayMilliseconds = 400;
 	stHold.iMark = 77;
 	int64_t iBegin = ::OI::Timer::SteadyMilliseconds();
-	auto vHeld = co_await stGames.CallAll<::OI::RpcData::HoldRes>(stHold, ::OI::Timer::Seconds(3));
+	auto vHeld = co_await stRoute.CallAll<::OI::RpcData::HoldRes>("gameserver", stHold, ::OI::Timer::Seconds(3));
 	long long iElapsed = ::OI::Timer::SteadyMilliseconds() - iBegin;
 	int iHeldOk = 0;
 	for (const auto& stItem : vHeld)
@@ -361,24 +362,14 @@ OI::Coro::TaskResult<int> RpcServiceMgr::CheckNamedServiceRpc()
 		++iBad;
 	}
 	LOG_TRACE("hold service rpc global=%d any=%d zone=%d batch=%d many=%d slot=%d elapsed_ms=%lld wrong=%d miss=%d bad=%d", iGlobal, iAny, iZone, iBatch, iMany, iSlot, iElapsed, iWrong, iMiss, iBad);
-	// 服务名只在入口解析；局部字符串和请求销毁后，延迟启动仍能正确发送。
-	static ZoneService stOfflineWatcher("ipcserver");
-	OI::Base::ServiceTable::GetInstance().Watch(&stOfflineWatcher, "ipcserver");
-	OI::Rpc::RouteAwaiter stFallbackWait;
-	stFallbackWait.pManager = &stOfflineWatcher;
-	stFallbackWait.sName = "ipcserver";
-	auto stFallback = co_await stFallbackWait;
-	if (stFallback.iStatus != OI::Rpc::ServiceRouteStatus::Ok || stFallback.vClients.size() != 1 || stFallback.vClients[0] == &stOfflineWatcher.Sender())
-	{
-		++iBad;
-	}
+	// 服务名只在入口拷进任务；局部字符串和请求销毁后，延迟启动仍能正确发送。
 	auto fnDeferred = []()
 	{
 		::OI::RpcData::HoldReq stLocal;
 		stLocal.iMark = 913;
-		std::string sTarget = "gameserver.*";
-		auto stTask = OI::Rpc::RpcCallBatch<OI::RpcData::HoldRes>(sTarget, stLocal, OI::Timer::Seconds(3));
-		sTarget = "invalid.*";
+		std::string sName = "gameserver";
+		auto stTask = OI::Rpc::RouteManager::GetInstance().CallAll<::OI::RpcData::HoldRes>(sName, stLocal, OI::Timer::Seconds(3));
+		sName = "invalid";
 		return stTask;
 	};
 	auto stDeferred = fnDeferred();
@@ -386,7 +377,7 @@ OI::Coro::TaskResult<int> RpcServiceMgr::CheckNamedServiceRpc()
 	{
 		::OI::RpcData::HoldReq stLocal;
 		stLocal.iMark = 914;
-		return stGames.CallMany<OI::RpcData::HoldRes>({1001, 1002}, stLocal, OI::Timer::Seconds(3));
+		return OI::Rpc::RouteManager::GetInstance().CallMany<OI::RpcData::HoldRes>("gameserver", {1001, 1002}, stLocal, OI::Timer::Seconds(3));
 	};
 	auto stDeferredMany = fnDeferredMany();
 	co_await OI::Coro::yield(0);
@@ -409,11 +400,13 @@ OI::Coro::TaskResult<int> RpcServiceMgr::CheckNamedServiceRpc()
 			++iBad;
 		}
 	}
-	auto stSingle = stGames.Call<OI::RpcData::HoldRes>(1001, stHold, OI::Timer::Seconds(3));
+	::OI::RpcData::HoldRes stShared;
+	stShared.iMark = -77;
+	auto stSingle = stRoute.Call("gameserver", 1001, stHold, stShared, OI::Timer::Seconds(3));
 	std::vector<OI::Coro::TaskResult<NamedOutcome>> vContenders;
 	for (int iIndex = 0; iIndex < 8; ++iIndex)
 	{
-		vContenders.push_back(AwaitNamedHold(stSingle));
+		vContenders.push_back(AwaitNamedHold(stSingle, stShared));
 	}
 	int iSuccess = 0, iRejected = 0;
 	for (const auto& stContender : vContenders)
@@ -422,8 +415,8 @@ OI::Coro::TaskResult<int> RpcServiceMgr::CheckNamedServiceRpc()
 		iSuccess += iOutcome == NamedOutcome::Success ? 1 : 0;
 		iRejected += iOutcome == NamedOutcome::Rejected ? 1 : 0;
 	}
-	auto stAgain = co_await stSingle;
-	if (stAgain.GetRet() != 0 || stAgain.GetRes().iMark != 77)
+	const int32_t iAgain = co_await stSingle;
+	if (iAgain != 0 || stShared.iMark != 77)
 	{
 		++iBad;
 	}
@@ -436,10 +429,244 @@ OI::Coro::TaskResult<int> RpcServiceMgr::CheckNamedServiceRpc()
 	co_return iBad;
 }
 
+void RpcServiceMgr::OnTaskError(OI::Coro::Token, std::exception_ptr stError)
+{
+	try
+	{
+		std::rethrow_exception(stError);
+	}
+	catch (const std::exception& stException)
+	{
+		RpcServiceMgr::GetInstance().RememberTaskError(stException.what());
+		fprintf(stderr, "task failed: %s\n", stException.what());
+		fflush(stderr);
+	}
+	catch (...)
+	{
+		fprintf(stderr, "task failed: unknown exception\n");
+		fflush(stderr);
+	}
+}
+
+void RpcServiceMgr::RememberTaskError(const std::string& sText)
+{
+	::OI::Thread::MutexGuard stLock(m_stErrorLocker);
+	m_vTaskErrors.push_back(sText);
+}
+
+bool RpcServiceMgr::SawTaskError(const std::string& sNeedle)
+{
+	::OI::Thread::MutexGuard stLock(m_stErrorLocker);
+	for (const auto& sText : m_vTaskErrors)
+	{
+		if (sText.find(sNeedle) != std::string::npos)
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+OI::Coro::TaskResult<int32_t> RpcServiceMgr::QueryZoneNotes(int32_t iZoneId, int32_t iTag)
+{
+	::OI::RpcData::PeerProbeReq stRequest;
+	stRequest.iTag = iTag;
+	stRequest.iNotify = 0;
+	::OI::RpcData::PeerProbeRes stResponse;
+	stResponse.iNoteCount = -1;
+	const int32_t iCode = co_await OI::Rpc::RouteManager::GetInstance().Call("gameserver", iZoneId, stRequest, stResponse, ::OI::Timer::Seconds(3));
+	if (iCode != OI_OK)
+	{
+		co_return iCode;
+	}
+	co_return stResponse.iNoteCount;
+}
+
+OI::Coro::TaskResult<int32_t> RpcServiceMgr::WaitGameserverNotes(int32_t iTag, int32_t iExpected, int64_t iMilliseconds, int32_t& iZone1001, int32_t& iZone1002)
+{
+	const int64_t iDeadlineMilliseconds = ::OI::Timer::SteadyMilliseconds() + iMilliseconds;
+	while (true)
+	{
+		iZone1001 = co_await QueryZoneNotes(1001, iTag);
+		iZone1002 = co_await QueryZoneNotes(1002, iTag);
+		const int32_t iSum = (iZone1001 < 0 || iZone1002 < 0) ? -1 : iZone1001 + iZone1002;
+		if (iSum == iExpected)
+		{
+			co_return iSum;
+		}
+		if (::OI::Timer::SteadyMilliseconds() >= iDeadlineMilliseconds)
+		{
+			co_return iSum < 0 ? (iZone1001 < 0 ? iZone1001 : iZone1002) : iSum;
+		}
+		co_await OI::Coro::yield(20);
+	}
+}
+
+OI::Coro::TaskResult<bool> RpcServiceMgr::WaitTaskError(const std::string& sNeedle, int64_t iMilliseconds)
+{
+	const int64_t iDeadlineMilliseconds = ::OI::Timer::SteadyMilliseconds() + iMilliseconds;
+	while (!SawTaskError(sNeedle))
+	{
+		if (::OI::Timer::SteadyMilliseconds() >= iDeadlineMilliseconds)
+		{
+			co_return false;
+		}
+		co_await OI::Coro::yield(20);
+	}
+	co_return true;
+}
+
+OI::Coro::TaskResult<int> RpcServiceMgr::CheckRouteNotify()
+{
+	int iBad = 0;
+	OI::Coro::SetTaskErrorHandler(&RpcServiceMgr::OnTaskError);
+	auto& stRoute = OI::Rpc::RouteManager::GetInstance();
+	constexpr int32_t iSingleTag = 7101;
+	constexpr int32_t iZoneTag = 7102;
+	constexpr int32_t iNegativeTag = 7103;
+	constexpr int32_t iAllTag = 7104;
+	constexpr int32_t iManyTag = 7105;
+	constexpr int32_t iMissingTag = 7106;
+	constexpr int32_t iReconnectTag = 7107;
+	constexpr int64_t iWaitMilliseconds = 5000;
+
+	int32_t iSingle1001 = -1;
+	int32_t iSingle1002 = -1;
+	::OI::RpcData::PeerNoteReq stSingle;
+	stSingle.iTag = iSingleTag;
+	const int32_t iSingleCode = stRoute.Notify("gameserver", stSingle);
+	const int32_t iSingle = co_await WaitGameserverNotes(iSingleTag, 1, iWaitMilliseconds, iSingle1001, iSingle1002);
+	if (iSingleCode != OI_OK || iSingle != 1)
+	{
+		++iBad;
+	}
+
+	int32_t iZone1001 = -1;
+	int32_t iZone1002 = -1;
+	::OI::RpcData::PeerNoteReq stZone;
+	stZone.iTag = iZoneTag;
+	const int32_t iZoneCode = stRoute.Notify("gameserver", 1001, stZone);
+	iZone1001 = co_await QueryZoneNotes(1001, iZoneTag);
+	const int64_t iZoneDeadline = ::OI::Timer::SteadyMilliseconds() + iWaitMilliseconds;
+	while (iZone1001 != 1 && ::OI::Timer::SteadyMilliseconds() < iZoneDeadline)
+	{
+		co_await OI::Coro::yield(20);
+		iZone1001 = co_await QueryZoneNotes(1001, iZoneTag);
+	}
+	iZone1002 = co_await QueryZoneNotes(1002, iZoneTag);
+	if (iZoneCode != OI_OK || iZone1001 != 1 || iZone1002 != 0)
+	{
+		++iBad;
+	}
+
+	::OI::RpcData::PeerNoteReq stNegative;
+	stNegative.iTag = iNegativeTag;
+	const int32_t iNegative = stRoute.Notify("gameserver", -1, stNegative);
+	const int32_t iNegative1001 = co_await QueryZoneNotes(1001, iNegativeTag);
+	const int32_t iNegative1002 = co_await QueryZoneNotes(1002, iNegativeTag);
+	if (iNegative != OI_ERR_FAIL || iNegative1001 != 0 || iNegative1002 != 0)
+	{
+		++iBad;
+	}
+
+	int32_t iAll1001 = -1;
+	int32_t iAll1002 = -1;
+	::OI::RpcData::PeerNoteReq stAll;
+	stAll.iTag = iAllTag;
+	const int32_t iAllCode = stRoute.NotifyAll("gameserver", stAll);
+	const int32_t iAll = co_await WaitGameserverNotes(iAllTag, 2, iWaitMilliseconds, iAll1001, iAll1002);
+	if (iAllCode != OI_OK || iAll != 2 || iAll1001 != 1 || iAll1002 != 1)
+	{
+		++iBad;
+	}
+
+	int32_t iMany1001 = -1;
+	int32_t iMany1002 = -1;
+	::OI::RpcData::PeerNoteReq stMany;
+	stMany.iTag = iManyTag;
+	const std::vector<int32_t> vZones{1001, 1003, 1002};
+	const int32_t iManyCode = stRoute.NotifyMany("gameserver", vZones, stMany);
+	const int32_t iMany = co_await WaitGameserverNotes(iManyTag, 2, iWaitMilliseconds, iMany1001, iMany1002);
+	const bool bMissingReported = co_await WaitTaskError("zones=1003 protocol=3006 failed=1/3 code=-3", iWaitMilliseconds);
+	if (iManyCode != OI_OK || iMany != 2 || iMany1001 != 1 || iMany1002 != 1 || !bMissingReported)
+	{
+		++iBad;
+	}
+
+	::OI::RpcData::PeerNoteReq stMissing;
+	stMissing.iTag = iMissingTag;
+	const int32_t iAbsentCode = stRoute.Notify("missingnotify", stMissing);
+	const bool bAbsentReported = co_await WaitTaskError("service=missingnotify protocol=3006 failed=1/1 code=-3", iWaitMilliseconds);
+	const int32_t iAbsent1001 = co_await QueryZoneNotes(1001, iMissingTag);
+	const int32_t iAbsent1002 = co_await QueryZoneNotes(1002, iMissingTag);
+	if (iAbsentCode != OI_OK || !bAbsentReported || iAbsent1001 != 0 || iAbsent1002 != 0)
+	{
+		++iBad;
+	}
+
+	OI::Rpc::RouteAwaiter stWait;
+	stWait.sName = "gameserver";
+	stWait.iPick = OI::Rpc::ServicePick::Zone;
+	stWait.sZone = "1001";
+	auto stResolved = co_await stWait;
+	int32_t iReconnect1001 = -1;
+	int32_t iReconnectCode = OI_ERR_FAIL;
+	if (stResolved.iStatus != OI::Rpc::ServiceRouteStatus::Ok || stResolved.vClients.size() != 1 || !stResolved.vClients[0])
+	{
+		++iBad;
+	}
+	else
+	{
+		auto* pClient = stResolved.vClients[0];
+		const sid_t iSid = stRoute.ConnectionInfo(*pClient).iSessionId;
+		if (iSid == INVALID_SID)
+		{
+			++iBad;
+		}
+		::OI::RpcData::PeerNoteReq stReconnect;
+		stReconnect.iTag = iReconnectTag;
+		pClient->Manager().CloseSession(iSid);
+		iReconnectCode = stRoute.Notify("gameserver", 1001, stReconnect);
+		const int64_t iReconnectDeadline = ::OI::Timer::SteadyMilliseconds() + iWaitMilliseconds;
+		iReconnect1001 = co_await QueryZoneNotes(1001, iReconnectTag);
+		while (iReconnect1001 != 1 && ::OI::Timer::SteadyMilliseconds() < iReconnectDeadline)
+		{
+			co_await OI::Coro::yield(20);
+			iReconnect1001 = co_await QueryZoneNotes(1001, iReconnectTag);
+		}
+		if (iReconnectCode != OI_OK || iReconnect1001 != 1)
+		{
+			++iBad;
+		}
+	}
+
+	if (iBad != 0)
+	{
+		std::vector<std::string> vErrors;
+		{
+			::OI::Thread::MutexGuard stLock(m_stErrorLocker);
+			vErrors = m_vTaskErrors;
+		}
+		for (const auto& sText : vErrors)
+		{
+			LOG_TRACE("hold route notify task error %s", sText.c_str());
+		}
+		LOG_TRACE("hold route notify detail single=%d/%d zone=%d/%d negative=%d/%d/%d all=%d/%d many=%d/%d absent=%d/%d/%d reconnect=%d",
+		    iSingle1001, iSingle1002, iZone1001, iZone1002, iNegative, iNegative1001, iNegative1002, iAll1001, iAll1002, iMany1001, iMany1002,
+		    iAbsentCode, iAbsent1001, iAbsent1002, iReconnect1001);
+	}
+	LOG_TRACE("hold route notify single=%d zone=%d zone_other=%d negative=%d all=%d many=%d missing_reported=%d absent_reported=%d reconnect=%d bad=%d",
+	    iSingle, iZone1001, iZone1002, iNegative, iAll, iMany, bMissingReported ? 1 : 0, bAbsentReported ? 1 : 0, iReconnect1001 == 1 ? 1 : 0, iBad);
+	fflush(stdout);
+	co_return iBad;
+}
+
 // 全局、任意、分区、批量和多分区调用打到对应服务。并发争用同一个命名调用时，成功和拒绝的次数对得上。
 OI::Coro::TaskResult<int> RpcServiceMgr::RunNamed()
 {
-	co_return co_await CheckNamedServiceRpc();
+	int iBad = co_await CheckNamedServiceRpc();
+	iBad += co_await CheckRouteNotify();
+	co_return iBad;
 }
 
 // 按服务名和分区的输出引用，8 个等待者只提交一次。

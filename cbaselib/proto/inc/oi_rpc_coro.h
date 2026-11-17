@@ -3,12 +3,12 @@
 #include "oi_header.h"
 #include "oi_parser.h"
 #include "oi_rpc_call.h"
-#include "oi_registry_client.h"
+#include "oi_registry.h"
 #include "oi_session_manager.h"
-#include "oi_rpc_session_manager.h"
 #include "oi_lock.h"
+#include "oi_log.h"
+#include "oi_poll.h"
 #include "oi_duration.h"
-#include "oi_singleton.h"
 #include <algorithm>
 #include <atomic>
 #include <coroutine>
@@ -29,14 +29,16 @@
 
 #include "oi_coro.h"
 
-struct uv_timer_s;
-
 namespace OI
 {
 namespace Rpc
 {
 // 标准服务端协程：co_return 0 成功，正数为业务错误。
 using RpcTask = OI::Coro::TaskResult<int32_t>;
+
+// 定义在下面。会话不在时由 SendBytesResult 返回 OI_ERR_CONNECT，编码失败是 OI_ERR_ENCODE。
+template <typename Msg>
+int32_t RpcNotify(::OI::Net::SessionManager& stManager, sid_t iSessionId, const Msg& stMessage);
 
 // 仅需要连接信息的处理函数接收上下文；生命周期覆盖本次处理协程。
 struct RpcContext
@@ -69,160 +71,115 @@ struct RpcProtoId;
 // 请求：调用号 + Req；回执：调用号 + int32_t retcode + 成功时的 Res。
 // 0 成功，负数保留给框架错误，正数用于业务错误。失败不序列化 Res。
 
-// 业务任务外面这一层：co_await 业务任务，再把带调用号的回包写出去。
-template <typename Req, typename Res, typename F>
-OI::Coro::Task RunHandledRpc(F fnFunction, proto_type_t iResponseId, OI::Coro::Token iToken, ::OI::Net::SessionManager* pManager, sid_t iSessionId, uint64_t iRawCallId, Req stRequestLocal)
+// 服务端处理函数的包装：解请求、起任务、发回包。
+class RpcHandlerBuilder
 {
-	// 单向消息发到了请求处理函数上：照常处理，不回包，免得回执被对端当成又一条单向消息。
-	const bool bNotify = iRawCallId == 0;
-	const uint64_t iCallIdLocal = iRawCallId & ~(uint64_t)RPC_REQ_MASK;
-	Res stResponseLocal{};
-	int32_t iRetcode = 0;
-	const char* pStage = "handler";
-	try
+  public:
+	// 业务任务外面这一层：co_await 业务任务，再把带调用号的回包写出去。
+	template <typename Req, typename Res, typename F>
+	static OI::Coro::Task Run(F fnFunction, proto_type_t iResponseId, OI::Coro::Token iToken, ::OI::Net::SessionManager* pManager, sid_t iSessionId, uint64_t iRawCallId, Req stRequestLocal)
 	{
-		RpcContext stContext{iToken, *pManager, iSessionId};
-		auto stInvoke = [pFunction = &fnFunction, pRequest = &stRequestLocal, pResponse = &stResponseLocal, pContext = &stContext]()
+		// 单向消息发到了请求处理函数上：照常处理，不回包，免得回执被对端当成又一条单向消息。
+		const bool bNotify = iRawCallId == 0;
+		const uint64_t iCallIdLocal = iRawCallId & ~(uint64_t)RPC_REQ_MASK;
+		Res stResponseLocal{};
+		int32_t iRetcode = 0;
+		const char* pStage = "handler";
+		try
 		{
-			(void)pContext;
-			if constexpr (std::is_invocable_v<F&, Req&, Res&>)
+			RpcContext stContext{iToken, *pManager, iSessionId};
+			auto stInvoke = [pFunction = &fnFunction, pRequest = &stRequestLocal, pResponse = &stResponseLocal, pContext = &stContext]()
 			{
-				return (*pFunction)(*pRequest, *pResponse);
+				(void)pContext;
+				if constexpr (std::is_invocable_v<F&, Req&, Res&>)
+				{
+					return (*pFunction)(*pRequest, *pResponse);
+				}
+				else
+				{
+					static_assert(std::is_invocable_v<F&, const RpcContext&, Req&, Res&>, "RPC handler must accept (req, res) or (context, req, res)");
+					return (*pFunction)(*pContext, *pRequest, *pResponse);
+				}
+			};
+			using Return = decltype(stInvoke());
+			if constexpr (std::is_same_v<Return, int32_t>)
+			{
+				iRetcode = stInvoke();
 			}
 			else
 			{
-				static_assert(std::is_invocable_v<F&, const RpcContext&, Req&, Res&>, "RPC handler must accept (req, res) or (context, req, res)");
-				return (*pFunction)(*pContext, *pRequest, *pResponse);
+				static_assert(std::is_same_v<Return, RpcTask>,
+				    "RPC handler must return RpcTask or int32_t");
+				iRetcode = co_await OI::Coro::InvokeTask(OI::Coro::TaskLaunch{iToken, false, false}, stInvoke);
 			}
-		};
-		using Return = decltype(stInvoke());
-		if constexpr (std::is_same_v<Return, int32_t>)
-		{
-			iRetcode = stInvoke();
 		}
-		else
+		catch (::OI::Base::ParserException&)
 		{
-			static_assert(std::is_same_v<Return, RpcTask>,
-			    "RPC handler must return RpcTask or int32_t");
-			iRetcode = co_await OI::Coro::InvokeTask(OI::Coro::TaskLaunch{iToken, false, false}, stInvoke);
-		}
-	}
-	catch (::OI::Base::ParserException&)
-	{
-		iRetcode = OI_ERR_FAIL;
-		RpcCallManager::ReportError(iToken, iCallIdLocal, iSessionId, iResponseId, pStage, std::current_exception());
-	}
-	catch (...)
-	{
-		iRetcode = OI_ERR_FAIL;
-		RpcCallManager::ReportError(iToken, iCallIdLocal, iSessionId, iResponseId, pStage, std::current_exception());
-		OI::Coro::ReportTaskError(iToken, std::current_exception());
-	}
-	if (bNotify)
-	{
-		co_return;
-	}
-	::OI::Base::BytesStream stFrame;
-	try
-	{
-		::OI::Base::BytesStream stOutput;
-		stOutput << iCallIdLocal << iRetcode;
-		if (iRetcode == 0)
-		{
-			stResponseLocal.serialize(stOutput);
-		}
-		stFrame = EncodePbFrame(iResponseId, stOutput);
-	}
-	catch (...)
-	{
-		RpcCallManager::ReportError(iToken, iCallIdLocal, iSessionId, iResponseId, "encode_response", std::current_exception());
-		OI::Coro::ReportTaskError(iToken, std::current_exception());
-		// 丢弃已经写入的半包，重新构造只有调用号和错误码的回执。
-		try
-		{
-			::OI::Base::BytesStream stFailure;
-			stFailure << iCallIdLocal << int32_t(OI_ERR_FAIL);
-			stFrame = EncodePbFrame(iResponseId, stFailure);
+			iRetcode = OI_ERR_FAIL;
+			RpcCallManager::ReportError(iToken, iCallIdLocal, iSessionId, iResponseId, pStage, std::current_exception());
 		}
 		catch (...)
 		{
-			RpcCallManager::ReportError(iToken, iCallIdLocal, iSessionId, iResponseId, "encode_failure_reply", std::current_exception());
+			iRetcode = OI_ERR_FAIL;
+			RpcCallManager::ReportError(iToken, iCallIdLocal, iSessionId, iResponseId, pStage, std::current_exception());
 			OI::Coro::ReportTaskError(iToken, std::current_exception());
-			pManager->CloseSession(iSessionId);
+		}
+		if (bNotify)
+		{
 			co_return;
 		}
-	}
-	try
-	{
-		if (pManager->SendBytes(iSessionId, stFrame.GetMutableBuff()) != OI_OK)
-		{
-			pManager->CloseSession(iSessionId);
-		}
-	}
-	catch (...)
-	{
-		RpcCallManager::ReportError(iToken, iCallIdLocal, iSessionId, iResponseId, "send_response", std::current_exception());
-		OI::Coro::ReportTaskError(iToken, std::current_exception());
-		pManager->CloseSession(iSessionId);
-	}
-	co_return;
-}
-
-template <typename Req, typename Res, typename F>
-RpcHandleFn MakeRpcHandler(F fnFunction, proto_type_t iResponseId)
-{
-	return [fnFunction = std::move(fnFunction), iResponseId](::OI::Base::BytesStream& stBody, RpcDelivery&& stDelivery) mutable
-	{
-		std::optional<Req> stRequest;
+		::OI::Base::BytesStream stFrame;
 		try
 		{
-			stRequest.emplace();
-			stRequest->deserialize(stBody);
+			::OI::Base::BytesStream stOutput;
+			stOutput << iCallIdLocal << iRetcode;
+			if (iRetcode == 0)
+			{
+				stResponseLocal.serialize(stOutput);
+			}
+			stFrame = EncodePbFrame(iResponseId, stOutput);
 		}
 		catch (...)
 		{
-			const uint64_t iCallId = stDelivery.iRawCallId & ~(uint64_t)RPC_REQ_MASK;
-			RpcCallManager::ReportError(0, iCallId, stDelivery.iSessionId, iResponseId, "decode_request", std::current_exception());
-			if (stDelivery.iRawCallId == 0)
-			{
-				return;
-			}
-			::OI::Base::BytesStream stFrame;
-			try
-			{
-				::OI::Base::BytesStream stFailure;
-				stFailure << iCallId << int32_t(OI_ERR_FAIL);
-				stFrame = EncodePbFrame(iResponseId, stFailure);
-			}
-			catch (...)
-			{
-				RpcCallManager::ReportError(0, iCallId, stDelivery.iSessionId, iResponseId, "encode_failure_reply", std::current_exception());
-				OI::Coro::ReportTaskError(0, std::current_exception());
-				stDelivery.pManager->CloseSession(stDelivery.iSessionId);
-				return;
-			}
-			try
-			{
-				if (stDelivery.pManager->SendBytes(stDelivery.iSessionId, stFrame.GetMutableBuff()) != OI_OK)
-				{
-					stDelivery.pManager->CloseSession(stDelivery.iSessionId);
-				}
-			}
-			catch (...)
-			{
-				RpcCallManager::ReportError(0, iCallId, stDelivery.iSessionId, iResponseId, "send_response", std::current_exception());
-				OI::Coro::ReportTaskError(0, std::current_exception());
-				stDelivery.pManager->CloseSession(stDelivery.iSessionId);
-			}
-			return;
+			RpcCallManager::ReportError(iToken, iCallIdLocal, iSessionId, iResponseId, "encode_response", std::current_exception());
+			OI::Coro::ReportTaskError(iToken, std::current_exception());
+			// 丢弃已经写入的半包，改回只有调用号和错误码的回执。
+			RpcCallManager::SendFailureReply(iToken, pManager, iSessionId, iCallIdLocal, iResponseId);
+			co_return;
 		}
-		OI::Coro::StartTask([fnFunction, iResponseId, stDelivery = std::move(stDelivery), stRequest = std::move(*stRequest)](OI::Coro::Token iToken) mutable
+		RpcCallManager::SendReply(iToken, pManager, iSessionId, iCallIdLocal, iResponseId, stFrame.GetMutableBuff());
+	}
+
+	// 请求解不开时直接回失败，不进处理函数。
+	template <typename Req, typename Res, typename F>
+	static RpcHandleFn Make(F fnFunction, proto_type_t iResponseId)
+	{
+		return [fnFunction = std::move(fnFunction), iResponseId](::OI::Base::BytesStream& stBody, RpcDelivery&& stDelivery) mutable
 		{
-			return RunHandledRpc<Req, Res>(fnFunction, iResponseId, iToken, stDelivery.pManager,
-			    stDelivery.iSessionId, stDelivery.iRawCallId, std::move(stRequest));
-		});
-	};
-}
+			std::optional<Req> stRequest;
+			try
+			{
+				stRequest.emplace();
+				stRequest->deserialize(stBody);
+			}
+			catch (...)
+			{
+				const uint64_t iCallId = stDelivery.iRawCallId & ~(uint64_t)RPC_REQ_MASK;
+				RpcCallManager::ReportError(0, iCallId, stDelivery.iSessionId, iResponseId, "decode_request", std::current_exception());
+				if (stDelivery.iRawCallId != 0)
+				{
+					RpcCallManager::SendFailureReply(0, stDelivery.pManager, stDelivery.iSessionId, iCallId, iResponseId);
+				}
+				return;
+			}
+			OI::Coro::StartTask([fnFunction, iResponseId, stDelivery = std::move(stDelivery), stRequest = std::move(*stRequest)](OI::Coro::Token iToken) mutable
+			{
+				return Run<Req, Res>(fnFunction, iResponseId, iToken, stDelivery.pManager,
+				    stDelivery.iSessionId, stDelivery.iRawCallId, std::move(stRequest));
+			});
+		};
+	}
+};
 
 // 从处理函数的形参取出请求和回包类型。只认非模板的 lambda、函数、函数指针和成员函数；带 auto 形参的写 RegisterRpcHandler<Req>。
 template <typename T>
@@ -295,114 +252,6 @@ template <typename F>
 constexpr bool kRpcHandlerDeducible = requires { typename RpcHandlerTypes<typename RpcHandlerArgs<F>::Args>::Request; };
 template <typename F>
 constexpr bool kRpcNotifyDeducible = requires { typename RpcNotifyTypes<typename RpcHandlerArgs<F>::Args>::Message; };
-
-template <typename Req, typename Res, typename F>
-void ProtoSessionManager::RegisterRpcHandler(F fnFunction)
-{
-	BindRpcHandler(RpcProtoId<Req>::iValue, MakeRpcHandler<Req, Res>(std::move(fnFunction), RpcProtoId<Res>::iValue));
-}
-
-template <typename Req, typename F>
-void ProtoSessionManager::RegisterRpcHandler(F fnFunction)
-{
-	RegisterRpcHandler<Req, typename RpcProtoId<Req>::Response>(std::move(fnFunction));
-}
-
-// 成员函数不在注册时找对象：登记时确认本管理器就是 C，处理时直接调本管理器的成员。
-template <typename F>
-void ProtoSessionManager::RegisterRpcHandler(F fnFunction)
-{
-	static_assert(kRpcHandlerDeducible<F>, "RPC handler must accept (req, res) or (const RpcContext&, req, res); generic lambdas need RegisterRpcHandler<Req>");
-	using Args = typename RpcHandlerArgs<F>::Args;
-	using Req = typename RpcHandlerTypes<Args>::Request;
-	using Res = typename RpcHandlerTypes<Args>::Response;
-	static_assert(std::is_same_v<Res, typename RpcProtoId<Req>::Response>, "RPC handler response type does not match the request");
-	if constexpr (std::is_member_function_pointer_v<F>)
-	{
-		using C = typename RpcCallableArgs<F>::Class;
-		using R = typename RpcCallableArgs<F>::Return;
-		static_assert(std::is_base_of_v<ProtoSessionManager, C>, "RPC member handler must belong to a session manager class");
-		C* pSelf = dynamic_cast<C*>(this);
-		if (pSelf == nullptr)
-		{
-			LOG_ERROR("rpc member handler class mismatch manager=%s proto=%u", GetIDString().c_str(), (unsigned)RpcProtoId<Req>::iValue);
-			fprintf(stderr, "rpc member handler class mismatch manager=%s proto=%u\n", GetIDString().c_str(), (unsigned)RpcProtoId<Req>::iValue);
-			fflush(stderr);
-			throw std::logic_error("rpc member handler class mismatch manager=" + GetIDString() + " proto=" + std::to_string((unsigned)RpcProtoId<Req>::iValue));
-		}
-		RegisterRpcHandler<Req, Res>([pSelf, fnFunction](const RpcContext& stContext, Req& stRequest, Res& stResponse) -> R
-		{
-			if constexpr (std::tuple_size_v<Args> == 3)
-			{
-				return (pSelf->*fnFunction)(stContext, stRequest, stResponse);
-			}
-			else
-			{
-				return (pSelf->*fnFunction)(stRequest, stResponse);
-			}
-		});
-	}
-	else
-	{
-		RegisterRpcHandler<Req, Res>(std::move(fnFunction));
-	}
-}
-
-// 调用号 0 不回包；RPC 包装通知复用默认响应与错误处理。
-template <typename Msg, typename F>
-void ProtoSessionManager::RegisterNotifyHandler(F fnFunction)
-{
-	using Response = typename RpcProtoId<Msg>::Response;
-	auto fnAdapter = [fnFunction = std::move(fnFunction)](const RpcContext& stContext, Msg& stMessage, Response&) mutable
-	{
-		if constexpr (std::is_invocable_v<F&, Msg&>)
-		{
-			return fnFunction(stMessage);
-		}
-		else
-		{
-			return fnFunction(stContext, stMessage);
-		}
-	};
-	BindRpcHandler(RpcProtoId<Msg>::iValue, MakeRpcHandler<Msg, Response>(std::move(fnAdapter), RpcProtoId<Msg>::iValue));
-}
-
-template <typename F>
-void ProtoSessionManager::RegisterNotifyHandler(F fnFunction)
-{
-	static_assert(kRpcNotifyDeducible<F>, "notify handler must accept (msg) or (const RpcContext&, msg); generic lambdas need RegisterNotifyHandler<Msg>");
-	using Args = typename RpcHandlerArgs<F>::Args;
-	using Msg = typename RpcNotifyTypes<Args>::Message;
-	if constexpr (std::is_member_function_pointer_v<F>)
-	{
-		using C = typename RpcCallableArgs<F>::Class;
-		using R = typename RpcCallableArgs<F>::Return;
-		static_assert(std::is_base_of_v<ProtoSessionManager, C>, "notify member handler must belong to a session manager class");
-		C* pSelf = dynamic_cast<C*>(this);
-		if (pSelf == nullptr)
-		{
-			LOG_ERROR("notify member handler class mismatch manager=%s proto=%u", GetIDString().c_str(), (unsigned)RpcProtoId<Msg>::iValue);
-			fprintf(stderr, "notify member handler class mismatch manager=%s proto=%u\n", GetIDString().c_str(), (unsigned)RpcProtoId<Msg>::iValue);
-			fflush(stderr);
-			throw std::logic_error("notify member handler class mismatch manager=" + GetIDString() + " proto=" + std::to_string((unsigned)RpcProtoId<Msg>::iValue));
-		}
-		RegisterNotifyHandler<Msg>([pSelf, fnFunction](const RpcContext& stContext, Msg& stMessage) -> R
-		{
-			if constexpr (std::tuple_size_v<Args> == 2)
-			{
-				return (pSelf->*fnFunction)(stContext, stMessage);
-			}
-			else
-			{
-				return (pSelf->*fnFunction)(stMessage);
-			}
-		});
-	}
-	else
-	{
-		RegisterNotifyHandler<Msg>(std::move(fnFunction));
-	}
-}
 
 // 发一条单向消息，不等回包。返回 SendBytesResult 的错误码，编码失败是 OI_ERR_ENCODE。
 template <typename Msg>
@@ -800,59 +649,20 @@ auto RpcCall(RpcSender& stManager, Req stRequest,
 {
 	return {stManager.Manager(), INVALID_SID, std::move(stRequest), stTimeout, &stManager};
 }
-
-// 常驻应用管理器用成员发送目标适配，不需要继承发送接口。
-template <typename Req>
-auto MakeRpcCallAwaiter(ProtoClientManager& stManager, Req& stRequest, typename RpcProtoId<Req>::Response& stResponse,
-    ::OI::Timer::MS stTimeout = ::OI::Timer::Seconds(180))
-{
-	return MakeRpcCallAwaiter(stManager.Sender(), stRequest, stResponse, stTimeout);
-}
-
-template <typename Req>
-[[nodiscard]] auto RpcCall(ProtoClientManager& stManager, Req stRequest, typename RpcProtoId<Req>::Response& stResponse,
-    ::OI::Timer::MS stTimeout = ::OI::Timer::Seconds(180))
-{
-	return RpcCall(stManager.Sender(), std::move(stRequest), stResponse, stTimeout);
-}
-
-template <typename Req>
-[[nodiscard]] auto RpcCall(ProtoClientManager& stManager, Req stRequest,
-    ::OI::Timer::MS stTimeout = ::OI::Timer::Seconds(180))
-{
-	return RpcCall(stManager.Sender(), std::move(stRequest), stTimeout);
-}
-
 // 同一调用的查询、建连和回包共享单调时钟预算。非正值保持无限 RPC 等待语义。
 struct RpcDeadline
 {
 	int64_t iDeadlineMilliseconds = 0;
 	RpcDeadline() = default;
-	RpcDeadline(::OI::Timer::MS stTimeout)
-	{
-		if (stTimeout.iMilliseconds > 0)
-		{
-			const int64_t iNow = ::OI::Timer::SteadyMilliseconds();
-			iDeadlineMilliseconds = stTimeout.iMilliseconds > INT64_MAX - iNow ? INT64_MAX : iNow + stTimeout.iMilliseconds;
-		}
-	}
+	RpcDeadline(::OI::Timer::MS stTimeout);
 	template <typename Duration, std::enable_if_t<std::is_convertible_v<Duration, ::OI::Timer::MS>, int> = 0>
 	RpcDeadline(Duration stTimeout)
 	    : RpcDeadline(::OI::Timer::MS(stTimeout))
 	{
 	}
-	bool Expired() const
-	{
-		return iDeadlineMilliseconds > 0 && ::OI::Timer::SteadyMilliseconds() >= iDeadlineMilliseconds;
-	}
-	::OI::Timer::MS Remaining() const
-	{
-		if (iDeadlineMilliseconds == 0)
-		{
-			return ::OI::Timer::MS(0);
-		}
-		return ::OI::Timer::MS((std::max)(int64_t(1), iDeadlineMilliseconds - ::OI::Timer::SteadyMilliseconds()));
-	}
+	bool Expired() const;
+	// 没有期限返回 0，否则至少 1 毫秒。
+	::OI::Timer::MS Remaining() const;
 };
 
 enum class ServiceRouteStatus
@@ -885,29 +695,10 @@ struct RouteConnectionInfo
 	std::pair<size_t, size_t> stPendingLimits;
 };
 
-inline int32_t RouteError(ServiceRouteStatus iStatus)
-{
-	switch (iStatus)
-	{
-	case ServiceRouteStatus::Timeout:
-		return OI_ERR_TIMEOUT;
-	case ServiceRouteStatus::Busy:
-		return OI_ERR_BUSY;
-	case ServiceRouteStatus::BadName:
-	case ServiceRouteStatus::WrongKind:
-		return OI_ERR_FAIL;
-	default:
-		return OI_ERR_CONNECT;
-	}
-}
-
 struct RoutePoolStats
 {
+	size_t iGroups = 0;
 	size_t iClients = 0;
-	size_t iMaxClients = 0;
-	size_t iLeasedClients = 0;
-	size_t iEvicted = 0;
-	int64_t iIdleMilliseconds = 0;
 };
 
 enum class ServicePick
@@ -917,73 +708,20 @@ enum class ServicePick
 	All,
 };
 
-// 进程内只有这一个路由管理器。按名单选定的固定地址连接都挂在它上面，共用 SID 空间和断连清理。
-class RouteManager final : public ProtoSessionManager
-{
-	DECLARE_SINGLETON(RouteManager)
-	struct Entry
-	{
-		std::shared_ptr<PeerConnection> pClient;
-		int64_t iIdleSinceMilliseconds = 0;
-	};
-	::OI::Thread::Mutex m_stPoolLocker;
-	std::map<std::tuple<std::string, std::string, PeerPolicy>, Entry> m_mClients;
-	size_t m_iMaxClients = 1024;
-	size_t m_iEvicted = 0;
-	int64_t m_iIdleMilliseconds = 60000;
-	// 句柄跟进程走，不关。
-	uv_timer_s* m_pTimer = nullptr;
-	bool m_bStopped = false;
-	std::once_flag m_stArmOnce;
-	std::atomic<uint32_t> m_iCursor{0};
-
-	RouteManager();
-	// 在 poll 线程。bStop 为真时全部退役，之后不再出借。
-	void Sweep(bool bStop);
-	void Stop();
-	void Arm();
-	static void OnArm(void* pArgument);
-	static void OnSweep(uv_timer_s* pTimer);
-	// 池满或已停返回空。
-	std::shared_ptr<RpcSender> Lease(const std::string& sIp, const std::string& sPort, ::OI::Net::SessionManager* pManager);
-	bool AddClient(ServiceRoute& stRoute, const std::string& sIp, const std::string& sPort, ::OI::Net::SessionManager* pManager);
-
-  public:
-	const std::string GetIDString() override;
-	void OnAddSession(::OI::Net::Session*) override
-	{
-	}
-	void OnDelSession(const ::OI::Net::Session*) override
-	{
-	}
-	// 名单完成后的路由只引用固定地址的池连接；不读取或复用可能切换地址的订阅管理器。
-	ServiceRoute Resolve(const std::string& sName, ServicePick iPick, const std::string& sZone, int32_t iCode, const std::vector<::OI::Base::ServiceInstance>& vList, ::OI::Net::SessionManager* pManager = nullptr);
-	// vClients 与分区号等长，空指针表示这个分区当前没登记。
-	ServiceRoute ResolveZones(const std::string& sName, const std::vector<std::string>& vZones, int32_t iCode, const std::vector<::OI::Base::ServiceInstance>& vList, ::OI::Net::SessionManager* pManager = nullptr);
-	// 不是池连接返回空。
-	RouteConnectionInfo ConnectionInfo(const RpcSender& stSender);
-	std::shared_ptr<void> ConnectionOwner(const RpcSender& stSender);
-	RoutePoolStats Stats();
-};
-
-// 挂起等注册表，不在调用线程里同步等。快路径（名字非法、自己已经连着）不挂起。
+// 挂起等注册表，不在调用线程里同步等。名字非法时不挂起。
 struct RouteAwaiter
 {
 	enum class Kind
 	{
 		Named,
 		Zones,
-		Target,
 	};
 	RpcDeadline stDeadline;
 	Kind iKind = Kind::Named;
-	::OI::Net::SessionManager* pManager = nullptr;
 	std::string sName;
 	std::string sZone;
 	ServicePick iPick = ServicePick::Any;
 	std::vector<int32_t> vZones;
-	std::string sTarget;
-	bool bBatch = false;
 	bool bResolved = false;
 	int32_t iCode = OI_ERR_CONNECT;                 // 读缓存的结果。exchange(Ready) 之前写完。
 	std::vector<::OI::Base::ServiceInstance> vList; // 缓存里的名单。和 iCode 一起在认领完成前写完。
@@ -997,56 +735,13 @@ struct RouteAwaiter
 	{
 		return false;
 	}
-	template <typename Promise>
-	bool await_suspend(std::coroutine_handle<Promise> stHandleLocal)
-	{
-		stHandle = stHandleLocal;
-		if (Prepare())
-		{
-			bResolved = true;
-			return false;
-		}
-		if (stDeadline.Expired())
-		{
-			stRoute.iStatus = ServiceRouteStatus::Timeout;
-			bResolved = true;
-			return false;
-		}
-		const int64_t iRemaining = stDeadline.Remaining().iMilliseconds;
-		// 注册表每秒拉一次，没拉到过的名字最多等两轮。
-		if (ReadCache(iRemaining > 0 ? (std::min)(iRemaining, int64_t(3000)) : 3000))
-		{
-			return false;
-		}
-		// 看见 Ready 表示名单已经写完，不挂起。
-		return iGate.exchange(OI::Coro::Gate::Waiting, std::memory_order_acq_rel) != OI::Coro::Gate::Ready;
-	}
-	ServiceRoute await_resume()
-	{
-		if (stDeadline.Expired() || iCode == OI_ERR_TIMEOUT)
-		{
-			stRoute.iStatus = ServiceRouteStatus::Timeout;
-			return std::move(stRoute);
-		}
-		if (bResolved)
-		{
-			return std::move(stRoute);
-		}
-		if (iKind == Kind::Zones)
-		{
-			return RouteManager::GetInstance().ResolveZones(sName, vZoneNames, iCode, vList, pManager);
-		}
-		return RouteManager::GetInstance().Resolve(sName, iPick, sZone, iCode, vList, pManager);
-	}
-	// bBatch 为真时只接受 name.*，否则只接受 name 或 name.分区。合法时写出要拉取的名字、挑选方式和分区。
-	static bool SplitTarget(const std::string& sTargetLocal, bool bBatchLocal, std::string& sNameLocal, ServicePick& iPickLocal, std::string& sZoneLocal);
+	bool await_suspend(std::coroutine_handle<> stHandleLocal);
+	// 按名单向 RouteManager 取发送目标。
+	ServiceRoute await_resume();
 
   private:
-	// 返回 true 表示不用再问注册表，结果已经写进 stRoute。
+	// 返回 true 表示名字非法，不用再问注册表，结果已经写进 stRoute。
 	bool Prepare();
-	// pManager 不带分区且自己就在看这个名字时，直接用它，不再另连。
-	bool PrepareNamed();
-	bool PrepareZones();
 	// 读 RegistryClient 的本地缓存，不发请求。命中返回 true；没拉到过就挂定时器复查，到点写 iCode、vList 后过完成门。
 	bool ReadCache(int64_t iTimeoutMilliseconds);
 	void Recheck(int64_t iDeadlineMilliseconds);
@@ -1054,295 +749,197 @@ struct RouteAwaiter
 	static bool ValidToken(const std::string& sText);
 };
 
-}
-}
+// 按服务名选路后发送，RouteManager 的调用都落到这里。
+class RouteCall
+{
+  public:
+	// 选路失败的状态换成返回码。
+	static int32_t Error(ServiceRouteStatus iStatus);
+	// 直接以 iCode 完成的任务，用于参数不合法时不发请求。
+	static OI::Coro::TaskResult<int32_t> Fail(int32_t iCode);
 
-namespace OI
-{
-namespace Rpc
-{
-
-template <typename Res, typename Req>
-OI::Coro::TaskResult<RpcResult<Res>> FailNamed(int32_t iCode)
-{
-	co_return RpcResult<Res>(iCode, Res{});
-}
-
-template <typename Res, typename Req>
-OI::Coro::TaskResult<RpcResult<Res>> CallNamed(::OI::Net::SessionManager* pManager, std::string sName, ServicePick iPick, std::string sZone, Req stRequest, RpcDeadline stDeadline)
-{
-	RouteAwaiter stWait;
-	stWait.stDeadline = stDeadline;
-	stWait.iKind = RouteAwaiter::Kind::Named;
-	stWait.pManager = pManager;
-	stWait.sName = std::move(sName);
-	stWait.iPick = iPick;
-	stWait.sZone = std::move(sZone);
-	ServiceRoute stRoute = co_await stWait;
-	if (stRoute.iStatus != ServiceRouteStatus::Ok || stRoute.vClients.size() != 1 || !stRoute.vClients[0])
+	// 按名字选出一台再发一次，响应直接写进调用方对象。
+	template <typename Req>
+	static OI::Coro::TaskResult<int32_t> RunOutput(std::string sName, ServicePick iPick, std::string sZone, std::optional<Req> stRequest,
+	    typename RpcProtoId<Req>::Response& stResponse, RpcDeadline stDeadline)
 	{
-		int32_t iCode = RouteError(stRoute.iStatus);
-		co_return RpcResult<Res>(iCode, Res{});
-	}
-	if (stDeadline.Expired())
-	{
-		co_return RpcResult<Res>(OI_ERR_TIMEOUT, Res{});
-	}
-	auto stCall = RpcCall(*stRoute.vClients[0], std::move(stRequest), stDeadline.Remaining());
-	co_return co_await stCall;
-}
-
-template <typename Res, typename Req>
-auto ProtoClientManager::CallAny(Req stRequest, ::OI::Timer::MS stTimeout)
-{
-	static_assert(std::is_same_v<Res, typename RpcProtoId<Req>::Response>, "RPC response type does not match the request");
-	return CallNamed<Res>(this, sServiceName, ServicePick::Any, std::string(), std::move(stRequest), stTimeout);
-}
-
-template <typename Res, typename Req>
-auto ProtoClientManager::Call(int32_t iZoneId, Req stRequest, ::OI::Timer::MS stTimeout)
-{
-	static_assert(std::is_same_v<Res, typename RpcProtoId<Req>::Response>, "RPC response type does not match the request");
-	if (iZoneId < 0)
-	{
-		return FailNamed<Res, Req>(OI_ERR_FAIL);
-	}
-	return CallNamed<Res>(this, sServiceName, ServicePick::Zone, std::to_string(iZoneId), std::move(stRequest), stTimeout);
-}
-
-// 命名调用与直连共用同一个解包等待器，响应不经过 RpcResult 中转或复制。
-template <typename Req>
-OI::Coro::TaskResult<int32_t> RunNamedOutput(::OI::Net::SessionManager* pManager, std::string sName,
-    ServicePick iPick, std::string sZone, std::optional<Req> stRequest,
-    typename RpcProtoId<Req>::Response& stResponse, RpcDeadline stDeadline)
-{
-	RpcRequestRelease<Req> stRelease{stRequest};
-	RouteAwaiter stWait;
-	stWait.stDeadline = stDeadline;
-	stWait.pManager = pManager;
-	stWait.sName = std::move(sName);
-	stWait.iPick = iPick;
-	stWait.sZone = std::move(sZone);
-	ServiceRoute stRoute = co_await stWait;
-	if (stRoute.iStatus != ServiceRouteStatus::Ok || stRoute.vClients.size() != 1 || !stRoute.vClients[0])
-	{
-		co_return RouteError(stRoute.iStatus);
-	}
-	if (stDeadline.Expired())
-	{
-		co_return OI_ERR_TIMEOUT;
-	}
-	auto stCall = MakeRpcCallAwaiter(*stRoute.vClients[0], *stRequest, stResponse, stDeadline.Remaining());
-	co_return co_await stCall;
-}
-template <typename Req>
-OI::Coro::TaskResult<int32_t> CallNamedOutput(::OI::Net::SessionManager* pManager, std::string sName,
-    ServicePick iPick, std::string sZone, Req stRequest,
-    typename RpcProtoId<Req>::Response& stResponse, RpcDeadline stDeadline)
-{
-	return RunNamedOutput<Req>(pManager, std::move(sName), iPick, std::move(sZone),
-	    std::optional<Req>(std::in_place, std::move(stRequest)), stResponse, stDeadline);
-}
-
-inline OI::Coro::TaskResult<int32_t> FailRpcOutput(int32_t iCode)
-{
-	co_return iCode;
-}
-
-template <typename Req>
-[[nodiscard]] auto ProtoClientManager::Call(Req stRequest, typename RpcProtoId<Req>::Response& stResponse,
-    ::OI::Timer::MS stTimeout)
-{
-	// 不指定分区时沿用当前客户端的连接、首次建连排队和固定配置。
-	return RpcCall(*this, std::move(stRequest), stResponse, stTimeout);
-}
-
-template <typename Req>
-[[nodiscard]] auto ProtoClientManager::CallAny(Req stRequest, typename RpcProtoId<Req>::Response& stResponse,
-    ::OI::Timer::MS stTimeout)
-{
-	return CallNamedOutput(this, sServiceName, ServicePick::Any, std::string(), std::move(stRequest), stResponse, stTimeout);
-}
-
-template <typename Req>
-[[nodiscard]] auto ProtoClientManager::Call(int32_t iZoneId, Req stRequest,
-    typename RpcProtoId<Req>::Response& stResponse, ::OI::Timer::MS stTimeout)
-{
-	if (iZoneId < 0)
-	{
-		return FailRpcOutput(OI_ERR_FAIL);
-	}
-	return CallNamedOutput(this, sServiceName, ServicePick::Zone, std::to_string(iZoneId), std::move(stRequest), stResponse, stTimeout);
-}
-
-template <typename Req>
-[[nodiscard]] OI::Coro::TaskResult<int32_t> RpcCall(const std::string& sService, Req stRequest,
-    typename RpcProtoId<Req>::Response& stResponse, ::OI::Timer::MS stTimeout = ::OI::Timer::Seconds(180))
-{
-	// 本函数不是协程，解析/拷贝在返回前完成；任务帧按值保存选路参数。
-	std::string sName;
-	std::string sZone;
-	ServicePick iPick = ServicePick::Any;
-	if (!RouteAwaiter::SplitTarget(sService, false, sName, iPick, sZone))
-	{
-		return FailRpcOutput(OI_ERR_FAIL);
-	}
-	return CallNamedOutput(nullptr, std::move(sName), iPick, std::move(sZone), std::move(stRequest), stResponse, stTimeout);
-}
-
-template <typename Res, typename Req>
-OI::Coro::TaskResult<std::vector<RpcResult<Res>>> SendRouted(ServiceRoute stRoute, Req stRequest, RpcDeadline stDeadline, size_t iFailureCount = 1)
-{
-	static_assert(std::is_same_v<Res, typename RpcProtoId<Req>::Response>, "RPC response type does not match the request");
-	if (stRoute.iStatus != ServiceRouteStatus::Ok)
-	{
-		int32_t iCode = RouteError(stRoute.iStatus);
-		co_return std::vector<RpcResult<Res>>(iFailureCount, RpcResult<Res>(iCode, Res{}));
-	}
-	std::deque<std::optional<RpcValueAwaiter<Req, Res>>> vCalls;
-	std::vector<int32_t> vSkipped(stRoute.vClients.size(), OI_ERR_CONNECT);
-	size_t iSlot = 0;
-	std::exception_ptr stBuildError;
-	try
-	{
-		for (auto* pClient : stRoute.vClients)
+		RpcRequestRelease<Req> stRelease{stRequest};
+		RouteAwaiter stWait;
+		stWait.stDeadline = stDeadline;
+		stWait.sName = std::move(sName);
+		stWait.iPick = iPick;
+		stWait.sZone = std::move(sZone);
+		ServiceRoute stRoute = co_await stWait;
+		if (stRoute.iStatus != ServiceRouteStatus::Ok || stRoute.vClients.size() != 1 || !stRoute.vClients[0])
 		{
-			const size_t iCurrentSlot = iSlot++;
-			if (!pClient)
-			{
-				vCalls.emplace_back();
-				continue;
-			}
-			if (stDeadline.Expired())
-			{
-				vSkipped[iCurrentSlot] = OI_ERR_TIMEOUT;
-				vCalls.emplace_back();
-				continue;
-			}
-			vCalls.emplace_back(std::in_place, RpcCall(*pClient, stRequest, stDeadline.Remaining()));
-			vCalls.back()->Submit();
+			co_return Error(stRoute.iStatus);
 		}
+		if (stDeadline.Expired())
+		{
+			co_return OI_ERR_TIMEOUT;
+		}
+		auto stCall = MakeRpcCallAwaiter(*stRoute.vClients[0], *stRequest, stResponse, stDeadline.Remaining());
+		co_return co_await stCall;
 	}
-	catch (...)
+
+	// 给 stRoute 里每个目标各发一份，先全部发出再等，结果和目标一一对应。空目标那一格记 OI_ERR_CONNECT。
+	// 选路失败时返回 iFailureCount 格同一个错误码。
+	template <typename Res, typename Req>
+	static OI::Coro::TaskResult<std::vector<RpcResult<Res>>> Send(ServiceRoute stRoute, Req stRequest, RpcDeadline stDeadline, size_t iFailureCount = 1)
 	{
-		stBuildError = std::current_exception();
-	}
-	if (stBuildError)
-	{
+		static_assert(std::is_same_v<Res, typename RpcProtoId<Req>::Response>, "RPC response type does not match the request");
+		if (stRoute.iStatus != ServiceRouteStatus::Ok)
+		{
+			int32_t iCode = Error(stRoute.iStatus);
+			co_return std::vector<RpcResult<Res>>(iFailureCount, RpcResult<Res>(iCode, Res{}));
+		}
+		std::deque<std::optional<RpcValueAwaiter<Req, Res>>> vCalls;
+		std::vector<int32_t> vSkipped(stRoute.vClients.size(), OI_ERR_CONNECT);
+		size_t iSlot = 0;
+		std::exception_ptr stBuildError;
+		try
+		{
+			for (auto* pClient : stRoute.vClients)
+			{
+				const size_t iCurrentSlot = iSlot++;
+				if (!pClient)
+				{
+					vCalls.emplace_back();
+					continue;
+				}
+				if (stDeadline.Expired())
+				{
+					vSkipped[iCurrentSlot] = OI_ERR_TIMEOUT;
+					vCalls.emplace_back();
+					continue;
+				}
+				vCalls.emplace_back(std::in_place, RpcCall(*pClient, stRequest, stDeadline.Remaining()));
+				vCalls.back()->Submit();
+			}
+		}
+		catch (...)
+		{
+			stBuildError = std::current_exception();
+		}
+		if (stBuildError)
+		{
+			for (auto& stCall : vCalls)
+			{
+				if (!stCall || !stCall->bDispatched)
+				{
+					continue;
+				}
+				try
+				{
+					(void)co_await *stCall;
+				}
+				catch (...)
+				{
+				}
+			}
+			std::rethrow_exception(stBuildError);
+		}
+		std::vector<RpcResult<Res>> vResults;
+		vResults.reserve(vCalls.size());
 		for (auto& stCall : vCalls)
 		{
-			if (!stCall || !stCall->bDispatched)
+			if (!stCall)
 			{
+				vResults.push_back(RpcResult<Res>(vSkipped[vResults.size()], Res{}));
 				continue;
 			}
 			try
 			{
-				(void)co_await *stCall;
+				vResults.push_back(co_await *stCall);
 			}
-			catch (...)
+			catch (const std::exception&)
 			{
+				vResults.push_back(RpcResult<Res>(OI_ERR_FAIL, Res{}));
 			}
 		}
-		std::rethrow_exception(stBuildError);
+		co_return vResults;
 	}
-	std::vector<RpcResult<Res>> vResults;
-	vResults.reserve(vCalls.size());
-	for (auto& stCall : vCalls)
+
+	// 名字拷进任务。名单是任务跑起来时的注册表缓存，等待不占线程。
+	// 路由在执行期间持有发送目标，完成后释放；回包仍按调用号匹配等待器。
+	template <typename Res, typename Req>
+	static OI::Coro::TaskResult<std::vector<RpcResult<Res>>> Call(RouteAwaiter::Kind iKind, std::string sName, ServicePick iPick, std::vector<int32_t> vZones,
+	    Req stRequest, RpcDeadline stDeadline)
 	{
-		if (!stCall)
-		{
-			vResults.push_back(RpcResult<Res>(vSkipped[vResults.size()], Res{}));
-			continue;
-		}
-		try
-		{
-			vResults.push_back(co_await *stCall);
-		}
-		catch (const std::exception&)
-		{
-			vResults.push_back(RpcResult<Res>(OI_ERR_FAIL, Res{}));
-		}
+		// 指定分区时，整体错误也必须保留每个输入槽（包括重复分区）。
+		const size_t iFailureCount = iKind == RouteAwaiter::Kind::Zones ? vZones.size() : 1;
+		RouteAwaiter stWait;
+		stWait.stDeadline = stDeadline;
+		stWait.iKind = iKind;
+		stWait.sName = std::move(sName);
+		stWait.iPick = iPick;
+		stWait.vZones = std::move(vZones);
+		ServiceRoute stRoute = co_await stWait;
+		auto stBatch = Send<Res>(std::move(stRoute), std::move(stRequest), stDeadline, iFailureCount);
+		co_return co_await stBatch;
 	}
-	co_return vResults;
-}
 
-// 名字拷进任务。名单是任务跑起来时的注册表回包，等待不占线程。
-// 路由在执行期间持有连接租约，完成后释放；回包仍按调用号匹配等待器。
-template <typename Res, typename Req>
-OI::Coro::TaskResult<std::vector<RpcResult<Res>>> CallRouted(RouteAwaiter::Kind iKind,
-    ::OI::Net::SessionManager* pManager,
-    std::string sName,
-    ServicePick iPick,
-    std::string sZone,
-    std::vector<int32_t> vZones,
-    std::string sTarget,
-    bool bBatch,
-    Req stRequest,
-    RpcDeadline stDeadline)
-{
-	// 指定分区时，整体错误也必须保留每个输入槽（包括重复分区）。
-	const size_t iFailureCount = iKind == RouteAwaiter::Kind::Zones ? vZones.size() : 1;
-	RouteAwaiter stWait;
-	stWait.stDeadline = stDeadline;
-	stWait.iKind = iKind;
-	stWait.pManager = pManager;
-	stWait.sName = std::move(sName);
-	stWait.iPick = iPick;
-	stWait.sZone = std::move(sZone);
-	stWait.vZones = std::move(vZones);
-	stWait.sTarget = std::move(sTarget);
-	stWait.bBatch = bBatch;
-	ServiceRoute stRoute = co_await stWait;
-	auto stBatch = SendRouted<Res>(std::move(stRoute), std::move(stRequest), stDeadline, iFailureCount);
-	co_return co_await stBatch;
-}
-
-template <typename Res, typename Req>
-OI::Coro::TaskResult<std::vector<RpcResult<Res>>> RpcCallBatch(const std::string& sService, Req stRequest, ::OI::Timer::MS stTimeout = ::OI::Timer::Seconds(180))
-{
-	return CallRouted<Res>(RouteAwaiter::Kind::Target, nullptr, std::string(), ServicePick::Any, std::string(), {}, sService, true, std::move(stRequest), stTimeout);
-}
-
-template <typename Res, typename Req>
-OI::Coro::TaskResult<RpcResult<Res>> RunTargetCall(std::string sService, Req stRequest, RpcDeadline stDeadline)
-{
-	static_assert(std::is_same_v<Res, typename RpcProtoId<Req>::Response>, "RPC response type does not match the request");
-	RouteAwaiter stWait;
-	stWait.stDeadline = stDeadline;
-	stWait.iKind = RouteAwaiter::Kind::Target;
-	stWait.sTarget = std::move(sService);
-	stWait.bBatch = false;
-	ServiceRoute stRoute = co_await stWait;
-	if (stRoute.iStatus != ServiceRouteStatus::Ok || stRoute.vClients.size() != 1 || !stRoute.vClients[0])
+	// 选路后给每个目标发一份单向消息并等回执。选路失败或有目标失败就抛出，由任务错误处理器报告服务名、失败格数和首个返回码。
+	template <typename Msg>
+	static OI::Coro::Task RunNotify(RouteAwaiter::Kind iKind, std::string sName, ServicePick iPick, std::string sZone, std::vector<int32_t> vZones, Msg stMessage)
 	{
-		int32_t iCode = RouteError(stRoute.iStatus);
-		co_return RpcResult<Res>(iCode, Res{});
+		using Res = typename RpcProtoId<Msg>::Response;
+		const RpcDeadline stDeadline(::OI::Timer::Seconds(180));
+		const size_t iFailureCount = iKind == RouteAwaiter::Kind::Zones ? vZones.size() : 1;
+		RouteAwaiter stWait;
+		stWait.stDeadline = stDeadline;
+		stWait.iKind = iKind;
+		stWait.sName = sName;
+		stWait.iPick = iPick;
+		stWait.sZone = sZone;
+		stWait.vZones = vZones;
+		ServiceRoute stRoute = co_await stWait;
+		auto stBatch = Send<Res>(std::move(stRoute), std::move(stMessage), stDeadline, iFailureCount);
+		std::vector<RpcResult<Res>> vResults = co_await stBatch;
+		size_t iFailed = 0;
+		int32_t iFirstCode = OI_OK;
+		std::string sFailedZones;
+		for (size_t iIndexLocal = 0; iIndexLocal < vResults.size(); ++iIndexLocal)
+		{
+			const int32_t iCode = vResults[iIndexLocal].GetRet();
+			if (iCode == OI_OK)
+			{
+				continue;
+			}
+			if (iFailed == 0)
+			{
+				iFirstCode = iCode;
+			}
+			++iFailed;
+			if (iKind == RouteAwaiter::Kind::Zones && iIndexLocal < vZones.size())
+			{
+				sFailedZones += (sFailedZones.empty() ? "" : ",") + std::to_string(vZones[iIndexLocal]);
+			}
+		}
+		if (iFailed != 0)
+		{
+			throw std::runtime_error("route notification failed service=" + sName + (sZone.empty() ? "" : " zone=" + sZone) +
+			                         (sFailedZones.empty() ? "" : " zones=" + sFailedZones) + " protocol=" + std::to_string(RpcProtoId<Msg>::iValue) +
+			                         " failed=" + std::to_string(iFailed) + "/" + std::to_string(vResults.size()) + " code=" + std::to_string(iFirstCode));
+		}
 	}
-	if (stDeadline.Expired())
+
+	// 启动一条通知任务就返回 OI_OK；线程不对返回错误码。
+	template <typename Msg>
+	static int32_t StartNotify(RouteAwaiter::Kind iKind, std::string sName, ServicePick iPick, std::string sZone, std::vector<int32_t> vZones, const Msg& stMessage)
 	{
-		co_return RpcResult<Res>(OI_ERR_TIMEOUT, Res{});
+		const int32_t iThreadStatus = ::OI::Net::Poll::GetInstance().CheckThreadAccess("RouteCall::StartNotify");
+		if (iThreadStatus != OI_OK)
+		{
+			return iThreadStatus;
+		}
+		OI::Coro::StartTask([iKind, sName = std::move(sName), iPick, sZone = std::move(sZone), vZones = std::move(vZones), stMessage](OI::Coro::Token) mutable
+		{
+			return RunNotify(iKind, std::move(sName), iPick, std::move(sZone), std::move(vZones), std::move(stMessage));
+		});
+		return OI_OK;
 	}
-	auto stCall = RpcCall(*stRoute.vClients[0], std::move(stRequest), stDeadline.Remaining());
-	co_return co_await stCall;
-}
-
-template <typename Res, typename Req>
-OI::Coro::TaskResult<RpcResult<Res>> RpcCall(std::string sService, Req stRequest, ::OI::Timer::MS stTimeout = ::OI::Timer::Seconds(180))
-{
-	return RunTargetCall<Res>(std::move(sService), std::move(stRequest), RpcDeadline(stTimeout));
-}
-
-template <typename Res, typename Req>
-auto ProtoClientManager::CallAll(const Req& stRequest, ::OI::Timer::MS stTimeout)
-{
-	return CallRouted<Res>(RouteAwaiter::Kind::Named, this, sServiceName, ServicePick::All, std::string(), {}, std::string(), false, stRequest, stTimeout);
-}
-
-template <typename Res, typename Req>
-auto ProtoClientManager::CallMany(const std::vector<int32_t>& vZoneIds, const Req& stRequest, ::OI::Timer::MS stTimeout)
-{
-	return CallRouted<Res>(RouteAwaiter::Kind::Zones, this, sServiceName, ServicePick::Any, std::string(), vZoneIds, std::string(), false, stRequest, stTimeout);
-}
+};
 
 template <typename Res>
 struct PeerResult
@@ -1351,126 +948,94 @@ struct PeerResult
 	RpcResult<Res> stResult;
 };
 
-// 调用期间持有发送目标，实例中途退役也不会释放它。
-template <typename Req>
-OI::Coro::TaskResult<int32_t> RunPeerOutput(std::shared_ptr<RpcSender> pSender, std::optional<Req> stRequest,
-    typename RpcProtoId<Req>::Response& stResponse, ::OI::Timer::MS stTimeout)
+// 按实例发送，ProtoMultiClientManager 的调用都落到这里。
+class PeerCall
 {
-	RpcRequestRelease<Req> stRelease{stRequest};
-	if (!pSender)
+  public:
+	// 调用期间持有发送目标，实例中途退役也不会释放它。
+	template <typename Req>
+	static OI::Coro::TaskResult<int32_t> RunOutput(std::shared_ptr<RpcSender> pSender, std::optional<Req> stRequest,
+	    typename RpcProtoId<Req>::Response& stResponse, ::OI::Timer::MS stTimeout)
 	{
-		co_return OI_ERR_CONNECT;
-	}
-	auto stCall = MakeRpcCallAwaiter(*pSender, *stRequest, stResponse, stTimeout);
-	co_return co_await stCall;
-}
-
-template <typename Res, typename Req>
-OI::Coro::TaskResult<std::vector<PeerResult<Res>>> RunPeerBatch(std::vector<int32_t> vIds, ServiceRoute stRoute, Req stRequest, RpcDeadline stDeadline)
-{
-	auto stBatch = SendRouted<Res>(std::move(stRoute), std::move(stRequest), stDeadline, 0);
-	std::vector<RpcResult<Res>> vResults = co_await stBatch;
-	std::vector<PeerResult<Res>> vPeers;
-	vPeers.reserve(vResults.size());
-	for (size_t iIndexLocal = 0; iIndexLocal < vResults.size() && iIndexLocal < vIds.size(); ++iIndexLocal)
-	{
-		vPeers.push_back(PeerResult<Res>{vIds[iIndexLocal], std::move(vResults[iIndexLocal])});
-	}
-	co_return vPeers;
-}
-
-template <typename Msg>
-OI::Coro::Task RunPeerNotify(std::shared_ptr<RpcSender> pSender, Msg stMessage)
-{
-	auto stCall = RpcCall(*pSender, std::move(stMessage), ::OI::Timer::Seconds(180));
-	auto stResult = co_await stCall;
-	if (stResult.GetRet() != OI_OK)
-	{
-		throw std::runtime_error("RPC notification failed protocol=" + std::to_string(RpcProtoId<Msg>::iValue) + " code=" + std::to_string(stResult.GetRet()) + " call=" + std::to_string(stCall.iCallId));
-	}
-}
-
-template <typename Msg>
-int32_t StartPeerNotify(std::shared_ptr<RpcSender> pSender, const Msg& stMessage)
-{
-	const int32_t iThreadStatus = ::OI::Net::Poll::GetInstance().CheckThreadAccess("StartPeerNotify");
-	if (iThreadStatus != OI_OK)
-	{
-		return iThreadStatus;
+		RpcRequestRelease<Req> stRelease{stRequest};
+		if (!pSender)
+		{
+			co_return OI_ERR_CONNECT;
+		}
+		auto stCall = MakeRpcCallAwaiter(*pSender, *stRequest, stResponse, stTimeout);
+		co_return co_await stCall;
 	}
 
-	if (!pSender)
+	template <typename Res, typename Req>
+	static OI::Coro::TaskResult<std::vector<PeerResult<Res>>> RunBatch(std::vector<int32_t> vIds, ServiceRoute stRoute, Req stRequest, RpcDeadline stDeadline)
 	{
-		return OI_ERR_CONNECT;
-	}
-	OI::Coro::StartTask([pSender = std::move(pSender), stMessage](OI::Coro::Token) mutable
-	{
-		return RunPeerNotify(std::move(pSender), std::move(stMessage));
-	});
-	return OI_OK;
-}
-
-template <typename Msg>
-int32_t ProtoMultiClientManager::NotifyPeer(int32_t iInstanceId, const Msg& stMessage)
-{
-	const int32_t iThreadStatus = ::OI::Net::Poll::GetInstance().CheckThreadAccess("ProtoMultiClientManager::NotifyPeer");
-	if (iThreadStatus != OI_OK)
-	{
-		return iThreadStatus;
+		auto stBatch = RouteCall::Send<Res>(std::move(stRoute), std::move(stRequest), stDeadline, 0);
+		std::vector<RpcResult<Res>> vResults = co_await stBatch;
+		std::vector<PeerResult<Res>> vPeers;
+		vPeers.reserve(vResults.size());
+		for (size_t iIndexLocal = 0; iIndexLocal < vResults.size() && iIndexLocal < vIds.size(); ++iIndexLocal)
+		{
+			vPeers.push_back(PeerResult<Res>{vIds[iIndexLocal], std::move(vResults[iIndexLocal])});
+		}
+		co_return vPeers;
 	}
 
-	return StartPeerNotify(PeerSender(iInstanceId), stMessage);
-}
-
-template <typename Msg>
-int32_t ProtoMultiClientManager::NotifyAny(const Msg& stMessage)
-{
-	const int32_t iThreadStatus = ::OI::Net::Poll::GetInstance().CheckThreadAccess("ProtoMultiClientManager::NotifyAny");
-	if (iThreadStatus != OI_OK)
+	template <typename Msg>
+	static OI::Coro::Task RunNotify(std::shared_ptr<RpcSender> pSender, Msg stMessage)
 	{
-		return iThreadStatus;
+		auto stCall = RpcCall(*pSender, std::move(stMessage), ::OI::Timer::Seconds(180));
+		auto stResult = co_await stCall;
+		if (stResult.GetRet() != OI_OK)
+		{
+			throw std::runtime_error("RPC notification failed protocol=" + std::to_string(RpcProtoId<Msg>::iValue) + " code=" + std::to_string(stResult.GetRet()) + " call=" + std::to_string(stCall.iCallId));
+		}
 	}
 
-	return StartPeerNotify(AnySender(), stMessage);
-}
+	template <typename Msg>
+	static int32_t StartNotify(std::shared_ptr<RpcSender> pSender, const Msg& stMessage)
+	{
+		const int32_t iThreadStatus = ::OI::Net::Poll::GetInstance().CheckThreadAccess("PeerCall::StartNotify");
+		if (iThreadStatus != OI_OK)
+		{
+			return iThreadStatus;
+		}
 
-template <typename Req>
-[[nodiscard]] auto ProtoMultiClientManager::Call(int32_t iInstanceId, Req stRequest, typename RpcProtoId<Req>::Response& stResponse,
-    ::OI::Timer::MS stTimeout)
-{
-	return RunPeerOutput<Req>(PeerSender(iInstanceId), std::optional<Req>(std::in_place, std::move(stRequest)), stResponse, stTimeout);
-}
+		if (!pSender)
+		{
+			return OI_ERR_CONNECT;
+		}
+		OI::Coro::StartTask([pSender = std::move(pSender), stMessage](OI::Coro::Token) mutable
+		{
+			return RunNotify(std::move(pSender), std::move(stMessage));
+		});
+		return OI_OK;
+	}
 
-template <typename Req>
-[[nodiscard]] auto ProtoMultiClientManager::CallAny(Req stRequest, typename RpcProtoId<Req>::Response& stResponse, ::OI::Timer::MS stTimeout)
-{
-	return RunPeerOutput<Req>(AnySender(), std::optional<Req>(std::in_place, std::move(stRequest)), stResponse, stTimeout);
-}
+	// 给 stRoute.vOwners 里每个非空目标各启动一条通知任务，返回启动了几条；线程不对返回错误码。
+	template <typename Msg>
+	static int32_t StartBatchNotify(const ServiceRoute& stRoute, const Msg& stMessage)
+	{
+		const int32_t iThreadStatus = ::OI::Net::Poll::GetInstance().CheckThreadAccess("PeerCall::StartBatchNotify");
+		if (iThreadStatus != OI_OK)
+		{
+			return iThreadStatus;
+		}
+		int32_t iStarted = 0;
+		for (const auto& pSender : stRoute.vOwners)
+		{
+			if (!pSender)
+			{
+				continue;
+			}
+			OI::Coro::StartTask([pSender, stMessage](OI::Coro::Token) mutable
+			{
+				return RunNotify(std::move(pSender), std::move(stMessage));
+			});
+			++iStarted;
+		}
+		return iStarted;
+	}
+};
 
-template <typename Res, typename Req>
-auto ProtoMultiClientManager::CallAll(const Req& stRequest, ::OI::Timer::MS stTimeout)
-{
-	static_assert(std::is_same_v<Res, typename RpcProtoId<Req>::Response>, "RPC response type does not match the request");
-	std::vector<int32_t> vIds;
-	ServiceRoute stRoute;
-	AllSenders(vIds, stRoute);
-	return RunPeerBatch<Res>(std::move(vIds), std::move(stRoute), stRequest, RpcDeadline(stTimeout));
-}
-
 }
 }
-
-// 业务命名约定：协议 Name 对应生成的 NameReq / NameRes。
-// 可用于函数声明或定义；stRequest/stResponse/stContext 是宏提供的参数名。
-#define OI_RPC_HANDLER(Name, Function) \
-	::OI::Rpc::RpcTask Function(const ::OI::RpcData::Name##Req& stRequest, ::OI::RpcData::Name##Res& stResponse)
-#define OI_RPC_SYNC_HANDLER(Name, Function) \
-	int32_t Function(const ::OI::RpcData::Name##Req& stRequest, ::OI::RpcData::Name##Res& stResponse)
-#define OI_RPC_CONTEXT_HANDLER(Name, Function) \
-	::OI::Rpc::RpcTask Function(const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::Name##Req& stRequest, ::OI::RpcData::Name##Res& stResponse)
-// 从本次回调的上下文拿回组件。stManager 必须就是这个类型，对象要活过所有在途请求。
-#define OI_RPC_SELF(Type) static_cast<Type&>(stContext.stManager)
-
-// 单向消息。协议 Name 只用 NameReq，生成的 NameRes 不会出现在线上。
-#define OI_NOTIFY_HANDLER(Name, Function) \
-	::OI::Rpc::RpcTask Function(const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::Name##Req& stRequest)

@@ -1,6 +1,6 @@
 #pragma once
 #include "oi_net.h"
-#include "oi_rpc_coro.h"
+#include "oi_rpc_session_manager.h"
 #include "oi_rpcdata_udpechoreq.h"
 #include "oi_rpcdata_udpechores.h"
 #include "oi_rpcdata_udpnotereq.h"

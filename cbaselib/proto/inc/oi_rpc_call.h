@@ -117,6 +117,8 @@ class RpcCallManager
 	bool Deliver(proto_type_t iId, ::OI::Base::BytesStream& stBody, ProtoSessionManager* pManager, sid_t iSessionId);
 	// 各分片在途调用的合计。并发请求下不是同一时刻的快照。
 	RpcWaitStats WaitStats();
+	// 这条会话上已发出、还在等回包的调用数。等连接的不算。
+	size_t SessionCalls(::OI::Net::SessionManager* pManager, sid_t iSessionId);
 	// 读取进程级 RPC 在途限制；非法配置令模块初始化失败。
 	int32_t InitAdmission();
 	// RpcAdmissionLease 析构时归还额度。
@@ -124,6 +126,12 @@ class RpcCallManager
 	// 记录失败阶段和调用关联信息；日志失败不能打断原来的错误回执/收尾。
 	static void ReportError(::OI::Coro::Token iToken, uint64_t iCallId, sid_t iSessionId,
 	    proto_type_t iProtocolId, const char* pStage, std::exception_ptr stError) noexcept;
+	// 发出已编码的回包。发送失败或抛异常都关这条会话。
+	static void SendReply(::OI::Coro::Token iToken, ::OI::Net::SessionManager* pManager, sid_t iSessionId,
+	    uint64_t iCallId, proto_type_t iResponseId, const ::OI::Base::Bytes& stFrame);
+	// 只带调用号和 OI_ERR_FAIL 的回执。连这个都编不出来就关会话。
+	static void SendFailureReply(::OI::Coro::Token iToken, ::OI::Net::SessionManager* pManager, sid_t iSessionId,
+	    uint64_t iCallId, proto_type_t iResponseId);
 	// 每跳扫一遍到期的调用。
 	::OI::Coro::Task OnTickUpdate(uint64_t iNowMilliseconds);
 

@@ -1,6 +1,8 @@
 #include "multi_mgr.h"
 #include "oi_config.h"
+#include "oi_registry_client.h"
 #include "oi_poll.h"
+#include "oi_rpcdata_peernotereq.h"
 #include "oi_rpcdata_peerprobereq.h"
 #include "oi_rpcdata_peerproberes.h"
 #include "rpc_ids.h"
@@ -166,6 +168,92 @@ OI::Coro::TaskResult<bool> MultiMgr::WaitFor(std::function<bool()> fnReady, int6
 	co_return true;
 }
 
+OI::Coro::TaskResult<int32_t> MultiMgr::QueryPeerNotes(int32_t iInstanceId, int32_t iTag)
+{
+	::OI::RpcData::PeerProbeReq stRequest;
+	stRequest.iTag = iTag;
+	stRequest.iNotify = 0;
+	::OI::RpcData::PeerProbeRes stResponse;
+	stResponse.iNoteCount = -1;
+	const int32_t iCode = co_await m_stPeers.Call(iInstanceId, stRequest, stResponse, ::OI::Timer::Seconds(3));
+	if (iCode != OI_OK)
+	{
+		co_return iCode;
+	}
+	co_return stResponse.iNoteCount;
+}
+
+OI::Coro::TaskResult<int32_t> MultiMgr::WaitPeerNotes(int32_t iInstanceId, int32_t iTag, int32_t iExpected, int64_t iMilliseconds)
+{
+	const int64_t iDeadlineMilliseconds = ::OI::Timer::SteadyMilliseconds() + iMilliseconds;
+	int32_t iCount = -1;
+	while (true)
+	{
+		iCount = co_await QueryPeerNotes(iInstanceId, iTag);
+		if (iCount == iExpected)
+		{
+			co_return iCount;
+		}
+		if (::OI::Timer::SteadyMilliseconds() >= iDeadlineMilliseconds)
+		{
+			co_return iCount;
+		}
+		co_await OI::Coro::yield(20);
+	}
+}
+
+OI::Coro::TaskResult<int> MultiMgr::CheckNotifyBatch(int32_t& iAllStarted, int32_t& iAllGot, int32_t& iManyStarted, int32_t& iManyGot)
+{
+	int iBad = 0;
+	constexpr int32_t iAllTag = 8101;
+	constexpr int32_t iManyTag = 8102;
+	constexpr int64_t iWaitMilliseconds = 5000;
+	::OI::RpcData::PeerNoteReq stAll;
+	stAll.iTag = iAllTag;
+	iAllStarted = m_stPeers.NotifyAll(stAll);
+	const int32_t iAllOne = co_await WaitPeerNotes(1, iAllTag, 1, iWaitMilliseconds);
+	const int32_t iAllTwo = co_await WaitPeerNotes(2, iAllTag, 1, iWaitMilliseconds);
+	iAllGot = (iAllOne < 0 || iAllTwo < 0) ? -1 : iAllOne + iAllTwo;
+	if (iAllStarted != 2 || iAllOne != 1 || iAllTwo != 1)
+	{
+		++iBad;
+	}
+	::OI::RpcData::PeerNoteReq stMany;
+	stMany.iTag = iManyTag;
+	const std::vector<int32_t> vIds{1, 99, 2};
+	iManyStarted = m_stPeers.NotifyMany(vIds, stMany);
+	const int32_t iManyOne = co_await WaitPeerNotes(1, iManyTag, 1, iWaitMilliseconds);
+	const int32_t iManyTwo = co_await WaitPeerNotes(2, iManyTag, 1, iWaitMilliseconds);
+	iManyGot = (iManyOne < 0 || iManyTwo < 0) ? -1 : iManyOne + iManyTwo;
+	if (iManyStarted != 2 || iManyOne != 1 || iManyTwo != 1)
+	{
+		++iBad;
+	}
+	co_return iBad;
+}
+
+OI::Coro::TaskResult<int32_t> MultiMgr::CheckNotifyReconnect()
+{
+	constexpr int32_t iReconnectTag = 8103;
+	constexpr int64_t iWaitMilliseconds = 5000;
+	::OI::RpcData::PeerNoteReq stReconnect;
+	stReconnect.iTag = iReconnectTag;
+	const std::vector<int32_t> vIds{1, 99, 2};
+	const sid_t iSid = m_stPeers.ConnectedSid(2);
+	if (iSid == INVALID_SID)
+	{
+		co_return 0;
+	}
+	m_stPeers.CloseSession(iSid);
+	const int32_t iStarted = m_stPeers.NotifyMany(vIds, stReconnect);
+	const int32_t iTwo = co_await WaitPeerNotes(2, iReconnectTag, 1, iWaitMilliseconds);
+	if (iStarted != 2 || iTwo != 1)
+	{
+		co_return 0;
+	}
+	co_return 1;
+}
+
 std::string MultiMgr::JoinIds(const std::vector<int32_t>& vIds)
 {
 	std::string sText;
@@ -283,7 +371,19 @@ OI::Coro::Task MultiMgr::Pool()
 		bAllOk = stPeer.iInstanceId == (int32_t)iIndex + 1 && stPeer.stResult.GetRet() == OI_OK && stPeer.stResult.GetRes().iTag == 40 && stPeer.stResult.GetRes().iServiceId == stPeer.iInstanceId;
 	}
 	std::printf("pool call all slots=%d bad=%d\n", (int32_t)vAll.size(), bAllOk ? 0 : 1);
-	const int32_t iBadTotal = (bAny && bAllOk) ? 0 : 1;
+	::OI::RpcData::PeerProbeReq stManyRequest;
+	stManyRequest.iTag = 41;
+	const std::vector<int32_t> vManyIds{1, 99, 2};
+	auto vMany = co_await m_stPeers.CallMany<::OI::RpcData::PeerProbeRes>(vManyIds, stManyRequest, ::OI::Timer::Seconds(3));
+	bool bManyOk = vMany.size() == 3 && vMany[1].GetRet() == OI_ERR_CONNECT;
+	if (bManyOk)
+	{
+		bManyOk = vMany[0].GetRet() == OI_OK && vMany[0].GetRes().iTag == 41 && vMany[0].GetRes().iServiceId == 1;
+		bManyOk = bManyOk && vMany[2].GetRet() == OI_OK && vMany[2].GetRes().iTag == 41 && vMany[2].GetRes().iServiceId == 2;
+	}
+	std::printf("pool call many slots=%d missing=%d bad=%d\n", (int32_t)vMany.size(),
+	    vMany.size() == 3 ? vMany[1].GetRet() : -1, bManyOk ? 0 : 1);
+	const int32_t iBadTotal = (bAny && bAllOk && bManyOk) ? 0 : 1;
 	std::printf("pool done bad=%d\n", iBadTotal);
 	std::fflush(stdout);
 	TestBoard::GetInstance().Done(iBadTotal == 0 ? 0 : 1);
@@ -337,7 +437,6 @@ OI::Coro::Task MultiMgr::Run()
 	fnReport("multi watcher unchanged recovered=%d bad=%d\n", bWatchRecovered ? 0 : 1, bWatchRecovered ? 1 : 0);
 
 	// 写死地址：一台，实例号 0。没连上就发的调用先暂存，连上补发。
-	const auto stWaitBaseline = ::OI::Rpc::RpcCallManager::GetInstance().WaitStats();
 	const bool bNotConnected = m_stFixed.ConnectedSid(0) == INVALID_SID;
 	::OI::RpcData::PeerProbeReq stEarlyNotify;
 	stEarlyNotify.iTag = 901;
@@ -361,12 +460,20 @@ OI::Coro::Task MultiMgr::Run()
 	{
 		return m_stFixed.Notes() == 2;
 	}, 5000);
-	const bool bDrained = co_await WaitFor([stWaitBaseline]()
+	const bool bDrained = co_await WaitFor([this]()
 	{
-		const auto stNow = ::OI::Rpc::RpcCallManager::GetInstance().WaitStats();
-		return stNow.iCalls == stWaitBaseline.iCalls && stNow.iExpirations == stWaitBaseline.iExpirations &&
-		       stNow.iSessionEntries == stWaitBaseline.iSessionEntries;
+		const sid_t iSid = m_stFixed.ConnectedSid(0);
+		const auto stHeld = m_stFixed.HeldInfo(0);
+		return iSid != INVALID_SID && stHeld.iCount == 0 && stHeld.iBytes == 0 &&
+		       ::OI::Rpc::RpcCallManager::GetInstance().SessionCalls(&m_stFixed, iSid) == 0;
 	}, 5000);
+	if (!bDrained)
+	{
+		const sid_t iSid = m_stFixed.ConnectedSid(0);
+		const auto stHeld = m_stFixed.HeldInfo(0);
+		const size_t iCalls = ::OI::Rpc::RpcCallManager::GetInstance().SessionCalls(&m_stFixed, iSid);
+		fnReport("multi notify reconnect drain sid=%lld held=%zu/%zu calls=%zu\n", 0, (long long)iSid, stHeld.iCount, stHeld.iBytes, iCalls);
+	}
 	fnReport("multi notify reconnect disconnected=%d accepted=%d delivered=%d drained=%d bad=%d\n",
 	    bDisconnected && iReconnectNotify == OI_OK && bReconnectDelivered && bDrained && m_stFixed.NoteBad() == 0 ? 0 : 1,
 	    bDisconnected ? 1 : 0, iReconnectNotify, bReconnectDelivered ? 1 : 0, bDrained ? 1 : 0);
@@ -427,6 +534,25 @@ OI::Coro::Task MultiMgr::Run()
 	}
 	fnReport("multi call all slots=%d bad=%d\n", bAllOk ? 0 : 1, (int32_t)vAll.size());
 
+	::OI::RpcData::PeerProbeReq stManyRequest;
+	stManyRequest.iTag = 41;
+	const std::vector<int32_t> vManyIds{1, 99, 2};
+	auto vMany = co_await m_stPeers.CallMany<::OI::RpcData::PeerProbeRes>(vManyIds, stManyRequest, ::OI::Timer::Seconds(3));
+	bool bManyOk = vMany.size() == 3 && vMany[1].GetRet() == OI_ERR_CONNECT;
+	if (bManyOk)
+	{
+		bManyOk = vMany[0].GetRet() == OI_OK && vMany[0].GetRes().iTag == 41 && vMany[0].GetRes().iServiceId == 1;
+		bManyOk = bManyOk && vMany[2].GetRet() == OI_OK && vMany[2].GetRes().iTag == 41 && vMany[2].GetRes().iServiceId == 2;
+	}
+	fnReport("multi call many slots=%d missing=%d bad=%d\n", bManyOk ? 0 : 1, (int32_t)vMany.size(),
+	    vMany.size() == 3 ? vMany[1].GetRet() : -1);
+
+	int32_t iAllStarted = -1;
+	int32_t iAllGot = -1;
+	int32_t iManyStarted = -1;
+	int32_t iManyGot = -1;
+	iBadTotal += co_await CheckNotifyBatch(iAllStarted, iAllGot, iManyStarted, iManyGot);
+
 	iBadTotal += co_await SwapFixed();
 
 	// 服务端顺着请求所在的连接推回来。第二台用单向消息触发，顺带验 NotifyPeer。
@@ -472,6 +598,16 @@ OI::Coro::Task MultiMgr::Run()
 	const int32_t iBackTwo = co_await ProbeOnce(m_stPeers, 2, 81, 0);
 	fnReport("multi peer back listed=%d two=%d connects=%d bad=%d\n", (bBack && iBackTwo == 2) ? 0 : 1, bBack ? 1 : 0, iBackTwo,
 	    m_stPeers.Connects(2));
+
+	const int32_t iReconnect = co_await CheckNotifyReconnect();
+	if (iReconnect != 1)
+	{
+		++iBadTotal;
+	}
+	const int32_t iNotifyBad = (iAllStarted == 2 && iAllGot == 2 && iManyStarted == 2 && iManyGot == 2 && iReconnect == 1) ? 0 : 1;
+	LOG_TRACE("multi notify batch all_started=%d all_got=%d many_started=%d many_got=%d reconnect=%d bad=%d", iAllStarted, iAllGot, iManyStarted,
+	    iManyGot, iReconnect, iNotifyBad);
+	fflush(stdout);
 
 	std::printf("multi done bad=%d\n", iBadTotal);
 	std::fflush(stdout);

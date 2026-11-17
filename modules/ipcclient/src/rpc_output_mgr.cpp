@@ -1,6 +1,6 @@
 #include "rpc_output_mgr.h"
 #include "hold_test.h"
-#include "oi_rpc_coro.h"
+#include "oi_rpc_session_manager.h"
 #include "rpc_probe.h"
 #include "oi_http.h"
 #include "oi_log_client.h"
@@ -16,6 +16,10 @@
 #include "oi_rpcdata_allechores.h"
 #include "oi_rpcdata_holdreq.h"
 #include "oi_rpcdata_holdres.h"
+#include "oi_rpcdata_peernotereq.h"
+#include "oi_rpcdata_peerprobereq.h"
+#include "oi_rpcdata_peerproberes.h"
+#include "oi_thread.h"
 #include "ipcclient.h"
 #include "rpc_ids.h"
 #include "oi_redis.h"
@@ -211,14 +215,187 @@ OI::Coro::TaskResult<int> RpcOutputMgr::CheckDeferredRpcSession()
 	co_return iBad;
 }
 
+void RpcOutputMgr::OnClientTaskError(OI::Coro::Token, std::exception_ptr stError)
+{
+	try
+	{
+		std::rethrow_exception(stError);
+	}
+	catch (const std::exception& stException)
+	{
+		RpcOutputMgr::GetInstance().RememberClientTaskError(stException.what());
+		fprintf(stderr, "task failed: %s\n", stException.what());
+		fflush(stderr);
+	}
+	catch (...)
+	{
+		fprintf(stderr, "task failed: unknown exception\n");
+		fflush(stderr);
+	}
+}
+
+void RpcOutputMgr::RememberClientTaskError(const std::string& sText)
+{
+	::OI::Thread::MutexGuard stLock(m_stErrorLocker);
+	m_vTaskErrors.push_back(sText);
+}
+
+bool RpcOutputMgr::SawClientTaskError(const std::string& sNeedle)
+{
+	::OI::Thread::MutexGuard stLock(m_stErrorLocker);
+	for (const auto& sText : m_vTaskErrors)
+	{
+		if (sText.find(sNeedle) != std::string::npos)
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+OI::Coro::TaskResult<int32_t> RpcOutputMgr::QueryClientNotes(::OI::Rpc::ProtoClientManager& stClient, int32_t iTag)
+{
+	::OI::RpcData::PeerProbeReq stRequest;
+	stRequest.iTag = iTag;
+	stRequest.iNotify = 0;
+	::OI::RpcData::PeerProbeRes stResponse;
+	stResponse.iNoteCount = -1;
+	const int32_t iCode = co_await stClient.Call(stRequest, stResponse, ::OI::Timer::Seconds(3));
+	if (iCode != OI_OK)
+	{
+		co_return iCode;
+	}
+	co_return stResponse.iNoteCount;
+}
+
+OI::Coro::TaskResult<int> RpcOutputMgr::CheckClientNotify()
+{
+	int iBad = 0;
+	static DeferredRpcProbe stClient;
+	constexpr int32_t iEarlyTag = 7201;
+	constexpr int32_t iConnectedTag = 7202;
+	constexpr int32_t iReconnectTag = 7203;
+	constexpr int64_t iWaitMilliseconds = 5000;
+	const bool bNotConnected = !stClient.IsConnect();
+	::OI::RpcData::PeerNoteReq stEarly;
+	stEarly.iTag = iEarlyTag;
+	const int32_t iEarlyCode = stClient.Notify(stEarly);
+	int32_t iEarly = -1;
+	if ((co_await stClient.StartClient()) != OI_OK)
+	{
+		++iBad;
+	}
+	else
+	{
+		const int64_t iEarlyDeadline = ::OI::Timer::SteadyMilliseconds() + iWaitMilliseconds;
+		iEarly = co_await QueryClientNotes(stClient, iEarlyTag);
+		while (iEarly != 1 && ::OI::Timer::SteadyMilliseconds() < iEarlyDeadline)
+		{
+			co_await OI::Coro::yield(20);
+			iEarly = co_await QueryClientNotes(stClient, iEarlyTag);
+		}
+	}
+	if (!bNotConnected || iEarlyCode != OI_OK || iEarly != 1)
+	{
+		++iBad;
+	}
+
+	::OI::RpcData::PeerNoteReq stConnected;
+	stConnected.iTag = iConnectedTag;
+	const int32_t iConnectedCode = stClient.Notify(stConnected);
+	const int64_t iConnectedDeadline = ::OI::Timer::SteadyMilliseconds() + iWaitMilliseconds;
+	int32_t iConnected = co_await QueryClientNotes(stClient, iConnectedTag);
+	while (iConnected != 1 && ::OI::Timer::SteadyMilliseconds() < iConnectedDeadline)
+	{
+		co_await OI::Coro::yield(20);
+		iConnected = co_await QueryClientNotes(stClient, iConnectedTag);
+	}
+	if (iConnectedCode != OI_OK || iConnected != 1)
+	{
+		++iBad;
+	}
+
+	const sid_t iSid = stClient.ConnectedSid();
+	::OI::RpcData::PeerNoteReq stDropped;
+	stDropped.iTag = iReconnectTag;
+	if (iSid == INVALID_SID)
+	{
+		++iBad;
+	}
+	// 只接直连这一段。路由用例稍后会换上自己的处理器，两边的名单不共用。
+	OI::Coro::SetTaskErrorHandler(&RpcOutputMgr::OnClientTaskError);
+	stClient.CloseSession(iSid);
+	const int32_t iDroppedCode = stClient.Notify(stDropped);
+	const std::string sDroppedNeedle = "RPC notification failed protocol=" +
+	                                   std::to_string(::OI::Rpc::RpcProtoId<::OI::RpcData::PeerNoteReq>::iValue) + " code=-3";
+	bool bDroppedReported = false;
+	bool bReconnected = false;
+	const int64_t iReconnectDeadline = ::OI::Timer::SteadyMilliseconds() + iWaitMilliseconds;
+	while (::OI::Timer::SteadyMilliseconds() < iReconnectDeadline)
+	{
+		if (!bDroppedReported && SawClientTaskError(sDroppedNeedle))
+		{
+			bDroppedReported = true;
+		}
+		const sid_t iNowSid = stClient.ConnectedSid();
+		if (stClient.IsConnect() && iNowSid != INVALID_SID && iNowSid != iSid)
+		{
+			bReconnected = true;
+		}
+		if (bDroppedReported && bReconnected)
+		{
+			break;
+		}
+		co_await OI::Coro::yield(20);
+	}
+	int32_t iDroppedCount = -1;
+	if (bReconnected)
+	{
+		iDroppedCount = co_await QueryClientNotes(stClient, iReconnectTag);
+	}
+	const bool bDropped = iDroppedCode == OI_OK && bDroppedReported && iDroppedCount == 0;
+	if (!bDropped)
+	{
+		++iBad;
+	}
+
+	constexpr int32_t iAgainTag = 7204;
+	::OI::RpcData::PeerNoteReq stAgain;
+	stAgain.iTag = iAgainTag;
+	const int32_t iAgainCode = stClient.Notify(stAgain);
+	const int64_t iAgainDeadline = ::OI::Timer::SteadyMilliseconds() + iWaitMilliseconds;
+	int32_t iAgain = co_await QueryClientNotes(stClient, iAgainTag);
+	while (iAgain != 1 && ::OI::Timer::SteadyMilliseconds() < iAgainDeadline)
+	{
+		co_await OI::Coro::yield(20);
+		iAgain = co_await QueryClientNotes(stClient, iAgainTag);
+	}
+	const bool bAgain = iAgainCode == OI_OK && iAgain == 1;
+	if (!bAgain)
+	{
+		++iBad;
+	}
+	if (iBad != 0)
+	{
+		LOG_TRACE("hold client notify detail dropped_code=%d reported=%d count=%d reconnected=%d again=%d", iDroppedCode, bDroppedReported ? 1 : 0,
+		    iDroppedCount, bReconnected ? 1 : 0, iAgain);
+	}
+	LOG_TRACE("hold client notify early=%d connected=%d dropped=%d reconnect=%d bad=%d", iEarly == 1 ? 1 : 0, iConnected == 1 ? 1 : 0, bDropped ? 1 : 0,
+	    bAgain ? 1 : 0, iBad);
+	fflush(stdout);
+	co_return iBad;
+}
+
 // 按值和输出引用同时在飞。没连上时，固定 sid 回 CONNECT。
 OI::Coro::TaskResult<int> RpcOutputMgr::RunDeferred()
 {
 	co_return co_await CheckDeferredRpcSession();
 }
 
-// 16 个等待者只提交一次，重复等待不重写输出。固定会话、业务错误、超时后的迟到回包都不覆盖新结果。
+// 16 个等待者只提交一次，重复等待不重写输出。固定会话、业务错误、超时后的迟到回包都不覆盖新结果。直连通知也在这里。
 OI::Coro::TaskResult<int> RpcOutputMgr::Run(sid_t iSessionId)
 {
-	co_return co_await CheckOutputRpcTask(iSessionId);
+	int iBad = co_await CheckOutputRpcTask(iSessionId);
+	iBad += co_await CheckClientNotify();
+	co_return iBad;
 }

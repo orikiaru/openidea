@@ -1,6 +1,6 @@
 #include "rpc_pending_mgr.h"
 #include "hold_test.h"
-#include "oi_rpc_coro.h"
+#include "oi_rpc_session_manager.h"
 #include "oi_http.h"
 #include "oi_log_client.h"
 #include "oi_log.h"
@@ -135,7 +135,7 @@ OI::Coro::TaskResult<int> RpcPendingMgr::CheckRpcContext(PendingClient& stPendin
 		++iCallbacks;
 		co_return 1001;
 	};
-	co_await OI::Rpc::RunHandledRpc<Req, Res>(fnContextHandler, OI::Rpc::RpcProtoId<Res>::iValue, 88, &stPending, 77,
+	co_await OI::Rpc::RpcHandlerBuilder::Run<Req, Res>(fnContextHandler, OI::Rpc::RpcProtoId<Res>::iValue, 88, &stPending, 77,
 	    uint64_t(1) | uint64_t(RPC_REQ_MASK), std::move(stRequestLocal));
 	if (iCallbacks != 1)
 	{

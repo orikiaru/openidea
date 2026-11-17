@@ -2,7 +2,7 @@
 #include <cstdio>
 #include "oi_rpc_call.h"
 #include "oi_poll.h"
-#include "oi_rpc_coro.h"
+#include "oi_rpc_session_manager.h"
 #include "oi_thread.h"
 #include "oi_config.h"
 #include "oi_duration.h"
@@ -345,6 +345,22 @@ RpcWaitStats RpcCallManager::WaitStats()
 	return stStats;
 }
 
+size_t RpcCallManager::SessionCalls(::OI::Net::SessionManager* pManager, sid_t iSessionId)
+{
+	const SessionKey stKey{pManager, iSessionId};
+	size_t iCount = 0;
+	for (auto& stShard : m_vShards)
+	{
+		::OI::Thread::MutexGuard stLock(stShard.stMutex);
+		auto it = stShard.mSessions.find(stKey);
+		if (it != stShard.mSessions.end())
+		{
+			iCount += it->second.size();
+		}
+	}
+	return iCount;
+}
+
 bool RpcCallManager::MarkAwaitingConnect(uint64_t iCallIdLocal)
 {
 	Shard& stShard = ShardOf(iCallIdLocal);
@@ -652,6 +668,44 @@ void RpcCallManager::ReportError(OI::Coro::Token iToken, uint64_t iCallIdLocal, 
 	{
 		fnWrite("non-std exception");
 	}
+}
+
+void RpcCallManager::SendReply(OI::Coro::Token iToken, ::OI::Net::SessionManager* pManager, sid_t iSessionId,
+    uint64_t iCallId, proto_type_t iResponseId, const ::OI::Base::Bytes& stFrame)
+{
+	try
+	{
+		if (pManager->SendBytes(iSessionId, stFrame) != OI_OK)
+		{
+			pManager->CloseSession(iSessionId);
+		}
+	}
+	catch (...)
+	{
+		ReportError(iToken, iCallId, iSessionId, iResponseId, "send_response", std::current_exception());
+		OI::Coro::ReportTaskError(iToken, std::current_exception());
+		pManager->CloseSession(iSessionId);
+	}
+}
+
+void RpcCallManager::SendFailureReply(OI::Coro::Token iToken, ::OI::Net::SessionManager* pManager, sid_t iSessionId,
+    uint64_t iCallId, proto_type_t iResponseId)
+{
+	::OI::Base::BytesStream stFrame;
+	try
+	{
+		::OI::Base::BytesStream stFailure;
+		stFailure << iCallId << int32_t(OI_ERR_FAIL);
+		stFrame = EncodePbFrame(iResponseId, stFailure);
+	}
+	catch (...)
+	{
+		ReportError(iToken, iCallId, iSessionId, iResponseId, "encode_failure_reply", std::current_exception());
+		OI::Coro::ReportTaskError(iToken, std::current_exception());
+		pManager->CloseSession(iSessionId);
+		return;
+	}
+	SendReply(iToken, pManager, iSessionId, iCallId, iResponseId, stFrame.GetMutableBuff());
 }
 
 }

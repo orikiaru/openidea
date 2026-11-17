@@ -1,7 +1,6 @@
 #include "registry_mgr.h"
 #include "hold_test.h"
-#include "oi_rpc_coro.h"
-#include "zone_service.h"
+#include "oi_rpc_session_manager.h"
 #include "oi_http.h"
 #include "oi_log_client.h"
 #include "oi_log.h"
@@ -78,11 +77,11 @@ OI::Coro::TaskResult<int> RegistryMgr::CheckRegistryBoundsAndBudget()
 	}
 	// 暂停期间，已在缓存里的 gameserver 不访问注册表。
 	int iPauseCachedBad = 0;
-	static ZoneService stGames("gameserver");
+	auto& stRoute = OI::Rpc::RouteManager::GetInstance();
 	OI::RpcData::HoldReq stRequest;
 	stRequest.iMark = 831;
 	const std::vector<int32_t> vManyZones{1001, 1002, 1001};
-	const auto vMany = co_await stGames.CallMany<OI::RpcData::HoldRes>(vManyZones, stRequest, OI::Timer::Seconds(3));
+	const auto vMany = co_await stRoute.CallMany<OI::RpcData::HoldRes>("gameserver", vManyZones, stRequest, OI::Timer::Seconds(3));
 	int iManyOk = 0;
 	const int iManyCount = static_cast<int>(vMany.size());
 	if (iManyCount == static_cast<int>(vManyZones.size()))
@@ -101,7 +100,7 @@ OI::Coro::TaskResult<int> RegistryMgr::CheckRegistryBoundsAndBudget()
 	}
 	OI::RpcData::HoldRes stOutput;
 	stOutput.iMark = -831;
-	const int32_t iCallCode = co_await stGames.Call(1001, stRequest, stOutput, OI::Timer::Seconds(3));
+	const int32_t iCallCode = co_await stRoute.Call("gameserver", 1001, stRequest, stOutput, OI::Timer::Seconds(3));
 	if (iCallCode != OI_OK || stOutput.iMark != 831)
 	{
 		++iPauseCachedBad;
@@ -122,7 +121,7 @@ OI::Coro::TaskResult<int> RegistryMgr::CheckRegistryBoundsAndBudget()
 	OI::RpcData::HoldRes stMissingOutput;
 	stMissingOutput.iMark = -731;
 	const int64_t iMissingStartMilliseconds = OI::Timer::SteadyMilliseconds();
-	const int32_t iMissingCode = co_await OI::Rpc::RpcCall(std::string("missing_paused.1"), stMissingRequest, stMissingOutput, OI::Timer::Milliseconds(300));
+	const int32_t iMissingCode = co_await stRoute.Call("missing_paused", 1, stMissingRequest, stMissingOutput, OI::Timer::Milliseconds(300));
 	const long long iMissingElapsedMilliseconds = OI::Timer::SteadyMilliseconds() - iMissingStartMilliseconds;
 	if (iMissingCode != OI_ERR_TIMEOUT || iMissingElapsedMilliseconds >= 450 || stMissingOutput.iMark != -731)
 	{
@@ -136,7 +135,7 @@ OI::Coro::TaskResult<int> RegistryMgr::CheckRegistryBoundsAndBudget()
 	{
 		co_return iBad + 1;
 	}
-	// 恢复后后台拉取写入空名单。空名单在 Resolve 里记 Offline，RouteError 默认返回 OI_ERR_CONNECT。
+	// 恢复后后台拉取写入空名单。空名单在 Resolve 里记 Offline，RouteCall::Error 默认返回 OI_ERR_CONNECT。
 	int iResumeBad = 0;
 	bool bResumedKnown = false;
 	std::vector<OI::Base::ServiceInstance> vResumed;
@@ -156,7 +155,7 @@ OI::Coro::TaskResult<int> RegistryMgr::CheckRegistryBoundsAndBudget()
 		++iResumeBad;
 	}
 	stMissingOutput.iMark = -732;
-	const int32_t iOfflineCode = co_await OI::Rpc::RpcCall(std::string("missing_paused.1"), stMissingRequest, stMissingOutput, OI::Timer::Milliseconds(1000));
+	const int32_t iOfflineCode = co_await stRoute.Call("missing_paused", 1, stMissingRequest, stMissingOutput, OI::Timer::Milliseconds(1000));
 	if (iOfflineCode != OI_ERR_CONNECT)
 	{
 		++iResumeBad;
@@ -167,7 +166,7 @@ OI::Coro::TaskResult<int> RegistryMgr::CheckRegistryBoundsAndBudget()
 	iBad += iResumeBad;
 	// 批量里夹非法分区，结果条数不变，每条失败。
 	int iSlotsBad = 0;
-	const auto vInvalid = co_await stGames.CallMany<OI::RpcData::HoldRes>({1001, -1, 1002}, stRequest, OI::Timer::Seconds(3));
+	const auto vInvalid = co_await stRoute.CallMany<OI::RpcData::HoldRes>("gameserver", {1001, -1, 1002}, stRequest, OI::Timer::Seconds(3));
 	if (vInvalid.size() != 3)
 	{
 		++iSlotsBad;
@@ -197,8 +196,8 @@ OI::Coro::TaskResult<int> RegistryMgr::CheckRegistryBoundsAndBudget()
 	OI::RpcData::HoldRes stBudgetMissingOutput;
 	stBudgetMissingOutput.iMark = -842;
 	const int64_t iBudgetStartMilliseconds = OI::Timer::SteadyMilliseconds();
-	auto stCachedCall = stGames.Call(1001, stBudgetRequest, stBudgetOutput, OI::Timer::Milliseconds(1000));
-	auto stMissingCall = OI::Rpc::RpcCall(std::string("missing_budget.1"), stBudgetMissingRequest, stBudgetMissingOutput, OI::Timer::Milliseconds(2500));
+	auto stCachedCall = stRoute.Call("gameserver", 1001, stBudgetRequest, stBudgetOutput, OI::Timer::Milliseconds(1000));
+	auto stMissingCall = stRoute.Call("missing_budget", 1, stBudgetMissingRequest, stBudgetMissingOutput, OI::Timer::Milliseconds(2500));
 	const int32_t iBudgetMissingCode = co_await stMissingCall;
 	const long long iBudgetElapsedMilliseconds = OI::Timer::SteadyMilliseconds() - iBudgetStartMilliseconds;
 	const int32_t iBudgetCachedCode = co_await stCachedCall;

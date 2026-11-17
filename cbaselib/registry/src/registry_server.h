@@ -1,7 +1,6 @@
 #pragma once
 #include "oi_registry.h"
 #include "framework_protocol/rpc_ids.h"
-#include "oi_rpc_coro.h"
 #include "oi_rpc_session_manager.h"
 #include "oi_singleton.h"
 #include <map>

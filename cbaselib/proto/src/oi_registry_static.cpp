@@ -71,6 +71,40 @@ std::vector<std::string> SplitFields(const std::string& sLine)
 }
 }
 
+bool StaticRegistry::ParseLine(const std::string& sLine, bool bWithName, ServiceInstance& stInstance)
+{
+	const std::vector<std::string> vFields = SplitFields(sLine);
+	const size_t iOffset = bWithName ? 1 : 0;
+	if (vFields.size() != iOffset + 3 && vFields.size() != iOffset + 4)
+	{
+		return false;
+	}
+	if (bWithName)
+	{
+		stInstance.sName = vFields[0];
+		if (!ValidToken(stInstance.sName))
+		{
+			return false;
+		}
+	}
+	if (!ParseId(vFields[iOffset], stInstance.iId) || vFields[iOffset + 1].empty() || vFields[iOffset + 2].empty())
+	{
+		return false;
+	}
+	stInstance.sIp = vFields[iOffset + 1];
+	stInstance.sPort = vFields[iOffset + 2];
+	stInstance.sZone.clear();
+	if (vFields.size() == iOffset + 4)
+	{
+		stInstance.sZone = vFields[iOffset + 3];
+		if (!ValidToken(stInstance.sZone))
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
 int32_t StaticRegistry::Load()
 {
 	if (m_bLoaded)
@@ -87,38 +121,14 @@ int32_t StaticRegistry::Load()
 	std::vector<ServiceInstance> vInstances;
 	for (const std::string& sLine : vLines)
 	{
-		const std::vector<std::string> vFields = SplitFields(sLine);
-		if (vFields.size() != 4 && vFields.size() != 5)
-		{
-			fprintf(stderr, "registry static bad instance \"%s\"\n", sLine.c_str());
-			fflush(stderr);
-			LOG_ERROR("registry static bad instance");
-			m_iStatus = OI_ERR_INVALID_ARGUMENT;
-			return m_iStatus;
-		}
 		ServiceInstance stInstance;
-		stInstance.sName = vFields[0];
-		if (!ValidToken(stInstance.sName) || !ParseId(vFields[1], stInstance.iId) || vFields[2].empty() || vFields[3].empty())
+		if (!ParseLine(sLine, true, stInstance))
 		{
 			fprintf(stderr, "registry static bad instance \"%s\"\n", sLine.c_str());
 			fflush(stderr);
 			LOG_ERROR("registry static bad instance");
 			m_iStatus = OI_ERR_INVALID_ARGUMENT;
 			return m_iStatus;
-		}
-		stInstance.sIp = vFields[2];
-		stInstance.sPort = vFields[3];
-		if (vFields.size() == 5)
-		{
-			stInstance.sZone = vFields[4];
-			if (!ValidToken(stInstance.sZone))
-			{
-				fprintf(stderr, "registry static bad instance \"%s\"\n", sLine.c_str());
-				fflush(stderr);
-				LOG_ERROR("registry static bad zone");
-				m_iStatus = OI_ERR_INVALID_ARGUMENT;
-				return m_iStatus;
-			}
 		}
 		for (const ServiceInstance& stHave : vInstances)
 		{

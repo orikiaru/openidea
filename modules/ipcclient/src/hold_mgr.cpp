@@ -58,7 +58,6 @@
 #include <thread>
 #include <vector>
 
-
 HoldMgr::HoldMgr()
     : m_bEnabled(false), m_iSessionId(0), m_iRedisTimeoutMilliseconds(25000)
 {
@@ -67,10 +66,6 @@ HoldMgr::HoldMgr()
 void HoldMgr::Load()
 {
 	TryGetConfig("Test.hold", m_bEnabled);
-	if (m_bEnabled)
-	{
-		RouteMgr::Prepare();
-	}
 	TryGetConfig("RedisClient.timeout_ms", m_iRedisTimeoutMilliseconds);
 	// 跳更新跟着 TimerMgr 的首次构造注册，必须赶在 RunFramework 之前。
 	TimerMgr::GetInstance();
@@ -95,7 +90,7 @@ OI::Coro::TaskResult<HoldMgr::RaceOutcome> HoldMgr::RaceOne(int32_t iMarkLocal, 
 	::OI::RpcData::HoldReq stOne;
 	stOne.iDelayMilliseconds = iDelay;
 	stOne.iMark = iMarkLocal;
-	auto stResult = co_await IpcClient::GetInstance().CallAny<::OI::RpcData::HoldRes>(stOne, ::OI::Timer::Seconds(1));
+	auto stResult = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), stOne, ::OI::Timer::Seconds(1));
 	if (stResult.GetRet() == 0)
 	{
 		co_return stResult.GetRes().iMark == iMarkLocal ? RaceOutcome::Reply : RaceOutcome::Bad;
@@ -111,14 +106,14 @@ OI::Coro::TaskResult<int> HoldMgr::CheckStandardizedReply()
 	::OI::RpcData::HoldRes stResponseLocal;
 	stRequestLocal.iDelayMilliseconds = 0;
 	stRequestLocal.iMark = 1;
-	auto stDirect = co_await IpcClient::GetInstance().CallAny<::OI::RpcData::HoldRes>(stRequestLocal, ::OI::Timer::Seconds(10));
+	auto stDirect = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequestLocal, ::OI::Timer::Seconds(10));
 	if (!stDirect || stDirect.GetRes().iMark != 1)
 	{
 		++iBadLocal;
 	}
 	static_assert(std::is_same_v<decltype(stDirect.GetRet()), int32_t>);
 	stRequestLocal.iDelayMilliseconds = -1;
-	auto stFailed = co_await IpcClient::GetInstance().CallAny<::OI::RpcData::HoldRes>(stRequestLocal);
+	auto stFailed = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequestLocal);
 	if (stFailed.GetRet() != 1001 || stFailed)
 	{
 		++iBadLocal;
@@ -204,14 +199,14 @@ OI::Coro::TaskResult<int> HoldMgr::CheckRpcLateReply()
 	::OI::RpcData::HoldRes stResponseLocal;
 	stRequestLocal.iMark = 1;
 	stRequestLocal.iDelayMilliseconds = 600;
-	auto stShortWait = co_await IpcClient::GetInstance().CallAny<::OI::RpcData::HoldRes>(stRequestLocal, ::OI::Timer::Milliseconds(150));
+	auto stShortWait = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequestLocal, ::OI::Timer::Milliseconds(150));
 	if (stShortWait.GetRet() != OI_ERR_TIMEOUT)
 	{
 		++iBadLocal;
 	}
 	co_await OI::Coro::yield(::OI::Timer::Milliseconds(700));
 	stRequestLocal.iDelayMilliseconds = 0;
-	auto stEarly = co_await IpcClient::GetInstance().CallAny<::OI::RpcData::HoldRes>(stRequestLocal, ::OI::Timer::Seconds(10));
+	auto stEarly = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequestLocal, ::OI::Timer::Seconds(10));
 	int iReturnCodeLocal = stEarly.GetRet();
 	if (iReturnCodeLocal == 0)
 	{
@@ -229,7 +224,7 @@ OI::Coro::TaskResult<int> HoldMgr::CheckRpcLateReply()
 	stRequestLocal.iDelayMilliseconds = 1500;
 	stRequestLocal.iMark = 2;
 	stResponseLocal.iMark = 0;
-	auto stTimeout = co_await IpcClient::GetInstance().CallAny<::OI::RpcData::HoldRes>(stRequestLocal, ::OI::Timer::Milliseconds(500));
+	auto stTimeout = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequestLocal, ::OI::Timer::Milliseconds(500));
 	iReturnCodeLocal = stTimeout.GetRet();
 	LOG_TRACE("hold rpc timeout ret=%d", iReturnCodeLocal);
 	fflush(stdout);
@@ -246,7 +241,7 @@ OI::Coro::TaskResult<int> HoldMgr::CheckRpcLateReply()
 	stRequestLocal.iDelayMilliseconds = 0;
 	stRequestLocal.iMark = 3;
 	stResponseLocal.iMark = 0;
-	auto stFollow = co_await IpcClient::GetInstance().CallAny<::OI::RpcData::HoldRes>(stRequestLocal, ::OI::Timer::Seconds(10));
+	auto stFollow = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequestLocal, ::OI::Timer::Seconds(10));
 	iReturnCodeLocal = stFollow.GetRet();
 	stResponseLocal.iMark = iReturnCodeLocal == 0 ? stFollow.GetRes().iMark : 0;
 	LOG_TRACE("hold rpc follow ret=%d mark=%d", iReturnCodeLocal, stResponseLocal.iMark);
@@ -362,7 +357,7 @@ OI::Coro::TaskResult<int> HoldMgr::CheckRpcDisconnect(sid_t iSessionId)
 	stRequestLocal.iMark = 4;
 	auto stClose = CloseSessionLater(iSessionId);
 	const int64_t iWallBegin = ::OI::Timer::SteadyMilliseconds();
-	auto stClosed = co_await IpcClient::GetInstance().CallAny<::OI::RpcData::HoldRes>(stRequestLocal, ::OI::Timer::Seconds(10));
+	auto stClosed = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequestLocal, ::OI::Timer::Seconds(10));
 	const long long iWallMilliseconds = HoldTest::WallMs(iWallBegin);
 	co_await stClose;
 	LOG_TRACE("hold rpc disconnected code=%d wall_ms=%lld", stClosed.GetRet(), iWallMilliseconds);
@@ -412,7 +407,6 @@ OI::Coro::Task HoldMgr::Pump()
 		iBad += co_await RpcServiceMgr::GetInstance().RunCompleted(m_iSessionId);
 		iBad += co_await RouteMgr::GetInstance().RunPool();
 		iBad += co_await RouteMgr::GetInstance().RunInbound();
-		iBad += co_await RouteMgr::GetInstance().RunCapacity();
 		iBad += co_await RegistryMgr::GetInstance().RunBounds();
 		iBad += co_await RouteMgr::GetInstance().RunTarget();
 	}

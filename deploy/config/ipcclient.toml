@@ -12,10 +12,12 @@ type = "tcp"
 heartbeat_ms = 1000
 pull_ms = 1000
 
-# 命名 RPC 的连接池：相同地址、相同容量策略才共用连接。
+# 按服务名调用的连接在 RouteManager 上，配置段名 RpcRoute。
+# 每个服务名一组常驻连接，跟着注册表；实例离开名单才退役。没有空闲回收，也没有客户端上限。
+# 发送队列小于默认帧上限和连接前暂存（都是 64MiB），背压用例才能造出超过发送预算、仍能进暂存的包。
+# 普通 Hold / AllEcho 远小于这个值。
 [RpcRoute]
-max_clients = 1024 # 包含正在使用和空闲的池连接；满时返回 OI_ERR_BUSY
-idle_ms = 60000 # 最后一份路由租约释放后，空闲达到该时长才回收
+max_send_queue_bytes = 65536
 
 [IpcClient]
 service = "ipcserver"
@@ -48,6 +50,7 @@ port = "17981"
 type = "tcp"
 
 # 配了 service，名单里每台实例各连一条。查不到时按下面的地址连一台。
+# 不配 service 时也可以写 instances = ["实例号 ip 端口 [分区]", ...]，配了就不要求 ip/port。
 [IpcMulti]
 service = "peerserver"
 ip = "127.0.0.1"

@@ -26,11 +26,11 @@ C++20 网络进程框架。业务写协议和协程，收发、回包配对、�
 2. 进程 `StartFramework` 读 toml，拉起 poll、定时器和协程。
 3. 收这条连接的会话管理器在自己的 `Init` 里 `RegisterRpcHandler(fn)` 或 `RegisterRpcHandler(&类::成员)` 注册。处理表按管理器各存一份。
 4. 请求进来，框架按协议号交给处理函数。函数填回复，返回 `0`。失败只回错误码，不带回复体。
-5. 客户端把回复对象传进 `RpcCall` 或 `CallAny`，`co_await` 得到错误码。返回码是 `0` 再读回复。非 `0` 时回复保持调用前的值。
+5. 客户端把回复对象传进 `RpcCall` 或 `Call`，`co_await` 得到错误码。返回码是 `0` 再读回复。非 `0` 时回复保持调用前的值。按服务名用 `RouteManager::Call`。
 6. 这一次调用按调用号认回包。超时、断线、对端忙都是明确的错误码，框架不自动重放。
 
 ```cpp
-static OI_RPC_SYNC_HANDLER(AllEcho, HandleAllEcho)
+static int32_t HandleAllEcho(const OI::RpcData::AllEchoReq& stRequest, OI::RpcData::AllEchoRes& stResponse)
 {
     stResponse.stData = stRequest.stData;
     stResponse.iCode = 1;
@@ -44,7 +44,7 @@ RegisterRpcHandler(HandleAllEcho);
 ```cpp
 ::OI::RpcData::AllEchoReq stRequest;
 ::OI::RpcData::AllEchoRes stResponse;
-const int32_t iRet = co_await IpcClient::GetInstance().CallAny(
+const int32_t iRet = co_await IpcClient::GetInstance().Call(
     stRequest, stResponse, ::OI::Timer::Seconds(3));
 if (iRet != OI_OK)
 {

@@ -9,6 +9,6 @@ alwaysApply: false
 
 时长参数是 `OI::Timer::MS`，默认 `Seconds(180)`。超时统一使用带单位的时长类型，不接受裸整数秒。200 毫秒扫一次队头，按毫秒分桶，不走时间轮。`GetRet() == 0` 是成功回包，`OI_ERR_TIMEOUT` 是已经发出之后超时，`OI_ERR_CONNECT` 是没连上或断连，`OI_ERR_FAIL` 是发送或解包失败。
 
-按服务名用 `CallAny`、`Call`、`CallAll`、`CallMany`，见 `docs/registry.md`。`CallAll` 和 `CallMany` 先 `Submit` 再等。
+按服务名用 `RouteManager::GetInstance()` 的 `Call`、`CallAll`、`CallMany`，见 `docs/registry.md`。同名多台直连才用 `ProtoMultiClientManager` 的 `CallAny`。`CallAll` 和 `CallMany` 先 `Submit` 再等。
 
 服务端注册用 `RegisterRpcHandler(处理函数)`，类型从形参推出，见 `modules/ipcserver/src/ipcserver.cpp` 的 `AllEcho`。要推迟回包用同文件的 `Hold`：`co_await OI::Coro::yield(stRequest.iDelayMilliseconds)` 再写 `stResponse`。

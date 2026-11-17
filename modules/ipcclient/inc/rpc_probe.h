@@ -1,6 +1,5 @@
 #pragma once
 #include "hold_test.h"
-#include "oi_rpc_coro.h"
 #include "oi_rpc_session_manager.h"
 
 class DeferredRpcProbe : public OI::Rpc::ProtoClientManager

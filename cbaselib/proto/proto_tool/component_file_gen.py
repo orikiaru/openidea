@@ -116,7 +116,7 @@ type = ""
         file_data = '''#pragma once
 #include <ctime>
 #include "oi_net.h"
-#include "oi_rpc_coro.h"
+#include "oi_rpc_session_manager.h"
 #include "oi_singleton.h"
 
 // 配置段名就是 GetIDString()。
@@ -144,11 +144,11 @@ class __COMPONENT_NAME__ : public OI::Rpc::ProtoSessionManager
         file_data = '''#pragma once
 #include <ctime>
 #include "oi_net.h"
-#include "oi_rpc_coro.h"
+#include "oi_rpc_session_manager.h"
 #include "oi_singleton.h"
 
-// 配置段名就是 GetIDString()。段里 service 留空只连 ip/port 这一台，实例号 0；填服务名就连注册表里的每一台。
-// 按实例号 Call(id, ...)，任选一台 CallAny，每台一份 CallAll。
+// 配置段名就是 GetIDString()。段里 service 留空时，配了 instances 就按「实例号 ip 端口 [分区]」连那几台，否则只连 ip/port，实例号 0。
+// 填了服务名就连注册表里的每一台。按实例号 Call(id, ...)，任选一台 CallAny，指定几台 CallMany，每台一份 CallAll。
 class __COMPONENT_NAME__ : public OI::Rpc::ProtoMultiClientManager
 {
 	DECLARE_SINGLETON(__COMPONENT_NAME__)

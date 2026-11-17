@@ -153,9 +153,9 @@ Windows 的日志故障测试要求该产物以 `-DOI_ENABLE_TEST_HOOKS=ON` 构�
 - 客户端时限：跑 hold 那套的用例（含 rpc-admission、clock）120 秒，Redis 压力类和 redis-shutdown 20 秒，coro、empty 各 180 秒，其余 60 秒。超时按失败处理并打印客户端输出。
 - log：逐条核对实际磁盘记录、字节数和内容；端到端速度以落盘字节除以客户端开始到文件最后增长的时间，不能拿 enqueue_rate 代替。
 - redis：`redis integrity ok`、压力统计 `bad=0`；同时验证毫秒 TTL、单次请求等待、脚本隔离、断线、队列超时及限流。
-- hold：`hold done bad=0`；覆盖多等待者、异常、RPC 接纳上限、请求生命周期、服务名/分区路由及批量调用。测试脚本额外启动两个 gameserver 分区（1001/1002），不能只起默认 ipcserver 就冒充全量。
+- hold：`hold done bad=0`；覆盖多等待者、异常、RPC 接纳上限、请求生命周期、服务名/分区路由及批量调用。测试脚本额外启动两个 gameserver 分区（1001/1002），不能只起默认 ipcserver 就冒充全量。路由通知和直连 `Notify` 都用 `PeerNote` 的标记让服务端计数，再用 `PeerProbe` 的 `iNoteCount` 查回来：任选、指定分区、负分区、全部、夹未登记分区 1003、不存在的服务名，以及路由断线后不让出立刻再发。直连没连上先发、已连上再发；断线后立刻再发只表示任务已启动，任务报 `code=-3` 且服务端计数不变，重连后再发才送到。
 - udp：ipcserver 的 `[IpcUdp]` 和 ipcclient 的 UdpMgr，`udp done bad=0`。覆盖系统分配端口、同地址 `OpenPeer` 去重、对端地址、1000 次 RPC、1000 条单向消息不丢不重、60000 字节单个数据报、坏包不断会话（服务端会话数仍为 1）、客户端 1.5 秒空闲关会话后重开新会话。gameserver 分区的 UDP 口改为 0，不和主服抢。
-- multi：ipcclient 的 MultiMgr，`multi done bad=0`。`[IpcMultiFixed]` 不配 service，写死地址只连一台，实例号 0，没连上就发的调用连上后补发。`[IpcMulti]` 配 service=peerserver，脚本用 17992、17993 起两台同名全局 ipcserver，实例号 1、2，客户端起来前都已登记。覆盖每台各一条连接和建连回调、按实例号调用打到对应服务端、名单外实例号回 CONNECT、CallAny 两台都命中、CallAll 两个结果按实例号排列、服务端顺着连接反推（请求和 NotifyPeer 各触发一次，核对推送进的是这台的会话）、写死地址 UseAddress 换到 2 号再换回（配了 service 的拒绝，地址没变不断开，IsConnect 为真）。随后脚本杀掉 2 号：断开回调触发，注册表撤掉后名单只剩 1，调 2 回 CONNECT，1 照常；再重启 2 号：名单恢复，自动重连，调 2 成功。不起 redisserver。
+- multi：ipcclient 的 MultiMgr，`multi done bad=0`。`[IpcMultiFixed]` 不配 service，写死地址只连一台，实例号 0，没连上就发的调用连上后补发。`[IpcMulti]` 配 service=peerserver，脚本用 17992、17993 起两台同名全局 ipcserver，实例号 1、2，客户端起来前都已登记。覆盖每台各一条连接和建连回调、按实例号调用打到对应服务端、名单外实例号回 CONNECT、CallAny 两台都命中、CallAll 两个结果按实例号排列、CallMany 夹一个不存在的实例号时那一格是 CONNECT、服务端顺着连接反推（请求和 NotifyPeer 各触发一次，核对推送进的是这台的会话）、写死地址 UseAddress 换到 2 号再换回（配了 service 的拒绝，地址没变不断开，IsConnect 为真）。随后脚本杀掉 2 号：断开回调触发，注册表撤掉后名单只剩 1，调 2 回 CONNECT，1 照常；再重启 2 号：名单恢复，自动重连，调 2 成功。`NotifyAll` 按名单每台各收 1 次，`NotifyMany` 跳过实例号 99；2 号回来后关掉会话并立刻再发，重连后送达。不起 redisserver。
 - 正常退出必须完成排空和 join。清理超过时限需要强杀，算失败。
 
 ## 5. 平台故障注入与清理
@@ -179,7 +179,7 @@ git diff --check
 
 矩阵启动时先使旧汇总失效；只有本次所有步骤完成，`summary.json` 才能标记 `passed: true`。中断和配置失败算未通过，检查 `completed` 和异常字段。单线程和多线程各用各的构建目录，不再编回另一种模式；`restore_skipped` 为 true，`restored` 为 false。`--no-restore` 保留但不起作用。`tools/test_matrix_outcomes.py` 用模拟子进程覆盖这些分支，矩阵自动执行。
 
-进程收尾会逐一尝试正常退出；控制台通知失败或超时后，仅强制结束当前用例持有的进程，并继续回收其他进程、关闭输出和保留诊断日志。强制回收仍记为失败，不算正常退出；如果用例本身已有异常，保留原始异常，同时输出清理错误。正常 Hold 回归还会在选路后、发送前切换订阅管理器的分区，检查单次与批量目标不变，输出 `hold route target stability bad=0`。
+进程收尾会逐一尝试正常退出；控制台通知失败或超时后，仅强制结束当前用例持有的进程，并继续回收其他进程、关闭输出和保留诊断日志。强制回收仍记为失败，不算正常退出；如果用例本身已有异常，保留原始异常，同时输出清理错误。正常 Hold 回归还会核对路由连接常驻：同一分区始终是同一个发送目标，顺序跟输入分区对应，跨过一次秒更新后指针和会话号都不变，单次和批量回包标记正确，输出 `hold route target stability bad=0`。
 
 交给下一位 AI 时必须列出：实际测试的平台/编译器/线程模式、用的构建目录、结果目录、失败或阻塞项、是否关闭测试注入、是否清理临时数据。缺 SDK、缺 Redis、编译失败或操作被拦截，都只能记录为阻塞/失败；不能写“全量通过”。
 
@@ -225,8 +225,8 @@ python tools/parallel_matrix.py --lane <LANE> --jobs 4 --windows-redis-binary <W
 
 ## 8. 断连与背压边界回归
 
-- `RouteMgr` 的 `hold pooled reconnect bad=0` 必须在主动断开后不 yield、不等待清理，立即向同一连接发 RPC，验证重连排队。
-- `hold route backpressure status bad=0` 检查已连接发送及建连后的缓存补发均准确返回 BUSY，背压不换会话，随后的小请求仍可成功。`BudgetMgr` 同时检查满载返回 BUSY、关闭返回 CONNECT。
+- `RouteMgr` 的 `hold pooled reconnect bad=0` 必须在主动断开后不 yield、不等待清理，立即向同一个 `RpcSender` 发 RPC，验证排队重连后回包标记正确。
+- `hold route backpressure status bad=0` 按这条路由连接的 `RpcRoute` 发送预算构造刚好超预算的包：已连接发送，以及断开后先暂存、建连后再补发，都返回 BUSY，背压不换会话，随后的小请求仍可成功。`BudgetMgr` 同时检查满载返回 BUSY、关闭返回 CONNECT。
 - `RpcPendingMgr` 的 `hold disconnect drain calls=4096 bad=0` 跨 64 个分片及固定大小批次清理 4096 项，首个完成回调注入 bad_alloc，验证其他回调继续、结果全部为 CONNECT、保护计数归零、等待索引恢复基线。清理本身不动态扩容；该注入发生在完成回调，不是全局内存耗尽模拟。
 - 以上均由常规 `--case all` 的 Hold 触发，并由回归脚本断言。
 

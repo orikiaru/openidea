@@ -5,10 +5,11 @@
 #include "oi_rpcdata_emptyres.h"
 #include "oi_rpcdata_holdreq.h"
 #include "oi_rpcdata_holdres.h"
+#include "oi_lock.h"
 #include "oi_rpcdata_peernotereq.h"
 #include "oi_parser.h"
 #include "oi_rpc_call.h"
-#include "oi_rpc_coro.h"
+#include "oi_rpc_session_manager.h"
 #include "rpc_ids.h"
 #include "oi_config.h"
 #include "oi_http.h"
@@ -26,21 +27,21 @@ const std::string IpcServer::GetIDString()
 	return "IpcServer";
 }
 
-static OI_RPC_SYNC_HANDLER(AllEcho, HandleAllEcho)
+static int32_t HandleAllEcho(const OI::RpcData::AllEchoReq& stRequest, OI::RpcData::AllEchoRes& stResponse)
 {
 	stResponse.stData = stRequest.stData;
 	stResponse.iCode = 1;
 	return 0;
 }
 
-static OI_RPC_SYNC_HANDLER(Empty, HandleEmpty)
+static int32_t HandleEmpty(const OI::RpcData::EmptyReq& stRequest, OI::RpcData::EmptyRes& stResponse)
 {
 	(void)stRequest;
 	(void)stResponse;
 	return 0;
 }
 
-static OI_RPC_HANDLER(Hold, HandleHold)
+static OI::Rpc::RpcTask HandleHold(const OI::RpcData::HoldReq& stRequest, OI::RpcData::HoldRes& stResponse)
 {
 	if (stRequest.iDelayMilliseconds < 0)
 	{
@@ -101,6 +102,24 @@ static OI::Rpc::RpcTask HandleEncodingRegression(const OI::Rpc::RpcContext& stCo
 	co_return iResult;
 }
 
+int32_t IpcServer::NoteCount(int32_t iTag)
+{
+	::OI::Thread::MutexGuard stLock(m_stNoteLocker);
+	auto it = m_mNoteCount.find(iTag);
+	if (it == m_mNoteCount.end())
+	{
+		return 0;
+	}
+	return it->second;
+}
+
+int32_t IpcServer::HandlePeerNote(const ::OI::RpcData::PeerNoteReq& stRequest)
+{
+	::OI::Thread::MutexGuard stLock(m_stNoteLocker);
+	++m_mNoteCount[stRequest.iTag];
+	return OI_OK;
+}
+
 ::OI::Rpc::RpcTask IpcServer::HandlePeerProbe(const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::PeerProbeReq& stRequest,
     ::OI::RpcData::PeerProbeRes& stResponse)
 {
@@ -117,6 +136,7 @@ static OI::Rpc::RpcTask HandleEncodingRegression(const OI::Rpc::RpcContext& stCo
 	}
 	stResponse.iTag = stRequest.iTag;
 	stResponse.iServiceId = m_iServiceId;
+	stResponse.iNoteCount = NoteCount(stRequest.iTag);
 	co_return 0;
 }
 
@@ -138,12 +158,13 @@ int32_t IpcServer::Init()
 	}
 	RegisterRpcHandler(HandleEmpty);
 	RegisterRpcHandler(&IpcServer::HandlePeerProbe);
+	RegisterNotifyHandler(&IpcServer::HandlePeerNote);
 	bool bEncodingRegression = false;
 	TryGetConfig("Regression.encoding_failure", bEncodingRegression);
 	if (bEncodingRegression)
 	{
 		BindRpcHandler(OI::Rpc::RpcProtoId<OI::RpcData::HoldReq>::iValue,
-		    OI::Rpc::MakeRpcHandler<OI::RpcData::HoldReq, EncodingFailureResponse>(HandleEncodingRegression,
+		    OI::Rpc::RpcHandlerBuilder::Make<OI::RpcData::HoldReq, EncodingFailureResponse>(HandleEncodingRegression,
 		        OI::Rpc::RpcProtoId<OI::RpcData::HoldRes>::iValue));
 	}
 	else

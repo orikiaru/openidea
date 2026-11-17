@@ -96,6 +96,8 @@ class StaticRegistry
 {
   public:
 	int32_t Load();
+	// 解析一行“[名字] 实例号 ip 端口 [分区]”。bWithName 为假时行首不带名字，sName 由调用方填。格式不对返回假。
+	static bool ParseLine(const std::string& sLine, bool bWithName, ServiceInstance& stInstance);
 	bool Empty() const;
 	void Collect(const std::string& sName, std::vector<ServiceInstance>& vList) const;
 	void ApplyWatched() const;

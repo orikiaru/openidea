@@ -18,7 +18,7 @@ alwaysApply: false
 标准用例是服务端原样回包，以及客户端在根任务里起固定数量的工作协程，每个循环领编号、发一次、等回包，在途数量不超过服务端额度，全部结束后统一汇报：
 
 ```cpp
-static OI_RPC_SYNC_HANDLER(AllEcho, HandleAllEcho)
+static int32_t HandleAllEcho(const OI::RpcData::AllEchoReq& stRequest, OI::RpcData::AllEchoRes& stResponse)
 {
     stResponse.stData = stRequest.stData;
     stResponse.iCode = 1;

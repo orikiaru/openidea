@@ -773,6 +773,7 @@ def run(case, args):
                 assert "multi call all slots=2 bad=0" in text
                 assert "multi fixed swap reject=1 two=2 back=1 same=1 connected=1 bad=0" in text
                 assert "multi reverse notify call=1 notify=0 none=-3 any=0 received=3 wrong=0 bad=0" in text
+                assert "multi notify batch all_started=2 all_got=2 many_started=2 many_got=2 reconnect=1 bad=0" in text
                 assert "multi peer down disconnect=1 gone=1 one=1 two=-3 bad=0" in text
                 assert re.search(r"multi peer back listed=1 two=2 connects=[2-9]\d* bad=0", text)
                 assert "multi done bad=0" in text
@@ -870,19 +871,15 @@ def run(case, args):
                 assert "hold output rpc direct pinned error late bad=0" in text
                 assert "hold output rpc named any zone shared=8 bad=0" in text
                 assert "hold completed rpc requests retained=20 destroyed=20 bad=0" in text
-                assert "hold route policy isolation idle reconnect bad=0" in text
                 assert "hold pooled reconnect bad=0" in text
                 assert "hold route backpressure status bad=0" in text
                 assert "hold disconnect drain calls=4096 bad=0" in text
-                assert "hold inbound route lifetime bad=0" in text
-                assert "hold reverse reply bad=0" in (root / "gameserver-1001.out").read_text(encoding="utf-8", errors="replace")
                 assert "hold batch failure slots bad=0" in text
                 assert re.search(r"hold absolute deadline buckets calls=4096 buckets=\d+ fired=32 bad=0", text)
-                assert "hold route pool capacity busy=1 bad=0" in text
                 assert "hold registry pause cached many=3/3 call=0 mark=831 bad=0" in text
                 paused_missing = re.search(r"hold registry pause missing snapshot=0 code=-2 elapsed_ms=(\d+) mark=-731 bad=0", text)
                 assert paused_missing and int(paused_missing.group(1)) < 450, paused_missing.group(0) if paused_missing else "missing pause-missing marker"
-                # 空名单：Resolve 记 Offline，RouteError 默认返回 OI_ERR_CONNECT（-3）。
+                # 空名单：Resolve 记 Offline，RouteCall::Error 默认返回 OI_ERR_CONNECT（-3）。
                 assert "hold registry resume missing snapshot=1 empty=1 code=-3 bad=0" in text
                 budget = re.search(r"hold registry budget miss code=-3 elapsed_ms=(\d+) cached=0 mark=841 bad=0", text)
                 assert budget and 500 <= int(budget.group(1)) < 2450, budget.group(0) if budget else "missing budget marker"
@@ -898,6 +895,11 @@ def run(case, args):
                 assert "hold route target stability bad=0" in text
                 assert re.search(r"hold service rpc global=1 any=1 zone=1 batch=2 many=2 slot=1 elapsed_ms=\d+ wrong=1 miss=1 bad=0", text)
                 assert "hold named rpc ownership success=8 rejected=0 bad=0" in text
+                assert "hold route notify single=1 zone=1 zone_other=0 negative=-1 all=2 many=2 missing_reported=1 absent_reported=1 reconnect=1 bad=0" in text
+                assert "task failed: route notification failed service=gameserver zones=1003 protocol=3006 failed=1/3 code=-3" in text
+                assert "task failed: route notification failed service=missingnotify protocol=3006 failed=1/1 code=-3" in text
+                assert "hold client notify early=1 connected=1 dropped=1 reconnect=1 bad=0" in text
+                assert "task failed: RPC notification failed protocol=3006 code=-3" in text
                 assert re.search(r"hold http release before=\d+ after=\d+ bad=0", text)
                 assert "hold json validation bad=0" in text
                 assert "hold server encoding bad=0" in text

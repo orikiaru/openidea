@@ -233,6 +233,11 @@ class SessionManager
 	virtual void BindService(const std::string& sService, std::string& sIpLocal, std::string& sPortLocal);
 	// Init 末尾调用。默认跟着名单里选中的那一台切换地址。
 	virtual void WatchService(const std::string& sService);
+	// 为真时 Init 不要求配 ip/port，地址由子类自己的配置给出。默认为假。
+	virtual bool AddressOptional()
+	{
+		return false;
+	}
 	// 按本模块的会话类型新建一条。
 	virtual Session* CloneSession() = 0;
 	// 会话进表时通知子类。

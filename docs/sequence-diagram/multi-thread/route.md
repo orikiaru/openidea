@@ -1,6 +1,6 @@
 # 按服务名调用
 
-`CallAny`、`Call`、`CallAll`、`CallMany` 在调用时就建好 `RpcDeadline`：单调时钟上的一个截止点，查询注册表、建连排队和回包共用它。非正时长不设截止。
+`RouteManager` 的 `Call`、`CallAll`、`CallMany` 在调用时就建好 `RpcDeadline`：单调时钟上的一个截止点，查询注册表、建连排队和回包共用它。非正时长不设截止。
 
 选路协程在工人上跑。快路径不挂起：名字非法、自己已经连着这个名字、或者截止点已经过了。要问注册表时挂起，`RouteAwaiter::Pull` 只用剩余时间和 1 秒里较短的那个。回包从 poll 线程 `PostCoroutine` 回工人，不在回调里 `resume`。
 

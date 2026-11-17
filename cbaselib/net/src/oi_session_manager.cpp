@@ -53,11 +53,9 @@ int32_t SessionManager::Init()
 	iIncompleteFrameTimeoutMilliseconds = static_cast<uint64_t>(iFrameTimeout);
 	iIdleTimeoutMilliseconds = static_cast<uint64_t>(iIdleTimeout);
 	std::string sIpLocal, sPortLocal, sType;
-	if (!TryGetConfig(GetIDString() + ".ip", sIpLocal))
-	{
-		return OI_ERR_INVALID_ARGUMENT;
-	}
-	if (!TryGetConfig(GetIDString() + ".port", sPortLocal))
+	const bool bHasIp = TryGetConfig(GetIDString() + ".ip", sIpLocal);
+	const bool bHasPort = TryGetConfig(GetIDString() + ".port", sPortLocal);
+	if ((!bHasIp || !bHasPort) && !AddressOptional())
 	{
 		return OI_ERR_INVALID_ARGUMENT;
 	}

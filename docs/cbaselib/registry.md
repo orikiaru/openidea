@@ -12,7 +12,7 @@
 | 起服按最小实例号选 | [`Lookup`](../../cbaselib/proto/inc/oi_registry_client.h#L31) |
 | 运行期读缓存 | [`Snapshot`](../../cbaselib/proto/inc/oi_registry_client.h#L33) |
 | 秒更新 | [`OnSecondUpdate`](../../cbaselib/proto/inc/oi_registry_client.h#L43) |
-| 不限分区调用 | [`CallAny`](../../cbaselib/proto/inc/oi_rpc_session_manager.h#L166) |
+| 按服务名任选一台 | [`RouteManager::Call`](../../cbaselib/proto/inc/oi_rpc_session_manager.h#L437) |
 
 > **注意：** 应用只连 registry，不自己扫 Redis 里的服务表。
 

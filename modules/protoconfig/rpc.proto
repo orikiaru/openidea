@@ -102,6 +102,8 @@ rpcdata PeerProbeReq json {
 rpcdata PeerProbeRes json {
     0 [json tag] int32_t iTag;
     1 [json service_id] int32_t iServiceId;
+    // 本进程收到的、标记与请求 iTag 相同的 PeerNote 条数。查询时 iNotify 保持 0。
+    2 [json note_count] int32_t iNoteCount;
 }
 
 // 服务端推给客户端的单向消息。

@@ -80,16 +80,18 @@ Redis 连不上或卡住时，登记和续期回失败，客户端下一次心�
 
 服务名里不能有 `.` 和 `*`。分区号单独传入，不拼进服务名。
 
+按服务名的无状态调用走进程里唯一的 `OI::Rpc::RouteManager::GetInstance()`。单次把回复对象传进去，`co_await` 得到 `int32_t`。
+
 | 调用 | 含义 |
 | --- | --- |
-| `CallAny` | 不带分区号。在当前登记里随机一台。管理器自己已经连着这个名字时，继续用这条连接，断了再选。 |
-| `Call(分区号)` | 只打这个分区。全局服不接受分区号。 |
-| `CallAll` | 协程挂起读本地缓存，没拉到过就等下一次秒更新，再同时发给每一份。等待不占线程，上限 min(剩余预算, 3000ms)。 |
-| `CallMany(分区号列表)` | 只打 `vector<int32_t>` 里的这些分区，结果数量、顺序始终和列表一致，重复分区也保留。没登记的那一格是 `OI_ERR_CONNECT`。选路超时、池满等整体错误填入每一格；负数分区号、全局服带分区号每格为 `OI_ERR_FAIL`。空列表返回空结果。 |
+| `Call(名字, req, res)` | 任选一台，优先已连上的。 |
+| `Call(名字, 分区号, req, res)` | 打这个分区里实例号最小的一台。全局服不接受分区号。分区号为负返回 `OI_ERR_FAIL`，不发请求。 |
+| `CallAll<Res>(名字, req)` | 协程挂起读本地缓存，没拉到过就等下一次秒更新，再同时发给每一份。等待不占线程，上限 min(剩余预算, 3000ms)。结果按实例号升序；选路失败时只有一格。 |
+| `CallMany<Res>(名字, 分区号列表, req)` | 只打 `vector<int32_t>` 里的这些分区，结果数量、顺序始终和列表一致，重复分区也保留。没登记的那一格是 `OI_ERR_CONNECT`。选路超时等整体错误填入每一格；负数分区号、全局服带分区号每格为 `OI_ERR_FAIL`。空列表返回空结果。 |
 
 登记时标明自己是全局还是分区。全局服拒绝带分区号的调用，避免把一封信送到另一类进程上。
 
-`CallAny` 和 `Call` 一次只打一台。`CallAll` 和 `CallMany` 先把要打的请求全部发出去，再等各自的回包。总耗时取决于最慢的一台，不是各台延迟相加。时长从调用一开始算，选路花掉的时间从同一份 `RpcDeadline` 里扣，发出去只带剩余毫秒；预算用完的格子不再发送，记 `OI_ERR_TIMEOUT`。等待表不用改：每个仍是一个调用号、一份回包、唤醒一次。没回来的那个自己超时或断连，不连累另外几个。等待期间新登记的分区不补进这一批，`CallMany` 也不补列表里没写的分区。
+`Call` 一次只打一台。`CallAll` 和 `CallMany` 先把要打的请求全部发出去，再等各自的回包。总耗时取决于最慢的一台，不是各台延迟相加。时长从调用一开始算，选路花掉的时间从同一份 `RpcDeadline` 里扣，发出去只带剩余毫秒；预算用完的格子不再发送，记 `OI_ERR_TIMEOUT`。等待表不用改：每个仍是一个调用号、一份回包、唤醒一次。没回来的那个自己超时或断连，不连累另外几个。等待期间新登记的分区不补进这一批，`CallMany` 也不补列表里没写的分区。
 
 分区号只作为登记字段和 `Call` 的参数，不编进 `sessionid`，也不编进 IP。同一分区再开一份进程时，仍是多条连接，`sessionid` 负责把回包送回其中一条。
 
@@ -100,7 +102,8 @@ Redis 连不上或卡住时，登记和续期回失败，客户端下一次心�
 | 配置 | 名单 |
 | --- | --- |
 | 写了 `service`，注册表查得到 | 名单里每个 id 一条常驻连接，实例号就是登记的 `[Service] id` |
-| 没写 `service`，或查不到 | 按段里的 ip/port 连一台，实例号 0 |
+| 写了 `<段名>.instances` | `["实例号 ip 端口 [分区]", ...]`。配了就不要求 ip/port。没配注册或注册里还查不到时先连这份名单 |
+| 没写 `service`，也没写 `instances` | 按段里的 ip/port 连一台，实例号 0 |
 
 `Init` 之后名单已经有了，`Start` 对每台发起建连；不用 `StartClient`。连上回调 `OnPeerConnect(实例号, sid)`，断开回调 `OnPeerDisconnect(实例号, sid)`，都在 poll 线程。断开后自己重连，连不上隔 `RetryMilliseconds()` 再试。
 
@@ -110,13 +113,14 @@ Redis 连不上或卡住时，登记和续期回失败，客户端下一次心�
 | --- | --- |
 | `Call(实例号, req, res)` | 只打这一台。名单里没有回 `OI_ERR_CONNECT`；在名单里还没连上就暂存，连上补发。 |
 | `CallAny(req, res)` | 在已连上的实例里轮询，一台都没连上时在名单里轮询。 |
+| `CallMany<Res>(实例号列表, req)` | 只打这些实例，顺序和列表一致。名单里没有的那一格是 `OI_ERR_CONNECT`。 |
 | `CallAll<Res>(req)` | 按发送这一刻的名单每台一份，先全部发出再等。结果按实例号升序，每格带 `iInstanceId`。 |
 | `NotifyPeer(实例号, msg)` | 向指定实例启动异步通知，名单里没有返回 `OI_ERR_CONNECT`，未连接时暂存并重连。 |
 | `NotifyAny(msg)` | 选路同 `CallAny`，名单为空返回 `OI_ERR_CONNECT`。 |
 
 通知复制消息并启动任务，通过现有 RPC 路径发送，默认超时 180 秒。返回 `OI_OK` 仅表示任务已启动，不代表对端收到；发送、回执或超时失败由任务错误处理器报告。
 
-服务端推下来的消息登记在接收它的管理器上：自己的 `Init` 里写 `RegisterNotifyHandler(&类::成员)`，别处写 `管理器.RegisterNotifyHandler(&类::成员)`。`OI_RPC_SELF(类型)` 拿到的就是这个管理器。`InstanceIds()` 给当前名单，`ConnectedSid(实例号)` 给这台当前的会话，`IsConnect()` 表示至少有一台连着。
+服务端推下来的消息登记在接收它的管理器上：自己的 `Init` 里写 `RegisterNotifyHandler(&类::成员)`，别处写 `管理器.RegisterNotifyHandler(&类::成员)`。成员函数里的 `this` 就是这个管理器。`InstanceIds()` 给当前名单，`ConnectedSid(实例号)` 给这台当前的会话，`IsConnect()` 表示至少有一台连着。
 
 写死地址时运行中要换服务器，在 `Init` 之后调 `UseAddress(ip, port)`：旧连接退役，在途调用回 `OI_ERR_CONNECT`，实例号仍是 0，`Start` 过就马上连新地址，`GetStrIP()`、`GetStrPort()` 跟着变。配了 `service` 时返回 `OI_ERR_INVALID_ARGUMENT`；成功返回 `OI_OK`，地址没变什么都不做。
 
@@ -131,7 +135,7 @@ Redis 连不上或卡住时，登记和续期回失败，客户端下一次心�
 回声已经是这种处理函数，注册在 `ipcserver` 的 `Init`：
 
 ```cpp
-static OI_RPC_SYNC_HANDLER(AllEcho, HandleAllEcho)
+static int32_t HandleAllEcho(const OI::RpcData::AllEchoReq& stRequest, OI::RpcData::AllEchoRes& stResponse)
 {
     stResponse.stData = stRequest.stData;
     stResponse.iCode = 1;
@@ -142,23 +146,26 @@ static OI_RPC_SYNC_HANDLER(AllEcho, HandleAllEcho)
 发出去不传管理器和 `sessionid`。时长是 `OI::Timer::MS`，不写就用 `Seconds(180)`：
 
 ```cpp
-auto any = co_await games.CallAny<AllEchoRes>(req);
-auto one = co_await games.Call<AllEchoRes>(1001, req);
-auto some = co_await games.CallMany<AllEchoRes>(std::vector<int32_t>{1001, 1002}, req, OI::Timer::Seconds(3));
-auto all = co_await games.CallAll<AllEchoRes>(req);
+auto& stRoute = OI::Rpc::RouteManager::GetInstance();
+OI::RpcData::AllEchoRes stAny;
+const int32_t iAny = co_await stRoute.Call("gameserver", req, stAny);
+OI::RpcData::AllEchoRes stOne;
+const int32_t iOne = co_await stRoute.Call("gameserver", 1001, req, stOne);
+auto vSome = co_await stRoute.CallMany<OI::RpcData::AllEchoRes>("gameserver", std::vector<int32_t>{1001, 1002}, req, OI::Timer::Seconds(3));
+auto vAll = co_await stRoute.CallAll<OI::RpcData::AllEchoRes>("gameserver", req);
 ```
 
-服务名在管理器上，调用方不拼 `名字.分区`。`CallAll` 和 `CallMany` 自己先把这一批请求都发出去，再逐个等已经在途的等待器，然后把每台的结果一起交回来。调用方不写这个循环。总耗时取决于最慢的一台。某一台超时或断连只记在它自己的结果里。
+服务名和分区号分开传，不拼 `名字.分区`，也不再解析 `名字.*`。`CallAll` 和 `CallMany` 自己先把这一批请求都发出去，再逐个等已经在途的等待器，然后把每台的结果一起交回来。调用方不写这个循环。总耗时取决于最慢的一台。某一台超时或断连只记在它自己的结果里。
 
 单次 `RpcCall` 仍把发送写在 `await_suspend` 里。一批调用不能先造一串还没发送的等待器再挨个 `co_await`，那样会等完一台才发下一台。`CallAll` 和 `CallMany` 在里面先 `Submit` 再等。
 
 日志、Redis、访问本框架里的 HTTP 服务，也是这种调用，编码留在框架里。应用不写会话子类。对外的 HTTP 网址，以及 `redisserver` 背后那台真正的 Redis，不是注册表里的服务，地址仍要配置。
 
-监听方的一条连接在框架内部仍是一个 `sessionid`。普通处理函数看不到它。需要顺着这条连接回呼时，用 `OI_RPC_CONTEXT_HANDLER` 里的 `stContext.iSessionId` 和 `stContext.stManager`，只在这次处理期间有效。断连按管理器指针和 `sessionid` 一起摘等待，另一个管理器上的相同数字不受影响。
+监听方的一条连接在框架内部仍是一个 `sessionid`。普通处理函数看不到它。需要顺着这条连接回呼时，处理函数第一个形参写 `const OI::Rpc::RpcContext& stContext`，用 `stContext.iSessionId` 和 `stContext.stManager`，只在这次处理期间有效。断连按管理器指针和 `sessionid` 一起摘等待，另一个管理器上的相同数字不受影响。
 
 批量调用把服务名拷进任务，任务跑起来再读本地缓存，没拉到过就等下一次秒更新，等待上限是 min(剩余预算, 3000ms)。这一等是挂起，不占线程。创建任务后可以修改或销毁原来的字符串。目标名单以当时的缓存为准，这次之后新登记的不补进这一批。路由连接池管理器常驻，不为每次调用新增共享所有权；连接失效仍由发送、断连和超时路径返回错误。
 
-按登记名单选定目标后，单次和批量调用都使用固定地址的池内连接，不复用可能随订阅更新而改连其他分区的调用方管理器。选路后即使订阅管理器换区，这次请求的目标也不变；原目标连接失败时返回错误，不自动改投其他分区。`CallAny` 已有连接的快捷路径仍保留，因为它不限定分区。
+按登记名单选定目标后，单次和批量调用都走 `RouteManager` 上这个服务名的常驻连接，不借用调用方自己的连接。选路之后这次请求的目标不变；原目标连接失败时返回错误，不自动改投其他分区。
 
 ## 运行期缓存、超时与路由连接回收
 
@@ -172,8 +179,4 @@ auto all = co_await games.CallAll<AllEchoRes>(req);
 
 命名 RPC 的时长覆盖读缓存、建连排队和回包。缓存未就绪时最多再等 min(剩余预算, 3000ms)，预算耗尽不再发送。调度和时间轮粒度仍可能使返回时间略晚于截止时间，不能按硬实时保证使用。
 
-成员调用选出的路由连接继承该管理器的发送队列、接收缓冲、帧上限、半包时限及连接前请求排队额度。不同容量策略不共用连接；不传管理器的自由函数使用框架默认策略。
-
-`RpcRoute.max_clients` 默认 1024，`RpcRoute.idle_ms` 默认 60000，均须为正数。池满返回 `OI_ERR_BUSY`。路由管理器是进程常驻单例，所有目标共用管理器和 SID 空间，动态对象只是连接状态与会话；不同策略的限制保存在各自连接/会话中，不修改共享管理器配置。
-
-出站请求和入站处理在执行期间持有连接业务租约，完成后释放；闲置扫描只回收无业务租约的连接，并取消未完成建连。会话和建连通道只持有连接状态，不持有管理器共享指针。连接断开后，下一次调用按需建连并在当前连接状态中有界排队，不依赖“曾经连接成功”的标记；已发送的请求不会自动重发。回收检查有周期粒度，不保证在 `idle_ms` 到点的同一毫秒释放。
+路由连接的发送队列、接收缓冲、帧上限和半包时限取配置段 `RpcRoute`，也就是 `RouteManager` 自己的会话配置。进程里只有这一个路由管理器，所有服务名共用它的 SID 空间；每个服务名一组连接，名单跟着注册表走。实例离开名单才退役。没有空闲回收，也没有客户端数量上限。连接断开后按原地址重连，连上前的调用在这条连接上排队。已发送的请求不会自动重发。

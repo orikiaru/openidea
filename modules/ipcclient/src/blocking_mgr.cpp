@@ -1,6 +1,6 @@
 #include "blocking_mgr.h"
 #include "hold_test.h"
-#include "oi_rpc_coro.h"
+#include "oi_rpc_session_manager.h"
 #include "oi_http.h"
 #include "oi_log_client.h"
 #include "oi_log.h"
