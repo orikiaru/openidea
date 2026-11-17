@@ -99,7 +99,8 @@ int32_t MultiMgr::Load()
 	{
 		return m_stPeers.Init();
 	}
-	OI_NOTIFY_BIND_SELF(PeerNote, MultiClient, HandleNote);
+	m_stFixed.HandleNotify(&MultiClient::HandleNote);
+	m_stPeers.HandleNotify(&MultiClient::HandleNote);
 	int32_t iCode = m_stFixed.Init();
 	if (iCode != OI_OK)
 	{
@@ -336,7 +337,7 @@ OI::Coro::Task MultiMgr::Run()
 	fnReport("multi watcher unchanged recovered=%d bad=%d\n", bWatchRecovered ? 0 : 1, bWatchRecovered ? 1 : 0);
 
 	// 写死地址：一台，实例号 0。没连上就发的调用先暂存，连上补发。
-	const auto stWaitBaseline = ::OI::Rpc::GetRpcWaitStats();
+	const auto stWaitBaseline = ::OI::Rpc::RpcCallManager::GetInstance().WaitStats();
 	const bool bNotConnected = m_stFixed.ConnectedSid(0) == INVALID_SID;
 	::OI::RpcData::PeerProbeReq stEarlyNotify;
 	stEarlyNotify.iTag = 901;
@@ -362,7 +363,7 @@ OI::Coro::Task MultiMgr::Run()
 	}, 5000);
 	const bool bDrained = co_await WaitFor([stWaitBaseline]()
 	{
-		const auto stNow = ::OI::Rpc::GetRpcWaitStats();
+		const auto stNow = ::OI::Rpc::RpcCallManager::GetInstance().WaitStats();
 		return stNow.iCalls == stWaitBaseline.iCalls && stNow.iExpirations == stWaitBaseline.iExpirations &&
 		       stNow.iSessionEntries == stWaitBaseline.iSessionEntries;
 	}, 5000);

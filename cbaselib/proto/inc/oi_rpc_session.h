@@ -6,6 +6,8 @@ namespace OI
 {
 namespace Rpc
 {
+class ProtoSessionManager;
+
 class ProtoSession : public ::OI::Net::NetSession
 {
 	struct PartialFrameTimer;
@@ -18,7 +20,7 @@ class ProtoSession : public ::OI::Net::NetSession
 	bool m_bDatagram;
 
   public:
-	ProtoSession(::OI::Net::SessionManager* pMgr);
+	explicit ProtoSession(ProtoSessionManager* pMgr);
 	void SetFrameLimits(size_t iBytes, uint64_t iTimeoutMilliseconds)
 	{
 		m_iFrameBytes = iBytes;

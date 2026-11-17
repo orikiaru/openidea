@@ -123,23 +123,26 @@ static OI::Rpc::RpcTask HandleEncodingRegression(const OI::Rpc::RpcContext& stCo
 int32_t IpcServer::Init()
 {
 	TryGetConfig("Service.id", m_iServiceId);
-	OI_RPC_BIND(AllEcho, HandleAllEcho);
-	OI_RPC_BIND(Empty, HandleEmpty);
-	OI_RPC_BIND(Hold, HandleHold);
-	OI_RPC_BIND_SELF(PeerProbe, IpcServer, HandlePeerProbe);
+	HandleRpc(HandleAllEcho);
+	HandleRpc(HandleEmpty);
+	HandleRpc(&IpcServer::HandlePeerProbe);
 	bool bEncodingRegression = false;
 	TryGetConfig("Regression.encoding_failure", bEncodingRegression);
 	if (bEncodingRegression)
 	{
-		OI::Rpc::BindRpcHandler(OI::Rpc::RpcProtoId<OI::RpcData::HoldReq>::iValue,
+		BindRpcHandler(OI::Rpc::RpcProtoId<OI::RpcData::HoldReq>::iValue,
 		    OI::Rpc::MakeRpcHandler<OI::RpcData::HoldReq, EncodingFailureResponse>(HandleEncodingRegression,
 		        OI::Rpc::RpcProtoId<OI::RpcData::HoldRes>::iValue));
+	}
+	else
+	{
+		HandleRpc(HandleHold);
 	}
 	bool bReadLimitRegression = false;
 	TryGetConfig("Regression.rpc_read_limit", bReadLimitRegression);
 	if (bReadLimitRegression)
 	{
-		OI::Rpc::BindRpcHandler(31000, [](OI::Base::BytesStream& stBody, OI::Rpc::RpcDelivery&&)
+		BindRpcHandler(31000, [](OI::Base::BytesStream& stBody, OI::Rpc::RpcDelivery&&)
 		{
 			uint8_t iPart = 0;
 			stBody >> iPart;

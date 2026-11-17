@@ -1,5 +1,6 @@
 #include "oi_rpc_session.h"
 #include "oi_rpc_call.h"
+#include "oi_rpc_session_manager.h"
 #include "oi_poll.h"
 #include "oi_session_manager.h"
 #include <uv.h>
@@ -8,7 +9,7 @@ namespace OI
 {
 namespace Rpc
 {
-ProtoSession::ProtoSession(::OI::Net::SessionManager* pMgr)
+ProtoSession::ProtoSession(ProtoSessionManager* pMgr)
     : NetSession(pMgr), m_iFrameBytes(pMgr->MaxFrameBytes()), m_iFrameTimeoutMilliseconds(pMgr->IncompleteFrameTimeoutMilliseconds()),
       m_bDatagram(pMgr->GetSessionType() == ::OI::Net::SESSION_TYPE_UDP)
 {
@@ -83,6 +84,8 @@ void ProtoSession::OnDataIn()
 	// 借 _ibuff 的内存原地解析，不整块拷一份。
 	::OI::Base::BytesStream stOutputStream;
 	stOutputStream.Swap(stInputBuffer);
+	// 构造时只收 ProtoSessionManager。
+	auto* pProtoManager = static_cast<ProtoSessionManager*>(pSessionManager);
 	while (stOutputStream.RemainSize())
 	{
 		if (stOutputStream.RemainSize() >= sizeof(uint32_t) * 2)
@@ -117,7 +120,7 @@ void ProtoSession::OnDataIn()
 		CancelIncompleteTimer();
 		{
 			::OI::Base::BytesStream::ReadLimit stLimit(stOutputStream, iSize, true);
-			DeliverRpc((proto_type_t)iIdLocal, stOutputStream, pSessionManager, iSessionId);
+			RpcCallManager::GetInstance().Deliver((proto_type_t)iIdLocal, stOutputStream, pProtoManager, iSessionId);
 		}
 	}
 	stInputBuffer.Swap(stOutputStream);

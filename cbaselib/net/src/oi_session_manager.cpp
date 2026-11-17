@@ -2,7 +2,7 @@
 #include "oi_config.h"
 #include "oi_thread.h"
 #include "oi_log.h"
-#include "oi_registry.h"
+#include "oi_registry_client.h"
 #include "oi_session_manager.h"
 #include "oi_session.h"
 #include "oi_accept_channel.h"

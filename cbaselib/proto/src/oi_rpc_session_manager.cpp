@@ -7,6 +7,156 @@ namespace OI
 namespace Rpc
 {
 
+int32_t ProtoSessionManager::BindRpcHandler(proto_type_t iId, RpcHandleFn fnHandle)
+{
+	bool bInserted = false;
+	{
+		::OI::Thread::MutexGuard stLock(m_stHandlerLocker);
+		bInserted = m_mHandlers.emplace(iId, std::move(fnHandle)).second;
+	}
+	if (!bInserted)
+	{
+		LOG_ERROR("rpc handler already bound manager=%s proto=%u", GetIDString().c_str(), (unsigned)iId);
+		return OI_ERR_EXIST;
+	}
+	return OI_OK;
+}
+
+const RpcHandleFn* ProtoSessionManager::FindRpcHandler(proto_type_t iId)
+{
+	::OI::Thread::MutexGuard stLock(m_stHandlerLocker);
+	auto it = m_mHandlers.find(iId);
+	if (it == m_mHandlers.end())
+	{
+		return nullptr;
+	}
+	return &it->second;
+}
+
+int32_t ProtoSessionManager::Init()
+{
+	const int32_t iThreadStatus = ::OI::Net::Poll::GetInstance().CheckThreadAccess("ProtoSessionManager::Init");
+	if (iThreadStatus != OI_OK)
+	{
+		return iThreadStatus;
+	}
+	const int32_t iAdmissionStatus = RpcCallManager::GetInstance().InitAdmission();
+	if (iAdmissionStatus != OI_OK)
+	{
+		return iAdmissionStatus;
+	}
+	return ::OI::Net::SessionManager::Init();
+}
+
+void ProtoSessionManager::OnAddSession(::OI::Net::Session* pSession)
+{
+	LOG_INFO("ProtoSessionManager::OnAddSession sid=%d", pSession->GetSessionID());
+}
+
+void ProtoSessionManager::OnDelSession(const ::OI::Net::Session* pSession)
+{
+	LOG_INFO("ProtoSessionManager::OnDelSession sid=%d, error=%d", pSession->GetSessionID(), pSession->GetError());
+}
+
+ProtoClientManager::ProtoClientManager()
+    : m_iSessionId(INVALID_SID), m_bConnected(false), m_iConnectMode(CLIENT_CONNECT_DIRECT), m_iPendingBytes(0), m_bEverConnected(false)
+{
+	m_stSender = {this, this, [](void* pContext, uint64_t iCallId, const ::OI::Base::Bytes& stData)
+	{
+		static_cast<ProtoClientManager*>(pContext)->SubmitCall(iCallId, stData);
+	}, [](void* pContext, uint64_t iCallId)
+	{
+		static_cast<ProtoClientManager*>(pContext)->DropPendingCall(iCallId);
+	}};
+}
+
+sid_t ProtoClientManager::ConnectedSid()
+{
+	if (::OI::Net::Poll::GetInstance().CheckThreadAccess("ProtoClientManager::ConnectedSid()") != OI_OK)
+	{
+		return INVALID_SID;
+	}
+	::OI::Thread::SpinLockGuard stLock(m_stClientLocker);
+	return m_bConnected ? m_iSessionId : INVALID_SID;
+}
+
+bool ProtoClientManager::IsConnect()
+{
+	if (::OI::Net::Poll::GetInstance().CheckThreadAccess("ProtoClientManager::IsConnect()") != OI_OK)
+	{
+		return false;
+	}
+	::OI::Thread::SpinLockGuard stLock(m_stClientLocker);
+	return m_bConnected;
+}
+
+void ProtoClientManager::OnAddSession(::OI::Net::Session* pSession)
+{
+	sid_t iSessionIdLocal = INVALID_SID;
+	{
+		::OI::Thread::SpinLockGuard stLock(m_stClientLocker);
+		m_bConnected = true;
+		m_iSessionId = pSession->GetSessionID();
+		iSessionIdLocal = m_iSessionId;
+		// 与新发送共用客户端锁；先发送连接前缓存，不能让新数据抢占它的额度。
+		// 待发总量已受发送额度限制；若连接恰好关闭，保留尚未接纳的部分等重连。
+		while (!m_vPending.empty())
+		{
+			if (SendBytes(iSessionIdLocal, m_vPending.front()) != OI_OK)
+			{
+				break;
+			}
+			m_iPendingBytes -= m_vPending.front().Size();
+			m_vPending.pop_front();
+		}
+		m_bEverConnected = true;
+	}
+	FlushHeldCalls(iSessionIdLocal);
+	OnClientConnect(pSession);
+}
+
+void ProtoClientManager::OnConnectFailed()
+{
+	if (!AutoReconnect() || bServiceDown || sEndpoint.empty())
+	{
+		FailHeldCalls();
+		return;
+	}
+	Reconnect();
+}
+
+void ProtoClientManager::SetPendingCallLimits(size_t iCount, size_t iBytes)
+{
+	::OI::Thread::SpinLockGuard stLock(m_stClientLocker);
+	m_iHeldMaxCount = iCount;
+	m_iHeldMaxBytes = iBytes;
+}
+
+std::pair<size_t, size_t> ProtoClientManager::PendingCallLimits()
+{
+	::OI::Thread::SpinLockGuard stLock(m_stClientLocker);
+	return {m_iHeldMaxCount, m_iHeldMaxBytes};
+}
+
+void ProtoClientManager::OnDelSession(const ::OI::Net::Session* pSession)
+{
+	bool bReconnect = false;
+	{
+		::OI::Thread::SpinLockGuard stLock(m_stClientLocker);
+		if (m_iSessionId == pSession->GetSessionID())
+		{
+			m_iSessionId = INVALID_SID;
+			m_bConnected = false;
+			bReconnect = AutoReconnect() && !bServiceDown && !sEndpoint.empty() && pSession->GetEndpoint() == sEndpoint;
+		}
+	}
+	OnClientDisconnect(pSession);
+	if (bReconnect)
+	{
+		Reconnect(0);
+	}
+}
+
 int32_t ProtoClientManager::SendRaw(const ::OI::Base::Bytes& stData)
 {
 	return SendRawResult(stData);
@@ -77,7 +227,7 @@ bool ProtoClientManager::HoldCallLocked(uint64_t iCallId, const ::OI::Base::Byte
 		return false;
 	}
 	// 先标记再入队；超时回调会在客户端锁释放后删除。已经超时则不再留副本。
-	if (!MarkRpcAwaitingConnect(iCallId))
+	if (!RpcCallManager::GetInstance().MarkAwaitingConnect(iCallId))
 	{
 		return true;
 	}
@@ -109,7 +259,7 @@ bool ProtoClientManager::TryPendCall(uint64_t iCallId, const ::OI::Base::Bytes& 
 		}
 	}
 	// 不持客户端锁唤醒，回调允许再次发起请求。
-	WakeRpcCall(iCallId, OI_ERR_BUSY, nullptr);
+	RpcCallManager::GetInstance().Wake(iCallId, OI_ERR_BUSY, nullptr);
 	return true;
 }
 
@@ -123,7 +273,7 @@ void ProtoClientManager::SubmitCall(uint64_t iCallId, const ::OI::Base::Bytes& s
 		{
 			iSessionIdLocal = m_iSessionId;
 			// 来源匹配必须与发送目标一致；已经超时的调用不再发出。
-			if (!ClaimRpcSend(iCallId, iSessionIdLocal))
+			if (!RpcCallManager::GetInstance().ClaimSend(iCallId, iSessionIdLocal))
 			{
 				return;
 			}
@@ -146,7 +296,7 @@ void ProtoClientManager::SubmitCall(uint64_t iCallId, const ::OI::Base::Bytes& s
 		}
 	}
 	// 完成可能反过来删除待发项，不能持客户端锁唤醒。
-	WakeRpcCall(iCallId, iFailure, nullptr);
+	RpcCallManager::GetInstance().Wake(iCallId, iFailure, nullptr);
 }
 
 void ProtoClientManager::DropPendingCall(uint64_t iCallId)
@@ -173,14 +323,14 @@ void ProtoClientManager::FlushHeldCalls(sid_t iSessionId)
 	}
 	for (const auto& stCall : vHeld)
 	{
-		if (!ClaimRpcSend(stCall.iCallId, iSessionId))
+		if (!RpcCallManager::GetInstance().ClaimSend(stCall.iCallId, iSessionId))
 		{
 			continue;
 		}
 		const int32_t iRet = SendBytesResult(iSessionId, stCall.stData);
 		if (iRet != OI_OK)
 		{
-			WakeRpcCall(stCall.iCallId, iRet, NULL);
+			RpcCallManager::GetInstance().Wake(stCall.iCallId, iRet, NULL);
 		}
 	}
 }
@@ -198,7 +348,7 @@ void ProtoClientManager::FailHeldCalls()
 	}
 	for (const auto& stCall : vHeld)
 	{
-		WakeRpcCall(stCall.iCallId, OI_ERR_CONNECT, NULL);
+		RpcCallManager::GetInstance().Wake(stCall.iCallId, OI_ERR_CONNECT, NULL);
 	}
 }
 

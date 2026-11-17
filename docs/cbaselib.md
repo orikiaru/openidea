@@ -13,14 +13,14 @@
 | 工程 | [工程](cbaselib/project.md) | [`framework.cmake`](../framework.cmake#L1) |
 | 进程启动 | [进程](cbaselib/process.md) | [`StartFramework`](../cbaselib/base/inc/oi_app.h#L9) |
 | 协程 | [协程](cbaselib/coro.md) | [`StartTask`](../cbaselib/base/inc/oi_coro.h#L666) |
-| 请求回包 | [RPC](cbaselib/rpc.md) | [`RpcCall`](../cbaselib/proto/inc/oi_rpc_coro.h#L548) |
-| 单向消息 | [单向消息](cbaselib/notify.md) | [`Notify`](../cbaselib/proto/inc/oi_rpc_session_manager.h#L52) |
+| 请求回包 | [RPC](cbaselib/rpc.md) | [`RpcCall`](../cbaselib/proto/inc/oi_rpc_coro.h#L720) |
+| 单向消息 | [单向消息](cbaselib/notify.md) | [`Notify`](../cbaselib/proto/inc/oi_rpc_session_manager.h#L76) |
 | UDP | [UDP](cbaselib/udp.md) | [`OpenPeer`](../cbaselib/net/inc/oi_session_manager.h#L151) |
 | Redis | [Redis](cbaselib/redis.md) | [`RedisGet`](../cbaselib/redis/inc/oi_redis_string.h#L11) |
 | 数据库 | [数据库](database.md) | 连接池、参数绑定与事务 |
 | HTTP 客户端 | [HTTP](cbaselib/http.md) | [`Client::Get`](../cbaselib/http/inc/oi_http.h#L80) |
 | 时间 | [时间](cbaselib/time.md) | [`AddTimer`](../cbaselib/timer/inc/oi_timer_manager.h#L95) |
-| 服务名 | [服务注册](cbaselib/registry.md) | [`Lookup`](../cbaselib/base/inc/oi_registry.h#L115) |
+| 服务名 | [服务注册](cbaselib/registry.md) | [`Lookup`](../cbaselib/proto/inc/oi_registry_client.h#L31) |
 | 锁 | [锁](cbaselib/lock.md) | [`Mutex`](../cbaselib/base/inc/oi_lock.h#L120) |
 
 ## 目录
@@ -33,7 +33,7 @@
 
 `type = "udp"` 的组件是 `UDP_Channel`：`StartServer` 绑一个口，按对端地址各开一条会话，会话从 `CloneSession` 克隆，业务照常走 `Session` 和 RPC，不碰裸包。端口填 `"0"` 由系统分配，`LocalPort()` 取实际端口。没有 `StartClient`；主动发用 `OpenPeer(ip, port, sid)` 输出会话号，成功返回 `OI_OK`，失败保留原输出，同一地址重复打开返回同一条，地址只认字面 IPv4/IPv6。`GetPeerAddr(sid, addr)` 取对端地址。每次 `Send` 立即发成一个数据报，一个数据报必须装下整帧。数据报超过 IPv4 的 65507 字节或 IPv6 的 65527 字节时返回 `OI_ERR_INVALID_ARGUMENT`；本地 `sendto` 失败返回 `OI_ERR_FAIL`。这两种都把该数据报从队列丢掉，不自动重发，也不调用 `OnBytesSend`；只有 `sendto` 接受整包才扣发送额度并刷新活跃时间。成功只表示本地套接字已接受数据报；收到的数据报按整帧解析，坏包只丢这一个，不断会话、不起残包计时。`idle_timeout_ms` 默认 60000，期间没收没发就关会话并走 `OnDelSession`，之后再来包或再 `OpenPeer` 会建新会话。UDP 绑定不开 `SO_REUSEADDR`，两个进程抢不到同一个口；Windows 关掉了 ICMP 端口不可达导致的 `WSAECONNRESET`。UDP 口不向 registry 登记。
 
-`proto` 是自有协议，类型在 `OI::Rpc`。`Protocol` 是协议基类，`Rpc` 是远程调用。`oi_rpc_coro.h` 是协程任务和 RPC 等待。`ProtoClientManager` 只连一台；同名多台每台各连一条用 `ProtoMultiClientManager`，见 [服务注册](registry.md) 的「每台各连一条」。一条出站连接的状态（建连、暂存、补发、重连）在 `oi_rpc_peer.h` 的 `PeerConnection`，多连接客户端和路由连接池共用。收包按协议号交给 `DeliverRpc`，不再按协议号克隆存根。`parser` 做组包。`proto_tool` 是 cmake 时跑的 Python 生成器，输入是 `.proto` 文本。协议解码目前生成宏字段表，编译更便宜；运行更快的 `switch` 编译更贵，由使用方自己选，测量见 [字段分发](pb-dispatch.md)。
+`proto` 是自有协议，类型在 `OI::Rpc`。`Protocol` 是协议基类，`Rpc` 是远程调用。`oi_rpc_coro.h` 是协程任务和 RPC 等待。`ProtoClientManager` 只连一台；同名多台每台各连一条用 `ProtoMultiClientManager`，见 [服务注册](registry.md) 的「每台各连一条」。一条出站连接的状态（建连、暂存、补发、重连）在 `oi_rpc_peer.h` 的 `PeerConnection`，多连接客户端和路由连接池共用。收包按协议号交给 `RpcCallManager::Deliver`，请求用接收方管理器的 `FindRpcHandler` 查自己的处理表，不再按协议号克隆存根。`parser` 做组包。`proto_tool` 是 cmake 时跑的 Python 生成器，输入是 `.proto` 文本。协议解码目前生成宏字段表，编译更便宜；运行更快的 `switch` 编译更贵，由使用方自己选，测量见 [字段分发](pb-dispatch.md)。
 
 `timer` 是分层时间轮，类型在 `OI::Timer`，见 [定时器](timer.md)。应用层时长是 `MS`，由 `Milliseconds`、`Seconds`、`Minutes`、`Hours`、`Days` 构造。
 

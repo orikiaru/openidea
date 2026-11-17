@@ -5,7 +5,7 @@
 #include "oi_http.h"
 #include "oi_log_client.h"
 #include "oi_log.h"
-#include "oi_registry.h"
+#include "oi_registry_client.h"
 #if defined(__GLIBC__)
 #include <malloc.h>
 #endif

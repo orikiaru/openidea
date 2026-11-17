@@ -1,4 +1,4 @@
-#include "oi_registry.h"
+#include "oi_registry_client.h"
 #include "oi_proto_id.h"
 #include "framework_protocol/oi_rpcdata_regregister.h"
 #include "framework_protocol/oi_rpcdata_regheartbeat.h"
@@ -92,16 +92,6 @@ RegistryClient::~RegistryClient()
 const std::string RegistryClient::GetIDString()
 {
 	return "RegistryClient";
-}
-
-::OI::Net::Session* RegistryClient::CloneSession()
-{
-	return new ::OI::Rpc::ProtoSession(this);
-}
-
-void RegistryClient::OnSessionClosed(sid_t iSessionIdLocal)
-{
-	::OI::Rpc::FailRpcCalls(this, iSessionIdLocal);
 }
 
 int32_t RegistryClient::EnsureSource()
@@ -367,7 +357,7 @@ void RegistryClient::CallRegistry(const Req& stRequest, int64_t iTimeoutMillisec
 	bool bBound = false;
 	try
 	{
-		iCallId = ::OI::Rpc::BindRpcCall(this, iSessionIdLocal, ::OI::Rpc::RpcProtoId<Res>::iValue, {}, &pState->iCode, iTimeoutMilliseconds,
+		iCallId = ::OI::Rpc::RpcCallManager::GetInstance().Bind(this, iSessionIdLocal, ::OI::Rpc::RpcProtoId<Res>::iValue, {}, &pState->iCode, iTimeoutMilliseconds,
 		    [pState](::OI::Base::BytesStream& stInput, sid_t iSourceSession)
 		{
 			try
@@ -383,7 +373,7 @@ void RegistryClient::CallRegistry(const Req& stRequest, int64_t iTimeoutMillisec
 			catch (...)
 			{
 				pState->iCode = OI_ERR_FAIL;
-				::OI::Rpc::ReportRpcError(0, pState->iCallId.load(), iSourceSession, ::OI::Rpc::RpcProtoId<Res>::iValue, "decode_response", std::current_exception());
+				::OI::Rpc::RpcCallManager::ReportError(0, pState->iCallId.load(), iSourceSession, ::OI::Rpc::RpcProtoId<Res>::iValue, "decode_response", std::current_exception());
 			}
 			return true;
 		}, fnFinish);
@@ -396,7 +386,7 @@ void RegistryClient::CallRegistry(const Req& stRequest, int64_t iTimeoutMillisec
 		const int32_t iStatus = SendBytesResult(iSessionIdLocal, stFrame.GetMutableBuff());
 		if (iStatus != OI_OK)
 		{
-			::OI::Rpc::WakeRpcCall(iCallId, iStatus, nullptr);
+			::OI::Rpc::RpcCallManager::GetInstance().Wake(iCallId, iStatus, nullptr);
 		}
 	}
 	catch (...)
@@ -404,7 +394,7 @@ void RegistryClient::CallRegistry(const Req& stRequest, int64_t iTimeoutMillisec
 		::OI::Thread::ReportTaskError(std::current_exception());
 		if (bBound)
 		{
-			::OI::Rpc::WakeRpcCall(iCallId, OI_ERR_FAIL, nullptr);
+			::OI::Rpc::RpcCallManager::GetInstance().Wake(iCallId, OI_ERR_FAIL, nullptr);
 		}
 		else
 		{

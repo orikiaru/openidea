@@ -1,57 +1,46 @@
 #include "oi_log.h"
 #include <cstdio>
 #include "oi_rpc_call.h"
-#include "oi_timer_manager.h"
 #include "oi_poll.h"
 #include "oi_rpc_coro.h"
 #include "oi_thread.h"
 #include "oi_config.h"
-#include "oi_registry.h"
+#include "oi_duration.h"
 #include <algorithm>
 #include <array>
 #include <memory>
 #include <atomic>
+#include <limits>
+#include <stdexcept>
 #include <thread>
-#include <chrono>
-#include <deque>
 #include <list>
 #include <map>
-#include <mutex>
 #include <set>
 #include <unordered_map>
 #include <vector>
 #include <tuple>
 #include <type_traits>
-#include <uv.h>
 namespace OI
 {
 namespace Rpc
 {
 
-namespace
+RpcAdmissionLease::~RpcAdmissionLease()
 {
-struct RpcAdmission
-{
-	struct Usage
+	if (!bAcquired)
 	{
-		size_t iCount = 0;
-		size_t iBytes = 0;
-	};
-	::OI::Thread::Mutex stMutex;
-	Usage stTotal;
-	std::map<std::pair<::OI::Net::SessionManager*, sid_t>, Usage> mSessions;
-	size_t iMaxCount = 65536;
-	size_t iMaxBytes = 64 * 1024 * 1024;
-	size_t iSessionMaxCount = 4096;
-	size_t iSessionMaxBytes = 16 * 1024 * 1024;
-	RpcAdmission()
-	{
-		ReadLimit("Rpc.max_inflight_count", iMaxCount);
-		ReadLimit("Rpc.max_inflight_bytes", iMaxBytes);
-		ReadLimit("Rpc.session_max_inflight_count", iSessionMaxCount);
-		ReadLimit("Rpc.session_max_inflight_bytes", iSessionMaxBytes);
+		return;
 	}
-	static void ReadLimit(const char* pKey, size_t& iLimit)
+	RpcCallManager::GetInstance().ReleaseAdmission(*this);
+}
+
+void RpcCallManager::LoadAdmissionLocked()
+{
+	if (m_bAdmissionLoaded)
+	{
+		return;
+	}
+	const auto fnRead = [](const char* pKey, size_t& iLimit)
 	{
 		int64_t iValue = static_cast<int64_t>(iLimit);
 		TryGetConfig(pKey, iValue);
@@ -60,85 +49,81 @@ struct RpcAdmission
 			throw std::invalid_argument(pKey);
 		}
 		iLimit = static_cast<size_t>(iValue);
-	}
-};
-
-RpcAdmission& Admission()
-{
-	static RpcAdmission stAdmission;
-	return stAdmission;
+	};
+	size_t iMaxCount = m_iMaxCount;
+	size_t iMaxBytes = m_iMaxBytes;
+	size_t iSessionMaxCount = m_iSessionMaxCount;
+	size_t iSessionMaxBytes = m_iSessionMaxBytes;
+	fnRead("Rpc.max_inflight_count", iMaxCount);
+	fnRead("Rpc.max_inflight_bytes", iMaxBytes);
+	fnRead("Rpc.session_max_inflight_count", iSessionMaxCount);
+	fnRead("Rpc.session_max_inflight_bytes", iSessionMaxBytes);
+	m_iMaxCount = iMaxCount;
+	m_iMaxBytes = iMaxBytes;
+	m_iSessionMaxCount = iSessionMaxCount;
+	m_iSessionMaxBytes = iSessionMaxBytes;
+	m_bAdmissionLoaded = true;
 }
 
-std::optional<RpcAdmissionLease> AcquireRpc(::OI::Net::SessionManager* pManagerLocal, sid_t iSessionIdLocal, size_t iBytesLocal)
+std::optional<RpcAdmissionLease> RpcCallManager::AcquireAdmission(::OI::Net::SessionManager* pManagerLocal, sid_t iSessionIdLocal, size_t iBytesLocal)
 {
-	auto& stAdmission = Admission();
-	::OI::Thread::MutexGuard stLock(stAdmission.stMutex);
+	::OI::Thread::MutexGuard stLock(m_stAdmissionLocker);
+	LoadAdmissionLocked();
 	const auto stKey = std::make_pair(pManagerLocal, iSessionIdLocal);
-	auto it = stAdmission.mSessions.find(stKey);
-	const auto stUsage = it == stAdmission.mSessions.end() ? RpcAdmission::Usage{} : it->second;
-	if (stAdmission.stTotal.iCount >= stAdmission.iMaxCount ||
-	    iBytesLocal > stAdmission.iMaxBytes - stAdmission.stTotal.iBytes ||
-	    stUsage.iCount >= stAdmission.iSessionMaxCount ||
-	    iBytesLocal > stAdmission.iSessionMaxBytes - stUsage.iBytes)
+	auto it = m_mAdmissionSessions.find(stKey);
+	const auto stUsage = it == m_mAdmissionSessions.end() ? AdmissionUsage{} : it->second;
+	if (m_stAdmissionTotal.iCount >= m_iMaxCount ||
+	    iBytesLocal > m_iMaxBytes - m_stAdmissionTotal.iBytes ||
+	    stUsage.iCount >= m_iSessionMaxCount ||
+	    iBytesLocal > m_iSessionMaxBytes - stUsage.iBytes)
 	{
 		return {};
 	}
 	// 所有可能分配的操作先完成，再一次性扣额度；构造或提交失败由 lease 归还。
 	RpcAdmissionLease stLease;
-	auto& stSession = stAdmission.mSessions[stKey];
+	auto& stSession = m_mAdmissionSessions[stKey];
 	stLease.stKey = stKey;
 	stLease.iBytes = iBytesLocal;
 	stLease.bAcquired = true;
 	++stSession.iCount;
 	stSession.iBytes += iBytesLocal;
-	++stAdmission.stTotal.iCount;
-	stAdmission.stTotal.iBytes += iBytesLocal;
+	++m_stAdmissionTotal.iCount;
+	m_stAdmissionTotal.iBytes += iBytesLocal;
 	return stLease;
 }
 
-struct RpcExpire
+void RpcCallManager::ReleaseAdmission(const RpcAdmissionLease& stLease)
 {
-	int64_t iDeadlineMilliseconds;
-	uint64_t iCallId;
-};
-using RpcExpireBuckets = std::map<int64_t, std::list<RpcExpire>>;
-using RpcSessionKey = std::pair<::OI::Net::SessionManager*, sid_t>;
+	::OI::Thread::MutexGuard stLock(m_stAdmissionLocker);
+	auto it = m_mAdmissionSessions.find(stLease.stKey);
+	--m_stAdmissionTotal.iCount;
+	m_stAdmissionTotal.iBytes -= stLease.iBytes;
+	it->second.iBytes -= stLease.iBytes;
+	if (--it->second.iCount == 0)
+	{
+		m_mAdmissionSessions.erase(it);
+	}
+}
 
-struct RpcCoroSlot
+int32_t RpcCallManager::InitAdmission()
 {
-	RpcSender* pSender = nullptr;
-	::OI::Net::SessionManager* pManager;
-	sid_t iSessionId;
-	std::coroutine_handle<> stHandle;
-	int32_t* pResult;
-	std::function<bool(::OI::Base::BytesStream&, sid_t)> fnDecode;
-	std::function<void()> fnResume;
-	proto_type_t iResponseId;
-	uint64_t iCallId;
-	bool bAwaitingConnect;
-	bool bGuardArmed = false;
-	std::shared_ptr<std::atomic<int32_t>> pGuard;
-	bool bHasExpiry = false;
-	bool bIndexed = false;
-	std::list<uint64_t>::iterator stSessionIndex;
-	RpcExpireBuckets::iterator stExpiryBucket;
-	std::list<RpcExpire>::iterator stExpiry;
-};
-static_assert(std::is_nothrow_move_assignable_v<RpcCoroSlot>, "FailRpcCalls moves slots into a fixed array under the shard lock");
-
-// 按绝对截止时间所在刻度分桶；槽持索引，完成时 O(1) 摘除节点。
-struct RpcCallShard
-{
-	::OI::Thread::Mutex stMutex;
-	std::unordered_map<uint64_t, RpcCoroSlot> mSlots;
-	RpcExpireBuckets mExpire;
-	std::map<RpcSessionKey, std::list<uint64_t>> mSessions;
-};
+	try
+	{
+		::OI::Thread::MutexGuard stLock(m_stAdmissionLocker);
+		LoadAdmissionLocked();
+		return OI_OK;
+	}
+	catch (const std::exception& stError)
+	{
+		fprintf(stderr, "invalid RPC admission configuration: %s\n", stError.what());
+		return OI_ERR_INVALID_ARGUMENT;
+	}
+}
 
 // 与等待项共用分片锁：登记、换绑、超时、回包及断连原子维护会话索引。
-std::list<uint64_t>::iterator AddSessionIndex(RpcCallShard& stShard, const RpcCoroSlot& stSlot, sid_t iSessionIdLocal)
+std::list<uint64_t>::iterator RpcCallManager::AddSessionIndex(Shard& stShard, const Slot& stSlot, sid_t iSessionIdLocal)
 {
-	auto it = stShard.mSessions.try_emplace(RpcSessionKey{stSlot.pManager, iSessionIdLocal}).first;
+	auto it = stShard.mSessions.try_emplace(SessionKey{stSlot.pManager, iSessionIdLocal}).first;
 	try
 	{
 		it->second.push_back(stSlot.iCallId);
@@ -154,7 +139,7 @@ std::list<uint64_t>::iterator AddSessionIndex(RpcCallShard& stShard, const RpcCo
 	return std::prev(it->second.end());
 }
 
-void RemoveSessionIndex(RpcCallShard& stShard, RpcCoroSlot& stSlot)
+void RpcCallManager::RemoveSessionIndex(Shard& stShard, Slot& stSlot)
 {
 	if (!stSlot.bIndexed)
 	{
@@ -169,8 +154,7 @@ void RemoveSessionIndex(RpcCallShard& stShard, RpcCoroSlot& stSlot)
 	stSlot.bIndexed = false;
 }
 
-// 调用者持分片锁。删除空桶，避免动态超时参数让桶本身无限增长。
-void ArmRpcGuard(RpcCoroSlot& stSlot)
+void RpcCallManager::ArmGuard(Slot& stSlot)
 {
 	if (!stSlot.pGuard || stSlot.bGuardArmed)
 	{
@@ -180,7 +164,8 @@ void ArmRpcGuard(RpcCoroSlot& stSlot)
 	stSlot.bGuardArmed = true;
 }
 
-void RemoveRpcExpiry(RpcCallShard& stShard, RpcCoroSlot& stSlot)
+// 调用者持分片锁。删除空桶，避免动态超时参数让桶本身无限增长。
+void RpcCallManager::RemoveExpiry(Shard& stShard, Slot& stSlot)
 {
 	if (!stSlot.bHasExpiry)
 	{
@@ -197,28 +182,12 @@ void RemoveRpcExpiry(RpcCallShard& stShard, RpcCoroSlot& stSlot)
 	stSlot.stExpiryBucket = {};
 }
 
-const uint64_t kCallShards = 64;
-const int kSweepMs = 200;
-RpcCallShard g_call_shards[kCallShards];
-std::atomic<uint64_t> g_call_seq(1);
-std::once_flag g_sweep_once;
-
-::OI::Thread::Mutex g_rpc_handle_lock;
-std::map<proto_type_t, RpcHandleFn> g_rpc_handle;
-
-int64_t NowMs()
+RpcCallManager::Shard& RpcCallManager::ShardOf(uint64_t iCallIdLocal)
 {
-	return std::chrono::duration_cast<std::chrono::milliseconds>(
-	    std::chrono::steady_clock::now().time_since_epoch())
-	    .count();
+	return m_vShards[iCallIdLocal % kShardCount];
 }
 
-RpcCallShard& ShardOf(uint64_t iCallIdLocal)
-{
-	return g_call_shards[iCallIdLocal % kCallShards];
-}
-
-void FinishRpcSlot(RpcCoroSlot& stSlot, int32_t iCode, ::OI::Base::BytesStream* pBody)
+void RpcCallManager::FinishSlot(Slot& stSlot, int32_t iCode, ::OI::Base::BytesStream* pBody)
 {
 	struct GuardRelease
 	{
@@ -264,9 +233,9 @@ void FinishRpcSlot(RpcCoroSlot& stSlot, int32_t iCode, ::OI::Base::BytesStream* 
 	}
 }
 
-bool TakeRpcSlot(uint64_t iCallIdLocal, RpcCoroSlot& stOutput, ::OI::Net::SessionManager* pManagerLocal = NULL, sid_t iSessionIdLocal = 0, proto_type_t iResponseIdLocal = 0)
+bool RpcCallManager::TakeSlot(uint64_t iCallIdLocal, Slot& stOutput, ::OI::Net::SessionManager* pManagerLocal, sid_t iSessionIdLocal, proto_type_t iResponseIdLocal)
 {
-	RpcCallShard& stShard = ShardOf(iCallIdLocal);
+	Shard& stShard = ShardOf(iCallIdLocal);
 	::OI::Thread::MutexGuard stLock(stShard.stMutex);
 	auto stIterator = stShard.mSlots.find(iCallIdLocal);
 	if (stIterator == stShard.mSlots.end())
@@ -278,31 +247,30 @@ bool TakeRpcSlot(uint64_t iCallIdLocal, RpcCoroSlot& stOutput, ::OI::Net::Sessio
 	{
 		return false;
 	}
-	RemoveRpcExpiry(stShard, stIterator->second);
+	RemoveExpiry(stShard, stIterator->second);
 	RemoveSessionIndex(stShard, stIterator->second);
-	ArmRpcGuard(stIterator->second);
+	ArmGuard(stIterator->second);
 	stOutput = std::move(stIterator->second);
 	stShard.mSlots.erase(stIterator);
 	return true;
 }
 
-void SweepRpcCalls()
+void RpcCallManager::Sweep()
 {
-	int64_t iNow = NowMs();
-	std::vector<RpcCoroSlot> vFired;
+	const int64_t iNow = ::OI::Timer::SteadyMilliseconds();
+	std::vector<Slot> vFired;
 	try
 	{
-		for (uint64_t iIndexLocal = 0; iIndexLocal < kCallShards; ++iIndexLocal)
+		for (auto& stShard : m_vShards)
 		{
-			RpcCallShard& stShard = g_call_shards[iIndexLocal];
 			::OI::Thread::MutexGuard stLock(stShard.stMutex);
 			for (auto stBit = stShard.mExpire.begin(); stBit != stShard.mExpire.end();)
 			{
-				if (stBit->first > iNow / kSweepMs)
+				if (stBit->first > iNow / kBucketMilliseconds)
 				{
 					break; // 后面的整桶尚未到期，不扫描长超时请求。
 				}
-				std::list<RpcExpire>& vQ = stBit->second;
+				std::list<Expire>& vQ = stBit->second;
 				for (auto it = vQ.begin(); it != vQ.end();)
 				{
 					auto stIterator = stShard.mSlots.find(it->iCallId);
@@ -322,7 +290,7 @@ void SweepRpcCalls()
 					stIterator->second.stExpiry = {};
 					stIterator->second.stExpiryBucket = {};
 					RemoveSessionIndex(stShard, stIterator->second);
-					ArmRpcGuard(stIterator->second);
+					ArmGuard(stIterator->second);
 					vFired.back() = std::move(stIterator->second);
 					stShard.mSlots.erase(stIterator);
 					it = vQ.erase(it);
@@ -342,52 +310,24 @@ void SweepRpcCalls()
 	{
 		::OI::Thread::ReportTaskError(std::current_exception());
 	}
-	for (size_t iIndexLocal = 0; iIndexLocal < vFired.size(); ++iIndexLocal)
+	for (auto& stSlot : vFired)
 	{
 		// 还没连上就到期，按连接失败返回，不占超时码。
-		int32_t iCodeLocal = vFired[iIndexLocal].bAwaitingConnect ? OI_ERR_CONNECT : OI_ERR_TIMEOUT;
-		FinishRpcSlot(vFired[iIndexLocal], iCodeLocal, NULL);
+		const int32_t iCodeLocal = stSlot.bAwaitingConnect ? OI_ERR_CONNECT : OI_ERR_TIMEOUT;
+		FinishSlot(stSlot, iCodeLocal, NULL);
 	}
 }
 
-class RpcSweepTimer : public ::OI::Timer::BaseTimer
+::OI::Coro::Task RpcCallManager::OnTickUpdate(uint64_t)
 {
-  public:
-	bool OnTimer() override
-	{
-		SweepRpcCalls();
-		return true;
-	}
-};
-
-void ArmRpcSweep(void*)
-{
-	::OI::Timer::BaseTimerManager::GetInstance().AddTimer(new RpcSweepTimer(), kSweepMs);
-}
+	Sweep();
+	co_return;
 }
 
-RpcAdmissionLease::~RpcAdmissionLease()
-{
-	if (!bAcquired)
-	{
-		return;
-	}
-	auto& stAdmission = Admission();
-	::OI::Thread::MutexGuard stLock(stAdmission.stMutex);
-	auto it = stAdmission.mSessions.find(stKey);
-	--stAdmission.stTotal.iCount;
-	stAdmission.stTotal.iBytes -= iBytes;
-	it->second.iBytes -= iBytes;
-	if (--it->second.iCount == 0)
-	{
-		stAdmission.mSessions.erase(it);
-	}
-}
-
-RpcWaitStats GetRpcWaitStats()
+RpcWaitStats RpcCallManager::WaitStats()
 {
 	RpcWaitStats stStats{};
-	for (auto& stShard : g_call_shards)
+	for (auto& stShard : m_vShards)
 	{
 		::OI::Thread::MutexGuard stLock(stShard.stMutex);
 		stStats.iCalls += stShard.mSlots.size();
@@ -405,23 +345,9 @@ RpcWaitStats GetRpcWaitStats()
 	return stStats;
 }
 
-int32_t InitRpcAdmission()
+bool RpcCallManager::MarkAwaitingConnect(uint64_t iCallIdLocal)
 {
-	try
-	{
-		(void)Admission();
-		return OI_OK;
-	}
-	catch (const std::exception& stError)
-	{
-		fprintf(stderr, "invalid RPC admission configuration: %s\n", stError.what());
-		return OI_ERR_INVALID_ARGUMENT;
-	}
-}
-
-bool MarkRpcAwaitingConnect(uint64_t iCallIdLocal)
-{
-	RpcCallShard& stShard = ShardOf(iCallIdLocal);
+	Shard& stShard = ShardOf(iCallIdLocal);
 	::OI::Thread::MutexGuard stLock(stShard.stMutex);
 	auto stIterator = stShard.mSlots.find(iCallIdLocal);
 	if (stIterator == stShard.mSlots.end())
@@ -432,9 +358,9 @@ bool MarkRpcAwaitingConnect(uint64_t iCallIdLocal)
 	return true;
 }
 
-bool ClaimRpcSend(uint64_t iCallIdLocal, sid_t iSessionIdLocal)
+bool RpcCallManager::ClaimSend(uint64_t iCallIdLocal, sid_t iSessionIdLocal)
 {
-	RpcCallShard& stShard = ShardOf(iCallIdLocal);
+	Shard& stShard = ShardOf(iCallIdLocal);
 	::OI::Thread::MutexGuard stLock(stShard.stMutex);
 	auto stIterator = stShard.mSlots.find(iCallIdLocal);
 	if (stIterator == stShard.mSlots.end())
@@ -453,7 +379,7 @@ bool ClaimRpcSend(uint64_t iCallIdLocal, sid_t iSessionIdLocal)
 	return true;
 }
 
-uint64_t BindRpcCall(::OI::Net::SessionManager* pManagerLocal,
+uint64_t RpcCallManager::Bind(::OI::Net::SessionManager* pManagerLocal,
     sid_t iSessionIdLocal,
     proto_type_t iResponseIdLocal,
     std::coroutine_handle<> stHandleLocal,
@@ -464,13 +390,9 @@ uint64_t BindRpcCall(::OI::Net::SessionManager* pManagerLocal,
     std::shared_ptr<std::atomic<int32_t>> pGuardLocal,
     RpcSender* pSenderLocal)
 {
-	std::call_once(g_sweep_once, []()
-	{
-		::OI::Net::Poll::GetInstance().CallOnLoop(ArmRpcSweep, NULL);
-	});
 	// 最高位留给请求标记，槽里只存去掉标记的号。
-	uint64_t iCallIdLocal = g_call_seq.fetch_add(1, std::memory_order_relaxed) & ~(uint64_t)RPC_REQ_MASK;
-	RpcCoroSlot stSlot;
+	uint64_t iCallIdLocal = m_iCallSeq.fetch_add(1, std::memory_order_relaxed) & ~(uint64_t)RPC_REQ_MASK;
+	Slot stSlot;
 	stSlot.pManager = pManagerLocal;
 	stSlot.iSessionId = iSessionIdLocal;
 	stSlot.stHandle = stHandleLocal;
@@ -482,7 +404,7 @@ uint64_t BindRpcCall(::OI::Net::SessionManager* pManagerLocal,
 	stSlot.bAwaitingConnect = false;
 	stSlot.pGuard = std::move(pGuardLocal);
 	stSlot.pSender = pSenderLocal;
-	RpcCallShard& stShard = ShardOf(iCallIdLocal);
+	Shard& stShard = ShardOf(iCallIdLocal);
 	::OI::Thread::MutexGuard stLock(stShard.stMutex);
 	auto stInserted = stShard.mSlots.emplace(iCallIdLocal, std::move(stSlot)).first;
 	try
@@ -491,11 +413,11 @@ uint64_t BindRpcCall(::OI::Net::SessionManager* pManagerLocal,
 		stInserted->second.bIndexed = true;
 		if (iTimeoutMilliseconds > 0)
 		{
-			const int64_t iNow = NowMs();
+			const int64_t iNow = ::OI::Timer::SteadyMilliseconds();
 			const int64_t iMaxTime = (std::numeric_limits<int64_t>::max)();
 			const int64_t iDeadline = iTimeoutMilliseconds > iMaxTime - iNow ? iMaxTime : iNow + iTimeoutMilliseconds;
 			// 当前刻度内逐项校验精确截止时间，保持原扫描精度；存刻度编号避免溢出。
-			const int64_t iBucket = iDeadline / kSweepMs;
+			const int64_t iBucket = iDeadline / kBucketMilliseconds;
 			auto stBucket = stShard.mExpire.try_emplace(iBucket).first;
 			try
 			{
@@ -524,29 +446,29 @@ uint64_t BindRpcCall(::OI::Net::SessionManager* pManagerLocal,
 	return iCallIdLocal;
 }
 
-bool WakeRpcCall(uint64_t iCallIdLocal, int32_t iCode, ::OI::Base::BytesStream* pBody)
+bool RpcCallManager::Wake(uint64_t iCallIdLocal, int32_t iCode, ::OI::Base::BytesStream* pBody)
 {
-	RpcCoroSlot stSlot;
-	if (!TakeRpcSlot(iCallIdLocal, stSlot))
+	Slot stSlot;
+	if (!TakeSlot(iCallIdLocal, stSlot))
 	{
 		return false;
 	}
-	FinishRpcSlot(stSlot, iCode, pBody);
+	FinishSlot(stSlot, iCode, pBody);
 	return true;
 }
 
-void AbandonRpcCall(uint64_t iCallIdLocal)
+void RpcCallManager::Abandon(uint64_t iCallIdLocal)
 {
-	RpcCoroSlot stSlot;
+	Slot stSlot;
 	{
-		RpcCallShard& stShard = ShardOf(iCallIdLocal);
+		Shard& stShard = ShardOf(iCallIdLocal);
 		::OI::Thread::MutexGuard stLock(stShard.stMutex);
 		auto stIterator = stShard.mSlots.find(iCallIdLocal);
 		if (stIterator == stShard.mSlots.end())
 		{
 			return;
 		}
-		RemoveRpcExpiry(stShard, stIterator->second);
+		RemoveExpiry(stShard, stIterator->second);
 		RemoveSessionIndex(stShard, stIterator->second);
 		stSlot = std::move(stIterator->second);
 		stShard.mSlots.erase(stIterator);
@@ -564,7 +486,7 @@ void AbandonRpcCall(uint64_t iCallIdLocal)
 	}
 }
 
-void WaitRpcGuard(const std::shared_ptr<std::atomic<int32_t>>& pGuardLocal)
+void RpcCallManager::WaitGuard(const std::shared_ptr<std::atomic<int32_t>>& pGuardLocal)
 {
 	if (!pGuardLocal)
 	{
@@ -576,11 +498,12 @@ void WaitRpcGuard(const std::shared_ptr<std::atomic<int32_t>>& pGuardLocal)
 	}
 }
 
-void FailRpcCalls(::OI::Net::SessionManager* pManagerLocal, sid_t iSessionIdLocal)
+void RpcCallManager::FailSession(::OI::Net::SessionManager* pManagerLocal, sid_t iSessionIdLocal)
 {
+	static_assert(std::is_nothrow_move_assignable_v<Slot>, "FailSession moves slots into a fixed array under the shard lock");
 	// 固定容量分批摘除，断连清理自身不分配内存。每批出锁后完成，异常不能遗失后续等待项。
-	std::array<RpcCoroSlot, 32> vFailed{};
-	for (auto& stShard : g_call_shards)
+	std::array<Slot, 32> vFailed{};
+	for (auto& stShard : m_vShards)
 	{
 		while (true)
 		{
@@ -595,9 +518,9 @@ void FailRpcCalls(::OI::Net::SessionManager* pManagerLocal, sid_t iSessionIdLoca
 				while (!it->second.empty() && iCount < vFailed.size())
 				{
 					auto stSlot = stShard.mSlots.find(it->second.front());
-					RemoveRpcExpiry(stShard, stSlot->second);
+					RemoveExpiry(stShard, stSlot->second);
 					stSlot->second.bIndexed = false;
-					ArmRpcGuard(stSlot->second);
+					ArmGuard(stSlot->second);
 					vFailed[iCount++] = std::move(stSlot->second);
 					stShard.mSlots.erase(stSlot);
 					it->second.pop_front();
@@ -611,7 +534,7 @@ void FailRpcCalls(::OI::Net::SessionManager* pManagerLocal, sid_t iSessionIdLoca
 			{
 				try
 				{
-					FinishRpcSlot(vFailed[iIndex], OI_ERR_CONNECT, nullptr);
+					FinishSlot(vFailed[iIndex], OI_ERR_CONNECT, nullptr);
 				}
 				catch (...)
 				{
@@ -623,13 +546,7 @@ void FailRpcCalls(::OI::Net::SessionManager* pManagerLocal, sid_t iSessionIdLoca
 	}
 }
 
-void BindRpcHandler(proto_type_t iId, RpcHandleFn fnHandle)
-{
-	::OI::Thread::MutexGuard stLock(g_rpc_handle_lock);
-	g_rpc_handle[iId] = std::move(fnHandle);
-}
-
-bool DeliverRpc(proto_type_t iId, ::OI::Base::BytesStream& stBodyLocal, ::OI::Net::SessionManager* pManagerLocal, sid_t iSessionIdLocal)
+bool RpcCallManager::Deliver(proto_type_t iId, ::OI::Base::BytesStream& stBodyLocal, ProtoSessionManager* pManagerLocal, sid_t iSessionIdLocal)
 {
 	uint64_t iRaw = 0;
 	const size_t iBodyBytes = stBodyLocal.RemainSize();
@@ -650,30 +567,27 @@ bool DeliverRpc(proto_type_t iId, ::OI::Base::BytesStream& stBodyLocal, ::OI::Ne
 	const RpcHandleFn* pHandle = NULL;
 	if (bIsRequest)
 	{
-		::OI::Thread::MutexGuard stLock(g_rpc_handle_lock);
-		auto stHandlerIterator = g_rpc_handle.find(iId);
-		if (stHandlerIterator == g_rpc_handle.end())
+		pHandle = pManagerLocal->FindRpcHandler(iId);
+		if (pHandle == nullptr)
 		{
 			return false;
 		}
-		// 处理函数只在启动时注册，map 节点不会再动，出锁后用指针调用。
-		pHandle = &stHandlerIterator->second;
 	}
 	try
 	{
 		if (!bIsRequest)
 		{
 			uint64_t iCallIdLocal = iRaw & ~(uint64_t)RPC_REQ_MASK;
-			RpcCoroSlot stSlot;
-			if (!TakeRpcSlot(iCallIdLocal, stSlot, pManagerLocal, iSessionIdLocal, iId))
+			Slot stSlot;
+			if (!TakeSlot(iCallIdLocal, stSlot, pManagerLocal, iSessionIdLocal, iId))
 			{
 				return true;
 			}
-			FinishRpcSlot(stSlot, 0, &stBodyLocal);
+			FinishSlot(stSlot, 0, &stBodyLocal);
 		}
 		else
 		{
-			auto stLease = AcquireRpc(pManagerLocal, iSessionIdLocal, iBodyBytes);
+			auto stLease = AcquireAdmission(pManagerLocal, iSessionIdLocal, iBodyBytes);
 			if (!stLease && bIsNotify)
 			{
 				return true;
@@ -699,12 +613,7 @@ bool DeliverRpc(proto_type_t iId, ::OI::Base::BytesStream& stBodyLocal, ::OI::Ne
 	return true;
 }
 
-}
-}
-
-namespace OI::Rpc
-{
-void ReportRpcError(OI::Coro::Token iToken, uint64_t iCallIdLocal, sid_t iSessionIdLocal,
+void RpcCallManager::ReportError(OI::Coro::Token iToken, uint64_t iCallIdLocal, sid_t iSessionIdLocal,
     proto_type_t iProtocolId, const char* pStage, std::exception_ptr stErrorLocal) noexcept
 {
 	const auto fnWrite = [iToken, iCallIdLocal, iSessionIdLocal, iProtocolId, pStage](const char* pReason) noexcept
@@ -743,5 +652,7 @@ void ReportRpcError(OI::Coro::Token iToken, uint64_t iCallIdLocal, sid_t iSessio
 	{
 		fnWrite("non-std exception");
 	}
+}
+
 }
 }

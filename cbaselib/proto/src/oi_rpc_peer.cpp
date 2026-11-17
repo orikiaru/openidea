@@ -2,7 +2,7 @@
 #include "oi_rpc_coro.h"
 #include "oi_rpc_session.h"
 #include "oi_rpc_session_manager.h"
-#include "oi_registry.h"
+#include "oi_registry_client.h"
 #include "oi_log.h"
 #include "oi_poll.h"
 #include "oi_socket.h"
@@ -235,14 +235,14 @@ void PeerConnection::Finish(sid_t iSessionIdLocal)
 	{
 		if (iSessionIdLocal == INVALID_SID)
 		{
-			WakeRpcCall(stCall.iCallId, OI_ERR_CONNECT, nullptr);
+			RpcCallManager::GetInstance().Wake(stCall.iCallId, OI_ERR_CONNECT, nullptr);
 		}
-		else if (ClaimRpcSend(stCall.iCallId, iSessionIdLocal))
+		else if (RpcCallManager::GetInstance().ClaimSend(stCall.iCallId, iSessionIdLocal))
 		{
 			const int32_t iResult = pOwner->SendBytesResult(iSessionIdLocal, stCall.stData);
 			if (iResult != OI_OK)
 			{
-				WakeRpcCall(stCall.iCallId, iResult, nullptr);
+				RpcCallManager::GetInstance().Wake(stCall.iCallId, iResult, nullptr);
 			}
 		}
 	}
@@ -318,7 +318,7 @@ void PeerConnection::Submit(uint64_t iCallId, const ::OI::Base::Bytes& stData)
 		else if (iSessionId != INVALID_SID)
 		{
 			iTarget = iSessionId;
-			if (!ClaimRpcSend(iCallId, iTarget))
+			if (!RpcCallManager::GetInstance().ClaimSend(iCallId, iTarget))
 			{
 				return;
 			}
@@ -327,7 +327,7 @@ void PeerConnection::Submit(uint64_t iCallId, const ::OI::Base::Bytes& stData)
 		{
 			iError = OI_ERR_BUSY;
 		}
-		else if (MarkRpcAwaitingConnect(iCallId))
+		else if (RpcCallManager::GetInstance().MarkAwaitingConnect(iCallId))
 		{
 			vHeld.push_back({iCallId, stData});
 			try
@@ -348,14 +348,14 @@ void PeerConnection::Submit(uint64_t iCallId, const ::OI::Base::Bytes& stData)
 	}
 	if (iError != OI_OK)
 	{
-		WakeRpcCall(iCallId, iError, nullptr);
+		RpcCallManager::GetInstance().Wake(iCallId, iError, nullptr);
 	}
 	else if (iTarget != INVALID_SID)
 	{
 		const int32_t iResult = pOwner->SendBytesResult(iTarget, stData);
 		if (iResult != OI_OK)
 		{
-			WakeRpcCall(iCallId, iResult, nullptr);
+			RpcCallManager::GetInstance().Wake(iCallId, iResult, nullptr);
 		}
 	}
 	else

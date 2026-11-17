@@ -6,13 +6,14 @@
 
 | 用途 | 声明 |
 | --- | --- |
-| 管理器按 sid 发送 | [`ProtoSessionManager::Notify`](../../cbaselib/proto/inc/oi_rpc_session_manager.h#L52) |
-| 发回这次请求的会话 | [`RpcContext::Notify`](../../cbaselib/proto/inc/oi_rpc_coro.h#L51) |
-| 用这次请求的管理器发给另一条会话 | [`RpcContext::Notify`](../../cbaselib/proto/inc/oi_rpc_coro.h#L57) |
-| UDP 地址换成 sid | [`OpenPeer`](../../cbaselib/net/inc/oi_session_manager.h#L151) |
-| 客户端当前会话 | [`ConnectedSid`](../../cbaselib/proto/inc/oi_rpc_session_manager.h#L127) |
-| 注册处理函数 | [`HandleNotify`](../../cbaselib/proto/inc/oi_rpc_coro.h#L249) |
-| 成员函数注册 | [`OI_NOTIFY_BIND_SELF`](../../cbaselib/proto/inc/oi_rpc_coro.h#L1190) |
+| 管理器按 sid 发送 | [`ProtoSessionManager::Notify`](../../cbaselib/proto/inc/oi_rpc_session_manager.h#L76) |
+| 发回这次请求的会话 | [`RpcContext::Notify`](../../cbaselib/proto/inc/oi_rpc_coro.h#L52) |
+| 用这次请求的管理器发给另一条会话 | [`RpcContext::Notify`](../../cbaselib/proto/inc/oi_rpc_coro.h#L58) |
+| UDP 地址换成 sid | [`OpenPeer`](../../cbaselib/net/inc/oi_session_manager.h#L155) |
+| 客户端当前会话 | [`ConnectedSid`](../../cbaselib/proto/inc/oi_rpc_session_manager.h#L140) |
+| 从形参推出，含成员函数 | [`HandleNotify`](../../cbaselib/proto/inc/oi_rpc_coro.h#L368) |
+| 显式消息类型 | [`HandleNotify`](../../cbaselib/proto/inc/oi_rpc_coro.h#L350) |
+| 声明处理函数 | [`OI_NOTIFY_HANDLER`](../../cbaselib/proto/inc/oi_rpc_coro.h#L1470) |
 
 ```cpp
 stContext.Notify(stReply);
@@ -26,9 +27,24 @@ if (iUdp == OI_OK)
 }
 ```
 
-返回 [`SendBytes`](../../cbaselib/net/inc/oi_session_manager.h#L184) 的错误码。编码失败是 `OI_ERR_ENCODE`。会话不在是 `OI_ERR_CONNECT`。
+返回 [`SendBytes`](../../cbaselib/net/inc/oi_session_manager.h#L190) 的错误码。编码失败是 `OI_ERR_ENCODE`。会话不在是 `OI_ERR_CONNECT`。
 
-> **注意：** 一个协议号只注册一种处理：要么 `HandleRpc`，要么 `HandleNotify`。
+在接收这条连接的管理器上登记。自己的 `Init` 里写 `HandleNotify(fn)` 或 `HandleNotify(&类::成员)`；在别处写 `管理器.HandleNotify(fn)`，例如 `IpcUdp::GetInstance().HandleNotify(...)`。`HandleNotify(fn)` 从形参推出消息类型，显式写 `HandleNotify<Msg>(fn)`。成员函数的类检查与 `HandleRpc` 相同：当前管理器必须是该类或其派生，否则返回 `OI_ERR_INVALID_ARGUMENT`。
+
+```cpp
+::OI::Rpc::RpcTask IpcUdp::HandleNote(const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::UdpNoteReq& stRequest)
+{
+    co_return stContext.Notify(stRequest);
+}
+
+int32_t IpcUdp::Init()
+{
+    HandleNotify(&IpcUdp::HandleNote);
+    return ::OI::Rpc::ProtoSessionManager::Init();
+}
+```
+
+> **注意：** 一个协议号在同一个管理器上只登记一次：要么 `HandleRpc`，要么 `HandleNotify`。重复返回 `OI_ERR_EXIST` 并记日志，不覆盖。别的管理器有自己的表。
 
 > **注意：** RPC 包装通知的接收端需使用带 RPC 适配的新版 `HandleNotify`；旧版接收端不会为其回包，发送任务会等待到超时。`HandleNotify` 复用 RPC 处理路径。调用号为 0 时不回包；调用号非 0 时回传处理返回码，成功时附带默认构造的关联响应。
 

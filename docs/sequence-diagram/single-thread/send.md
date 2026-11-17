@@ -19,11 +19,7 @@ sequenceDiagram
 
     Main->>Biz: StScheduler.Poll 里 resume
     Biz->>Call: co_await RpcCall
-    opt 进程里第一次
-        Call->>Main: 就在主线程 ArmRpcSweep
-        Main->>Main: AddTimer 200ms 扫描
-    end
-    Call->>Wait: BindRpcCall 分配调用号并放入分片
+    Call->>Wait: RpcCallManager::Bind 分配调用号并放入分片
     Call->>Call: 包体 = 调用号 + Req
     Call->>Call: EncodePbFrame 协议号 长度 包体
     Call->>Sess: SendBytes
@@ -32,7 +28,7 @@ sequenceDiagram
         Sess->>Tcp: AllowSend
         Tcp->>Main: 当场打开写事件
     else 没有这条会话
-        Call->>Wait: WakeRpcCall 结果 OI_ERR_FAIL
+        Call->>Wait: RpcCallManager::Wake 结果 OI_ERR_FAIL
     end
     alt 回包或失败已经先到
         Call-->>Biz: 不挂起，主线程上 await_resume

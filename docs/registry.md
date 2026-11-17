@@ -116,7 +116,7 @@ Redis 连不上或卡住时，登记和续期回失败，客户端下一次心�
 
 通知复制消息并启动任务，通过现有 RPC 路径发送，默认超时 180 秒。返回 `OI_OK` 仅表示任务已启动，不代表对端收到；发送、回执或超时失败由任务错误处理器报告。
 
-服务端推下来的消息照常用 `OI_NOTIFY_BIND_SELF` 绑定，`OI_RPC_SELF(类型)` 拿到的就是这个管理器。`InstanceIds()` 给当前名单，`ConnectedSid(实例号)` 给这台当前的会话，`IsConnect()` 表示至少有一台连着。
+服务端推下来的消息登记在接收它的管理器上：自己的 `Init` 里写 `HandleNotify(&类::成员)`，别处写 `管理器.HandleNotify(&类::成员)`。`OI_RPC_SELF(类型)` 拿到的就是这个管理器。`InstanceIds()` 给当前名单，`ConnectedSid(实例号)` 给这台当前的会话，`IsConnect()` 表示至少有一台连着。
 
 写死地址时运行中要换服务器，在 `Init` 之后调 `UseAddress(ip, port)`：旧连接退役，在途调用回 `OI_ERR_CONNECT`，实例号仍是 0，`Start` 过就马上连新地址，`GetStrIP()`、`GetStrPort()` 跟着变。配了 `service` 时返回 `OI_ERR_INVALID_ARGUMENT`；成功返回 `OI_OK`，地址没变什么都不做。
 
@@ -164,7 +164,7 @@ auto all = co_await games.CallAll<AllEchoRes>(req);
 
 起服用 `Publish`、`PullSync`、`Lookup` 同步登记并强制拉一次，结果写入本地缓存。这三步要真正等待时，不能在 poll 回调（含定时器回调）里调用，会抛 `logic_error`。
 
-运行期不再按调用向 registry 发查询。`RegistryClient` 是单例，日历秒变化时启动 `OI::Coro::Task OnSecondUpdate(time_t)`，上一次没 `co_return` 就跳过这一秒：没连就连；到点登记或心跳；到 `Registry.pull_ms` 或 `Snapshot` 未命中催促时，把关注的名字整量拉一次。登记、心跳、拉取在这条协程里按顺序 `co_await OI::Rpc::RpcCall(*this, sid, 请求, 回复, 1000ms)`。拉取失败则下一秒重拉。`Snapshot` 只读这份缓存，还没拉到过返回 false，并记下这个名字；未命中不立刻拉取，由下一次秒更新拉。
+运行期不再按调用向 registry 发查询。`RegistryClient` 继承 `ProtoSessionManager`，声明在 `cbaselib/proto/inc/oi_registry_client.h`；`cbaselib/base/inc/oi_registry.h` 只保留 `ServiceInstance`、`ServiceTable`、`StaticRegistry`。它是单例，日历秒变化时启动 `OI::Coro::Task OnSecondUpdate(time_t)`，上一次没 `co_return` 就跳过这一秒：没连就连；到点登记或心跳；到 `Registry.pull_ms` 或 `Snapshot` 未命中催促时，把关注的名字整量拉一次。登记、心跳、拉取在这条协程里按顺序 `co_await OI::Rpc::RpcCall(*this, sid, 请求, 回复, 1000ms)`。拉取失败则下一秒重拉。`Snapshot` 只读这份缓存，还没拉到过返回 false，并记下这个名字；未命中不立刻拉取，由下一次秒更新拉。
 
 路由发协议前读本地缓存。命中立即解析。没拉到过就每 10ms 复查，直到拉到或超过 min(剩余预算, 3000ms)，超时返回 `OI_ERR_TIMEOUT`。名单里没有目标时按不在线返回 `OI_ERR_CONNECT`。
 

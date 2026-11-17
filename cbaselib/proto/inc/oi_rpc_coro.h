@@ -3,7 +3,7 @@
 #include "oi_header.h"
 #include "oi_parser.h"
 #include "oi_rpc_call.h"
-#include "oi_registry.h"
+#include "oi_registry_client.h"
 #include "oi_session_manager.h"
 #include "oi_rpc_session_manager.h"
 #include "oi_lock.h"
@@ -34,10 +34,6 @@ namespace OI
 {
 namespace Rpc
 {
-// 记录失败阶段和调用关联信息；日志失败不能打断原来的错误回执/收尾。
-void ReportRpcError(OI::Coro::Token iToken, uint64_t iCallId, sid_t iSessionId,
-    proto_type_t iProtocolId, const char* pStage, std::exception_ptr stError) noexcept;
-
 // 标准服务端协程：co_return 0 成功，正数为业务错误。
 using RpcTask = OI::Coro::TaskResult<int32_t>;
 
@@ -113,12 +109,12 @@ OI::Coro::Task RunHandledRpc(F fnFunction, proto_type_t iResponseId, OI::Coro::T
 	catch (::OI::Base::ParserException&)
 	{
 		iRetcode = OI_ERR_FAIL;
-		ReportRpcError(iToken, iCallIdLocal, iSessionId, iResponseId, pStage, std::current_exception());
+		RpcCallManager::ReportError(iToken, iCallIdLocal, iSessionId, iResponseId, pStage, std::current_exception());
 	}
 	catch (...)
 	{
 		iRetcode = OI_ERR_FAIL;
-		ReportRpcError(iToken, iCallIdLocal, iSessionId, iResponseId, pStage, std::current_exception());
+		RpcCallManager::ReportError(iToken, iCallIdLocal, iSessionId, iResponseId, pStage, std::current_exception());
 		OI::Coro::ReportTaskError(iToken, std::current_exception());
 	}
 	if (bNotify)
@@ -138,7 +134,7 @@ OI::Coro::Task RunHandledRpc(F fnFunction, proto_type_t iResponseId, OI::Coro::T
 	}
 	catch (...)
 	{
-		ReportRpcError(iToken, iCallIdLocal, iSessionId, iResponseId, "encode_response", std::current_exception());
+		RpcCallManager::ReportError(iToken, iCallIdLocal, iSessionId, iResponseId, "encode_response", std::current_exception());
 		OI::Coro::ReportTaskError(iToken, std::current_exception());
 		// 丢弃已经写入的半包，重新构造只有调用号和错误码的回执。
 		try
@@ -149,7 +145,7 @@ OI::Coro::Task RunHandledRpc(F fnFunction, proto_type_t iResponseId, OI::Coro::T
 		}
 		catch (...)
 		{
-			ReportRpcError(iToken, iCallIdLocal, iSessionId, iResponseId, "encode_failure_reply", std::current_exception());
+			RpcCallManager::ReportError(iToken, iCallIdLocal, iSessionId, iResponseId, "encode_failure_reply", std::current_exception());
 			OI::Coro::ReportTaskError(iToken, std::current_exception());
 			pManager->CloseSession(iSessionId);
 			co_return;
@@ -164,7 +160,7 @@ OI::Coro::Task RunHandledRpc(F fnFunction, proto_type_t iResponseId, OI::Coro::T
 	}
 	catch (...)
 	{
-		ReportRpcError(iToken, iCallIdLocal, iSessionId, iResponseId, "send_response", std::current_exception());
+		RpcCallManager::ReportError(iToken, iCallIdLocal, iSessionId, iResponseId, "send_response", std::current_exception());
 		OI::Coro::ReportTaskError(iToken, std::current_exception());
 		pManager->CloseSession(iSessionId);
 	}
@@ -185,7 +181,7 @@ RpcHandleFn MakeRpcHandler(F fnFunction, proto_type_t iResponseId)
 		catch (...)
 		{
 			const uint64_t iCallId = stDelivery.iRawCallId & ~(uint64_t)RPC_REQ_MASK;
-			ReportRpcError(0, iCallId, stDelivery.iSessionId, iResponseId, "decode_request", std::current_exception());
+			RpcCallManager::ReportError(0, iCallId, stDelivery.iSessionId, iResponseId, "decode_request", std::current_exception());
 			if (stDelivery.iRawCallId == 0)
 			{
 				return;
@@ -199,7 +195,7 @@ RpcHandleFn MakeRpcHandler(F fnFunction, proto_type_t iResponseId)
 			}
 			catch (...)
 			{
-				ReportRpcError(0, iCallId, stDelivery.iSessionId, iResponseId, "encode_failure_reply", std::current_exception());
+				RpcCallManager::ReportError(0, iCallId, stDelivery.iSessionId, iResponseId, "encode_failure_reply", std::current_exception());
 				OI::Coro::ReportTaskError(0, std::current_exception());
 				stDelivery.pManager->CloseSession(stDelivery.iSessionId);
 				return;
@@ -213,7 +209,7 @@ RpcHandleFn MakeRpcHandler(F fnFunction, proto_type_t iResponseId)
 			}
 			catch (...)
 			{
-				ReportRpcError(0, iCallId, stDelivery.iSessionId, iResponseId, "send_response", std::current_exception());
+				RpcCallManager::ReportError(0, iCallId, stDelivery.iSessionId, iResponseId, "send_response", std::current_exception());
 				OI::Coro::ReportTaskError(0, std::current_exception());
 				stDelivery.pManager->CloseSession(stDelivery.iSessionId);
 			}
@@ -227,20 +223,7 @@ RpcHandleFn MakeRpcHandler(F fnFunction, proto_type_t iResponseId)
 	};
 }
 
-template <typename Req, typename Res, typename F>
-void HandleRpc(F fnFunction)
-{
-	BindRpcHandler(RpcProtoId<Req>::iValue, MakeRpcHandler<Req, Res>(std::move(fnFunction), RpcProtoId<Res>::iValue));
-}
-
-// 请求类型已关联响应，无需在注册处重复指定。
-template <typename Req, typename F>
-void HandleRpc(F fnFunction)
-{
-	HandleRpc<Req, typename RpcProtoId<Req>::Response>(std::move(fnFunction));
-}
-
-// 从处理函数的形参取出请求和回包类型。只认非模板的 lambda、函数和函数指针；带 auto 形参的写 HandleRpc<Req>。
+// 从处理函数的形参取出请求和回包类型。只认非模板的 lambda、函数、函数指针和成员函数；带 auto 形参的写 HandleRpc<Req>。
 template <typename T>
 struct RpcCallableArgs
 {
@@ -249,11 +232,15 @@ template <typename C, typename R, typename... A>
 struct RpcCallableArgs<R (C::*)(A...) const>
 {
 	using Args = std::tuple<A...>;
+	using Class = C;
+	using Return = R;
 };
 template <typename C, typename R, typename... A>
 struct RpcCallableArgs<R (C::*)(A...)>
 {
 	using Args = std::tuple<A...>;
+	using Class = C;
+	using Return = R;
 };
 template <typename R, typename... A>
 struct RpcCallableArgs<R (*)(A...)>
@@ -303,20 +290,64 @@ struct RpcNotifyTypes<std::tuple<Ctx, Msg>>
 	using Message = std::remove_cvref_t<Msg>;
 };
 
-// 处理函数是 (req, res) 或 (const RpcContext&, req, res)，请求类型直接从形参取，注册处不用再写。
 template <typename F>
-    requires requires { typename RpcHandlerTypes<typename RpcHandlerArgs<F>::Args>::Request; }
-void HandleRpc(F fnFunction)
+constexpr bool kRpcHandlerDeducible = requires { typename RpcHandlerTypes<typename RpcHandlerArgs<F>::Args>::Request; };
+template <typename F>
+constexpr bool kRpcNotifyDeducible = requires { typename RpcNotifyTypes<typename RpcHandlerArgs<F>::Args>::Message; };
+
+template <typename Req, typename Res, typename F>
+int32_t ProtoSessionManager::HandleRpc(F fnFunction)
 {
-	using Types = RpcHandlerTypes<typename RpcHandlerArgs<F>::Args>;
-	static_assert(std::is_same_v<typename Types::Response, typename RpcProtoId<typename Types::Request>::Response>,
-	    "RPC handler response type does not match the request");
-	HandleRpc<typename Types::Request, typename Types::Response>(std::move(fnFunction));
+	return BindRpcHandler(RpcProtoId<Req>::iValue, MakeRpcHandler<Req, Res>(std::move(fnFunction), RpcProtoId<Res>::iValue));
+}
+
+template <typename Req, typename F>
+int32_t ProtoSessionManager::HandleRpc(F fnFunction)
+{
+	return HandleRpc<Req, typename RpcProtoId<Req>::Response>(std::move(fnFunction));
+}
+
+// 成员函数不在注册时找对象：登记时确认本管理器就是 C，处理时直接调本管理器的成员。
+template <typename F>
+int32_t ProtoSessionManager::HandleRpc(F fnFunction)
+{
+	static_assert(kRpcHandlerDeducible<F>, "RPC handler must accept (req, res) or (const RpcContext&, req, res); generic lambdas need HandleRpc<Req>");
+	using Args = typename RpcHandlerArgs<F>::Args;
+	using Req = typename RpcHandlerTypes<Args>::Request;
+	using Res = typename RpcHandlerTypes<Args>::Response;
+	static_assert(std::is_same_v<Res, typename RpcProtoId<Req>::Response>, "RPC handler response type does not match the request");
+	if constexpr (std::is_member_function_pointer_v<F>)
+	{
+		using C = typename RpcCallableArgs<F>::Class;
+		using R = typename RpcCallableArgs<F>::Return;
+		static_assert(std::is_base_of_v<ProtoSessionManager, C>, "RPC member handler must belong to a session manager class");
+		C* pSelf = dynamic_cast<C*>(this);
+		if (pSelf == nullptr)
+		{
+			LOG_ERROR("rpc member handler class mismatch manager=%s proto=%u", GetIDString().c_str(), (unsigned)RpcProtoId<Req>::iValue);
+			return OI_ERR_INVALID_ARGUMENT;
+		}
+		return HandleRpc<Req, Res>([pSelf, fnFunction](const RpcContext& stContext, Req& stRequest, Res& stResponse) -> R
+		{
+			if constexpr (std::tuple_size_v<Args> == 3)
+			{
+				return (pSelf->*fnFunction)(stContext, stRequest, stResponse);
+			}
+			else
+			{
+				return (pSelf->*fnFunction)(stRequest, stResponse);
+			}
+		});
+	}
+	else
+	{
+		return HandleRpc<Req, Res>(std::move(fnFunction));
+	}
 }
 
 // 调用号 0 不回包；RPC 包装通知复用默认响应与错误处理。
 template <typename Msg, typename F>
-void HandleNotify(F fnFunction)
+int32_t ProtoSessionManager::HandleNotify(F fnFunction)
 {
 	using Response = typename RpcProtoId<Msg>::Response;
 	auto fnAdapter = [fnFunction = std::move(fnFunction)](const RpcContext& stContext, Msg& stMessage, Response&) mutable
@@ -330,15 +361,42 @@ void HandleNotify(F fnFunction)
 			return fnFunction(stContext, stMessage);
 		}
 	};
-	BindRpcHandler(RpcProtoId<Msg>::iValue, MakeRpcHandler<Msg, Response>(std::move(fnAdapter), RpcProtoId<Msg>::iValue));
+	return BindRpcHandler(RpcProtoId<Msg>::iValue, MakeRpcHandler<Msg, Response>(std::move(fnAdapter), RpcProtoId<Msg>::iValue));
 }
 
-// 处理函数是 (msg) 或 (const RpcContext&, msg)，消息类型直接从形参取。
 template <typename F>
-    requires requires { typename RpcNotifyTypes<typename RpcHandlerArgs<F>::Args>::Message; }
-void HandleNotify(F fnFunction)
+int32_t ProtoSessionManager::HandleNotify(F fnFunction)
 {
-	HandleNotify<typename RpcNotifyTypes<typename RpcHandlerArgs<F>::Args>::Message>(std::move(fnFunction));
+	static_assert(kRpcNotifyDeducible<F>, "notify handler must accept (msg) or (const RpcContext&, msg); generic lambdas need HandleNotify<Msg>");
+	using Args = typename RpcHandlerArgs<F>::Args;
+	using Msg = typename RpcNotifyTypes<Args>::Message;
+	if constexpr (std::is_member_function_pointer_v<F>)
+	{
+		using C = typename RpcCallableArgs<F>::Class;
+		using R = typename RpcCallableArgs<F>::Return;
+		static_assert(std::is_base_of_v<ProtoSessionManager, C>, "notify member handler must belong to a session manager class");
+		C* pSelf = dynamic_cast<C*>(this);
+		if (pSelf == nullptr)
+		{
+			LOG_ERROR("notify member handler class mismatch manager=%s proto=%u", GetIDString().c_str(), (unsigned)RpcProtoId<Msg>::iValue);
+			return OI_ERR_INVALID_ARGUMENT;
+		}
+		return HandleNotify<Msg>([pSelf, fnFunction](const RpcContext& stContext, Msg& stMessage) -> R
+		{
+			if constexpr (std::tuple_size_v<Args> == 2)
+			{
+				return (pSelf->*fnFunction)(stContext, stMessage);
+			}
+			else
+			{
+				return (pSelf->*fnFunction)(stMessage);
+			}
+		});
+	}
+	else
+	{
+		return HandleNotify<Msg>(std::move(fnFunction));
+	}
 }
 
 // 发一条单向消息，不等回包。返回 SendBytesResult 的错误码，编码失败是 OI_ERR_ENCODE。
@@ -366,24 +424,6 @@ int32_t RpcNotify(::OI::Net::SessionManager& stManager, sid_t iSessionId, const 
 	return stManager.SendBytesResult(iSessionId, stFrame.GetMutableBuff());
 }
 
-// 返回调用号。回包、超时或 WakeRpcCall 三者只有一个会触发 decode/resume。
-// 回包回调携带实际匹配的 sid，日志不得用可能已重连的当前会话替代来源。
-uint64_t BindRpcCall(::OI::Net::SessionManager* pManager,
-    sid_t iSessionId,
-    proto_type_t iResponseId,
-    std::coroutine_handle<> stHandle,
-    int32_t* pResult,
-    int64_t iTimeoutMilliseconds,
-    std::function<bool(::OI::Base::BytesStream&, sid_t)> fnDecode,
-    std::function<void()> fnResume,
-    std::shared_ptr<std::atomic<int32_t>> pGuard = {},
-    RpcSender* pSender = nullptr);
-void FailRpcCalls(::OI::Net::SessionManager* pManager, sid_t iSessionId);
-// 取走等待项且不调用完成回调。已经在回调里的，等 WaitRpcGuard 归零。
-void AbandonRpcCall(uint64_t iCallId);
-void WaitRpcGuard(const std::shared_ptr<std::atomic<int32_t>>& pGuard);
-bool WakeRpcCall(uint64_t iCallId, int32_t iCode, ::OI::Base::BytesStream* pBody);
-
 // 发出请求后挂起。回包或超时回调里 Schedule 回来。回包可能比挂起先到。
 template <typename Req, typename Res>
 struct [[nodiscard]] RpcCallAwaiter
@@ -400,7 +440,7 @@ struct [[nodiscard]] RpcCallAwaiter
 	// 完成门。Idle 已发出还没人认领，Ready 结果已写好，Waiting 调用方已挂起。
 	std::atomic<OI::Coro::Gate> iGate;
 	std::atomic<bool> bAwaitStarted{false}; // 一次性闩。第二次 await 或移动已提交对象直接抛，不进完成门。
-	bool bDispatched = false;               // Dispatch 已经 BindRpcCall。析构时槽还在就摘掉。
+	bool bDispatched = false;               // Dispatch 已经 RpcCallManager::Bind。析构时槽还在就摘掉。
 	Res stDecoded{};
 	int32_t iReplyCode = OI_ERR_FAIL;
 	std::exception_ptr stDecodeError;
@@ -432,8 +472,8 @@ struct [[nodiscard]] RpcCallAwaiter
 			return;
 		}
 		// 槽还在就摘掉，回调不会再进来。回调已经在跑就等它结束，避免写进释放后的等待器。
-		AbandonRpcCall(iCallId);
-		WaitRpcGuard(pGuard);
+		RpcCallManager::GetInstance().Abandon(iCallId);
+		RpcCallManager::WaitGuard(pGuard);
 	}
 	static ::OI::Net::SessionManager* ClaimMove(RpcCallAwaiter& stOther)
 	{
@@ -500,7 +540,7 @@ struct [[nodiscard]] RpcCallAwaiter
 		iGate.store(OI::Coro::Gate::Idle, std::memory_order_relaxed);
 		iCallId = 0;
 		pGuard = std::make_shared<std::atomic<int32_t>>(0);
-		uint64_t iCallIdLocal = BindRpcCall(pManager, iSessionId, RpcProtoId<Res>::iValue, stHandle, &iResult, iTimeoutMilliseconds, [this](::OI::Base::BytesStream& stInput, sid_t iSourceSession)
+		uint64_t iCallIdLocal = RpcCallManager::GetInstance().Bind(pManager, iSessionId, RpcProtoId<Res>::iValue, stHandle, &iResult, iTimeoutMilliseconds, [this](::OI::Base::BytesStream& stInput, sid_t iSourceSession)
 		{
 			DecodeReply(stInput, iSourceSession);
 			return true;
@@ -530,7 +570,7 @@ struct [[nodiscard]] RpcCallAwaiter
 				const int32_t iRet = pManager->SendBytesResult(iSessionId, stFrame.GetMutableBuff());
 				if (iRet != OI_OK)
 				{
-					WakeRpcCall(iCallIdLocal, iRet, NULL);
+					RpcCallManager::GetInstance().Wake(iCallIdLocal, iRet, NULL);
 				}
 			}
 		}
@@ -539,7 +579,7 @@ struct [[nodiscard]] RpcCallAwaiter
 			// 不直接从 await_suspend 抛出：超时/断连可能已取走等待项，正在使用 this。
 			// 先完成等待，再由同一 gate 确认回调已结束，最后在 await_resume 重抛。
 			stSubmissionError = std::current_exception();
-			WakeRpcCall(iCallIdLocal, OI_ERR_FAIL, nullptr);
+			RpcCallManager::GetInstance().Wake(iCallIdLocal, OI_ERR_FAIL, nullptr);
 		}
 	}
 	template <typename Promise>
@@ -572,7 +612,7 @@ struct [[nodiscard]] RpcCallAwaiter
 			iResult = iReplyCode;
 			if (stDecodeError)
 			{
-				ReportRpcError(iAwaitToken, iCallId, iReplySessionId, RpcProtoId<Res>::iValue, "decode_response", stDecodeError);
+				RpcCallManager::ReportError(iAwaitToken, iCallId, iReplySessionId, RpcProtoId<Res>::iValue, "decode_response", stDecodeError);
 			}
 			if (iResult == 0)
 			{
@@ -1423,25 +1463,9 @@ auto ProtoMultiClientManager::CallAll(const Req& stRequest, ::OI::Timer::MS stTi
 	int32_t Function(const ::OI::RpcData::Name##Req& stRequest, ::OI::RpcData::Name##Res& stResponse)
 #define OI_RPC_CONTEXT_HANDLER(Name, Function) \
 	::OI::Rpc::RpcTask Function(const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::Name##Req& stRequest, ::OI::RpcData::Name##Res& stResponse)
-#define OI_RPC_BIND(Name, ...) \
-	::OI::Rpc::HandleRpc<::OI::RpcData::Name##Req>((__VA_ARGS__))
 // 从本次回调的上下文拿回组件。stManager 必须就是这个类型，对象要活过所有在途请求。
 #define OI_RPC_SELF(Type) static_cast<Type&>(stContext.stManager)
-// 注册成员函数。不在这里绑 this，处理时用上下文还原对象再调用。成员签名与 OI_RPC_CONTEXT_HANDLER 相同。
-#define OI_RPC_BIND_SELF(Name, Type, Member)                                                                                                                                                     \
-	::OI::Rpc::HandleRpc<::OI::RpcData::Name##Req>([](const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::Name##Req& stRequest, ::OI::RpcData::Name##Res& stResponse) -> decltype(auto) \
-	{                                                                                                                                                                                            \
-		return OI_RPC_SELF(Type).Member(stContext, stRequest, stResponse);                                                                                                                       \
-	})
 
 // 单向消息。协议 Name 只用 NameReq，生成的 NameRes 不会出现在线上。
 #define OI_NOTIFY_HANDLER(Name, Function) \
 	::OI::Rpc::RpcTask Function(const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::Name##Req& stRequest)
-#define OI_NOTIFY_BIND(Name, ...) \
-	::OI::Rpc::HandleNotify<::OI::RpcData::Name##Req>((__VA_ARGS__))
-// 注册成员函数，签名与 OI_NOTIFY_HANDLER 相同。
-#define OI_NOTIFY_BIND_SELF(Name, Type, Member)                                                                                                               \
-	::OI::Rpc::HandleNotify<::OI::RpcData::Name##Req>([](const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::Name##Req& stRequest) -> decltype(auto) \
-	{                                                                                                                                                         \
-		return OI_RPC_SELF(Type).Member(stContext, stRequest);                                                                                                \
-	})

@@ -131,9 +131,9 @@ OI::Coro::TaskResult<int> RpcOutputMgr::CheckOutputRpcTask(sid_t iSessionId)
 		++iBad;
 	}
 	static DeferredRpcProbe stUnconnected;
-	const auto stBefore = OI::Rpc::GetRpcWaitStats();
+	const auto stBefore = OI::Rpc::RpcCallManager::GetInstance().WaitStats();
 	if (co_await OI::Rpc::RpcCall(stUnconnected, sid_t(12345), stRequest, stOutput, OI::Timer::Seconds(3)) != OI_ERR_CONNECT ||
-	    stOutput.iMark != 734 || OI::Rpc::GetRpcWaitStats().iCalls != stBefore.iCalls)
+	    stOutput.iMark != 734 || OI::Rpc::RpcCallManager::GetInstance().WaitStats().iCalls != stBefore.iCalls)
 	{
 		++iBad;
 	}

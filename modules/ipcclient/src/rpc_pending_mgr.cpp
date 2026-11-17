@@ -65,7 +65,7 @@ struct RpcPendingMgr::PendingClient : OI::Rpc::ProtoClientManager
 		}
 		if (iFailureMode == 2)
 		{
-			OI::Rpc::WakeRpcCall(iId, OI_ERR_FAIL, nullptr);
+			OI::Rpc::RpcCallManager::GetInstance().Wake(iId, OI_ERR_FAIL, nullptr);
 		}
 		if (iFailureMode == 3)
 		{
@@ -75,7 +75,7 @@ struct RpcPendingMgr::PendingClient : OI::Rpc::ProtoClientManager
 		{
 			OI::Coro::StartTask([iId](OI::Coro::Token) -> OI::Coro::Task
 			{
-				OI::Rpc::WakeRpcCall(iId, OI_ERR_FAIL, nullptr);
+				OI::Rpc::RpcCallManager::GetInstance().Wake(iId, OI_ERR_FAIL, nullptr);
 				co_return;
 			});
 		}
@@ -85,7 +85,7 @@ struct RpcPendingMgr::PendingClient : OI::Rpc::ProtoClientManager
 
 bool RpcPendingMgr::SameWaitStats(const OI::Rpc::RpcWaitStats& stBaseline)
 {
-	const auto stNow = OI::Rpc::GetRpcWaitStats();
+	const auto stNow = OI::Rpc::RpcCallManager::GetInstance().WaitStats();
 	// clang-format off
 	return stNow.iCalls == stBaseline.iCalls
 		&& stNow.iExpirations == stBaseline.iExpirations
@@ -147,7 +147,7 @@ OI::Coro::TaskResult<int> RpcPendingMgr::CheckRpcContext(PendingClient& stPendin
 
 uint64_t RpcPendingMgr::BindPendingCall(PendingClient& stPending, int32_t* pResult, int64_t iTimeoutMilliseconds)
 {
-	return OI::Rpc::BindRpcCall(&stPending, INVALID_SID, 0, {}, pResult, iTimeoutMilliseconds, {}, []()
+	return OI::Rpc::RpcCallManager::GetInstance().Bind(&stPending, INVALID_SID, 0, {}, pResult, iTimeoutMilliseconds, {}, []()
 	{
 	});
 }
@@ -167,7 +167,7 @@ int RpcPendingMgr::CheckPendingLimits(PendingClient& stPending)
 	{
 		++iBadLocal;
 	}
-	OI::Rpc::WakeRpcCall(iFirstCall, OI_ERR_TIMEOUT, nullptr);
+	OI::Rpc::RpcCallManager::GetInstance().Wake(iFirstCall, OI_ERR_TIMEOUT, nullptr);
 	iSecondResult = 0;
 	iSecondCall = BindPendingCall(stPending, &iSecondResult, 0);
 	stPending.TryPendCall(iSecondCall, stFrame.GetMutableBuff());
@@ -196,24 +196,24 @@ int RpcPendingMgr::CheckPendingLimits(PendingClient& stPending)
 int RpcPendingMgr::CheckRpcSessionIndex(PendingClient& stPending)
 {
 	int iBadLocal = 0;
-	const auto stBaseline = OI::Rpc::GetRpcWaitStats();
+	const auto stBaseline = OI::Rpc::RpcCallManager::GetInstance().WaitStats();
 	std::vector<int32_t> vIndexedResults(4096, -99);
 	std::vector<uint64_t> vIndexedCalls;
 	for (size_t iIndexLocal = 0; iIndexLocal < vIndexedResults.size(); ++iIndexLocal)
 	{
-		const auto iCallLocal = OI::Rpc::BindRpcCall(&stPending, iIndexLocal < 32 ? 123 : 456, 0, {}, &vIndexedResults[iIndexLocal], 180000, {}, []()
+		const auto iCallLocal = OI::Rpc::RpcCallManager::GetInstance().Bind(&stPending, iIndexLocal < 32 ? 123 : 456, 0, {}, &vIndexedResults[iIndexLocal], 180000, {}, []()
 		{
 		});
 		vIndexedCalls.push_back(iCallLocal);
 	}
 	for (size_t iIndexLocal = 0; iIndexLocal < 16; ++iIndexLocal)
 	{
-		if (!OI::Rpc::ClaimRpcSend(vIndexedCalls[iIndexLocal], 789))
+		if (!OI::Rpc::RpcCallManager::GetInstance().ClaimSend(vIndexedCalls[iIndexLocal], 789))
 		{
 			++iBadLocal;
 		}
 	}
-	OI::Rpc::FailRpcCalls(&stPending, 123);
+	OI::Rpc::RpcCallManager::GetInstance().FailSession(&stPending, 123);
 	for (size_t iIndexLocal = 0; iIndexLocal < vIndexedResults.size(); ++iIndexLocal)
 	{
 		if (vIndexedResults[iIndexLocal] != (iIndexLocal >= 16 && iIndexLocal < 32 ? OI_ERR_CONNECT : -99))
@@ -221,14 +221,14 @@ int RpcPendingMgr::CheckRpcSessionIndex(PendingClient& stPending)
 			++iBadLocal;
 		}
 	}
-	OI::Rpc::FailRpcCalls(&stPending, 789);
+	OI::Rpc::RpcCallManager::GetInstance().FailSession(&stPending, 789);
 	for (size_t iIndexLocal = 0; iIndexLocal < vIndexedResults.size(); ++iIndexLocal)
 	{
 		if (vIndexedResults[iIndexLocal] != (iIndexLocal < 32 ? OI_ERR_CONNECT : -99))
 		{
 			++iBadLocal;
 		}
-		OI::Rpc::WakeRpcCall(vIndexedCalls[iIndexLocal], OI_ERR_CONNECT, nullptr);
+		OI::Rpc::RpcCallManager::GetInstance().Wake(vIndexedCalls[iIndexLocal], OI_ERR_CONNECT, nullptr);
 	}
 	if (!SameWaitStats(stBaseline))
 	{
@@ -241,13 +241,13 @@ int RpcPendingMgr::CheckRpcSessionIndex(PendingClient& stPending)
 // 跨分片、跨批次断连清理：回调抛异常也必须完成后续项并归还所有 guard。
 int RpcPendingMgr::CheckRpcDisconnectDrain(PendingClient& stPending)
 {
-	const auto stBaseline = OI::Rpc::GetRpcWaitStats();
+	const auto stBaseline = OI::Rpc::RpcCallManager::GetInstance().WaitStats();
 	std::vector<int32_t> vResults(4096, -99);
 	auto pGuard = std::make_shared<std::atomic<int32_t>>(0);
 	auto pCallbacks = std::make_shared<std::atomic<int32_t>>(0);
 	for (size_t iIndex = 0; iIndex < vResults.size(); ++iIndex)
 	{
-		OI::Rpc::BindRpcCall(&stPending, 987654, 0, {}, &vResults[iIndex], 180000, {}, [pCallbacks]()
+		OI::Rpc::RpcCallManager::GetInstance().Bind(&stPending, 987654, 0, {}, &vResults[iIndex], 180000, {}, [pCallbacks]()
 		{
 			if (pCallbacks->fetch_add(1) == 0)
 			{
@@ -255,7 +255,7 @@ int RpcPendingMgr::CheckRpcDisconnectDrain(PendingClient& stPending)
 			}
 		}, pGuard);
 	}
-	OI::Rpc::FailRpcCalls(&stPending, 987654);
+	OI::Rpc::RpcCallManager::GetInstance().FailSession(&stPending, 987654);
 	int iBad = pCallbacks->load() == 4096 && pGuard->load() == 0 && SameWaitStats(stBaseline) ? 0 : 1;
 	for (const auto& iResult : vResults)
 	{
@@ -272,7 +272,7 @@ int RpcPendingMgr::CheckRpcDisconnectDrain(PendingClient& stPending)
 OI::Coro::TaskResult<int> RpcPendingMgr::CheckRpcExceptions(PendingClient& stPending)
 {
 	int iBadLocal = 0;
-	const auto stBaseline = OI::Rpc::GetRpcWaitStats();
+	const auto stBaseline = OI::Rpc::RpcCallManager::GetInstance().WaitStats();
 	struct ThrowingRequest : OI::RpcData::HoldReq
 	{
 		OI::Base::BytesStream& serialize(OI::Base::BytesStream&) const override
@@ -330,7 +330,7 @@ OI::Coro::TaskResult<int> RpcPendingMgr::CheckRpcExceptions(PendingClient& stPen
 int RpcPendingMgr::CheckRpcExpiry(PendingClient& stPending)
 {
 	int iBadLocal = 0;
-	const auto stBaseline = OI::Rpc::GetRpcWaitStats();
+	const auto stBaseline = OI::Rpc::RpcCallManager::GetInstance().WaitStats();
 	OI::Base::BytesStream stFrame;
 	stFrame << uint64_t(1);
 	stPending.SetPendingCallLimits(64, 64 * 8);
@@ -339,7 +339,7 @@ int RpcPendingMgr::CheckRpcExpiry(PendingClient& stPending)
 	{
 		stPending.TryPendCall(BindPendingCall(stPending, &iAnchorResult, 180000), stFrame.GetMutableBuff());
 	}
-	const auto stAnchored = OI::Rpc::GetRpcWaitStats();
+	const auto stAnchored = OI::Rpc::RpcCallManager::GetInstance().WaitStats();
 	if (stAnchored.iCalls != stBaseline.iCalls + 64 || stAnchored.iExpirations != stBaseline.iExpirations + 64)
 	{
 		++iBadLocal;
@@ -353,7 +353,7 @@ int RpcPendingMgr::CheckRpcExpiry(PendingClient& stPending)
 			++iBadLocal;
 		}
 	}
-	const auto stLimited = OI::Rpc::GetRpcWaitStats();
+	const auto stLimited = OI::Rpc::RpcCallManager::GetInstance().WaitStats();
 	if (stLimited.iCalls != stAnchored.iCalls || stLimited.iExpirations != stAnchored.iExpirations || stLimited.iBuckets != stAnchored.iBuckets)
 	{
 		++iBadLocal;
@@ -378,24 +378,24 @@ OI::Coro::TaskResult<int> RpcPendingMgr::CheckDeadlineBuckets()
 {
 	int iBad = 0;
 	auto& stManager = IpcClient::GetInstance();
-	const auto stBefore = OI::Rpc::GetRpcWaitStats();
+	const auto stBefore = OI::Rpc::RpcCallManager::GetInstance().WaitStats();
 	std::vector<uint64_t> vCalls;
 	const int64_t iTargetMilliseconds = OI::Timer::SteadyMilliseconds() + 60000;
 	for (int iIndex = 0; iIndex < 4096; ++iIndex)
 	{
 		// 不同剩余时长落到同一小段绝对截止时间，而不是产生4096个时长桶。
 		const int64_t iRemainingMilliseconds = iTargetMilliseconds + iIndex % 100 - OI::Timer::SteadyMilliseconds();
-		vCalls.push_back(OI::Rpc::BindRpcCall(&stManager, INVALID_SID, 0, {}, nullptr, iRemainingMilliseconds, {}, {}));
+		vCalls.push_back(OI::Rpc::RpcCallManager::GetInstance().Bind(&stManager, INVALID_SID, 0, {}, nullptr, iRemainingMilliseconds, {}, {}));
 	}
-	const auto stDuring = OI::Rpc::GetRpcWaitStats();
+	const auto stDuring = OI::Rpc::RpcCallManager::GetInstance().WaitStats();
 	if (stDuring.iCalls != stBefore.iCalls + 4096 || stDuring.iBuckets > stBefore.iBuckets + 192)
 	{
 		++iBad;
 	}
-	vCalls.push_back(OI::Rpc::BindRpcCall(&stManager, INVALID_SID, 0, {}, nullptr, INT64_MAX, {}, {}));
+	vCalls.push_back(OI::Rpc::RpcCallManager::GetInstance().Bind(&stManager, INVALID_SID, 0, {}, nullptr, INT64_MAX, {}, {}));
 	for (const auto& iCall : vCalls)
 	{
-		OI::Rpc::AbandonRpcCall(iCall);
+		OI::Rpc::RpcCallManager::GetInstance().Abandon(iCall);
 	}
 	vCalls.clear();
 	struct Probe
@@ -410,7 +410,7 @@ OI::Coro::TaskResult<int> RpcPendingMgr::CheckDeadlineBuckets()
 	{
 		const int64_t iDelayMilliseconds = 50 + (31 - iIndex) * 23;
 		const int64_t iDeadlineMilliseconds = OI::Timer::SteadyMilliseconds() + iDelayMilliseconds;
-		vCalls.push_back(OI::Rpc::BindRpcCall(&stManager, INVALID_SID, 0, {}, &pProbe->vCodes[iIndex], iDelayMilliseconds, {},
+		vCalls.push_back(OI::Rpc::RpcCallManager::GetInstance().Bind(&stManager, INVALID_SID, 0, {}, &pProbe->vCodes[iIndex], iDelayMilliseconds, {},
 		    [pProbe, iIndex, iDeadlineMilliseconds]()
 		{
 			if (OI::Timer::SteadyMilliseconds() < iDeadlineMilliseconds || pProbe->vCodes[iIndex] != OI_ERR_TIMEOUT)
@@ -427,9 +427,9 @@ OI::Coro::TaskResult<int> RpcPendingMgr::CheckDeadlineBuckets()
 	}
 	for (const auto& iCall : vCalls)
 	{
-		OI::Rpc::AbandonRpcCall(iCall);
+		OI::Rpc::RpcCallManager::GetInstance().Abandon(iCall);
 	}
-	OI::Rpc::WaitRpcGuard(pGuard);
+	OI::Rpc::RpcCallManager::WaitGuard(pGuard);
 	if (pProbe->iCompleted.load() != 32 || pProbe->iBad.load() != 0 || !SameWaitStats(stBefore))
 	{
 		++iBad;
@@ -446,7 +446,7 @@ int RpcPendingMgr::CheckRpcSource(sid_t iSessionId)
 	auto& stManagerLocal = IpcClient::GetInstance();
 	const auto iResponseIdLocal = ::OI::Rpc::RpcProtoId<::OI::RpcData::HoldRes>::iValue;
 	int iDecoded = 0, iResumed = 0, iResultLocal = -99;
-	uint64_t iCall = ::OI::Rpc::BindRpcCall(&stManagerLocal, iSessionId, iResponseIdLocal, {}, &iResultLocal, 0, [pDecoded = &iDecoded](::OI::Base::BytesStream&, sid_t)
+	uint64_t iCall = ::OI::Rpc::RpcCallManager::GetInstance().Bind(&stManagerLocal, iSessionId, iResponseIdLocal, {}, &iResultLocal, 0, [pDecoded = &iDecoded](::OI::Base::BytesStream&, sid_t)
 	{
 		++*pDecoded;
 		return true;
@@ -454,14 +454,14 @@ int RpcPendingMgr::CheckRpcSource(sid_t iSessionId)
 	{
 		++iResumed;
 	});
-	auto fnDeliver = [&](::OI::Net::SessionManager* pSource, sid_t iSourceSession)
+	auto fnDeliver = [&](::OI::Rpc::ProtoSessionManager* pSource, sid_t iSourceSession)
 	{
 		::OI::Base::BytesStream stBody;
 		stBody << iCall;
-		::OI::Rpc::DeliverRpc(iResponseIdLocal, stBody, pSource, iSourceSession);
+		::OI::Rpc::RpcCallManager::GetInstance().Deliver(iResponseIdLocal, stBody, pSource, iSourceSession);
 	};
 	fnDeliver(&stManagerLocal, iSessionId + 100000);
-	fnDeliver(&::OI::Redis::RedisClient::GetInstance(), iSessionId);
+	fnDeliver(&::OI::Rpc::RouteManager::GetInstance(), iSessionId);
 	if (iDecoded || iResumed)
 	{
 		++iBadLocal;
@@ -473,12 +473,12 @@ int RpcPendingMgr::CheckRpcSource(sid_t iSessionId)
 	}
 	iResumed = 0;
 	const sid_t iFakeSessionId = iSessionId + 100000;
-	::OI::Rpc::BindRpcCall(&stManagerLocal, iFakeSessionId, iResponseIdLocal, {}, &iResultLocal, 0, {}, [&]()
+	::OI::Rpc::RpcCallManager::GetInstance().Bind(&stManagerLocal, iFakeSessionId, iResponseIdLocal, {}, &iResultLocal, 0, {}, [&]()
 	{
 		++iResumed;
 	});
-	::OI::Rpc::FailRpcCalls(&stManagerLocal, iFakeSessionId);
-	::OI::Rpc::FailRpcCalls(&stManagerLocal, iFakeSessionId);
+	::OI::Rpc::RpcCallManager::GetInstance().FailSession(&stManagerLocal, iFakeSessionId);
+	::OI::Rpc::RpcCallManager::GetInstance().FailSession(&stManagerLocal, iFakeSessionId);
 	if (iResultLocal != OI_ERR_CONNECT || iResumed != 1)
 	{
 		++iBadLocal;

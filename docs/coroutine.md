@@ -74,12 +74,13 @@ if (iRet == 0)
 
 ## 服务端
 
-`HandleRpc` 在 IO 线程按帧边界原地解包，请求对象和会话、在途额度租约交给根协程；协程 `co_await` 业务任务，再把回包写出去。请求和回包的包体都以 8 字节调用号开头，客户端按调用号认回包，所以回包不用按接受顺序排队，处理完就发。
+处理函数登记在接收这条连接的会话管理器上。`HandleRpc` 在 IO 线程按帧边界原地解包，请求对象和会话、在途额度租约交给根协程；协程 `co_await` 业务任务，再把回包写出去。请求和回包的包体都以 8 字节调用号开头，客户端按调用号认回包，所以回包不用按接受顺序排队，处理完就发。
 
 ```cpp
-HandleRpc([](const AllEchoReq& req, AllEchoRes& res) -> OI::Rpc::RpcTask {
-    res.stData = req.stData;
-    res.iCode = 1;
+HandleRpc([](const ::OI::RpcData::AllEchoReq& stRequest, ::OI::RpcData::AllEchoRes& stResponse) -> OI::Rpc::RpcTask
+{
+    stResponse.stData = stRequest.stData;
+    stResponse.iCode = 1;
     co_return 0;
 });
 ```
@@ -90,11 +91,11 @@ HandleRpc([](const AllEchoReq& req, AllEchoRes& res) -> OI::Rpc::RpcTask {
 
 ## 客户端
 
-连接建立后用 `StartTask` 拉起任务，任务里 `co_await RpcCall`。等待键是每次调用新分配的调用号，等待表按调用号分片加锁。回包、超时或发送失败只有一个会把这条协程 `Schedule` 回来。迟到的回包发现调用号已经取走，就丢掉，不会配给下一次调用。
+连接建立后用 `StartTask` 拉起任务，任务里 `co_await RpcCall`。等待键是每次调用新分配的调用号。等待表、调用号和在途额度都在单例 `RpcCallManager` 里，按调用号分片加锁。回包、超时或发送失败只有一个会把这条协程 `Schedule` 回来。迟到的回包发现调用号已经取走，就丢掉，不会配给下一次调用。
 
 回包在 IO 线程按帧边界解到等待器私有对象，协程恢复后成功才交给调用方的输出；解包失败返回 `OI_ERR_FAIL`，不覆盖输出。
 
-新接口的时长参数是 `OI::Timer::MS`，用 `OI::Timer::Milliseconds(500)`、`Seconds(10)`、`Minutes`、`Hours`、`Days` 构造，默认 `Seconds(180)`。超时统一使用带单位的时长类型，不再接受裸整数秒。由 200 毫秒周期按毫秒分桶扫描，因此 `MS` 不代表毫秒级唤醒精度。非正超时表示不设截止时间，断连仍会结束等待。`yield` 接受毫秒整数，也接受 `MS`。
+新接口的时长参数是 `OI::Timer::MS`，用 `OI::Timer::Milliseconds(500)`、`Seconds(10)`、`Minutes`、`Hours`、`Days` 构造，默认 `Seconds(180)`。超时统一使用带单位的时长类型，不再接受裸整数秒。由 `RpcCallManager::OnTickUpdate` 每跳扫描，分桶仍按 200 毫秒刻度，桶内按精确截止时间判断，因此 `MS` 不代表毫秒级唤醒精度；精度取决于时间轮一跳（`offset_ms`，正常 10–50 毫秒）。非正超时表示不设截止时间，断连仍会结束等待。`yield` 接受毫秒整数，也接受 `MS`。
 
 按服务名调用不传 `sessionid`，见 [服务注册](registry.md)，时序见 [单线程](sequence-diagram/single-thread/route.md) 和 [多线程](sequence-diagram/multi-thread/route.md)。`CallAny` 不带分区，`Call` 打一个分区，`CallAll` 打当前名单上的每一份，`CallMany` 打给出的分区号列表。调用时记下 `RpcDeadline`，查询、建连和回包共用这一份预算，发出去时只剩剩余毫秒。选实例时挂起等注册表回包，不占线程。`CallAll` 和 `CallMany` 先全部发出，再逐个等。这几个接口返回 `TaskResult`，调用时就开始选实例并发请求；同一个对象可以给多个协程等，请求只发一次，大家拿同一份结果。
 
@@ -173,7 +174,7 @@ catch (const std::exception& e) { /* 记录错误，任务已经全部结束 */ 
 
 RPC 登记成功后的组包、排队或发送异常，先通过原完成机制结束等待，再在 `co_await` 处重新抛出；即使超时/断连已取走等待项，也要等该回调完成，不能直接销毁等待对象。登记本身失败会在分片锁内回滚。
 
-RPC 超时桶按单调时钟绝对截止时间所在的 200 毫秒刻度分桶，扫描遇到未来刻度即停止，不遍历后面的长超时桶。当前刻度内逐项校验精确截止时间，避免乱序登记挡住已到期请求，不提前触发，也不额外增加一个取整周期；实际唤醒仍受扫描和调度延迟影响。回包、限流、发送失败、主动结束或断连都会通过链表索引直接删除超时记录，空桶也回收。`GetRpcWaitStats()` 提供等待项、超时记录和桶数量的诊断快照，逐分片加锁，有并发变化时不是全局同一时刻快照。
+RPC 超时由 `RpcCallManager::OnTickUpdate` 每跳扫描，计时用 `OI::Timer::SteadyMilliseconds`。多线程下扫描协程在工人线程，单线程在 poll 线程的运行队列。超时桶按单调时钟绝对截止时间所在的 200 毫秒刻度分桶，扫描遇到未来刻度即停止，不遍历后面的长超时桶。当前刻度内逐项校验精确截止时间，避免乱序登记挡住已到期请求，不提前触发，也不额外增加一个取整周期。超时精度取决于时间轮一跳（`offset_ms`，正常 10–50 毫秒），实际唤醒还受调度延迟影响。回包、限流、发送失败、主动结束或断连都会通过链表索引直接删除超时记录，空桶也回收。`RpcCallManager::WaitStats()` 提供等待项、超时记录和桶数量的诊断快照，逐分片加锁，有并发变化时不是全局同一时刻快照。
 
 ## 简化客户端调用
 
@@ -229,44 +230,58 @@ int32_t ret = co_await RpcCall(client, req, output);
 
 `GetRet()` 返回 `int32_t`。`GetRes()` 在成功时返回引用，结果对象必须仍然存活；也可 `auto res = result.GetRes()` 复制响应，或 `auto res = std::move(result).GetRes()` 转移响应。错误时访问响应抛出 `std::logic_error`，不会把默认响应伪装成成功。结果字段通过这两个方法访问。
 
-服务端推荐只接收 `(req, res)`，注册可直接写 `HandleRpc(fn)`，请求和响应类型从处理函数形参推出，回包类型和请求不配对时编译报错；处理函数用 `auto` 形参推不出类型时写 `HandleRpc<Req>`，响应类型自动配对。通知同理，`HandleNotify(fn)` 从 `(msg)` 或 `(const RpcContext&, msg)` 推出消息类型。需要连接信息时接收 `(const RpcContext&, req, res)`，上下文包含 `iToken`、`stManager` 引用和 `iSessionId`，仅在本次处理期间有效。协程处理函数返回 `OI::Rpc::RpcTask`，用 `co_return int32_t` 返回状态码；同步处理函数直接返回 `int32_t`。不再接受旧五参数回调或无返回值的 `OI::Coro::Task` 处理函数：
+服务端推荐只接收 `(stRequest, stResponse)`，在接收连接的管理器上写 `HandleRpc(fn)`，请求和响应类型从处理函数形参推出，回包类型和请求不配对时编译报错；处理函数用 `auto` 形参推不出类型时写 `HandleRpc<Req>`，响应类型自动配对。通知同理，`HandleNotify(fn)` 从 `(stMessage)` 或 `(const RpcContext&, stMessage)` 推出消息类型。需要连接信息时接收 `(const RpcContext&, stRequest, stResponse)`，上下文包含 `iToken`、`stManager` 引用和 `iSessionId`，仅在本次处理期间有效。协程处理函数返回 `OI::Rpc::RpcTask`，用 `co_return int32_t` 返回状态码；同步处理函数直接返回 `int32_t`。不再接受旧五参数回调或无返回值的 `OI::Coro::Task` 处理函数：
 
 ```cpp
-HandleRpc([](const HoldReq& req, HoldRes& res) -> OI::Rpc::RpcTask {
-    if (req.iDelayMilliseconds < 0) {
+HandleRpc([](const HoldReq& stRequest, HoldRes& stResponse) -> OI::Rpc::RpcTask
+{
+    if (stRequest.iDelayMilliseconds < 0)
+    {
         co_return 1001;
     }
-    res.iMark = req.iMark;
+    stResponse.iMark = stRequest.iMark;
     co_return 0;
 });
 ```
 
 `RpcTask` 是 `OI::Coro::TaskResult<int32_t>` 的别名，与无返回值 `OI::Coro::Task` 共用同一套帧、调度和完成门，不增加包装层。带返回值的任务也支持嵌套 `co_await`、`StartTask` 和异常传播。请求解码异常或处理函数异常返回 `OI_ERR_FAIL`，处理函数异常还会交给任务错误处理器。等待登记/发送时的本地 C++ 异常仍按原约定从 `co_await` 抛出。
 
-## 应用层推荐：命名函数 + 宏注册
+## 应用层推荐：命名函数 + 注册
 
-协议名与生成类型按 `NameReq / NameRes` 对应。宏隐藏框架名字空间和固定参数类型，业务函数名自由指定，注册处只注入函数名：
+协议名与生成类型按 `NameReq / NameRes` 对应。声明宏只保留 `OI_RPC_HANDLER`、`OI_RPC_SYNC_HANDLER`、`OI_RPC_CONTEXT_HANDLER`、`OI_NOTIFY_HANDLER`，从上下文拿组件用 `OI_RPC_SELF`。宏隐藏框架名字空间和固定参数类型，业务函数名自由指定。
 
 ```cpp
 static OI_RPC_HANDLER(Hold, HandleHold)
 {
-    if (stRequest.iDelayMilliseconds < 0) co_return 1001;
-    if (stRequest.iDelayMilliseconds > 0) co_await OI::Coro::yield(stRequest.iDelayMilliseconds);
+    if (stRequest.iDelayMilliseconds < 0)
+    {
+        co_return 1001;
+    }
+    if (stRequest.iDelayMilliseconds > 0)
+    {
+        co_await OI::Coro::yield(stRequest.iDelayMilliseconds);
+    }
     stResponse.iMark = stRequest.iMark;
     co_return 0;
 }
 
-// 组件初始化时注册一次。
-OI_RPC_BIND(Hold, HandleHold);
+int32_t IpcServer::Init()
+{
+    HandleRpc(HandleHold);
+    HandleRpc(&IpcServer::HandlePeerProbe);
+    return ::OI::Rpc::ProtoSessionManager::Init();
+}
 ```
 
 `OI_RPC_HANDLER(Name, Function)` 用于协程函数声明或定义，提供 `stRequest`（const 引用）和 `stResponse` 参数，函数体用 `co_return int32_t`。`OI_RPC_SYNC_HANDLER` 用于同步处理，函数体用 `return int32_t`。`OI_RPC_CONTEXT_HANDLER` 额外提供 `stContext`，按需访问 iToken、stManager 和 iSessionId。头文件声明可写 `OI_RPC_HANDLER(Hold, HandleHold);`。宏本身不加 static，文件内部函数可自行加 static。
 
-`OI_RPC_BIND(Name, Function)` 使用请求关联的响应类型注册，不增加运行时包装层。也可传函数对象或 lambda。自由函数不需要对象。实例成员函数用 `OI_RPC_BIND_SELF(Name, Type, Member)`：处理时从 `stContext.stManager` 还原成 `Type` 再调用，不在注册时绑 `this`。函数体里要自己拿对象时用 `OI_RPC_SELF(Type)`。对象必须活到所有请求处理结束。原模板接口仍可直接使用，不按 NameReq/NameRes 命名的协议可用模板注册。
+注册是会话管理器的成员调用。在管理器自己的 `Init` 里写 `HandleRpc(fn)`、`HandleRpc(&类::成员)` 或 `HandleNotify(...)`。在别处写 `管理器.HandleRpc(fn)`，例如 `OI::Rpc::RouteManager::GetInstance().HandleRpc(HandleReverseHold)`。请求处理表是 `ProtoSessionManager` 的私有锁和 map，按管理器各存一份，对外是 `BindRpcHandler` / `FindRpcHandler`（实现在 `oi_rpc_session_manager.cpp`）。只有登记到接收该连接的那个管理器上才生效。
+
+`HandleRpc(fn)` 从形参推出请求和回包。形参是 `(stRequest, stResponse)` 或 `(const RpcContext&, stRequest, stResponse)`，回包类型和请求不配对时编译报错。自由函数或 lambda 直接传入。成员函数写 `HandleRpc(&IpcServer::HandlePeerProbe)`：登记时把当前管理器 `dynamic_cast` 成这个类，当前对象必须是该类或其派生，否则记日志并返回 `OI_ERR_INVALID_ARGUMENT`。该类还须继承 `ProtoSessionManager`，否则编译失败。带 `auto` 形参的泛型 lambda 推不出类型，写 `HandleRpc<Req>(fn)`；不按 NameReq/NameRes 命名的协议用 `HandleRpc<Req, Res>(fn)`，这两个重载收自由函数或 lambda。同一管理器重复登记同一协议号返回 `OI_ERR_EXIST` 并记日志，不覆盖。函数体里要自己拿对象时用 `OI_RPC_SELF(Type)`，它转换 `stContext.stManager`，类型必须对，对象要活过所有在途请求。
 
 ## 单向消息
 
-调用号 0 是单向消息：不登记等待、不回包。管理器上用 `Notify(sid, msg)`，这次请求的上下文上用 `stContext.Notify(msg)`，换一条会话用 `stContext.Notify(sid, msg)`。返回 `SendBytes` 的错误码，编码失败是 `OI_ERR_ENCODE`。UDP 先用 `OpenPeer(ip, port, sid)` 换成 sid，检查返回码后再使用输出。接收和 RPC 共用一张按协议号的处理表，一个协议号只注册一种：
+调用号 0 是单向消息：不登记等待、不回包。管理器上用 `Notify(sid, msg)`，这次请求的上下文上用 `stContext.Notify(msg)`，换一条会话用 `stContext.Notify(sid, msg)`。返回 `SendBytes` 的错误码，编码失败是 `OI_ERR_ENCODE`。UDP 先用 `OpenPeer(ip, port, sid)` 换成 sid，检查返回码后再使用输出。接收和 RPC 共用该管理器自己的协议号表，同一个协议号只登记一次：
 
 ```cpp
 static OI_NOTIFY_HANDLER(UdpNote, HandleNote)
@@ -274,10 +289,14 @@ static OI_NOTIFY_HANDLER(UdpNote, HandleNote)
     co_return stContext.Notify(stRequest);
 }
 
-OI_NOTIFY_BIND(UdpNote, HandleNote);
+int32_t IpcUdp::Init()
+{
+    HandleNotify(&IpcUdp::HandleNote);
+    return ::OI::Rpc::ProtoSessionManager::Init();
+}
 ```
 
-`OI_NOTIFY_HANDLER(Name, Function)` 提供 `stContext` 和 `stRequest`。成员函数用 `OI_NOTIFY_BIND_SELF(Name, Type, Member)`，规则与 `OI_RPC_BIND_SELF` 相同。生成器要求每条 rpc 都写 response。调用号为 0 时处理返回码不发回对端，服务端执行额度满时直接丢弃，不回 `OI_ERR_BUSY`。
+`OI_NOTIFY_HANDLER(Name, Function)` 提供 `stContext` 和 `stRequest`。自由函数或 lambda 在接收该连接的管理器上写 `HandleNotify(fn)`，成员函数写 `HandleNotify(&IpcUdp::HandleNote)`。形参是 `(stMessage)` 或 `(const RpcContext&, stMessage)`。成员函数的类检查、重复登记与 `HandleRpc` 相同。带 `auto` 形参写 `HandleNotify<Msg>(fn)`。生成器要求每条 rpc 都写 response。调用号为 0 时处理返回码不发回对端，服务端执行额度满时直接丢弃，不回 `OI_ERR_BUSY`。
 
 `ProtoMultiClientManager` 的 `NotifyPeer` 和 `NotifyAny` 复制消息并启动异步 RPC 任务，复用协议号和连接的暂存、重连路径，默认超时 180 秒。返回 `OI_OK` 只表示任务已启动，发送、回执或超时失败由任务错误处理器报告。接收端需使用带 RPC 适配的新版 `HandleNotify`：对非零调用号回传处理返回码，成功时附带默认构造的关联 response；执行额度满时返回 `OI_ERR_BUSY`。旧版只处理调用号 0 的接收端不会为包装通知回包，发送任务会等待到超时。
 
@@ -305,7 +324,7 @@ if ((co_await client.StartClient()) != OI_OK)
 
 不带输出的直连 RPC 请求等待对象只能 await 一次；重复、并发等待及等待已移走的对象会在修改句柄或提交之前抛出 `std::logic_error`。已提交的底层等待对象也不能再移动。输出引用版返回 TaskResult<int32_t>，同一任务可以重复/并发等待，但不重新发送。需要重新发送就重新创建调用。显式 sid 的重载始终固定会话，首次连接前也不排队；只有自动选会话的重载可以等待首次建连。
 
-服务端在创建处理协程之前检查 `[Rpc]` 的进程总量和每条会话额度：`max_inflight_count` 默认 65536，`max_inflight_bytes` 默认 67108864，`session_max_inflight_count` 默认 4096，`session_max_inflight_bytes` 默认 16777216。各项必须为正整数。字节统计收到的请求包体（含调用号），不等于整个进程 RSS；业务生成的响应、外部资源和网络输入缓冲另计。
+服务端在创建处理协程之前检查 `[Rpc]` 的进程总量和每条会话额度：`max_inflight_count` 默认 65536，`max_inflight_bytes` 默认 67108864，`session_max_inflight_count` 默认 4096，`session_max_inflight_bytes` 默认 16777216。这些配置仍在第一次用到时读取，非法配置让 `ProtoSessionManager::Init` 返回 `OI_ERR_INVALID_ARGUMENT`。各项必须为正整数。字节统计收到的请求包体（含调用号），不等于整个进程 RSS；业务生成的响应、外部资源和网络输入缓冲另计。
 
 超限立即回标准 `OI_ERR_BUSY`，不创建业务协程；错误回执无法发送时关闭会话。额度由原有根协程闭包中的可移动 RAII 对象持有，额度凭证不新增包装协程或单独堆分配；正常完成、业务异常、响应编码失败都自动归还。断连不提前释放仍在执行的业务额度，避免借助重连绕过进程限额。业务端收到 Busy 后自行决定退避，框架不自动重放写请求。
 
@@ -316,4 +335,4 @@ if ((co_await client.StartClient()) != OI_OK)
 
 直连客户端、显式 sid 调用及首次连接后的待发请求补发，均保留底层发送错误码：发送预算不足返回 `OI_ERR_BUSY`，会话不存在或已关闭返回 `OI_ERR_CONNECT`，不再用通用 FAIL 覆盖。BUSY 不关闭健康连接；应用可自行限流，框架不自动重放写请求。
 
-客户端回包解码失败保持原输出，返回 `OI_ERR_FAIL`，并记录 `rpc failure stage=decode_response`、调用号、协议号和原始解析异常。sid 来自该回包实际匹配的等待项，不重新查询可能已经重连的管理器；协程 token 在挂起时读取（框架任务按其状态锁读取，其他协程类型记为 0）。内部 BindRpcCall 回包回调现接收 `(BytesStream&, sid_t)`，应用层 RpcCall 接口不变。
+客户端回包解码失败保持原输出，返回 `OI_ERR_FAIL`，并记录 `rpc failure stage=decode_response`、调用号、协议号和原始解析异常。sid 来自该回包实际匹配的等待项，不重新查询可能已经重连的管理器；协程 token 在挂起时读取（框架任务按其状态锁读取，其他协程类型记为 0）。内部 `RpcCallManager::Bind` 的回包回调接收 `(BytesStream&, sid_t)`，应用层 RpcCall 接口不变。

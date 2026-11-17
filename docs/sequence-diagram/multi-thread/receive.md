@@ -11,7 +11,7 @@ sequenceDiagram
     participant Tcp as TCP_Channel
     participant Os as NetOs
     participant Sess as ProtoSession
-    participant Rpc as DeliverRpc
+    participant Rpc as RpcCallManager
     participant Wait as 等待表
     participant Worker as 工人
 
@@ -27,7 +27,7 @@ sequenceDiagram
         else 头非法
             Sess->>Sess: PassiveClose
         else 头合法
-            Sess->>Rpc: DeliverRpc 协议号和包体
+            Sess->>Rpc: Deliver 协议号和包体
             alt 是登记过的回包号
                 Rpc->>Rpc: 读出调用号
                 alt 等待表里还有这一号且协议号相符

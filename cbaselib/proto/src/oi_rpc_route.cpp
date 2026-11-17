@@ -3,7 +3,7 @@
 #include "oi_thread.h"
 #include "oi_log.h"
 #include "oi_tcp_channel.h"
-#include "oi_registry.h"
+#include "oi_registry_client.h"
 #include "oi_timer_manager.h"
 #include "oi_duration.h"
 #include <tuple>

@@ -205,9 +205,9 @@ OI::Coro::TaskResult<int> RpcAwaitMgr::CheckAwaitOwnership()
 	}
 	// 固定不存在的 sid 不得进入首次连接队列，也不能等待超时。
 	static DeferredRpcProbe stPinnedClient;
-	const auto stBefore = OI::Rpc::GetRpcWaitStats();
+	const auto stBefore = OI::Rpc::RpcCallManager::GetInstance().WaitStats();
 	auto stPinned = co_await OI::Rpc::RpcCall(stPinnedClient, sid_t(12345), stRequest, OI::Timer::Seconds(30));
-	const auto stAfter = OI::Rpc::GetRpcWaitStats();
+	const auto stAfter = OI::Rpc::RpcCallManager::GetInstance().WaitStats();
 	if (stPinned.GetRet() != OI_ERR_CONNECT || stAfter.iCalls != stBefore.iCalls)
 	{
 		++iBad;

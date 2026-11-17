@@ -133,6 +133,30 @@ function(oi_add_framework_programs runtime_dir)
 		target_link_libraries(registry PUBLIC -Wl,--start-group ${BASE_LIBS} -Wl,--end-group)
 	endif()
 	set_target_properties(logd registry PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${runtime_dir}")
+
+	# Windows 的 MySQL 客户端是动态库，exe 启动时要在同目录找到它；MySQL 的还依赖同一发行包 bin 里的 OpenSSL。
+	if(WIN32 AND OI_ENABLE_MYSQL)
+		get_filename_component(oi_mysql_library_dir "${OI_MYSQL_LIBRARY}" DIRECTORY)
+		find_file(OI_MYSQL_RUNTIME NAMES libmysql.dll libmariadb.dll
+			HINTS "${oi_mysql_library_dir}" "${oi_mysql_library_dir}/../bin" NO_DEFAULT_PATH)
+		if(NOT OI_MYSQL_RUNTIME)
+			message(FATAL_ERROR "OI_ENABLE_MYSQL on Windows requires the client DLL next to ${OI_MYSQL_LIBRARY}")
+		endif()
+		file(GLOB oi_mysql_ssl_runtimes
+			"${oi_mysql_library_dir}/libssl-*.dll" "${oi_mysql_library_dir}/libcrypto-*.dll"
+			"${oi_mysql_library_dir}/../bin/libssl-*.dll" "${oi_mysql_library_dir}/../bin/libcrypto-*.dll")
+		get_property(oi_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+		if(oi_multi_config)
+			set(oi_mysql_runtime_dir "${runtime_dir}/$<CONFIG>")
+		else()
+			set(oi_mysql_runtime_dir "${runtime_dir}")
+		endif()
+		add_custom_target(oi_mysql_runtime
+			COMMAND ${CMAKE_COMMAND} -E make_directory "${oi_mysql_runtime_dir}"
+			COMMAND ${CMAKE_COMMAND} -E copy_if_different "${OI_MYSQL_RUNTIME}" ${oi_mysql_ssl_runtimes} "${oi_mysql_runtime_dir}")
+		add_dependencies(db_static oi_mysql_runtime)
+		add_dependencies(db_m_static oi_mysql_runtime)
+	endif()
 endfunction()
 
 add_subdirectory("${BASE_LIB_PATH}/base" EXCLUDE_FROM_ALL)

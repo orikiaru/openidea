@@ -9,8 +9,8 @@
 | 用途 | 声明 |
 | --- | --- |
 | 引入基础库 | [`framework.cmake`](../../framework.cmake#L1) |
-| 单线程库名 | [`BASE_LIBS`](../../framework.cmake#L38) |
-| 多线程库名 | [`BASE_M_LIBS`](../../framework.cmake#L37) |
+| 单线程库名 | [`BASE_LIBS`](../../framework.cmake#L47) |
+| 多线程库名 | [`BASE_M_LIBS`](../../framework.cmake#L46) |
 
 ```cmake
 include("${CMAKE_CURRENT_SOURCE_DIR}/openidea/framework.cmake")

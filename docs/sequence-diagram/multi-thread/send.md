@@ -20,11 +20,7 @@ sequenceDiagram
 
     Worker->>Biz: resume
     Biz->>Call: co_await RpcCall
-    opt 进程里第一次
-        Call->>Poll: CallOnLoop ArmRpcSweep
-        Poll->>Poll: AddTimer 200ms 扫描
-    end
-    Call->>Wait: BindRpcCall 分配调用号并放入分片
+    Call->>Wait: RpcCallManager::Bind 分配调用号并放入分片
     Call->>Call: 包体 = 调用号 + Req
     Call->>Call: EncodePbFrame 协议号 长度 包体
     Call->>Sess: SendBytes
@@ -33,7 +29,7 @@ sequenceDiagram
         Sess->>Poll: AllowSend 变成 PostOp MOD
         Poll->>Tcp: uv_poll_start 打开写
     else 没有这条会话
-        Call->>Wait: WakeRpcCall 结果 OI_ERR_FAIL
+        Call->>Wait: RpcCallManager::Wake 结果 OI_ERR_FAIL
     end
     alt 回包或失败已经先到
         Call-->>Biz: 不挂起，工人上 await_resume

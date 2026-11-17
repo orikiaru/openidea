@@ -2,13 +2,24 @@
 
 #include "oi_bytes_stream.h"
 #include "oi_session_manager.h"
+#include "oi_singleton.h"
+#include "oi_lock.h"
+#include <array>
+#include <atomic>
+#include <coroutine>
+#include <exception>
 #include <functional>
+#include <list>
+#include <map>
 #include <memory>
+#include <optional>
+#include <unordered_map>
 #include <utility>
 namespace OI
 {
 namespace Rpc
 {
+class ProtoSessionManager;
 
 // 请求的提交目标。应用客户端和路由连接共用发送/撤销逻辑，连接不再冒充管理器。
 struct RpcSender
@@ -59,7 +70,6 @@ struct RpcDelivery
 	std::shared_ptr<void> pOwner;
 };
 using RpcHandleFn = std::function<void(::OI::Base::BytesStream&, RpcDelivery&&)>;
-void BindRpcHandler(proto_type_t iId, RpcHandleFn fnHandle);
 
 // 分片逐个取快照，用于诊断；有并发请求时不保证全局同一时刻的一致性。
 struct RpcWaitStats
@@ -75,17 +85,117 @@ struct RpcWaitStats
 	// 有在途调用的会话数。
 	size_t iSessionBuckets = 0;
 };
-// 各分片在途调用的合计。并发请求下不是同一时刻的快照。
-RpcWaitStats GetRpcWaitStats();
-// 读取进程级 RPC 在途限制；非法配置令模块初始化失败。
-int32_t InitRpcAdmission();
+// 进程里所有在途 RPC 调用的等待表和请求额度。调用号按分片加锁，任意线程可调；超时由每跳的 OnTickUpdate 扫。
+class RpcCallManager
+{
+	DECLARE_SINGLETON(RpcCallManager)
 
-// 连接还没好，这条调用先别发。调用号已经不在表里返回 false。
-bool MarkRpcAwaitingConnect(uint64_t iCallId);
-// 连接好了，把调用记到这个会话上，并清掉等待连接标记。调用号不在返回 false。
-bool ClaimRpcSend(uint64_t iCallId, sid_t iSessionId);
-// 回包按调用号交给 RpcCall 登记的等待项，请求交给该协议号的处理协程。都没有就把包丢掉。
-bool DeliverRpc(proto_type_t iId, ::OI::Base::BytesStream& stBody, ::OI::Net::SessionManager* pManager, sid_t iSessionId);
+  public:
+	// 返回调用号。回包、超时或 Wake 三者只有一个会触发 decode/resume。
+	// 回包回调携带实际匹配的 sid，日志不得用可能已重连的当前会话替代来源。
+	uint64_t Bind(::OI::Net::SessionManager* pManager,
+	    sid_t iSessionId,
+	    proto_type_t iResponseId,
+	    std::coroutine_handle<> stHandle,
+	    int32_t* pResult,
+	    int64_t iTimeoutMilliseconds,
+	    std::function<bool(::OI::Base::BytesStream&, sid_t)> fnDecode,
+	    std::function<void()> fnResume,
+	    std::shared_ptr<std::atomic<int32_t>> pGuard = {},
+	    RpcSender* pSender = nullptr);
+	bool Wake(uint64_t iCallId, int32_t iCode, ::OI::Base::BytesStream* pBody);
+	// 取走等待项且不调用完成回调。已经在回调里的，等 WaitGuard 归零。
+	void Abandon(uint64_t iCallId);
+	static void WaitGuard(const std::shared_ptr<std::atomic<int32_t>>& pGuard);
+	// 这条会话上的在途调用全部回 OI_ERR_CONNECT。
+	void FailSession(::OI::Net::SessionManager* pManager, sid_t iSessionId);
+	// 连接还没好，这条调用先别发。调用号已经不在表里返回 false。
+	bool MarkAwaitingConnect(uint64_t iCallId);
+	// 连接好了，把调用记到这个会话上，并清掉等待连接标记。调用号不在返回 false。
+	bool ClaimSend(uint64_t iCallId, sid_t iSessionId);
+	// 回包按调用号交给 Bind 登记的等待项，请求交给 pManager 自己处理表里该协议号的处理协程。都没有就把包丢掉。
+	bool Deliver(proto_type_t iId, ::OI::Base::BytesStream& stBody, ProtoSessionManager* pManager, sid_t iSessionId);
+	// 各分片在途调用的合计。并发请求下不是同一时刻的快照。
+	RpcWaitStats WaitStats();
+	// 读取进程级 RPC 在途限制；非法配置令模块初始化失败。
+	int32_t InitAdmission();
+	// RpcAdmissionLease 析构时归还额度。
+	void ReleaseAdmission(const RpcAdmissionLease& stLease);
+	// 记录失败阶段和调用关联信息；日志失败不能打断原来的错误回执/收尾。
+	static void ReportError(::OI::Coro::Token iToken, uint64_t iCallId, sid_t iSessionId,
+	    proto_type_t iProtocolId, const char* pStage, std::exception_ptr stError) noexcept;
+	// 每跳扫一遍到期的调用。
+	::OI::Coro::Task OnTickUpdate(uint64_t iNowMilliseconds);
+
+  private:
+	RpcCallManager() = default;
+
+	using SessionKey = std::pair<::OI::Net::SessionManager*, sid_t>;
+	struct Expire
+	{
+		int64_t iDeadlineMilliseconds;
+		uint64_t iCallId;
+	};
+	using ExpireBuckets = std::map<int64_t, std::list<Expire>>;
+	struct Slot
+	{
+		RpcSender* pSender = nullptr;
+		::OI::Net::SessionManager* pManager;
+		sid_t iSessionId;
+		std::coroutine_handle<> stHandle;
+		int32_t* pResult;
+		std::function<bool(::OI::Base::BytesStream&, sid_t)> fnDecode;
+		std::function<void()> fnResume;
+		proto_type_t iResponseId;
+		uint64_t iCallId;
+		bool bAwaitingConnect;
+		bool bGuardArmed = false;
+		std::shared_ptr<std::atomic<int32_t>> pGuard;
+		bool bHasExpiry = false;
+		bool bIndexed = false;
+		std::list<uint64_t>::iterator stSessionIndex;
+		ExpireBuckets::iterator stExpiryBucket;
+		std::list<Expire>::iterator stExpiry;
+	};
+	// 按绝对截止时间所在刻度分桶；槽持索引，完成时 O(1) 摘除节点。
+	struct Shard
+	{
+		::OI::Thread::Mutex stMutex;
+		std::unordered_map<uint64_t, Slot> mSlots;
+		ExpireBuckets mExpire;
+		std::map<SessionKey, std::list<uint64_t>> mSessions;
+	};
+	struct AdmissionUsage
+	{
+		size_t iCount = 0;
+		size_t iBytes = 0;
+	};
+	static constexpr uint64_t kShardCount = 64;
+	static constexpr int64_t kBucketMilliseconds = 200;
+
+	Shard& ShardOf(uint64_t iCallId);
+	static std::list<uint64_t>::iterator AddSessionIndex(Shard& stShard, const Slot& stSlot, sid_t iSessionId);
+	static void RemoveSessionIndex(Shard& stShard, Slot& stSlot);
+	static void ArmGuard(Slot& stSlot);
+	static void RemoveExpiry(Shard& stShard, Slot& stSlot);
+	static void FinishSlot(Slot& stSlot, int32_t iCode, ::OI::Base::BytesStream* pBody);
+	bool TakeSlot(uint64_t iCallId, Slot& stOutput, ::OI::Net::SessionManager* pManager = nullptr, sid_t iSessionId = 0, proto_type_t iResponseId = 0);
+	void Sweep();
+	// 调用者持 m_stAdmissionLocker。第一次用到时读配置，非法抛 invalid_argument，下次再读。
+	void LoadAdmissionLocked();
+	std::optional<RpcAdmissionLease> AcquireAdmission(::OI::Net::SessionManager* pManager, sid_t iSessionId, size_t iBytes);
+
+	std::array<Shard, kShardCount> m_vShards;
+	std::atomic<uint64_t> m_iCallSeq{1};
+	::OI::Thread::Mutex m_stAdmissionLocker;
+	bool m_bAdmissionLoaded = false;
+	AdmissionUsage m_stAdmissionTotal;
+	std::map<SessionKey, AdmissionUsage> m_mAdmissionSessions;
+	size_t m_iMaxCount = 65536;
+	size_t m_iMaxBytes = 64 * 1024 * 1024;
+	size_t m_iSessionMaxCount = 4096;
+	size_t m_iSessionMaxBytes = 16 * 1024 * 1024;
+};
 
 }
 }

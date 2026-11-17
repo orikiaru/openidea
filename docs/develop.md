@@ -10,14 +10,14 @@
 - 读改存写成 Load、Handle、Save 三步，不拆成一堆在外面填结构的辅助函数。输出参数直接传进去让被调方填。
 - 配置在 mgr 的 `Init` 里读一次，存成成员。实体处理时由 mgr 按参数传进去，实体不自己读配置。
 - 要换会话类型就重写 `CloneSession`，不在通道外面挂一层自己的解析。
-- 框架缺能力就在 cbaselib 里补，补齐回归、跑全量，不在业务里绕。例：UDP 用 `type = "udp"` 的 `UDP_Channel`，见 [基础库](cbaselib.md) 的 net 段；单向消息用 `RpcNotify` 和 `OI_NOTIFY_BIND`，见 [协程](coroutine.md) 的单向消息；成员函数注册用 `OI_RPC_BIND_SELF`。
+- 框架缺能力就在 cbaselib 里补，补齐回归、跑全量，不在业务里绕。例：UDP 用 `type = "udp"` 的 `UDP_Channel`，见 [基础库](cbaselib.md) 的 net 段；单向消息用 `RpcNotify` 和 `HandleNotify`，见 [协程](coroutine.md) 的单向消息。处理函数登记在接收该连接的管理器上：自己的 `Init` 里 `HandleRpc(&类::成员)`，别处写 `管理器.HandleRpc(&类::成员)`。
 
 ## 2. 模块和代码组织
 
 - 一个 module 对应一个进程，业务代码都放在 `modules/<进程>/inc`、`src` 里。几个进程共用的东西放 `modules/include`，或者单独建目录，不放仓库根下的 `src`。
 - 基础库用 `framework.cmake`。本仓库根 `CMakeLists.txt` 和外部工程都 include 它，不在业务工程里再列一遍库。进程模块仍由调用方自己的 `module.proto` 生成后加入，见 [模块](module.md)。按功能接到具体接口见 [基础库](cbaselib.md) 的接入表。
 - 进程在 `protoconfig/module.proto` 里声明，由 `proto_tool` 生成骨架，见 [模块](module.md)。生成器只在文件不存在时才写，生成出来以后就在上面改。
-- 不写类外的 C 风格函数，不用全局状态。处理函数是组件的成员，用 `OI_RPC_BIND_SELF` / `OI_NOTIFY_BIND_SELF` 注册，不用友元把类外函数放进类里。
+- 不写类外的 C 风格函数，不用全局状态。处理函数是组件的成员，在这个管理器上 `HandleRpc(&类::成员)` / `HandleNotify(&类::成员)` 注册，不用友元把类外函数放进类里。请求处理表是 `ProtoSessionManager` 的私有锁和 map，按管理器各存一份，对外是 `BindRpcHandler` / `FindRpcHandler`。成员函数所属的类必须继承 `ProtoSessionManager`；登记时当前管理器必须是该类本身或其派生，否则返回 `OI_ERR_INVALID_ARGUMENT`。
 - 状态放成员，不用静态变量，也不堆临时变量。
 - 不在会话或 mgr 里随手 `StartTask`。任务由框架入口拉起（`HandleRpc`、`HandleNotify`、测试 mgr 的 `Start`），见 [协程](coroutine.md)。
 

@@ -146,6 +146,12 @@ def apply_port_offset(offset):
     GAME_PORTS = tuple(port + offset for port in GAME_PORTS)
 
 
+def copy_runtime_dlls(bin_dir, work):
+    # Windows 只在 exe 同目录找依赖库，例如 MySQL 客户端和它带的 OpenSSL。
+    for dll in Path(bin_dir).glob("*.dll"):
+        shutil.copy2(dll, work / dll.name)
+
+
 def shift_ports(text):
     def shifted(match):
         port = int(match.group(2))
@@ -341,6 +347,7 @@ def run(case, args):
         work, cfg, logs = root / "bin", root / "config", root / "logs"
         for p in (work, cfg, logs):
             p.mkdir()
+        copy_runtime_dlls(args.bin_dir, work)
         for name in ("logd", "ipcclient", "ipcserver", "redisserver") + (("registry",) if case in ("registry", "registry-static") or mode in ("hold", "multi") else ()):
             shutil.copy2(args.bin_dir / (name + SUFFIX), work / (name + SUFFIX))
             text = shift_ports((REPO / "deploy/config" / (name + ".toml")).read_text(encoding="utf-8-sig"))
@@ -991,6 +998,7 @@ def run_web(args):
         work, cfg = root / "bin", root / "config"
         work.mkdir()
         cfg.mkdir()
+        copy_runtime_dlls(args.bin_dir, work)
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", 0))
             port = probe.getsockname()[1]

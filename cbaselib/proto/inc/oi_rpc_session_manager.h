@@ -8,6 +8,7 @@
 #include <unordered_map>
 #include <vector>
 #include "oi_session_manager.h"
+#include "oi_lock.h"
 #include "oi_rpc_session.h"
 #include "oi_rpc_call.h"
 #include "oi_rpc_peer.h"
@@ -28,8 +29,6 @@ struct ServiceRoute;
 template <typename Msg>
 int32_t RpcNotify(::OI::Net::SessionManager& stManager, sid_t iSessionId, const Msg& stMessage);
 
-void FailRpcCalls(::OI::Net::SessionManager* pManager, sid_t iSessionId);
-
 enum CLIENT_CONNECT_MODE
 {
 	CLIENT_CONNECT_DIRECT = 0,
@@ -38,29 +37,36 @@ enum CLIENT_CONNECT_MODE
 
 class ProtoSessionManager : public ::OI::Net::SessionManager
 {
+	// 只有本管理器会话上进来的请求查这张表。登记后不改不删，查到的指针出锁后仍可用。
+	::OI::Thread::Mutex m_stHandlerLocker;
+	std::map<proto_type_t, RpcHandleFn> m_mHandlers;
 	void OnSessionClosed(sid_t iSessionId) override final
 	{
-		FailRpcCalls(this, iSessionId);
+		RpcCallManager::GetInstance().FailSession(this, iSessionId);
 	}
 
   public:
+	// 同一管理器上一个协议号只能登记一次，重复返回 OI_ERR_EXIST，原处理函数不变。
+	int32_t BindRpcHandler(proto_type_t iId, RpcHandleFn fnHandle);
+	// 没登记返回空。
+	const RpcHandleFn* FindRpcHandler(proto_type_t iId);
+	// 以下定义在 oi_rpc_coro.h。处理函数形参是 (req, res) 或 (const RpcContext&, req, res)，类型从形参推出；
+	// 也可传本管理器类的成员函数，如 HandleRpc(&IpcServer::HandlePeerProbe)。带 auto 形参的写 HandleRpc<Req>。
+	template <typename F>
+	int32_t HandleRpc(F fnFunction);
+	template <typename Req, typename F>
+	int32_t HandleRpc(F fnFunction);
+	template <typename Req, typename Res, typename F>
+	int32_t HandleRpc(F fnFunction);
+	// 单向消息，形参是 (msg) 或 (const RpcContext&, msg)，同样可传成员函数。
+	template <typename F>
+	int32_t HandleNotify(F fnFunction);
+	template <typename Msg, typename F>
+	int32_t HandleNotify(F fnFunction);
 	ProtoSessionManager()
 	{
 	}
-	int32_t Init() override
-	{
-		const int32_t iThreadStatus = ::OI::Net::Poll::GetInstance().CheckThreadAccess("ProtoSessionManager::Init");
-		if (iThreadStatus != OI_OK)
-		{
-			return iThreadStatus;
-		}
-		const int32_t iAdmissionStatus = InitRpcAdmission();
-		if (iAdmissionStatus != OI_OK)
-		{
-			return iAdmissionStatus;
-		}
-		return ::OI::Net::SessionManager::Init();
-	}
+	int32_t Init() override;
 	const std::string GetIDString() override
 	{
 		return "ProtoSessionManager";
@@ -75,14 +81,8 @@ class ProtoSessionManager : public ::OI::Net::SessionManager
 	{
 		return new ProtoSession(this);
 	} //自定制回话类型
-	void OnAddSession(::OI::Net::Session* pSession) override
-	{
-		LOG_INFO("ProtoSessionManager::OnAddSession sid=%d", pSession->GetSessionID());
-	}
-	void OnDelSession(const ::OI::Net::Session* pSession) override
-	{
-		LOG_INFO("ProtoSessionManager::OnDelSession sid=%d, error=%d", pSession->GetSessionID(), pSession->GetError());
-	}
+	void OnAddSession(::OI::Net::Session* pSession) override;
+	void OnDelSession(const ::OI::Net::Session* pSession) override;
 	// 固定地址连接建好后纳入本管理器的会话表，只在 poll 线程调用。
 	sid_t AdoptPeer(net_socket_t iSocketLocal, const std::shared_ptr<PeerConnection>& pConnection);
 	// 固定地址连接连上、连接前暂存的请求补发之后回调，在 poll 线程。默认什么都不做。
@@ -121,17 +121,7 @@ class ProtoClientManager : public ProtoSessionManager
 	}
 
   public:
-	ProtoClientManager()
-	    : m_iSessionId(INVALID_SID), m_bConnected(false), m_iConnectMode(CLIENT_CONNECT_DIRECT), m_iPendingBytes(0), m_bEverConnected(false)
-	{
-		m_stSender = {this, this, [](void* pContext, uint64_t iCallId, const ::OI::Base::Bytes& stData)
-		{
-			static_cast<ProtoClientManager*>(pContext)->SubmitCall(iCallId, stData);
-		}, [](void* pContext, uint64_t iCallId)
-		{
-			static_cast<ProtoClientManager*>(pContext)->DropPendingCall(iCallId);
-		}};
-	}
+	ProtoClientManager();
 	RpcSender& Sender()
 	{
 		return m_stSender;
@@ -147,57 +137,10 @@ class ProtoClientManager : public ProtoSessionManager
 	virtual void OnClientConnect(::OI::Net::Session* pSession) = 0;
 	virtual void OnClientDisconnect(const ::OI::Net::Session* pSession) = 0;
 
-	sid_t ConnectedSid()
-	{
-		if (::OI::Net::Poll::GetInstance().CheckThreadAccess("ProtoClientManager::ConnectedSid()") != OI_OK)
-		{
-			return INVALID_SID;
-		}
-		::OI::Thread::SpinLockGuard stLock(m_stClientLocker);
-		return m_bConnected ? m_iSessionId : INVALID_SID;
-	}
-	bool IsConnect()
-	{
-		if (::OI::Net::Poll::GetInstance().CheckThreadAccess("ProtoClientManager::IsConnect()") != OI_OK)
-		{
-			return false;
-		}
-		::OI::Thread::SpinLockGuard stLock(m_stClientLocker);
-		return m_bConnected;
-	}
-	void OnAddSession(::OI::Net::Session* pSession) override
-	{
-		sid_t iSessionIdLocal = INVALID_SID;
-		{
-			::OI::Thread::SpinLockGuard stLock(m_stClientLocker);
-			m_bConnected = true;
-			m_iSessionId = pSession->GetSessionID();
-			iSessionIdLocal = m_iSessionId;
-			// 与新发送共用客户端锁；先发送连接前缓存，不能让新数据抢占它的额度。
-			// 待发总量已受发送额度限制；若连接恰好关闭，保留尚未接纳的部分等重连。
-			while (!m_vPending.empty())
-			{
-				if (SendBytes(iSessionIdLocal, m_vPending.front()) != OI_OK)
-				{
-					break;
-				}
-				m_iPendingBytes -= m_vPending.front().Size();
-				m_vPending.pop_front();
-			}
-			m_bEverConnected = true;
-		}
-		FlushHeldCalls(iSessionIdLocal);
-		OnClientConnect(pSession);
-	}
-	void OnConnectFailed() override
-	{
-		if (!AutoReconnect() || bServiceDown || sEndpoint.empty())
-		{
-			FailHeldCalls();
-			return;
-		}
-		Reconnect();
-	}
+	sid_t ConnectedSid();
+	bool IsConnect();
+	void OnAddSession(::OI::Net::Session* pSession) override;
+	void OnConnectFailed() override;
 	void OnServiceDown() override
 	{
 		FailHeldCalls();
@@ -206,41 +149,15 @@ class ProtoClientManager : public ProtoSessionManager
 	{
 		return IsConnect() ? OI_ERR_FAIL : OI_ERR_CONNECT;
 	}
-	void SetPendingCallLimits(size_t iCount, size_t iBytes)
-	{
-		::OI::Thread::SpinLockGuard stLock(m_stClientLocker);
-		m_iHeldMaxCount = iCount;
-		m_iHeldMaxBytes = iBytes;
-	}
-	std::pair<size_t, size_t> PendingCallLimits()
-	{
-		::OI::Thread::SpinLockGuard stLock(m_stClientLocker);
-		return {m_iHeldMaxCount, m_iHeldMaxBytes};
-	}
+	void SetPendingCallLimits(size_t iCount, size_t iBytes);
+	std::pair<size_t, size_t> PendingCallLimits();
 	bool TryPendCall(uint64_t iCallId, const ::OI::Base::Bytes& stData) override;
 	// 提交时在客户端锁内决定排队或绑定当前 sid，随后发送，避免构造等待对象时截取旧 sid。
 	virtual void SubmitCall(uint64_t iCallId, const ::OI::Base::Bytes& stData);
 	void DropPendingCall(uint64_t iCallId) override;
 	void FlushHeldCalls(sid_t iSessionId);
 	void FailHeldCalls();
-	void OnDelSession(const ::OI::Net::Session* pSession) override
-	{
-		bool bReconnect = false;
-		{
-			::OI::Thread::SpinLockGuard stLock(m_stClientLocker);
-			if (m_iSessionId == pSession->GetSessionID())
-			{
-				m_iSessionId = INVALID_SID;
-				m_bConnected = false;
-				bReconnect = AutoReconnect() && !bServiceDown && !sEndpoint.empty() && pSession->GetEndpoint() == sEndpoint;
-			}
-		}
-		OnClientDisconnect(pSession);
-		if (bReconnect)
-		{
-			Reconnect(0);
-		}
-	}
+	void OnDelSession(const ::OI::Net::Session* pSession) override;
 	// 输出引用版自动配对响应类型，返回 TaskResult<int32_t>；输出须活到任务结束。
 	// Call(req,res) 使用当前连接；CallAny 按名字选路；Call(zone,req,res) 指定分区。
 	template <typename Req>
