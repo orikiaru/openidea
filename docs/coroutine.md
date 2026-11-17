@@ -77,7 +77,7 @@ if (iRet == 0)
 `HandleRpc` 在 IO 线程按帧边界原地解包，请求对象和会话、在途额度租约交给根协程；协程 `co_await` 业务任务，再把回包写出去。请求和回包的包体都以 8 字节调用号开头，客户端按调用号认回包，所以回包不用按接受顺序排队，处理完就发。
 
 ```cpp
-HandleRpc<AllEchoReq>([](const AllEchoReq& req, AllEchoRes& res) -> OI::Rpc::RpcTask {
+HandleRpc([](const AllEchoReq& req, AllEchoRes& res) -> OI::Rpc::RpcTask {
     res.stData = req.stData;
     res.iCode = 1;
     co_return 0;
@@ -229,10 +229,10 @@ int32_t ret = co_await RpcCall(client, req, output);
 
 `GetRet()` 返回 `int32_t`。`GetRes()` 在成功时返回引用，结果对象必须仍然存活；也可 `auto res = result.GetRes()` 复制响应，或 `auto res = std::move(result).GetRes()` 转移响应。错误时访问响应抛出 `std::logic_error`，不会把默认响应伪装成成功。结果字段通过这两个方法访问。
 
-服务端推荐只接收 `(req, res)`，注册只写请求类型 `HandleRpc<Req>`，响应类型自动配对。需要连接信息时接收 `(const RpcContext&, req, res)`，上下文包含 `iToken`、`stManager` 引用和 `iSessionId`，仅在本次处理期间有效。协程处理函数返回 `OI::Rpc::RpcTask`，用 `co_return int32_t` 返回状态码；同步处理函数直接返回 `int32_t`。不再接受旧五参数回调或无返回值的 `OI::Coro::Task` 处理函数：
+服务端推荐只接收 `(req, res)`，注册可直接写 `HandleRpc(fn)`，请求和响应类型从处理函数形参推出，回包类型和请求不配对时编译报错；处理函数用 `auto` 形参推不出类型时写 `HandleRpc<Req>`，响应类型自动配对。通知同理，`HandleNotify(fn)` 从 `(msg)` 或 `(const RpcContext&, msg)` 推出消息类型。需要连接信息时接收 `(const RpcContext&, req, res)`，上下文包含 `iToken`、`stManager` 引用和 `iSessionId`，仅在本次处理期间有效。协程处理函数返回 `OI::Rpc::RpcTask`，用 `co_return int32_t` 返回状态码；同步处理函数直接返回 `int32_t`。不再接受旧五参数回调或无返回值的 `OI::Coro::Task` 处理函数：
 
 ```cpp
-HandleRpc<HoldReq>([](const HoldReq& req, HoldRes& res) -> OI::Rpc::RpcTask {
+HandleRpc([](const HoldReq& req, HoldRes& res) -> OI::Rpc::RpcTask {
     if (req.iDelayMilliseconds < 0) {
         co_return 1001;
     }

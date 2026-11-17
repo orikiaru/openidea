@@ -240,6 +240,80 @@ void HandleRpc(F fnFunction)
 	HandleRpc<Req, typename RpcProtoId<Req>::Response>(std::move(fnFunction));
 }
 
+// 从处理函数的形参取出请求和回包类型。只认非模板的 lambda、函数和函数指针；带 auto 形参的写 HandleRpc<Req>。
+template <typename T>
+struct RpcCallableArgs
+{
+};
+template <typename C, typename R, typename... A>
+struct RpcCallableArgs<R (C::*)(A...) const>
+{
+	using Args = std::tuple<A...>;
+};
+template <typename C, typename R, typename... A>
+struct RpcCallableArgs<R (C::*)(A...)>
+{
+	using Args = std::tuple<A...>;
+};
+template <typename R, typename... A>
+struct RpcCallableArgs<R (*)(A...)>
+{
+	using Args = std::tuple<A...>;
+};
+template <typename F, typename = void>
+struct RpcHandlerArgs : RpcCallableArgs<F>
+{
+};
+template <typename F>
+struct RpcHandlerArgs<F, std::void_t<decltype(&F::operator())>> : RpcCallableArgs<decltype(&F::operator())>
+{
+};
+
+template <typename Args>
+struct RpcHandlerTypes
+{
+};
+template <typename Req, typename Res>
+struct RpcHandlerTypes<std::tuple<Req, Res>>
+{
+	using Request = std::remove_cvref_t<Req>;
+	using Response = std::remove_cvref_t<Res>;
+};
+template <typename Ctx, typename Req, typename Res>
+    requires std::is_same_v<std::remove_cvref_t<Ctx>, RpcContext>
+struct RpcHandlerTypes<std::tuple<Ctx, Req, Res>>
+{
+	using Request = std::remove_cvref_t<Req>;
+	using Response = std::remove_cvref_t<Res>;
+};
+
+template <typename Args>
+struct RpcNotifyTypes
+{
+};
+template <typename Msg>
+struct RpcNotifyTypes<std::tuple<Msg>>
+{
+	using Message = std::remove_cvref_t<Msg>;
+};
+template <typename Ctx, typename Msg>
+    requires std::is_same_v<std::remove_cvref_t<Ctx>, RpcContext>
+struct RpcNotifyTypes<std::tuple<Ctx, Msg>>
+{
+	using Message = std::remove_cvref_t<Msg>;
+};
+
+// 处理函数是 (req, res) 或 (const RpcContext&, req, res)，请求类型直接从形参取，注册处不用再写。
+template <typename F>
+    requires requires { typename RpcHandlerTypes<typename RpcHandlerArgs<F>::Args>::Request; }
+void HandleRpc(F fnFunction)
+{
+	using Types = RpcHandlerTypes<typename RpcHandlerArgs<F>::Args>;
+	static_assert(std::is_same_v<typename Types::Response, typename RpcProtoId<typename Types::Request>::Response>,
+	    "RPC handler response type does not match the request");
+	HandleRpc<typename Types::Request, typename Types::Response>(std::move(fnFunction));
+}
+
 // 调用号 0 不回包；RPC 包装通知复用默认响应与错误处理。
 template <typename Msg, typename F>
 void HandleNotify(F fnFunction)
@@ -257,6 +331,14 @@ void HandleNotify(F fnFunction)
 		}
 	};
 	BindRpcHandler(RpcProtoId<Msg>::iValue, MakeRpcHandler<Msg, Response>(std::move(fnAdapter), RpcProtoId<Msg>::iValue));
+}
+
+// 处理函数是 (msg) 或 (const RpcContext&, msg)，消息类型直接从形参取。
+template <typename F>
+    requires requires { typename RpcNotifyTypes<typename RpcHandlerArgs<F>::Args>::Message; }
+void HandleNotify(F fnFunction)
+{
+	HandleNotify<typename RpcNotifyTypes<typename RpcHandlerArgs<F>::Args>::Message>(std::move(fnFunction));
 }
 
 // 发一条单向消息，不等回包。返回 SendBytesResult 的错误码，编码失败是 OI_ERR_ENCODE。

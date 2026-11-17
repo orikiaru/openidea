@@ -205,15 +205,15 @@ int32_t RegistryServer::Init()
 		fflush(stderr);
 		return OI_ERR_INVALID_ARGUMENT;
 	}
-	::OI::Rpc::HandleRpc<::OI::RpcData::RegRegister>([](const ::OI::Rpc::RpcContext& stContext, ::OI::RpcData::RegRegister& stRequest, ::OI::RpcData::RegRegisterRes&)
+	::OI::Rpc::HandleRpc([](const ::OI::Rpc::RpcContext& stContext, ::OI::RpcData::RegRegister& stRequest, ::OI::RpcData::RegRegisterRes&)
 	{
 		return RegistryServer::GetInstance().Register(stContext.iSessionId, stRequest);
 	});
-	::OI::Rpc::HandleRpc<::OI::RpcData::RegHeartbeat>([](const ::OI::Rpc::RpcContext& stContext, ::OI::RpcData::RegHeartbeat& stRequest, ::OI::RpcData::RegHeartbeatRes&)
+	::OI::Rpc::HandleRpc([](const ::OI::Rpc::RpcContext& stContext, ::OI::RpcData::RegHeartbeat& stRequest, ::OI::RpcData::RegHeartbeatRes&)
 	{
 		return RegistryServer::GetInstance().Refresh(stContext.iSessionId, stRequest);
 	});
-	::OI::Rpc::HandleRpc<::OI::RpcData::RegPull>([](::OI::RpcData::RegPull& stRequest, ::OI::RpcData::RegPullRes& stResponse)
+	::OI::Rpc::HandleRpc([](::OI::RpcData::RegPull& stRequest, ::OI::RpcData::RegPullRes& stResponse)
 	{
 		return RegistryServer::GetInstance().Pull(stRequest, stResponse);
 	});
