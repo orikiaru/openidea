@@ -22,6 +22,7 @@ enum OI_ERR
 	OI_ERR_SOCKET = -14,       // 创建套接字失败，系统原因保留在日志
 	OI_ERR_BIND = -15,         // 绑定本地地址失败
 	OI_ERR_LISTEN = -16,       // 启动监听失败
+	OI_ERR_CANCELLED = -17,
 };
 
 #define NET_PARSER_ERR_BEGIN (-10000)

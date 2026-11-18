@@ -12,6 +12,8 @@ add_executable(webclient ${MODULE_SRCS})
 target_include_directories(webclient
 	PUBLIC
 		inc
+	PRIVATE
+		../webtest/inc
 )
 
 # 客户端挂在 poll 的 libuv 上，单线程就能 co_await。多线程模块改链 http_m_static。

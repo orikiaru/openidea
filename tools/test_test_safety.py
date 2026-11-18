@@ -560,7 +560,10 @@ class RegressionCleanupTests(unittest.TestCase):
              patch.object(self.runner, "record_process"), \
              patch.object(self.runner.socket, "create_connection"), \
              patch.object(self.runner, "IPv6HttpServer", return_value=fixture), \
+             patch.object(self.runner, "stream_response_fixture", return_value=contextlib.nullcontext(12345)), \
              patch.object(self.runner, "check_web_transport"), \
+             patch.object(self.runner, "check_web_json"), \
+             patch.object(self.runner, "check_web_stream_length"), \
              patch.object(self.runner.threading, "Thread") as thread, \
              patch.object(self.runner.subprocess, "run", side_effect=run_client), \
              contextlib.redirect_stdout(io.StringIO()):

@@ -10,6 +10,8 @@ import sys
 if not __debug__:
     raise SystemExit("run_regressions.py requires assertions; do not use Python -O")
 import datetime
+import email.policy
+from email.parser import BytesParser
 import os
 from pathlib import Path
 import re
@@ -1124,6 +1126,8 @@ class HostHttpRegression(http.server.BaseHTTPRequestHandler):
                     data["gap"] += 1
                 body = json.dumps(data).encode()
         self.send_response(status)
+        if path.path in ("/query", "/json", "/rpcjson"):
+            self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -1140,7 +1144,35 @@ class IPv6HttpServer(http.server.ThreadingHTTPServer):
     daemon_threads = True
 
 
-def check_web_transport(port):
+def wait_web_marker(output_path, marker):
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        output = output_path.read_text(encoding="utf-8", errors="replace")
+        if marker in output:
+            return
+        time.sleep(0.02)
+    raise RuntimeError("missing web marker %r: %s" % (marker, output))
+
+
+def check_multipart_response(content_type, body):
+    assert content_type and "\r" not in content_type and "\n" not in content_type, "invalid multipart content type"
+    message = BytesParser(policy=email.policy.default).parsebytes(
+        b"MIME-Version: 1.0\r\nContent-Type: " + content_type.encode("ascii") + b"\r\n\r\n" + body)
+    assert message.get_content_type() == "multipart/form-data" and message.get_boundary(), "missing multipart boundary"
+    assert message.is_multipart() and not message.defects, "invalid multipart body"
+    parts = list(message.iter_parts())
+    assert len(parts) == 2, "expected exactly two multipart parts"
+    expected = (("field", None, None, b"value"),
+                ("file", "a.bin", "application/octet-stream", b"\x00\xffxyz"))
+    for part, (name, filename, part_type, payload) in zip(parts, expected):
+        assert not part.defects and part.get_content_disposition() == "form-data", "invalid part disposition"
+        assert part.get_param("name", header="content-disposition") == name, "wrong part name or order"
+        assert part.get_filename() == filename, "wrong filename"
+        assert (part.get_content_type() if part.get("Content-Type") else None) == part_type, "wrong part content type"
+        assert part.get_payload(decode=True) == payload, "wrong part bytes"
+
+
+def check_web_transport(port, output_path):
     def read_response(reader):
         status = reader.readline().decode("ascii").strip()
         headers = {}
@@ -1179,6 +1211,25 @@ def check_web_transport(port):
             assert headers.get("connection", "").lower() == "close", headers
             assert reader.read(1) == b"", "connection did not close after response"
 
+    multipart = (b"--boundary42\r\nContent-Disposition: form-data; name=\"field\"\r\n\r\nvalue\r\n"
+                 b"--boundary42\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.bin\"\r\n"
+                 b"Content-Type: application/octet-stream\r\n\r\n\x00\xffxyz\r\n--boundary42--\r\n")
+    with socket.create_connection(("127.0.0.1", port), timeout=10) as conn:
+        with conn.makefile("rb") as reader:
+            conn.sendall(("POST /test-multipart HTTP/1.1\r\nHost: localhost\r\n"
+                          "Content-Type: multipart/form-data; boundary=boundary42\r\nContent-Length: %d\r\n\r\n" % len(multipart)).encode())
+            for offset in range(0, len(multipart), 3):
+                conn.sendall(multipart[offset:offset + 3])
+                time.sleep(0.001)
+            status, headers, body = read_response(reader)
+            assert status.startswith("HTTP/1.1 200 "), (status, headers, body)
+            check_multipart_response(headers.get("content-type"), body)
+
+    with socket.create_connection(("127.0.0.1", port), timeout=10) as abandoned:
+        abandoned.sendall(b"POST /test-stream HTTP/1.1\r\nHost: localhost\r\nX-Disconnect-Check: 1\r\nTransfer-Encoding: chunked\r\n\r\n4\r\n\x00\x01\x02\x03\r\n")
+        wait_web_marker(output_path, "web disconnect sink created")
+    wait_web_marker(output_path, "web disconnect sink released cancelled=1")
+
     with contextlib.closing(http.client.HTTPConnection("127.0.0.1", port, timeout=5)) as client:
         client.request("GET", "/query")
         result = client.getresponse()
@@ -1189,6 +1240,85 @@ def check_web_transport(port):
         result = client.getresponse()
         assert result.status == 200 and result.read() == b"ok"
     print("web transport PASS: segmented headers, keep-alive, chunked binary, close, error isolation", flush=True)
+
+
+def check_web_json(port):
+    with contextlib.closing(http.client.HTTPConnection("127.0.0.1", port, timeout=5)) as client:
+        for body, content_type in ((b'{"gap":"bad"}', "application/json"),
+                                   (b'{', "application/json"),
+                                   (b'{} trailing', "application/json"),
+                                   (b'{}', "text/plain")):
+            client.request("POST", "/rpcjson", body, {"Content-Type": content_type})
+            response = client.getresponse()
+            response.read()
+            assert response.status == 400, (body, content_type, response.status)
+        payload = json.dumps({"i64": 9007199254740993, "msg": "a\u0000雪", "nums": [0, 7],
+                              "child": {"n": 8, "s": "nested"}, "gap": 2},
+                             ensure_ascii=False).encode("utf-8")
+        for content_type in ("application/json; charset=utf-8", "application/example+json"):
+            client.request("POST", "/rpcjson", payload, {"Content-Type": content_type})
+            response = client.getresponse()
+            body = response.read()
+            assert response.status == 200, (content_type, response.status, body)
+            decoded = json.loads(body)
+            assert decoded["i64"] == 9007199254740993 and decoded["msg"] == "a\u0000雪", decoded
+            assert decoded["nums"] == [0, 7] and decoded["gap"] == 3, decoded
+            assert decoded["child"]["n"] == 8 and decoded["child"]["s"] == "nested", decoded
+    print("web JSON media and malformed input PASS", flush=True)
+
+
+class StreamResponseFixture(socketserver.BaseRequestHandler):
+    def handle(self):
+        request = b""
+        while b"\r\n\r\n" not in request:
+            part = self.request.recv(4096)
+            if not part:
+                return
+            request += part
+        path = request.split(b" ", 2)[1]
+        size = 9 * 1024 * 1024
+        header = b"HTTP/1.1 200 OK\r\nConnection: close\r\n"
+        if path == b"/length":
+            header += ("Content-Length: %d\r\n" % size).encode()
+        elif path != b"/eof":
+            raise RuntimeError("unexpected stream fixture path")
+        self.request.sendall(header + b"\r\n")
+        pattern = bytes(range(251))
+        payload = (pattern * (size // len(pattern) + 1))[:size]
+        self.request.sendall(payload)
+        self.request.shutdown(socket.SHUT_WR)
+
+
+@contextlib.contextmanager
+def stream_response_fixture():
+    with socketserver.ThreadingTCPServer(("127.0.0.1", 0), StreamResponseFixture) as fixture:
+        fixture.daemon_threads = True
+        thread = threading.Thread(target=fixture.serve_forever, kwargs={"poll_interval": 0.05})
+        thread.start()
+        try:
+            yield fixture.server_address[1]
+        finally:
+            fixture.shutdown()
+            thread.join(timeout=3)
+            if thread.is_alive():
+                raise RuntimeError("stream response fixture failed to stop")
+
+
+def check_web_stream_length(port):
+    size = 9 * 1024 * 1024
+    block = bytes(range(251))
+    payload = (block * (size // len(block) + 1))[:size]
+    with socket.create_connection(("127.0.0.1", port), timeout=180) as conn:
+        conn.sendall(("POST /test-stream HTTP/1.0\r\nHost: localhost\r\nContent-Length: %d\r\n\r\n" % size).encode())
+        conn.sendall(payload)
+        response = http.client.HTTPResponse(conn)
+        response.begin()
+        body = response.read()
+        assert (response.version == 10 and response.status == 200 and not response.chunked and
+                response.getheader("Transfer-Encoding") is None and response.getheader("Content-Length") is None and
+                response.getheader("Connection", "").lower() == "close" and body == payload), (
+                    response.version, response.status, response.getheaders(), len(body))
+    print("web stream Content-Length upload HTTP/1.0 EOF response PASS", flush=True)
 
 
 def run_web(args):
@@ -1208,8 +1338,9 @@ def run_web(args):
             text = shift_ports((REPO / "deploy/config" / (name + ".toml")).read_text(encoding="utf-8-sig"))
             text = text.replace("port = 18080", "port = " + str(port))
             if name == "webserver":
-                text += "\necho_cookies = true\n"
+                text += "\necho_cookies = true\nform_regression = true\nmax_receive_buffer_bytes = 131072\nmax_frame_bytes = 131064\n"
             if name == "webclient":
+                text = replace(text, "timeout_ms", "120000")
                 text += "\ncheck_echo_header = true\n"
             (cfg / (name + ".toml")).write_text(text, encoding="utf-8")
         with (root / "server.out").open("w") as output:
@@ -1224,7 +1355,10 @@ def run_web(args):
                         if server.poll() is not None or time.monotonic() > deadline:
                             raise RuntimeError((root / "server.out").read_text())
                         time.sleep(0.05)
-                client = subprocess.run([str(work / ("webclient" + SUFFIX))], cwd=work, capture_output=True, text=True, timeout=30)
+                with stream_response_fixture() as fixture_port:
+                    with (cfg / "webclient.toml").open("a", encoding="utf-8") as config:
+                        config.write("stream_fixture_port = %d\n" % fixture_port)
+                    client = subprocess.run([str(work / ("webclient" + SUFFIX))], cwd=work, capture_output=True, text=True, timeout=180)
                 print(client.stdout, flush=True)
                 assert client.returncode == 0 and "rpc=1 bin=1 bad=0" in client.stdout, client.stderr
                 with IPv6HttpServer(("::1", 0), HostHttpRegression) as fixture:
@@ -1255,7 +1389,9 @@ def run_web(args):
                         thread.join(timeout=3)
                         if thread.is_alive():
                             raise RuntimeError("IPv6 HTTP fixture failed to stop")
-                check_web_transport(port)
+                check_web_transport(port, root / "server.out")
+                check_web_json(port)
+                check_web_stream_length(port)
                 print("web PASS", flush=True)
             finally:
                 cleanup_owned([server], [output], root, args, "web", primary=sys.exc_info()[1])

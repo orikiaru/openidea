@@ -1,4 +1,5 @@
 #include "oi_http_server.h"
+#include "oi_http_stream.h"
 #include "oi_http_header_fields.h"
 #include "oi_net_session.h"
 #include "oi_timer_manager.h"
@@ -106,10 +107,13 @@ bool ParseTarget(View sTarget, Request& stRequest)
 
 struct RequestFrame
 {
+	Detail::StreamBody stStream;
+	size_t iStreamConsumed = 0;
 	Request stRequest;
 	size_t iRemaining = 0;
 	size_t iScan = 0;
 	bool bHeaders = false;
+	bool bHttp10 = false;
 	bool bClose = false;
 	bool bChunked = false;
 	bool bTrailer = false;
@@ -127,6 +131,7 @@ struct RequestFrame
 		}
 		stRequest.sMethod = sLine.substr(0, iSpace);
 		const auto sVersion = sLine.substr(iLast + 1);
+		bHttp10 = sVersion == "HTTP/1.0";
 		if (sVersion != "HTTP/1.1" && sVersion != "HTTP/1.0")
 		{
 			return 400;
@@ -206,12 +211,13 @@ struct RequestFrame
 		{
 			return 400;
 		}
-		return iRemaining > kBodyLimit ? 413 : 0;
+		return 0;
 	}
 
 	// 0 等后续字节，200 为完整请求，其余为应返回的 HTTP 错误。
-	int Read(Base::Bytes& stBytes)
+	int Read(Base::Bytes& stBytes, const ServerManager& stServer)
 	{
+		iStreamConsumed = 0;
 		auto fnView = [&stBytes]()
 		{
 			return View(stBytes.Begin(), stBytes.Size());
@@ -231,6 +237,36 @@ struct RequestFrame
 			}
 			stBytes.Erase(0, iEnd + 4);
 			bHeaders = true;
+			if (auto fnFactory = stServer.FindSink(stRequest))
+			{
+				try
+				{
+					stRequest.pBodySink = fnFactory(stRequest);
+				}
+				catch (...)
+				{
+					return 500;
+				}
+				if (!stRequest.pBodySink)
+				{
+					return 400;
+				}
+				stStream.Begin(bChunked, true, iRemaining);
+			}
+			else if (iRemaining > kBodyLimit)
+			{
+				return 413;
+			}
+		}
+		if (stRequest.pBodySink)
+		{
+			const int32_t iRet = stStream.Consume(fnView(), *stRequest.pBodySink, iStreamConsumed);
+			stBytes.Erase(0, iStreamConsumed);
+			if (iRet == OI_ERR_BUSY)
+			{
+				return iRet;
+			}
+			return iRet == OI_OK ? (stStream.Done() ? 200 : 0) : 400;
 		}
 		if (!bChunked)
 		{
@@ -329,12 +365,71 @@ class ServerSession final : public Net::NetSession
 	Net::Poll::QueuedCall m_stCloseCall;
 	uint64_t m_iFrameGeneration = 0;
 	bool m_bPartial = false;
+	Detail::StreamPump m_stPump;
+	std::shared_ptr<BodySource> m_pSource;
+	bool m_bStreamClose = false;
+	bool m_bStreamChunked = true;
+	bool m_bReadPaused = false;
+	uint64_t m_iProgress = 0;
+
+	bool StartPump()
+	{
+		return m_stPump.Start(this, [](uv_timer_t* pTimer)
+		{
+			static_cast<ServerSession*>(pTimer->data)->PumpStream();
+		});
+	}
+
+	void PumpStream()
+	{
+		const auto iNow = uv_now(Net::Poll::GetInstance().Loop());
+		if (iNow - m_iProgress >= m_stServer.IncompleteFrameTimeoutMilliseconds())
+		{
+			m_stServer.CloseSession(GetSessionID());
+			return;
+		}
+		if (m_pSource)
+		{
+			bool bDone = false, bProgress = false;
+			if (Detail::StreamBody::Produce(*this, *m_pSource, bDone, bProgress, m_bStreamChunked) != OI_OK)
+			{
+				m_stServer.CloseSession(GetSessionID());
+				return;
+			}
+			if (bProgress)
+			{
+				m_iProgress = iNow;
+			}
+			if (bDone)
+			{
+				m_pSource.reset();
+				m_stPump.Stop();
+				m_bCloseAfter = m_bStreamClose;
+				m_bBusy = false;
+				if (m_bCloseAfter && PendingSendBytes() == 0)
+				{
+					m_stServer.CloseSession(GetSessionID());
+					return;
+				}
+				OnDataIn();
+			}
+		}
+		else if (m_stFrame.stRequest.pBodySink && m_stFrame.stRequest.pBodySink->IsCancelled())
+		{
+			m_stServer.CloseSession(GetSessionID());
+		}
+		else if (m_bReadPaused)
+		{
+			OnDataIn();
+		}
+	}
 
 	struct Completion
 	{
 		std::weak_ptr<ServerSession*> pBinding;
 		Response stReply;
 		bool bClose;
+		bool bHttp10;
 		Net::Poll::QueuedCall stCall;
 	};
 	// 仅 poll 线程解引用；断连立即失效，迟到的完成回调不持有会话。
@@ -363,20 +458,34 @@ class ServerSession final : public Net::NetSession
 		Net::Poll::GetInstance().PostOnLoop(pPending->stCall);
 	}
 
-	void Reply(const Response& stReply, bool bClose)
+	void Reply(const Response& stReply, bool bClose, bool bHttp10)
 	{
 		if (IsClosed())
 		{
 			return;
 		}
 		const bool bValid = stReply.iStatus >= 200 && stReply.iStatus <= 599 &&
-		                    HeaderFields::ValidForSend(stReply);
+		                    HeaderFields::ValidForSend(stReply) && (!stReply.pBodySource || stReply.sBody.empty());
 		const int iStatusLocal = bValid ? stReply.iStatus : 500;
-		std::string sWire = "HTTP/1.1 " + std::to_string(iStatusLocal) + " " + Reason(iStatusLocal) + "\r\n";
+		std::string sWire = std::string(bHttp10 ? "HTTP/1.0 " : "HTTP/1.1 ") + std::to_string(iStatusLocal) + " " + Reason(iStatusLocal) + "\r\n";
 		const bool bBody = iStatusLocal != 204 && iStatusLocal != 304;
 		if (bBody)
 		{
-			sWire += "Content-Length: " + std::to_string(bValid ? stReply.sBody.size() : 0) + "\r\n";
+			if (bValid && stReply.pBodySource)
+			{
+				if (bHttp10)
+				{
+					bClose = true;
+				}
+				else
+				{
+					sWire += "Transfer-Encoding: chunked\r\n";
+				}
+			}
+			else
+			{
+				sWire += "Content-Length: " + std::to_string(bValid ? stReply.sBody.size() : 0) + "\r\n";
+			}
 			if (bValid && !stReply.sContentType.empty())
 			{
 				sWire += "Content-Type: " + stReply.sContentType + "\r\n";
@@ -394,10 +503,22 @@ class ServerSession final : public Net::NetSession
 		{
 			sWire += stReply.sBody;
 		}
-		m_bCloseAfter = bClose;
+		m_pSource = bBody && bValid ? stReply.pBodySource : nullptr;
+		m_bStreamClose = bClose;
+		m_bStreamChunked = !bHttp10;
+		m_bCloseAfter = bClose && !m_pSource;
 		if (SendResult(Base::Bytes(sWire.data(), sWire.size())) != OI_OK)
 		{
 			m_stServer.CloseSession(GetSessionID());
+			return;
+		}
+		if (m_pSource)
+		{
+			m_iProgress = uv_now(Net::Poll::GetInstance().Loop());
+			if (!StartPump())
+			{
+				m_stServer.CloseSession(GetSessionID());
+			}
 			return;
 		}
 		m_bBusy = false;
@@ -413,7 +534,35 @@ class ServerSession final : public Net::NetSession
 		{
 			return;
 		}
-		const int iCode = m_stFrame.Read(stInputBuffer);
+		const bool bHadSink = bool(m_stFrame.stRequest.pBodySink);
+		const int iCode = m_stFrame.Read(stInputBuffer, m_stServer);
+		if (m_stFrame.stRequest.pBodySink)
+		{
+			m_bPartial = false;
+			if (!bHadSink || m_stFrame.iStreamConsumed)
+			{
+				m_iProgress = uv_now(Net::Poll::GetInstance().Loop());
+			}
+			if (iCode == OI_ERR_BUSY && !m_bReadPaused)
+			{
+				m_bReadPaused = true;
+				ForbidRead();
+			}
+			else if (iCode != OI_ERR_BUSY && m_bReadPaused)
+			{
+				m_bReadPaused = false;
+				AllowRead();
+			}
+			if (iCode == OI_ERR_BUSY || iCode == 0)
+			{
+				if (!StartPump())
+				{
+					m_stServer.CloseSession(GetSessionID());
+				}
+				return;
+			}
+			m_stPump.Stop();
+		}
 		if (iCode == 0)
 		{
 			if (!m_bPartial)
@@ -444,7 +593,7 @@ class ServerSession final : public Net::NetSession
 		{
 			Response stReply;
 			stReply.iStatus = iCode;
-			Reply(stReply, true);
+			Reply(stReply, true, m_stFrame.bHttp10);
 			return;
 		}
 		m_bBusy = true;
@@ -455,12 +604,13 @@ class ServerSession final : public Net::NetSession
 		pDone->stReply.sContentType = "text/plain";
 		pDone->pBinding = m_pBinding;
 		pDone->bClose = m_stFrame.bClose;
+		pDone->bHttp10 = m_stFrame.bHttp10;
 		pDone->stCall.fnCall = [](void* pArg)
 		{
 			std::unique_ptr<Completion> pFinished(static_cast<Completion*>(pArg));
 			if (auto pBinding = pFinished->pBinding.lock())
 			{
-				(*pBinding)->Reply(pFinished->stReply, pFinished->bClose);
+				(*pBinding)->Reply(pFinished->stReply, pFinished->bClose, pFinished->bHttp10);
 			}
 		};
 		pDone->stCall.pArgument = pDone.get();
@@ -493,6 +643,15 @@ class ServerSession final : public Net::NetSession
 	void OnClose() override
 	{
 		m_pBinding.reset();
+		m_stPump.Stop();
+		if (m_pSource)
+		{
+			m_pSource->Cancel();
+		}
+		if (m_stFrame.stRequest.pBodySink)
+		{
+			m_stFrame.stRequest.pBodySink->Cancel();
+		}
 		NetSession::OnClose();
 	}
 
@@ -506,7 +665,7 @@ class ServerSession final : public Net::NetSession
 
 void ServerManager::Register(std::string sMethod, std::string sPath, Handler fnHandler)
 {
-	if (!fnHandler || !m_mRoutes.emplace(std::make_pair(std::move(sMethod), std::move(sPath)), fnHandler).second)
+	if (!fnHandler || !m_mRoutes.emplace(std::make_pair(std::move(sMethod), std::move(sPath)), Route{fnHandler, nullptr}).second)
 	{
 		throw std::logic_error("invalid or duplicate HTTP route");
 	}
@@ -515,7 +674,21 @@ void ServerManager::Register(std::string sMethod, std::string sPath, Handler fnH
 ServerManager::Handler ServerManager::Find(const Request& stRequest) const
 {
 	auto it = m_mRoutes.find({stRequest.sMethod, stRequest.sPath});
-	return it == m_mRoutes.end() ? nullptr : it->second;
+	return it == m_mRoutes.end() ? nullptr : it->second.fnHandler;
+}
+
+void ServerManager::RegisterStream(std::string sMethod, std::string sPath, SinkFactory fnFactory, Handler fnHandler)
+{
+	if (!fnFactory || !fnHandler || !m_mRoutes.emplace(std::make_pair(std::move(sMethod), std::move(sPath)), Route{fnHandler, fnFactory}).second)
+	{
+		throw std::logic_error("invalid or duplicate HTTP streaming route");
+	}
+}
+
+ServerManager::SinkFactory ServerManager::FindSink(const Request& stRequest) const
+{
+	auto it = m_mRoutes.find({stRequest.sMethod, stRequest.sPath});
+	return it == m_mRoutes.end() ? nullptr : it->second.fnFactory;
 }
 
 Net::Session* ServerManager::CloneSession()

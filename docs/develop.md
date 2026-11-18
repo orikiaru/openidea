@@ -42,6 +42,8 @@
 
 - 按负载选：逻辑简单的转发服务端用单线程；要接 Windows UI 的客户端用多线程。在模块的 CMake 里用 `_SINGLE_THREAD_` 切换，见 [基础库](cbaselib.md)。
 
+流式 source/sink 回调不得阻塞 poll 或保存借用的 span/视图；返回 `OI_ERR_BUSY` 表示当前片未消费，重试前不得产生消费副作用。验证流取消与释放的回归须有旧状态取消并释放的可观察证据；新请求健康另行验证。普通协程 handler 可在客户端断开后完成并丢弃响应。
+
 ## 7. 测试
 
 - 框架的新能力要在 `ipcclient` / `ipcserver` 里加回归：一个 Mgr，一个 `[Test]` 开关，`run_regressions.py` 里加用例和标记断言，并收进 `--case all`，同步改 [测试规程](testing.md) 里的用例数和端口。例：`udp` 用例对应 `UdpMgr` 和 `IpcUdp`。

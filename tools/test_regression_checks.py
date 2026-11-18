@@ -8,6 +8,11 @@ from unittest.mock import MagicMock, patch
 import run_regressions as regression
 
 
+MULTIPART_BODY = (b"--fixture\r\nContent-Disposition: form-data; name=\"field\"\r\n\r\nvalue\r\n"
+                  b"--fixture\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.bin\"\r\n"
+                  b"Content-Type: application/octet-stream\r\n\r\n\x00\xffxyz\r\n--fixture--\r\n")
+
+
 class RegressionChecksTest(unittest.TestCase):
     def test_disk_failure_requires_exit_and_write_error(self):
         for operation in ("fwrite", "fflush", "injected fwrite ENOSPC"):
@@ -69,26 +74,50 @@ class RegressionChecksTest(unittest.TestCase):
                 regression.preflight_ports("echo")
             probe.assert_called_once()
 
+    def test_multipart_oracle_rejects_concatenated_values(self):
+        with self.assertRaises(AssertionError):
+            regression.check_multipart_response("multipart/form-data; boundary=fixture", b"value\x00\xffxyz")
+
+    def test_multipart_oracle_accepts_exact_parts(self):
+        regression.check_multipart_response("multipart/form-data; boundary=fixture", MULTIPART_BODY)
+        for invalid in (MULTIPART_BODY.replace(b'name="field"', b'name="wrong"'),
+                        MULTIPART_BODY.replace(b'filename="a.bin"', b'filename="other"'),
+                        MULTIPART_BODY.replace(b'application/octet-stream', b'text/plain'),
+                        MULTIPART_BODY.replace(b'\x00\xffxyz', b'\x00\xffxyZ'),
+                        MULTIPART_BODY.replace(b'--fixture--\r\n', b'')):
+            with self.subTest(invalid=invalid), self.assertRaises(AssertionError):
+                regression.check_multipart_response("multipart/form-data; boundary=fixture", invalid)
+
     def test_web_transport_runs_all_stages(self):
         payload = bytes(range(256)) * 2048
         ok = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"
         binary = (b"HTTP/1.1 200 OK\r\nContent-Length: 524288\r\n"
                   b"Connection: close\r\n\r\n" + payload)
-        keep, chunk = MagicMock(), MagicMock()
+        keep, chunk, multipart, abandoned = MagicMock(), MagicMock(), MagicMock(), MagicMock()
         keep.__enter__.return_value = keep
         chunk.__enter__.return_value = chunk
+        multipart.__enter__.return_value = multipart
+        abandoned.__enter__.return_value = abandoned
         keep.makefile.return_value = io.BytesIO(ok + ok)
         chunk.makefile.return_value = io.BytesIO(binary)
+        multipart.makefile.return_value = io.BytesIO(
+            b"HTTP/1.1 200 OK\r\nContent-Type: multipart/form-data; boundary=fixture\r\n" +
+            ("Content-Length: %d\r\n\r\n" % len(MULTIPART_BODY)).encode() + MULTIPART_BODY)
         bad, healthy = MagicMock(), MagicMock()
         bad.getresponse.return_value.status = 400
         healthy.getresponse.return_value.status = 200
         healthy.getresponse.return_value.read.return_value = b"ok"
-        with patch.object(regression.socket, "create_connection", side_effect=[keep, chunk]), \
+        with patch.object(regression.socket, "create_connection", side_effect=[keep, chunk, multipart, abandoned]), \
              patch.object(regression.http.client, "HTTPConnection", side_effect=[bad, healthy]), \
-             patch.object(regression.time, "sleep"):
-            regression.check_web_transport(18080)
+             patch.object(regression.time, "sleep"), \
+             patch.object(regression, "wait_web_marker") as wait_marker:
+            regression.check_web_transport(18080, Path("server.out"))
         self.assertEqual(keep.sendall.call_count, 3)
         self.assertEqual(chunk.sendall.call_count, 18)
+        self.assertGreater(multipart.sendall.call_count, 2)
+        abandoned.sendall.assert_called_once()
+        self.assertEqual([call.args[1] for call in wait_marker.call_args_list],
+                         ["web disconnect sink created", "web disconnect sink released cancelled=1"])
         bad.request.assert_called_once_with("GET", "/query")
         healthy.request.assert_called_once_with("GET", "/health")
         bad.close.assert_called_once_with()

@@ -7,6 +7,8 @@ set(LIBRARY_M ${LIBNAME}_m_static)
 set(LIBSRC
 	src/oi_http.cpp
 	src/oi_http_cookie.cpp
+	src/oi_http_form.cpp
+	src/oi_http_json.cpp
 	src/oi_http_server.cpp
 	)
 
@@ -21,8 +23,8 @@ target_compile_options(${LIBRARY_M} PUBLIC ${_CXX_OPTION_})
 
 target_compile_definitions(${LIBRARY} PUBLIC _SINGLE_THREAD_)
 
-target_link_libraries(${LIBRARY} PUBLIC uv_a)
-target_link_libraries(${LIBRARY_M} PUBLIC uv_a)
+target_link_libraries(${LIBRARY} PUBLIC uv_a jsoncpp_static)
+target_link_libraries(${LIBRARY_M} PUBLIC uv_a jsoncpp_static)
 if(WIN32)
 	target_link_libraries(${LIBRARY} PUBLIC ws2_32)
 	target_link_libraries(${LIBRARY_M} PUBLIC ws2_32)

@@ -1,4 +1,5 @@
 #include "oi_http.h"
+#include "oi_http_stream.h"
 #include "oi_http_header_fields.h"
 #include "oi_bytes.h"
 #include "oi_rpc_coro.h"
@@ -265,18 +266,24 @@ class HttpSession;
 
 struct Call::Request
 {
+	std::shared_ptr<BodySource> pSource;
+	std::shared_ptr<BodySink> pSink;
+	bool Cancelled() const
+	{
+		return (pSource && pSource->IsCancelled()) || (pSink && pSink->IsCancelled());
+	}
 	std::shared_ptr<Client::Impl> pImpl; // 所属连接。Client 析构后由它留到结果发布。
 	std::string sRequest;                // 待发报文。发布结果前释放，晚到的超时不再留着大包。
 	Headers vHeaders;
-	std::string sBody;                   // 正文。exchange(Ready) 之前写完。
-	std::string sError;                  // 失败原因。成功时为空。
-	std::coroutine_handle<> stHandle;    // 调用方句柄。门已经是 Waiting 才 Schedule。
-	std::atomic<OI::Coro::Gate> iGate;   // 完成门。Idle 还没人认领，Ready 结果已写好，Waiting 调用方已挂起。
-	std::atomic<int32_t> iDone;          // 结果只发布一次。晚到的超时看见非 0 就返回。
-	std::atomic<bool> bAwaitStarted;     // 一次性闩。第二次 await 或移走后再等直接抛。
-	int32_t iStatus;                     // HTTP 状态码。没拿到状态行是 0。
-	int32_t iTimeoutMilliseconds;        // 从入队起算的超时。
-	int32_t iCode;                       // 连接、超时或报文失败。
+	std::string sBody;                 // 正文。exchange(Ready) 之前写完。
+	std::string sError;                // 失败原因。成功时为空。
+	std::coroutine_handle<> stHandle;  // 调用方句柄。门已经是 Waiting 才 Schedule。
+	std::atomic<OI::Coro::Gate> iGate; // 完成门。Idle 还没人认领，Ready 结果已写好，Waiting 调用方已挂起。
+	std::atomic<int32_t> iDone;        // 结果只发布一次。晚到的超时看见非 0 就返回。
+	std::atomic<bool> bAwaitStarted;   // 一次性闩。第二次 await 或移走后再等直接抛。
+	int32_t iStatus;                   // HTTP 状态码。没拿到状态行是 0。
+	int32_t iTimeoutMilliseconds;      // 从入队起算的超时。
+	int32_t iCode;                     // 连接、超时或报文失败。
 	~Request();
 
 	Request()
@@ -292,6 +299,8 @@ struct Client::Impl : public ::OI::Net::SessionManager
 	int32_t m_iPort;
 	int32_t m_iTimeoutMilliseconds;
 	std::deque<std::shared_ptr<Call::Request>> m_vQueue;
+	Detail::StreamPump m_stQueuePump;
+	void CheckQueuedStreams();
 	std::shared_ptr<Call::Request> m_pFlight;
 	HttpSession* m_pSession;
 	std::weak_ptr<Impl> m_pSelf;
@@ -320,6 +329,10 @@ struct Client::Impl : public ::OI::Net::SessionManager
 	bool Reuse() const
 	{
 		return m_bReuse;
+	}
+	bool FlightCancelled() const
+	{
+		return m_pFlight && m_pFlight->Cancelled();
 	}
 	const std::string& Host() const
 	{
@@ -353,6 +366,13 @@ struct Client::Impl : public ::OI::Net::SessionManager
 
 class HttpSession : public ::OI::Net::NetSession
 {
+	Detail::StreamPump m_stStreamPump;
+	Detail::StreamBody m_stStreamBody;
+	std::shared_ptr<BodySource> m_pSource;
+	std::shared_ptr<BodySink> m_pSink;
+	bool m_bReadPaused = false;
+	void PumpStream();
+	void ClearStream(bool bCancel);
 	std::shared_ptr<Client::Impl> m_pImpl;
 	std::string m_sIncoming;
 	Headers m_vHeaders;
@@ -374,12 +394,12 @@ class HttpSession : public ::OI::Net::NetSession
 	bool ConsumeChunks();
 	bool Consume();
 	void Succeed(size_t iConsumed);
-	void Fail(const char* pWhy);
+	void Fail(const char* pWhy, int32_t iCode = OI_ERR_PROTOCOL);
 
   public:
 	explicit HttpSession(const std::shared_ptr<Client::Impl>& pImpl);
 	~HttpSession() override;
-	void BeginResponse();
+	bool BeginResponse(const Call::Request& stCall);
 	void Abandon();
 	void FinishEof();
 	void OnDataIn() override;
@@ -409,7 +429,7 @@ void HttpSession::ReleaseIncoming()
 	stInputBuffer.Swap(stEmpty);
 }
 
-void HttpSession::BeginResponse()
+bool HttpSession::BeginResponse(const Call::Request& stCall)
 {
 	m_sBody.clear();
 	m_iHeaderBytes = 0;
@@ -423,10 +443,64 @@ void HttpSession::BeginResponse()
 	m_bCloseAfter = false;
 	m_bActive = true;
 	ReleaseIncoming();
+	m_pSource = stCall.pSource;
+	m_pSink = stCall.pSink;
+	return (!m_pSource && !m_pSink) || m_stStreamPump.Start(this, [](uv_timer_t* pTimer)
+	{
+		static_cast<HttpSession*>(pTimer->data)->PumpStream();
+	});
+}
+
+void HttpSession::ClearStream(bool bCancel)
+{
+	m_stStreamPump.Stop();
+	if (m_pSource)
+	{
+		m_pSource->Cancel();
+		m_pSource.reset();
+	}
+	if (m_pSink && bCancel)
+	{
+		m_pSink->Cancel();
+	}
+	m_pSink.reset();
+	if (m_bReadPaused)
+	{
+		m_bReadPaused = false;
+		AllowRead();
+	}
+}
+
+void HttpSession::PumpStream()
+{
+	if (m_pImpl->FlightCancelled())
+	{
+		Fail("stream cancelled", OI_ERR_CANCELLED);
+		return;
+	}
+	if (m_pSource)
+	{
+		bool bDone = false, bProgress = false;
+		const int32_t iCode = Detail::StreamBody::Produce(*this, *m_pSource, bDone, bProgress);
+		if (iCode != OI_OK)
+		{
+			Fail("request body", iCode);
+			return;
+		}
+		if (bDone)
+		{
+			m_pSource.reset();
+		}
+	}
+	if (m_bReadPaused)
+	{
+		Consume();
+	}
 }
 
 void HttpSession::Abandon()
 {
+	ClearStream(true);
 	m_bActive = false;
 	ReleaseIncoming();
 }
@@ -536,7 +610,7 @@ bool HttpSession::ParseHeaders(size_t iHeaderEnd)
 			if (EqName(m_sIncoming, iPosition, iNameEnd, "content-length") && iPosition + std::strlen("content-length") == iNameEnd)
 			{
 				uint64_t iLength = 0;
-				if (!ParseU64(m_sIncoming, iValue, iValueEnd, iLength) || (m_iStatus != 304 && m_iStatus >= 200 && iLength > kMaxBody) || (m_bHasLength && m_iContentLength != iLength))
+				if (!ParseU64(m_sIncoming, iValue, iValueEnd, iLength) || (!m_pSink && m_iStatus != 304 && m_iStatus >= 200 && iLength > kMaxBody) || (m_bHasLength && m_iContentLength != iLength))
 				{
 					return false;
 				}
@@ -659,11 +733,48 @@ bool HttpSession::Consume()
 		m_bHeadersReady = true;
 		m_iHeaderBytes = iHeaderEnd + 4;
 		m_iChunkPosition = m_iHeaderBytes;
+		if (m_pSink && m_iStatus != 204 && m_iStatus != 304)
+		{
+			m_stStreamBody.Begin(m_bChunked, m_bHasLength, m_iContentLength);
+			m_sIncoming.erase(0, m_iHeaderBytes);
+			m_iHeaderBytes = 0;
+		}
 	}
 	if (m_iStatus == 204 || m_iStatus == 304)
 	{
 		Succeed(m_iHeaderBytes);
 		return true;
+	}
+	if (m_pSink)
+	{
+		size_t iConsumed = 0;
+		int32_t iCode = m_stStreamBody.Consume(m_sIncoming, *m_pSink, iConsumed);
+		m_sIncoming.erase(0, iConsumed);
+		if (iCode == OI_ERR_BUSY)
+		{
+			if (!m_bReadPaused)
+			{
+				m_bReadPaused = true;
+				ForbidRead();
+			}
+			return false;
+		}
+		if (iCode != OI_OK)
+		{
+			Fail("response body", iCode);
+			return true;
+		}
+		if (m_bReadPaused)
+		{
+			m_bReadPaused = false;
+			AllowRead();
+		}
+		if (m_stStreamBody.Done())
+		{
+			Succeed(0);
+			return true;
+		}
+		return false;
 	}
 	if (m_bChunked)
 	{
@@ -696,22 +807,24 @@ void HttpSession::Succeed(size_t iConsumed)
 	}
 	m_bActive = false;
 	int32_t iStatusLocal = m_iStatus;
-	bool bCloseLocal = m_bCloseAfter;
+	bool bCloseLocal = m_bCloseAfter || bool(m_pSource);
+	ClearStream(false);
 	std::string sBodyLocal = std::move(m_sBody);
 	ReleaseIncoming();
 	m_pImpl->OnHttpFinished(this, OI_OK, NULL, bCloseLocal, iStatusLocal, std::move(sBodyLocal), std::move(m_vHeaders));
 }
 
-void HttpSession::Fail(const char* pWhy)
+void HttpSession::Fail(const char* pWhy, int32_t iCode)
 {
 	if (!m_bActive)
 	{
 		return;
 	}
 	m_bActive = false;
+	ClearStream(true);
 	int32_t iStatusLocal = m_iStatus;
 	ReleaseIncoming();
-	m_pImpl->OnHttpFinished(this, OI_ERR_PROTOCOL, pWhy, true, iStatusLocal, std::string(), {});
+	m_pImpl->OnHttpFinished(this, iCode, pWhy, true, iStatusLocal, std::string(), {});
 }
 
 void HttpSession::FinishEof()
@@ -729,7 +842,10 @@ void HttpSession::FinishEof()
 		Fail("eof");
 		return;
 	}
-	m_sBody.assign(m_sIncoming, m_iHeaderBytes, std::string::npos);
+	if (!m_pSink)
+	{
+		m_sBody.assign(m_sIncoming, m_iHeaderBytes, std::string::npos);
+	}
 	m_bCloseAfter = true;
 	Succeed(m_sIncoming.size());
 }
@@ -796,6 +912,16 @@ void Client::Impl::Publish(const std::shared_ptr<Call::Request>& pRequestLocal, 
 		return;
 	}
 	pRequestLocal->iCode = iCode;
+	if (iCode != OI_OK && pRequestLocal->pSource)
+	{
+		pRequestLocal->pSource->Cancel();
+	}
+	if (iCode != OI_OK && pRequestLocal->pSink)
+	{
+		pRequestLocal->pSink->Cancel();
+	}
+	pRequestLocal->pSource.reset();
+	pRequestLocal->pSink.reset();
 	if (iCode != OI_OK && pRequestLocal->sError.empty() && pWhy)
 	{
 		pRequestLocal->sError = pWhy;
@@ -864,6 +990,12 @@ void Client::Impl::OnIdleBytes(HttpSession* pSession)
 
 void Client::Impl::Pump()
 {
+	while (!m_vQueue.empty() && m_vQueue.front()->Cancelled())
+	{
+		auto pCancelled = std::move(m_vQueue.front());
+		m_vQueue.pop_front();
+		Publish(pCancelled, OI_ERR_CANCELLED, "cancelled");
+	}
 	if (m_bClosed || m_pFlight || m_vQueue.empty())
 	{
 		return;
@@ -873,9 +1005,9 @@ void Client::Impl::Pump()
 		std::shared_ptr<Call::Request> pRequestLocal = m_vQueue.front();
 		m_vQueue.pop_front();
 		m_pFlight = pRequestLocal;
-		m_pSession->BeginResponse();
+		const bool bReady = m_pSession->BeginResponse(*pRequestLocal);
 		::OI::Base::Bytes stBytes(pRequestLocal->sRequest.data(), pRequestLocal->sRequest.size());
-		const int32_t iSendStatus = SendBytes(m_iSessionId, stBytes);
+		const int32_t iSendStatus = bReady ? SendBytes(m_iSessionId, stBytes) : OI_ERR_FAIL;
 		if (iSendStatus != OI_OK)
 		{
 			m_pFlight.reset();
@@ -956,8 +1088,36 @@ void Client::Impl::OnTimeout(const std::shared_ptr<Call::Request>& pRequestLocal
 	}
 }
 
+void Client::Impl::CheckQueuedStreams()
+{
+	bool bWaiting = false;
+	for (auto it = m_vQueue.begin(); it != m_vQueue.end();)
+	{
+		if ((*it)->Cancelled())
+		{
+			auto pCancelled = std::move(*it);
+			it = m_vQueue.erase(it);
+			Publish(pCancelled, OI_ERR_CANCELLED, "cancelled");
+		}
+		else
+		{
+			bWaiting |= bool((*it)->pSource) || bool((*it)->pSink);
+			++it;
+		}
+	}
+	if (!bWaiting)
+	{
+		m_stQueuePump.Stop();
+	}
+}
+
 void Client::Impl::EnqueueOnLoop(const std::shared_ptr<Call::Request>& pRequestLocal)
 {
+	if (pRequestLocal->Cancelled())
+	{
+		Publish(pRequestLocal, OI_ERR_CANCELLED, "cancelled");
+		return;
+	}
 	if (m_bClosed)
 	{
 		Publish(pRequestLocal, OI_ERR_CONNECT, "closed");
@@ -966,6 +1126,14 @@ void Client::Impl::EnqueueOnLoop(const std::shared_ptr<Call::Request>& pRequestL
 	if (m_iPort <= 0 || m_iPort > 65535 || m_sHost.empty())
 	{
 		Publish(pRequestLocal, OI_ERR_INVALID_ARGUMENT, "host");
+		return;
+	}
+	if ((pRequestLocal->pSource || pRequestLocal->pSink) && !m_stQueuePump.Start(this, [](uv_timer_t* pTimer)
+	{
+		static_cast<Impl*>(pTimer->data)->CheckQueuedStreams();
+	}))
+	{
+		Publish(pRequestLocal, OI_ERR_FAIL, "stream timer");
 		return;
 	}
 	m_vQueue.push_back(pRequestLocal);
@@ -1007,6 +1175,7 @@ void Client::Impl::Shutdown()
 		return;
 	}
 	m_bClosed = true;
+	m_stQueuePump.Stop();
 	if (m_pSession)
 	{
 		m_pSession->Abandon();
@@ -1209,7 +1378,8 @@ Call Client::Send(const Request& stRequest)
 	pRequest->pImpl = m_pImpl;
 	pRequest->iTimeoutMilliseconds = m_pImpl->Timeout();
 	const bool bPost = stRequest.sMethod == "POST";
-	if ((!bPost && stRequest.sMethod != "GET") || (!bPost && !stRequest.sBody.empty()) ||
+	if ((!bPost && stRequest.sMethod != "GET") || (!bPost && (!stRequest.sBody.empty() || stRequest.pBodySource)) ||
+	    (stRequest.pBodySource && !stRequest.sBody.empty()) ||
 	    !HeaderFields::ValidForSend(stRequest))
 	{
 		pRequest->iCode = OI_ERR_INVALID_ARGUMENT;
@@ -1237,7 +1407,13 @@ Call Client::Send(const Request& stRequest)
 	{
 		sWire += "Content-Type: " + stRequest.sContentType + "\r\n";
 	}
-	if (bPost)
+	pRequest->pSource = stRequest.pBodySource;
+	pRequest->pSink = stRequest.pBodySink;
+	if (pRequest->pSource)
+	{
+		sWire += "Transfer-Encoding: chunked\r\n";
+	}
+	else if (bPost)
 	{
 		sWire += "Content-Length: " + std::to_string(stRequest.sBody.size()) + "\r\n";
 	}

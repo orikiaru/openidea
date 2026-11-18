@@ -1,4 +1,7 @@
 #include "web_client.h"
+#include "oi_http_json.h"
+#include "web_stream_fixture.h"
+#include "web_json_regression.h"
 #include "oi_config.h"
 #include "oi_http.h"
 #include "oi_log.h"
@@ -126,6 +129,8 @@ static OI::Coro::Task Run()
 	int64_t iTimeoutMilliseconds = 5000;
 	bool bReuse = true;
 	bool bCheckEchoHeader = false;
+	int32_t iStreamFixturePort = 0;
+	TryGetConfig("WebClient.stream_fixture_port", iStreamFixturePort);
 	TryGetConfig("WebClient.check_echo_header", bCheckEchoHeader);
 	TryGetConfig("WebClient.ip", sIpLocal);
 	TryGetConfig("WebClient.port", iPortLocal);
@@ -325,8 +330,16 @@ static OI::Coro::Task Run()
 	{
 		iBadLocal += 1;
 	}
-	const std::string sRpcJson = stSent.ToJson();
-	::OI::Http::Response stRpc = co_await stCli.Post("/rpcjson", sRpcJson, "application/json");
+	::OI::Http::Request stRpcRequest;
+	stRpcRequest.sMethod = "POST";
+	stRpcRequest.sPath = "/rpcjson";
+	if (stRpcRequest.SetJson(stSent) != OI_OK)
+	{
+		LOG_ERROR("web rpcdata JSON encoding failed");
+		::OI::Thread::ThreadPool::GetInstance().RequestStop(OI_ERR_ENCODE);
+		co_return;
+	}
+	::OI::Http::Response stRpc = co_await stCli.Send(stRpcRequest);
 	int iRpcOk = 0;
 	if (OkStatus(stRpc) != OI_OK)
 	{
@@ -336,9 +349,9 @@ static OI::Coro::Task Run()
 	{
 		::OI::RpcData::JsonAll stBack;
 		// clang-format off
-		bool bSame = PlainJsonKeys(sRpcJson)
+		bool bSame = PlainJsonKeys(stRpcRequest.sBody)
 			&& PlainJsonKeys(stRpc.sBody)
-			&& stBack.FromJson(stRpc.sBody)
+			&& stRpc.GetJson(stBack) == OI_OK
 			&& stBack.iInt8 == stSent.iInt8
 			&& stBack.iInt16 == stSent.iInt16
 			&& stBack.iInt32 == stSent.iInt32
@@ -409,6 +422,176 @@ static OI::Coro::Task Run()
 		else
 		{
 			iBadLocal += 1;
+		}
+	}
+
+	if (bCheckEchoHeader)
+	{
+		if (!WebJsonRegression::Check())
+		{
+			LOG_ERROR("web JSON value and error checks failed");
+			++iBadLocal;
+		}
+		OI::Http::Request stStreamRequest;
+		stStreamRequest.sMethod = "POST";
+		stStreamRequest.sPath = "/test-stream";
+		stStreamRequest.pBodySource = std::make_shared<WebTestSource>(9 * 1024 * 1024);
+		auto pStreamSink = std::make_shared<WebTestSink>();
+		stStreamRequest.pBodySink = pStreamSink;
+		OI::Http::Response stStreamResponse = co_await stCli.Send(stStreamRequest);
+		if (stStreamResponse.iCode != OI_OK || stStreamResponse.iStatus != 200 || !pStreamSink->Valid() || pStreamSink->Size() != 9 * 1024 * 1024)
+		{
+			LOG_ERROR("web streaming roundtrip failed code=%d status=%d bytes=%zu", stStreamResponse.iCode, stStreamResponse.iStatus, pStreamSink->Size());
+			++iBadLocal;
+		}
+		if (iStreamFixturePort <= 0)
+		{
+			LOG_ERROR("web stream fixture port missing");
+			++iBadLocal;
+		}
+		else
+		{
+			OI::Http::Client stFixtureClient("127.0.0.1", iStreamFixturePort, 120000, false);
+			for (const auto& sPath : std::vector<std::string>{"/length", "/eof"})
+			{
+				OI::Http::Request stFixtureRequest;
+				stFixtureRequest.sPath = sPath;
+				auto pFixtureSink = std::make_shared<WebTestSink>();
+				stFixtureRequest.pBodySink = pFixtureSink;
+				OI::Http::Response stFixtureResponse = co_await stFixtureClient.Send(stFixtureRequest);
+				if (stFixtureResponse.iCode != OI_OK || stFixtureResponse.iStatus != 200 ||
+				    !pFixtureSink->Valid() || pFixtureSink->Size() != 9 * 1024 * 1024)
+				{
+					LOG_ERROR("web stream fixture failed path=%s code=%d status=%d bytes=%zu", sPath.c_str(), stFixtureResponse.iCode, stFixtureResponse.iStatus, pFixtureSink->Size());
+					++iBadLocal;
+				}
+			}
+		}
+		OI::Http::Client stShortClient(sIpLocal, iPortLocal, 500, true);
+		OI::Http::Request stTimeoutRequest;
+		stTimeoutRequest.sMethod = "POST";
+		stTimeoutRequest.sPath = "/test-stream";
+		stTimeoutRequest.pBodySource = std::make_shared<WebTestBlockedSource>();
+		OI::Http::Response stTimeoutResponse = co_await stShortClient.Send(stTimeoutRequest);
+		if (stTimeoutResponse.iCode != OI_ERR_TIMEOUT)
+		{
+			LOG_ERROR("web stream timeout failed code=%d", stTimeoutResponse.iCode);
+			++iBadLocal;
+		}
+		OI::Http::Request stMidCancelRequest;
+		stMidCancelRequest.sMethod = "POST";
+		stMidCancelRequest.sPath = "/test-stream";
+		stMidCancelRequest.pBodySource = std::make_shared<WebTestSource>(9 * 1024 * 1024);
+		auto pCancelSink = std::make_shared<WebTestCancelSink>();
+		stMidCancelRequest.pBodySink = pCancelSink;
+		OI::Http::Response stMidCancelResponse = co_await stCli.Send(stMidCancelRequest);
+		if (stMidCancelResponse.iCode != OI_ERR_CANCELLED || pCancelSink->Size() == 0)
+		{
+			LOG_ERROR("web midstream cancellation failed code=%d bytes=%zu", stMidCancelResponse.iCode, pCancelSink->Size());
+			++iBadLocal;
+		}
+		OI::Http::Request stCancelledRequest;
+		stCancelledRequest.sMethod = "POST";
+		stCancelledRequest.sPath = "/test-stream";
+		stCancelledRequest.pBodySource = std::make_shared<WebTestSource>(9 * 1024 * 1024);
+		stCancelledRequest.pBodySource->Cancel();
+		OI::Http::Response stCancelledResponse = co_await stCli.Send(stCancelledRequest);
+		if (stCancelledResponse.iCode != OI_ERR_CANCELLED)
+		{
+			LOG_ERROR("web stream cancellation failed code=%d", stCancelledResponse.iCode);
+			++iBadLocal;
+		}
+		OI::Http::Response stAfterStream = co_await stCli.Get("/health");
+		if (stAfterStream.iCode != OI_OK || stAfterStream.iStatus != 200 || stAfterStream.sBody != "ok")
+		{
+			LOG_ERROR("web after stream cancellation failed code=%d status=%d", stAfterStream.iCode, stAfterStream.iStatus);
+			++iBadLocal;
+		}
+		OI::Http::QueryParams stForm;
+		stForm.Add("repeat", "first");
+		stForm.Add("repeat", "a b+&");
+		stForm.Add("empty", "");
+		OI::Http::Request stFormRequest;
+		stFormRequest.sMethod = "POST";
+		stFormRequest.sPath = "/test-form";
+		if (stFormRequest.SetForm(stForm) != OI_OK)
+		{
+			LOG_ERROR("web form encoding failed");
+			++iBadLocal;
+		}
+		OI::Http::Response stFormResponse = co_await stCli.Send(stFormRequest);
+		OI::Http::QueryParams stFormBack;
+		const int32_t iFormCode = stFormResponse.GetForm(stFormBack);
+		const std::string* pEmpty = stFormBack.Get("empty");
+		if (stFormResponse.iCode != OI_OK || stFormResponse.iStatus != 200 || iFormCode != OI_OK ||
+		    stFormBack.GetAll("repeat") != std::vector<std::string>{"first", "a b+&"} || !pEmpty || !pEmpty->empty())
+		{
+			LOG_ERROR("web form roundtrip failed code=%d status=%d parse=%d", stFormResponse.iCode, stFormResponse.iStatus, iFormCode);
+			++iBadLocal;
+		}
+		OI::Http::Response stBadForm;
+		stBadForm.sContentType = "application/x-www-form-urlencoded";
+		stBadForm.sBody = "name=%GG";
+		OI::Http::QueryParams stKeptForm;
+		stKeptForm.Add("sentinel", "original");
+		const int32_t iBadFormCode = stBadForm.GetForm(stKeptForm);
+		const std::string* pKeptForm = stKeptForm.Get("sentinel");
+		if (iBadFormCode == OI_OK || !pKeptForm || *pKeptForm != "original" || stKeptForm.Get("name"))
+		{
+			LOG_ERROR("web malformed form did not preserve output code=%d", iBadFormCode);
+			++iBadLocal;
+		}
+		OI::Http::Response stBadMultipart;
+		stBadMultipart.sContentType = "multipart/form-data; boundary=boundary42";
+		stBadMultipart.sBody = "--boundary42\r\nContent-Disposition: form-data; name=\"field\"\r\n\r\nunfinished";
+		std::vector<OI::Http::FormPart> vKeptParts(1);
+		vKeptParts[0].sName = "sentinel";
+		vKeptParts[0].sValue = "original";
+		const int32_t iBadMultipartCode = stBadMultipart.GetMultipart(vKeptParts);
+		if (iBadMultipartCode == OI_OK || vKeptParts.size() != 1 || vKeptParts[0].sName != "sentinel" || vKeptParts[0].sValue != "original")
+		{
+			LOG_ERROR("web incomplete multipart did not preserve output code=%d", iBadMultipartCode);
+			++iBadLocal;
+		}
+		std::vector<OI::Http::FormPart> vParts(4);
+		vParts[0].sName = "repeat";
+		vParts[0].sValue = "first";
+		vParts[1].sName = "repeat";
+		vParts[2].sName = "files";
+		vParts[2].sFilename = "one.bin";
+		vParts[2].sContentType = "application/octet-stream";
+		vParts[2].sValue = std::string("\0\1\xff", 3);
+		vParts[3].sName = "files";
+		vParts[3].sFilename = "two.bin";
+		vParts[3].sContentType = "application/octet-stream";
+		vParts[3].sValue = std::string("second\0file", 11);
+		OI::Http::Request stMultipartRequest;
+		stMultipartRequest.sMethod = "POST";
+		stMultipartRequest.sPath = "/test-multipart";
+		if (stMultipartRequest.SetMultipart(vParts) != OI_OK)
+		{
+			LOG_ERROR("web multipart encoding failed");
+			++iBadLocal;
+		}
+		OI::Http::Response stMultipartResponse = co_await stCli.Send(stMultipartRequest);
+		std::vector<OI::Http::FormPart> vBack;
+		const int32_t iMultipartCode = stMultipartResponse.GetMultipart(vBack);
+		if (stMultipartResponse.iCode != OI_OK || stMultipartResponse.iStatus != 200 || iMultipartCode != OI_OK || vBack.size() != vParts.size())
+		{
+			LOG_ERROR("web multipart roundtrip failed code=%d status=%d parse=%d count=%zu", stMultipartResponse.iCode, stMultipartResponse.iStatus, iMultipartCode, vBack.size());
+			++iBadLocal;
+		}
+		else
+		{
+			for (size_t iIndex = 0; iIndex < vParts.size(); ++iIndex)
+			{
+				if (vParts[iIndex].sName != vBack[iIndex].sName || vParts[iIndex].sValue != vBack[iIndex].sValue ||
+				    vParts[iIndex].sFilename != vBack[iIndex].sFilename || vParts[iIndex].sContentType != vBack[iIndex].sContentType)
+				{
+					LOG_ERROR("web multipart mismatch index=%zu", iIndex);
+					++iBadLocal;
+				}
+			}
 		}
 	}
 

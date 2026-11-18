@@ -1,4 +1,6 @@
 #include "web_server.h"
+#include "oi_http_json.h"
+#include "web_stream_fixture.h"
 #include "oi_config.h"
 #include "oi_rpc_call.h"
 #include "oi_rpcdata_holdreq.h"
@@ -12,8 +14,8 @@
 
 namespace
 {
-using OI::Http::Response;
 using OI::Http::Request;
+using OI::Http::Response;
 
 class WebRpc : public OI::Rpc::ProtoClientManager
 {
@@ -31,14 +33,6 @@ class WebRpc : public OI::Rpc::ProtoClientManager
 	}
 };
 
-void SetJson(const Json::Value& stValue, Response& stReply)
-{
-	Json::StreamWriterBuilder stBuilder;
-	stBuilder["indentation"] = "";
-	stReply.sContentType = "application/json";
-	stReply.sBody = Json::writeString(stBuilder, stValue);
-}
-
 OI::Coro::Task Health(const Request&, Response& stReply)
 {
 	stReply.sBody = "ok";
@@ -47,31 +41,85 @@ OI::Coro::Task Health(const Request&, Response& stReply)
 
 OI::Coro::Task JsonEcho(const Request& stRequest, Response& stReply)
 {
-	Json::CharReaderBuilder stBuilder;
-	std::unique_ptr<Json::CharReader> pReader(stBuilder.newCharReader());
 	Json::Value stBody;
-	std::string sErrors;
-	const char* pBegin = stRequest.sBody.data();
-	if (!pReader->parse(pBegin, pBegin + stRequest.sBody.size(), &stBody, &sErrors) || !stBody.isObject())
+	if (stRequest.GetJson(stBody) != OI_OK || !stBody.isObject())
 	{
 		stReply.iStatus = 400;
 		co_return;
 	}
 	stBody["ok"] = true;
-	SetJson(stBody, stReply);
+	if (stReply.SetJson(stBody) != OI_OK)
+	{
+		stReply.iStatus = 500;
+	}
 }
 
 OI::Coro::Task RpcJson(const Request& stRequest, Response& stReply)
 {
 	OI::RpcData::JsonAll stData;
-	if (!stData.FromJson(stRequest.sBody) || stData.iGap == INT32_MAX)
+	if (stRequest.GetJson(stData) != OI_OK || stData.iGap == INT32_MAX)
 	{
 		stReply.iStatus = 400;
 		co_return;
 	}
 	++stData.iGap;
-	stReply.sBody = stData.ToJson();
-	stReply.sContentType = "application/json";
+	if (stReply.SetJson(stData) != OI_OK)
+	{
+		stReply.iStatus = 500;
+	}
+}
+
+OI::Coro::Task FormEcho(const Request& stRequest, Response& stReply)
+{
+	OI::Http::QueryParams stForm;
+	if (stRequest.GetForm(stForm) != OI_OK || stReply.SetForm(stForm) != OI_OK)
+	{
+		stReply.iStatus = 400;
+	}
+	co_return;
+}
+
+class DisconnectTestSink : public WebTestSink
+{
+  public:
+	~DisconnectTestSink() override
+	{
+		std::printf("web disconnect sink released cancelled=%d\n", IsCancelled() ? 1 : 0);
+		std::fflush(stdout);
+	}
+};
+
+std::shared_ptr<OI::Http::BodySink> MakeStreamSink(const Request& stRequest)
+{
+	if (stRequest.GetHeader("x-disconnect-check"))
+	{
+		std::puts("web disconnect sink created");
+		std::fflush(stdout);
+		return std::make_shared<DisconnectTestSink>();
+	}
+	return std::make_shared<WebTestSink>();
+}
+
+OI::Coro::Task StreamEcho(const Request& stRequest, Response& stReply)
+{
+	const auto pSink = std::static_pointer_cast<WebTestSink>(stRequest.pBodySink);
+	if (!pSink || !pSink->Valid() || pSink->Size() != 9 * 1024 * 1024)
+	{
+		stReply.iStatus = 400;
+		co_return;
+	}
+	stReply.sContentType = "application/octet-stream";
+	stReply.pBodySource = std::make_shared<WebTestSource>(9 * 1024 * 1024);
+}
+
+OI::Coro::Task MultipartEcho(const Request& stRequest, Response& stReply)
+{
+	std::vector<OI::Http::FormPart> vParts;
+	if (stRequest.GetMultipart(vParts) != OI_OK || stReply.SetMultipart(vParts) != OI_OK)
+	{
+		stReply.iStatus = 400;
+	}
+	co_return;
 }
 
 }
@@ -168,7 +216,11 @@ OI::Coro::Task WebServer::Query(const Request& stRequest, Response& stReply)
 	{
 		stBody["existing"] = it->second;
 	}
-	SetJson(stBody, stReply);
+	if (stReply.SetJson(stBody) != OI_OK)
+	{
+		stReply.iStatus = 500;
+		co_return;
+	}
 	if (stServer.m_bRpc && stServer.m_iDelayMilliseconds > 0)
 	{
 		std::puts("web handler complete");
@@ -199,6 +251,14 @@ int32_t WebServer::Init()
 	Register("POST", "/json", JsonEcho);
 	Register("POST", "/rpcjson", RpcJson);
 	Register("POST", "/bin", Binary);
+	bool bFormRegression = false;
+	TryGetConfig("WebServer.form_regression", bFormRegression);
+	if (bFormRegression)
+	{
+		Register("POST", "/test-form", FormEcho);
+		Register("POST", "/test-multipart", MultipartEcho);
+		RegisterStream("POST", "/test-stream", MakeStreamSink, StreamEcho);
+	}
 	std::string sPort;
 	m_bRpc = TryGetConfig("WebRpc.port", sPort);
 	if (m_bRpc)

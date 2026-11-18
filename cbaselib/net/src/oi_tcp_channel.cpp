@@ -19,7 +19,7 @@ void TCP_Channel::DataIn()
 		{
 			// 满额时先交给解析器。只有解析后仍无空间才拒绝，不能误杀完整合法包。
 			pSession->SwapInBuff(stInputBuffer);
-			if (!pSession->IsClosed() && pSession->ReceiveAllowance() == 0)
+			if (!pSession->IsClosed() && (iEventMask & IO_EV_READ) && pSession->ReceiveAllowance() == 0)
 			{
 				pSession->PassiveClose(ENOBUFS);
 			}
@@ -65,7 +65,11 @@ read_fault:
 	return;
 peer_close:
 	pSession->SwapInBuff(stInputBuffer);
-	pSession->PassiveClose(0);
+	// 接收方可能正在等应用消费最后一片。恢复读事件后，再交付 EOF。
+	if (iEventMask & IO_EV_READ)
+	{
+		pSession->PassiveClose(0);
+	}
 	return;
 }
 
