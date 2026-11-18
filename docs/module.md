@@ -87,7 +87,7 @@ RPC 帧在 IO 线程按读取上限原地解码；嵌套结构和容器复用同
 
 `webserver` 仍用 `cpp-httplib` 听 `WebServer.port`（默认 18080）。`GET /query` 回解码后的 query，`POST /json` 回 JSON，`POST /rpcjson` 用 `JsonAll` 的 `FromJson` / `ToJson` 走一遍全量字段并把 `gap` 加一，`POST /bin` 把 body 原样写回。这个进程自己的 listen 是阻塞的，不进协程。`c`、`gap` 这些是别名。`iPlain` 这些写了 `[json]` 但不改名。`iDefault`、`sDefault`、`vDefault`、`mDefault`、`stDefault` 连 `[json]` 都不写，结构标了 `json` 就默认参加，键名仍是字段名。`stDefault` 里的 `iNumber`、`sText` 同样不写标记。`iSkip` 和 `stDefault.iSkip` 标了 `[nojson]`，不进 JSON，读入时即使带了这个键也不改原值。客户端同时核对这几类。
 
-`webclient` 不直接调 `cpp-httplib`。它走基础库 `OI::Http::Client`：`Start` 用 `StartTask` 拉起 `Run`，四次请求都是 `co_await`。完成时 poll 线程 `Schedule` 协程句柄，不在回调里 `resume`。单线程模块链 `http_static`。退出码 0 表示四下都对上了。以后换 Go 或其他语言的 HTTP 服务时，仍用这个客户端，只改地址。
+`webclient` 不直接调 `cpp-httplib`。它走基础库 `OI::Http::Client`：`Start` 用 `StartTask` 拉起 `Run`，七次请求都是 `co_await`：四次 GET 覆盖普通路径、已有查询、尾问号和尾 `&`，另外三次 POST 覆盖 JSON、rpcdata 和二进制。GET 追加参数时保留路径已有查询，按需使用 `?` 或 `&` 分隔；参数名和值会做 URL 编码。完成时 poll 线程 `Schedule` 协程句柄，不在回调里 `resume`。单线程模块链 `http_static`。退出码 0 表示所有检查都通过。以后换 Go 或其他语言的 HTTP 服务时，仍用这个客户端，只改地址。
 
 `host` 可以写 IPv4、IPv6 字面地址或域名。IPv6 字面地址可以带方括号或不带方括号，请求的 `Host` 头统一使用方括号；端口不是 80 时附加端口。域名用 libuv 的 `uv_getaddrinfo` 在它自己的线程池里解析一次，回调回到 poll 线程，再交给 `SessionManager` 去连，不卡 poll。`Client` 最后一个参数 `bReuse` 默认是复用：同一个 `Client` 上的请求串行共用这一条连接，请求头是 `Connection: keep-alive`。传 `false` 时请求头改成 `Connection: close`，这一响结束后主动关掉，下一个请求重新连。对端写了 `Connection: close`、HTTP/1.0 没有 keep-alive、报文没收完对端就断开、这一响解析失败，或者当前响应后面还粘着没消费的字节，就把这条会话关掉，下一个请求重新连。响应认 `Content-Length`、`chunked` 和读到断开三种结尾。超时定时器取消不了，所以请求状态用共享指针留到定时器回来；已经收完的结果不会被晚到的超时改掉。
 

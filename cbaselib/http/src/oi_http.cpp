@@ -1054,7 +1054,15 @@ Call Client::Get(const std::string& sPath, const std::vector<std::pair<std::stri
 	std::string sTarget = sPath.empty() ? "/" : sPath;
 	if (!vQuery.empty())
 	{
-		sTarget.push_back('?');
+		const size_t iQueryStart = sTarget.find('?');
+		if (iQueryStart == std::string::npos)
+		{
+			sTarget.push_back('?');
+		}
+		else if (iQueryStart + 1 < sTarget.size() && sTarget.back() != '&')
+		{
+			sTarget.push_back('&');
+		}
 		for (size_t iIndexLocal = 0; iIndexLocal < vQuery.size(); ++iIndexLocal)
 		{
 			if (iIndexLocal != 0)

@@ -19,21 +19,15 @@ namespace OI
 namespace Net
 {
 
-int32_t SessionManager::Init()
+int32_t SessionManager::LoadSessionLimits()
 {
-	const int32_t iThreadStatus = ::OI::Net::Poll::GetInstance().CheckThreadAccess("SessionManager::Init");
-	if (iThreadStatus != OI_OK)
-	{
-		return iThreadStatus;
-	}
-
 	int64_t iSendLimit = 64 * 1024 * 1024;
 	TryGetConfig(GetIDString() + ".max_send_queue_bytes", iSendLimit);
 	if (iSendLimit <= 0 || (uint64_t)iSendLimit > (std::numeric_limits<size_t>::max)())
 	{
+		fprintf(stderr, "invalid send limit for %s\n", GetIDString().c_str());
 		return OI_ERR_INVALID_ARGUMENT;
 	}
-	iMaxSendQueueBytes = (size_t)iSendLimit;
 	int64_t iReceiveLimit = 64 * 1024 * 1024 + 8;
 	int64_t iFrameLimit = 64 * 1024 * 1024;
 	int64_t iFrameTimeout = 10000;
@@ -48,10 +42,27 @@ int32_t SessionManager::Init()
 		fprintf(stderr, "invalid receive limits for %s\n", GetIDString().c_str());
 		return OI_ERR_INVALID_ARGUMENT;
 	}
+	iMaxSendQueueBytes = static_cast<size_t>(iSendLimit);
 	iMaxReceiveBufferBytes = static_cast<size_t>(iReceiveLimit);
 	iMaxFrameBytes = static_cast<size_t>(iFrameLimit);
 	iIncompleteFrameTimeoutMilliseconds = static_cast<uint64_t>(iFrameTimeout);
 	iIdleTimeoutMilliseconds = static_cast<uint64_t>(iIdleTimeout);
+	return OI_OK;
+}
+
+int32_t SessionManager::Init()
+{
+	const int32_t iThreadStatus = ::OI::Net::Poll::GetInstance().CheckThreadAccess("SessionManager::Init");
+	if (iThreadStatus != OI_OK)
+	{
+		return iThreadStatus;
+	}
+
+	const int32_t iLimitStatus = LoadSessionLimits();
+	if (iLimitStatus != OI_OK)
+	{
+		return iLimitStatus;
+	}
 	std::string sIpLocal, sPortLocal, sType;
 	const bool bHasIp = TryGetConfig(GetIDString() + ".ip", sIpLocal);
 	const bool bHasPort = TryGetConfig(GetIDString() + ".port", sPortLocal);

@@ -58,6 +58,7 @@ class SessionManager
 	void BeginConnect(const std::shared_ptr<ConnectWait>& pWait);
 
   protected:
+	int32_t LoadSessionLimits();
 	typedef std::map<sid_t, Session*> SessionMap;
 	// 会话号到会话。
 	SessionMap mSessionMap;

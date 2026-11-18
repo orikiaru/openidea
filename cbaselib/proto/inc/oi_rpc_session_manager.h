@@ -448,7 +448,6 @@ class RouteManager final : public ProtoSessionManager
 	RouteManager();
 	void Stop();
 	// 第一次建连接前读 RpcRoute 的发送队列。没配就用基类默认值。
-	void LoadLimits();
 	// 取或建这个名字的组，并按 vList 对齐。停机后返回空。
 	ServiceGroup* Group(const std::string& sName, const std::vector<::OI::Base::ServiceInstance>& vList);
 	static std::vector<::OI::Base::ServiceInstance> Named(const std::string& sName, const std::vector<::OI::Base::ServiceInstance>& vList);

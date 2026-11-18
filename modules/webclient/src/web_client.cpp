@@ -155,6 +155,18 @@ static OI::Coro::Task Run()
 		}
 	}
 
+	const std::vector<std::string> vQueryPaths = {"/query?existing=original", "/query?", "/query?existing=original&"};
+	for (const auto& sPath : vQueryPaths)
+	{
+		::OI::Http::Response stQueryResponse = co_await stCli.Get(sPath, vQuery);
+		Json::Value stQueryBody;
+		if (OkStatus(stQueryResponse) != OI_OK || !ParseJson(stQueryResponse.sBody, stQueryBody) || !stQueryBody.isMember("text") || !stQueryBody["text"].isString() || stQueryBody["text"].asString() != sText || (sPath != "/query?" && (!stQueryBody.isMember("existing") || !stQueryBody["existing"].isString() || stQueryBody["existing"].asString() != "original")))
+		{
+			LOG_TRACE("web query path failed path=%s code=%d", sPath.c_str(), stQueryResponse.iCode);
+			iBadLocal += 1;
+		}
+	}
+
 	Json::Value stRequestLocal(Json::objectValue);
 	stRequestLocal["n"] = 1;
 	stRequestLocal["s"] = "hi";

@@ -61,27 +61,12 @@ void RouteManager::Stop()
 	}
 }
 
-void RouteManager::LoadLimits()
-{
-	int64_t iSendLimit = static_cast<int64_t>(iMaxSendQueueBytes);
-	if (!TryGetConfig(GetIDString() + ".max_send_queue_bytes", iSendLimit))
-	{
-		return;
-	}
-	if (iSendLimit <= 0 || static_cast<uint64_t>(iSendLimit) > (std::numeric_limits<size_t>::max)())
-	{
-		fprintf(stderr, "RpcRoute.max_send_queue_bytes invalid\n");
-		fflush(stderr);
-		return;
-	}
-	iMaxSendQueueBytes = static_cast<size_t>(iSendLimit);
-}
-
 ServiceGroup* RouteManager::Group(const std::string& sName, const std::vector<::OI::Base::ServiceInstance>& vList)
 {
 	std::call_once(m_stLimitOnce, [this]()
 	{
-		LoadLimits();
+		// 非法配置已记录原因，路由沿用默认限额。
+		LoadSessionLimits();
 	});
 	std::call_once(m_stStopOnce, []()
 	{

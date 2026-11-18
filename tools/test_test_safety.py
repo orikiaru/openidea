@@ -548,7 +548,7 @@ class RegressionCleanupTests(unittest.TestCase):
         fixture.__exit__ = Mock(return_value=False)
         def run_client(*args, **kwargs):
             if hasattr(fixture, "hosts") and isinstance(fixture.hosts, list):
-                fixture.hosts.extend(["[::1]:12345"] * 4)
+                fixture.hosts.extend(["[::1]:12345"] * 7)
             return client
         with patch.object(self.runner.shutil, "copy2"), \
              patch.object(self.runner, "launch", return_value=self.first), \

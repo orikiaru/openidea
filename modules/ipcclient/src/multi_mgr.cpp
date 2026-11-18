@@ -337,6 +337,46 @@ OI::Coro::TaskResult<int32_t> MultiMgr::SwapFixed()
 	co_return iBad;
 }
 
+OI::Coro::TaskResult<int32_t> MultiMgr::CheckRouteLimits(bool bConfigured)
+{
+	OI::Base::ServiceInstance stInstance;
+	stInstance.sName = "route-limit-probe";
+	stInstance.iId = 1;
+	stInstance.sIp = "127.0.0.1";
+	TryGetConfig("Regression.route_port", stInstance.sPort);
+	auto& stManager = OI::Rpc::RouteManager::GetInstance();
+	auto stRoute = stManager.Resolve(stInstance.sName, OI::Rpc::ServicePick::Any, "", OI_OK, {stInstance});
+	int32_t iBad = 0;
+	if (stRoute.vClients.size() != 1 || !stRoute.vClients[0])
+	{
+		++iBad;
+	}
+	else
+	{
+		OI::RpcData::PeerProbeReq stRequest;
+		OI::RpcData::PeerProbeRes stResponse;
+		stRequest.iTag = 918;
+		const int32_t iCode = co_await OI::Rpc::RpcCall(*stRoute.vClients[0], stRequest, stResponse, OI::Timer::Seconds(3));
+		if (iCode != OI_OK || stResponse.iTag != 918)
+		{
+			++iBad;
+		}
+		const auto stInfo = stManager.ConnectionInfo(*stRoute.vClients[0]);
+		const size_t iFrame = bConfigured ? 1048576 : 64 * 1024 * 1024;
+		const uint64_t iIncomplete = bConfigured ? 1234 : 10000;
+		const uint64_t iIdle = bConfigured ? 5678 : 60000;
+		if (stInfo.iSendBytes != 64 * 1024 * 1024 || stInfo.iReceiveBytes != iFrame + 8 ||
+		    stInfo.iFrameBytes != iFrame || stInfo.iIncompleteMilliseconds != iIncomplete ||
+		    stManager.IdleTimeoutMilliseconds() != iIdle)
+		{
+			++iBad;
+		}
+	}
+	std::printf("route limits configured=%d bad=%d\n", bConfigured ? 1 : 0, iBad);
+	std::fflush(stdout);
+	co_return iBad;
+}
+
 OI::Coro::Task MultiMgr::Pool()
 {
 	m_stPeers.Start();
@@ -383,7 +423,14 @@ OI::Coro::Task MultiMgr::Pool()
 	}
 	std::printf("pool call many slots=%d missing=%d bad=%d\n", (int32_t)vMany.size(),
 	    vMany.size() == 3 ? vMany[1].GetRet() : -1, bManyOk ? 0 : 1);
-	const int32_t iBadTotal = (bAny && bAllOk && bManyOk) ? 0 : 1;
+	bool bRouteLimits = false;
+	TryGetConfig("Regression.route_limits", bRouteLimits);
+	int32_t iRouteBad = 0;
+	if (bRouteLimits)
+	{
+		iRouteBad = co_await CheckRouteLimits(false);
+	}
+	const int32_t iBadTotal = (bAny && bAllOk && bManyOk) ? iRouteBad : iRouteBad + 1;
 	std::printf("pool done bad=%d\n", iBadTotal);
 	std::fflush(stdout);
 	TestBoard::GetInstance().Done(iBadTotal == 0 ? 0 : 1);
@@ -393,6 +440,12 @@ OI::Coro::Task MultiMgr::Pool()
 OI::Coro::Task MultiMgr::Run()
 {
 	int32_t iBadTotal = 0;
+	bool bRouteLimits = false;
+	TryGetConfig("Regression.route_limits", bRouteLimits);
+	if (bRouteLimits)
+	{
+		iBadTotal += co_await CheckRouteLimits(true);
+	}
 	auto fnReport = [&iBadTotal](const char* sFormat, int32_t iBad, auto... vArgs)
 	{
 		iBadTotal += iBad;

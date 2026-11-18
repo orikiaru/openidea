@@ -388,6 +388,11 @@ def run(case, args):
                 text = replace(text, "max_pending_commands", str(maximum_count))
                 if fairness: text = replace(text, "offset_ms", "1000")
             if name == "ipcclient":
+                if case in ("multi", "local"):
+                    text = text.replace("max_send_queue_bytes = 65536", "", 1)
+                    if case == "multi":
+                        text = text.replace("[RpcRoute]", "[RpcRoute]\nmax_receive_buffer_bytes = 1048584\nmax_frame_bytes = 1048576\nincomplete_frame_timeout_ms = 1234\nidle_timeout_ms = 5678", 1)
+                    text += "\n[Regression]\nroute_limits = true\nroute_port = \"%d\"\n" % GAME_PORTS[0]
                 if case == "redis":
                     text = text.replace("[RedisClient]", "[RedisClient]\nmax_send_queue_bytes = 1048576", 1)
                     text += "\n[Regression]\nredis_upstream_disconnect = true\nredis_send_budget = true\n"
@@ -759,10 +764,13 @@ def run(case, args):
             elif mode == "empty":
                 assert re.search(r"empty mode=\S+ total=1000000 ms=\d+ rate=\d+/s rpc_fail=0", text)
             elif mode == "pool":
+                if case == "local":
+                    assert "route limits configured=0 bad=0" in text
                 assert re.search(r"pool call any one=[1-9]\d* two=[1-9]\d* failed=0 bad=0", text)
                 assert "pool call all slots=2 bad=0" in text
                 assert "pool done bad=0" in text
             elif mode == "multi":
+                assert "route limits configured=1 bad=0" in text
                 assert "multi watcher unchanged recovered=1 bad=0" in text
                 assert "multi notify early accepted=0 delivered=1 bad=0" in text
                 assert "multi notify reconnect disconnected=1 accepted=0 delivered=1 drained=1 bad=0" in text
@@ -992,7 +1000,11 @@ class HostHttpRegression(http.server.BaseHTTPRequestHandler):
         self.server.hosts.append(self.headers.get("Host"))
         path = urllib.parse.urlsplit(self.path)
         if path.path == "/query":
-            body = json.dumps({"text": urllib.parse.parse_qs(path.query)["text"][0]}).encode()
+            params = urllib.parse.parse_qs(path.query)
+            data = {"text": params["text"][0]}
+            if "existing" in params:
+                data["existing"] = params["existing"][0]
+            body = json.dumps(data).encode()
         else:
             body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
             if path.path in ("/json", "/rpcjson"):
@@ -1064,7 +1076,7 @@ def run_web(args):
                             fixture.hosts.clear()
                             client = subprocess.run([str(work / ("webclient" + SUFFIX))], cwd=work, capture_output=True, text=True, timeout=30)
                             assert client.returncode == 0 and "rpc=1 bin=1 bad=0" in client.stdout, (host, client.stdout, client.stderr)
-                            assert fixture.hosts == ["[::1]:%d" % fixture_port] * 4, (host, fixture.hosts)
+                            assert fixture.hosts == ["[::1]:%d" % fixture_port] * 7, (host, fixture.hosts)
                             print("web ipv6 host %s PASS" % host, flush=True)
                     finally:
                         fixture.shutdown()

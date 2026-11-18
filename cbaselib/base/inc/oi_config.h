@@ -22,7 +22,7 @@ class Config
 	std::shared_ptr<cpptoml::table> m_pTomlConfig;
 
   public:
-	// 读一份 toml 并合进当前表。解析失败返回 false，已有内容不动。
+	// 读一份 toml 并合进当前表。解析失败返回 OI_ERR_INVALID_ARGUMENT，已有内容不动。
 	int32_t Parse(const std::string& sConfFileName);
 
 	// 按点分键取单个值。没有这个键或类型对不上时返回 false，不改输出。
@@ -64,22 +64,43 @@ class Config
 		return GetInstance();
 	}
 };
+
+namespace Detail
+{
+// 限定提前返回宏只能把读取失败作为 bool 返回，避免错误码接口误报成功。
+struct ConfigReadFailure
+{
+	constexpr operator bool() const
+	{
+		return false;
+	}
+	template <class T>
+	operator T() const = delete;
+};
+}
 }
 }
 
-#define GetConfigAndAssert(KEY, VALUE)                                \
-	{                                                                 \
-		assert(::OI::Base::Config::GlobalConfig().GetAs(KEY, VALUE)); \
-	}
+#define GetConfigAndAssert(KEY, VALUE)                             \
+	do                                                             \
+	{                                                              \
+		if (!::OI::Base::Config::GlobalConfig().GetAs(KEY, VALUE)) \
+		{                                                          \
+			assert(false && "GetConfigAndAssert: " #KEY);           \
+		}                                                          \
+	} while (false)
 #define TryGetConfigNoReturn(KEY, VALUE)                      \
 	{                                                         \
 		::OI::Base::Config::GlobalConfig().GetAs(KEY, VALUE); \
 	}
 #define TryGetConfigAndReturnFalse(KEY, VALUE)                     \
+	do                                                             \
 	{                                                              \
 		if (!::OI::Base::Config::GlobalConfig().GetAs(KEY, VALUE)) \
-			return false;                                          \
-	}
+		{                                                          \
+			return ::OI::Base::Detail::ConfigReadFailure{};         \
+		}                                                          \
+	} while (false)
 //可以拿取返回值
 #define TryGetConfig(KEY, VALUE) ::OI::Base::Config::GlobalConfig().GetAs(KEY, VALUE)
 #define ParseConfig(PATH) ::OI::Base::Config::GlobalMutableConfig().Parse(PATH)

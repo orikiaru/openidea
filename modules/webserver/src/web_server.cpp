@@ -52,6 +52,10 @@ int32_t WebServer::Run()
 		}
 		Json::Value stOutput(Json::objectValue);
 		stOutput["text"] = stRequest.get_param_value("text");
+		if (stRequest.has_param("existing"))
+		{
+			stOutput["existing"] = stRequest.get_param_value("existing");
+		}
 		stResponse.set_content(DumpJson(stOutput), "application/json");
 	});
 	stSvr.Post("/json", [](const httplib::Request& stRequest, httplib::Response& stResponse)
