@@ -426,14 +426,13 @@ class ServerSession final : public Net::NetSession
 
 	struct Completion
 	{
-		std::weak_ptr<ServerSession*> pBinding;
+		ServerManager* pServer;
+		sid_t iSessionId;
 		Response stReply;
 		bool bClose;
 		bool bHttp10;
 		Net::Poll::QueuedCall stCall;
 	};
-	// 仅 poll 线程解引用；断连立即失效，迟到的完成回调不持有会话。
-	std::shared_ptr<ServerSession*> m_pBinding;
 
 	static Coro::Task Dispatch(std::unique_ptr<Completion> pDone, ServerManager::Handler fnHandler, Request stRequest)
 	{
@@ -539,6 +538,7 @@ class ServerSession final : public Net::NetSession
 		if (m_stFrame.stRequest.pBodySink)
 		{
 			m_bPartial = false;
+			m_stServer.ClearIncomplete(GetSessionID());
 			if (!bHadSink || m_stFrame.iStreamConsumed)
 			{
 				m_iProgress = uv_now(Net::Poll::GetInstance().Loop());
@@ -568,27 +568,24 @@ class ServerSession final : public Net::NetSession
 			if (!m_bPartial)
 			{
 				m_bPartial = true;
-				const auto iGeneration = ++m_iFrameGeneration;
-				const std::weak_ptr<ServerSession*> pWeak = m_pBinding;
+				const uint64_t iGeneration = ++m_iFrameGeneration;
+				const sid_t iSessionId = GetSessionID();
+				ServerManager* pServer = &m_stServer;
+				m_stServer.ArmIncomplete(iSessionId, iGeneration);
 				const auto iTimeout = std::min<uint64_t>(m_stServer.IncompleteFrameTimeoutMilliseconds(), INT32_MAX);
-				if (Timer::BaseTimerManager::GetInstance().AddTimer([pWeak, iGeneration]()
+				if (Timer::BaseTimerManager::GetInstance().AddTimer([pServer, iSessionId, iGeneration]()
 				{
-					if (auto pBinding = pWeak.lock())
-					{
-						auto* pSession = *pBinding;
-						if (pSession->m_bPartial && pSession->m_iFrameGeneration == iGeneration)
-						{
-							pSession->m_stServer.CloseSession(pSession->GetSessionID());
-						}
-					}
+					pServer->CloseIncomplete(iSessionId, iGeneration);
 				}, static_cast<int>(iTimeout)) != OI_OK)
 				{
-					m_stServer.CloseSession(GetSessionID());
+					m_stServer.ClearIncomplete(iSessionId);
+					m_stServer.CloseSession(iSessionId);
 				}
 			}
 			return;
 		}
 		m_bPartial = false;
+		m_stServer.ClearIncomplete(GetSessionID());
 		if (iCode != 200)
 		{
 			Response stReply;
@@ -602,16 +599,17 @@ class ServerSession final : public Net::NetSession
 		pDone->stReply.iStatus = 200;
 		pDone->stReply.iCode = OI_OK;
 		pDone->stReply.sContentType = "text/plain";
-		pDone->pBinding = m_pBinding;
+		pDone->pServer = &m_stServer;
+		pDone->iSessionId = GetSessionID();
 		pDone->bClose = m_stFrame.bClose;
 		pDone->bHttp10 = m_stFrame.bHttp10;
 		pDone->stCall.fnCall = [](void* pArg)
 		{
 			std::unique_ptr<Completion> pFinished(static_cast<Completion*>(pArg));
-			if (auto pBinding = pFinished->pBinding.lock())
+			pFinished->pServer->UseSession(pFinished->iSessionId, [&](Net::Session& stSession)
 			{
-				(*pBinding)->Reply(pFinished->stReply, pFinished->bClose, pFinished->bHttp10);
-			}
+				static_cast<ServerSession&>(stSession).Reply(pFinished->stReply, pFinished->bClose, pFinished->bHttp10);
+			});
 		};
 		pDone->stCall.pArgument = pDone.get();
 		auto stRequest = std::move(m_stFrame.stRequest);
@@ -642,7 +640,6 @@ class ServerSession final : public Net::NetSession
 
 	void OnClose() override
 	{
-		m_pBinding.reset();
 		m_stPump.Stop();
 		if (m_pSource)
 		{
@@ -657,7 +654,7 @@ class ServerSession final : public Net::NetSession
 
   public:
 	explicit ServerSession(ServerManager* pManager)
-	    : NetSession(pManager), m_stServer(*pManager), m_pBinding(std::make_shared<ServerSession*>(this))
+	    : NetSession(pManager), m_stServer(*pManager)
 	{
 	}
 };
@@ -694,5 +691,41 @@ ServerManager::SinkFactory ServerManager::FindSink(const Request& stRequest) con
 Net::Session* ServerManager::CloneSession()
 {
 	return new ServerSession(this);
+}
+
+void ServerManager::ArmIncomplete(sid_t iSessionId, uint64_t iGeneration)
+{
+	::OI::Thread::MutexGuard stLock(stLocker);
+	m_mIncomplete[iSessionId] = iGeneration;
+}
+
+void ServerManager::ClearIncomplete(sid_t iSessionId)
+{
+	::OI::Thread::MutexGuard stLock(stLocker);
+	m_mIncomplete.erase(iSessionId);
+}
+
+void ServerManager::CloseIncomplete(sid_t iSessionId, uint64_t iGeneration)
+{
+	{
+		::OI::Thread::MutexGuard stLock(stLocker);
+		auto it = m_mIncomplete.find(iSessionId);
+		if (it == m_mIncomplete.end() || it->second != iGeneration)
+		{
+			return;
+		}
+		if (mSessionMap.find(iSessionId) == mSessionMap.end())
+		{
+			m_mIncomplete.erase(it);
+			return;
+		}
+		m_mIncomplete.erase(it);
+	}
+	CloseSession(iSessionId);
+}
+
+void ServerManager::OnSessionClosed(sid_t iSessionId)
+{
+	ClearIncomplete(iSessionId);
 }
 }
