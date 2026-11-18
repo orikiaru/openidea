@@ -124,7 +124,7 @@ class Session
 	// 追加到发送队列并打开写事件。成功返回 OI_OK，失败返回具体错误码。
 	int32_t Send(const ::OI::Base::Bytes& stBytes);
 	// 和 Send 一样。已关闭返回连接错误，队列放不下返回忙。发送失败且输出缓冲被取走时，退回未写出的额度。
-	int32_t SendResult(const ::OI::Base::Bytes& stBytes);
+	virtual int32_t SendResult(const ::OI::Base::Bytes& stBytes);
 	// 改发送队列上限。
 	void SetSendQueueLimit(size_t iBytes);
 	// 接收缓冲仅 poll 线程访问；会话发布前设置限制。

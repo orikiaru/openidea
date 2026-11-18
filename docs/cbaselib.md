@@ -104,7 +104,7 @@ if (iRangeRet != OI_OK)
 
 共享上游连接不支持改变连接状态的命令（切库、认证、事务、订阅、CLIENT 等）。代理收到这类命令会记录错误并关闭该下游连接，避免本地错误回包与在途回包错位。阻塞命令仍会阻塞共用该上游的其他会话，生产环境应单独部署这类调用。同步 Redis 调用在 poll 回调里会抛 `std::logic_error`，单线程和多线程都一样；那里应使用协程接口。
 
-`http` 是 HTTP/1.1 客户端，在 `OI::Http`。外层是 `Client` 的 `Get` / `Post`。连接坐在 `SessionManager` 上：`TCP_Channel` 只管字节，`HttpSession::OnDataIn` 拆 HTTP。`Client` 默认串行复用一条 keep-alive 连接；构造参数 `bReuse` 传 `false` 时每个请求写 `Connection: close`，收完就关。对端要求关闭、半包断开、解析失败，或当前响应后面还粘着未消费字节时关掉会话，下一个请求再连。`co_await` 之后由 poll 线程收完，再 `Schedule` 把协程句柄交回去，不在回调里 `resume`，也不睡线程。查询参数按百分号编码，和 `cpp-httplib` 的 `encode_query_param` 同一套字符。body 按 `Content-Length` 原样发送。单线程模块链 `http_static`，多线程模块链 `http_m_static`。服务端同在 `OI::Http`，通过会话管理器接收请求并启动处理协程。
+`http` 是 HTTP/1.1 客户端，在 `OI::Http`，支持使用 `TlsOptions` 启用 HTTPS 并校验证书链和主机名。外层是 `Client` 的 `Get` / `Post`。连接坐在 `SessionManager` 上：`TCP_Channel` 只管字节，HTTPS 由 `TlsSession` 解密，再由 `HttpSession::OnPlaintext` 解析 HTTP。`Client` 默认从进程共享池复用空闲的 keep-alive 连接，并发请求使用独立会话；构造参数 `bReuse` 传 `false` 时每个请求写 `Connection: close`，收完就关。对端要求关闭、半包断开、解析失败，或当前响应后面还粘着未消费字节时关掉会话，下一个请求再连。`co_await` 之后由 poll 线程收完，再 `Schedule` 把协程句柄交回去，不在回调里 `resume`，也不睡线程。查询参数按百分号编码，和 `cpp-httplib` 的 `encode_query_param` 同一套字符。body 按 `Content-Length` 原样发送。单线程模块链 `http_static`，多线程模块链 `http_m_static`。服务端同在 `OI::Http`，通过会话管理器接收请求并启动处理协程。
 
 `port` 是套接字的平台差异。`port/win` 给 MSVC 补头文件。
 

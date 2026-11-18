@@ -28,6 +28,7 @@ import signal
 import shutil
 import socket
 import socketserver
+import ssl
 import threading
 import struct
 import subprocess
@@ -1321,6 +1322,340 @@ def check_web_stream_length(port):
     print("web stream Content-Length upload HTTP/1.0 EOF response PASS", flush=True)
 
 
+class UrlRegressionHandler(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *args):
+        pass
+
+    def respond(self, body):
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        self.wfile.flush()
+        self.server.responses.append((self.path, time.monotonic()))
+
+    def do_GET(self):
+        self.server.requests.append((self.path, self.connection))
+        if self.path == "/slow":
+            self.server.slow_started.set()
+            assert self.server.fast_done.wait(3), "fast request did not run concurrently"
+        elif self.path == "/fast":
+            assert self.server.slow_started.wait(3), "slow request did not start"
+            self.respond(self.path.encode())
+            self.server.fast_done.set()
+            return
+        self.respond(self.path.encode())
+
+    def do_POST(self):
+        self.server.requests.append((self.path, self.connection))
+        body = self.rfile.read(int(self.headers["Content-Length"]))
+        self.respond(body)
+
+
+def check_url_client(work, cfg):
+    fixture_dir = REPO / "tools/fixtures/https"
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(str(fixture_dir / "server.pem"), str(fixture_dir / "server.key"))
+    servers = []
+    threads = []
+    try:
+        for secure in (False, True):
+            server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), UrlRegressionHandler)
+            server.daemon_threads = True
+            server.requests = []
+            server.responses = []
+            server.slow_started = threading.Event()
+            server.fast_done = threading.Event()
+            if secure:
+                server.socket = context.wrap_socket(server.socket, server_side=True)
+            servers.append(server)
+            thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05})
+            thread.start()
+            threads.append(thread)
+        plain, secure = servers
+        config = (REPO / "deploy/config/webclient.toml").read_text(encoding="utf-8-sig")
+        config = config.replace('port = 18080', 'port = %d' % plain.server_address[1])
+        config = config.replace('ca_file = ""', 'ca_file = ' + json.dumps(str(fixture_dir / "ca.pem")))
+        config += '\nurl_case = true\nurl_tls_port = %d\n' % secure.server_address[1]
+        (cfg / "webclient.toml").write_text(config, encoding="utf-8")
+        client = subprocess.run([str(work / ("webclient" + SUFFIX))], cwd=work, capture_output=True, text=True, timeout=20)
+        assert client.returncode == 0 and "url regression bad=0" in client.stdout, (client.returncode, client.stdout, client.stderr)
+        requests = dict(plain.requests)
+        assert len(plain.requests) == 9 and set(requests) == {"/first", "/second?x=1", "/third", "/fresh", "/after", "/slow", "/fast", "/temporary", "/post"}, plain.requests
+        assert requests["/first"] is requests["/second?x=1"] is requests["/third"] is requests["/after"], plain.requests
+        assert requests["/fresh"] is not requests["/first"]
+        assert requests["/slow"] is not requests["/fast"]
+        responses = dict(plain.responses)
+        assert responses["/fast"] < responses["/slow"], plain.responses
+        assert [path for path, _ in secure.requests] == ["/tls"], secure.requests
+        print("URL client PASS: shared reuse, fresh, concurrent requests, TLS trust isolation", flush=True)
+    finally:
+        for server in servers:
+            server.shutdown()
+        for thread in threads:
+            thread.join(timeout=5)
+        for server in servers:
+            server.server_close()
+        if any(thread.is_alive() for thread in threads):
+            raise RuntimeError("URL fixture failed to stop")
+
+
+class PoolRegressionHandler(UrlRegressionHandler):
+    def finish(self):
+        try:
+            super().finish()
+        finally:
+            self.server.closed.append((self.connection, time.monotonic()))
+
+    def do_GET(self):
+        self.server.requests.append((self.path, self.connection, time.monotonic()))
+        if self.path in ("/hold-one", "/hold-two"):
+            self.server.holds[self.path].set()
+            assert self.server.release.wait(4), "hold release not received"
+        elif self.path == "/busy":
+            self.server.busy_started.set()
+            assert self.server.fresh_done.wait(3), "fresh request did not run beside busy request"
+        elif self.path == "/fresh-full":
+            assert self.server.busy_started.wait(3), "busy request did not start"
+            self.respond(self.path.encode())
+            self.server.fresh_done.set()
+            return
+        self.respond(self.path.encode())
+
+
+class PoolRegressionServer(http.server.ThreadingHTTPServer):
+    def get_request(self):
+        conn, address = super().get_request()
+        self.accepted.append((conn, time.monotonic()))
+        return conn, address
+
+
+class PoolControlHandler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
+    def do_GET(self):
+        target = self.server.target
+        if self.path == "/ready":
+            ready = all(event.wait(4) for event in target.holds.values())
+            if not ready:
+                self.send_error(503)
+                return
+        elif self.path == "/release":
+            target.released_at = time.monotonic()
+            target.release.set()
+        else:
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+
+def check_http_pool(work, cfg):
+    server = PoolRegressionServer(("127.0.0.1", 0), PoolRegressionHandler)
+    server.daemon_threads = True
+    server.requests, server.responses, server.closed = [], [], []
+    server.busy_started, server.fresh_done = threading.Event(), threading.Event()
+    server.holds = {"/hold-one": threading.Event(), "/hold-two": threading.Event()}
+    server.release, server.accepted, server.released_at = threading.Event(), [], None
+    control = http.server.ThreadingHTTPServer(("127.0.0.1", 0), PoolControlHandler)
+    control.daemon_threads = True
+    control.target = server
+    control_thread = threading.Thread(target=control.serve_forever, kwargs={"poll_interval": 0.05})
+    control_thread.start()
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05})
+    thread.start()
+    try:
+        config = (REPO / "deploy/config/webclient.toml").read_text(encoding="utf-8-sig")
+        config = config.replace('port = 18080', 'port = %d' % server.server_address[1])
+        config += '\npool_case = true\npool_control_port = %d\n[HttpClientPool]\nmax_connections_per_server = 2\nidle_timeout_ms = 500\n' % control.server_address[1]
+        (cfg / "webclient.toml").write_text(config, encoding="utf-8")
+        client = subprocess.run([str(work / ("webclient" + SUFFIX))], cwd=work, capture_output=True, text=True, timeout=20)
+        assert client.returncode == 0 and "pool regression bad=0" in client.stdout, (client.returncode, client.stdout, client.stderr)
+        requests = {path: (conn, at) for path, conn, at in server.requests}
+        assert len(server.requests) == 7 and set(requests) == {"/hold-one", "/hold-two", "/queued-success", "/after-queue", "/busy", "/fresh-full", "/after-idle"}, server.requests
+        first, second = requests["/hold-one"][0], requests["/hold-two"][0]
+        assert first is not second
+        assert server.released_at is not None and sum(at < server.released_at for _, at in server.accepted) == 2, server.accepted
+        assert requests["/queued-success"][1] >= server.released_at
+        assert requests["/queued-success"][0] in (first, second)
+        assert requests["/after-queue"][0] in (first, second)
+        assert requests["/busy"][0] in (first, second)
+        assert requests["/fresh-full"][0] not in (first, second)
+        assert dict(server.responses)["/fresh-full"] < dict(server.responses)["/busy"]
+        after = requests["/after-idle"]
+        assert after[0] not in (first, second)
+        assert all(any(conn is old and at <= after[1] - 1.0 for conn, at in server.closed) for old in (first, second)), server.closed
+        print("HTTP pool PASS: limit, queue timeout, fresh isolation and idle eviction", flush=True)
+    finally:
+        server.release.set()
+        server.fresh_done.set()
+        server.busy_started.set()
+        for event in server.holds.values():
+            event.set()
+        server.shutdown()
+        control.shutdown()
+        thread.join(timeout=5)
+        control_thread.join(timeout=5)
+        server.server_close()
+        control.server_close()
+        if thread.is_alive() or control_thread.is_alive():
+            raise RuntimeError("HTTP pool fixture failed to stop")
+
+
+class HttpsRegressionHandler(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *args):
+        pass
+
+    def do_GET(self):
+        if self.server.wait_for_hello:
+            assert self.server.hello.wait(1), "stalled ClientHello not received"
+        self.server.requests.append((self.path, self.connection, time.monotonic()))
+        if self.path in ("/clean-eof", "/bad-eof"):
+            self.connection.sendall(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n" + (b"clean" if self.path == "/clean-eof" else b"bad"))
+            self.close_connection = True
+            if self.path == "/clean-eof":
+                self.connection.settimeout(3)
+                try:
+                    self.connection.unwrap().close()
+                except OSError:
+                    pass
+            else:
+                socket.close(self.connection.detach())
+            return
+        if self.path == "/truncated":
+            self.connection.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 20\r\n\r\nshort")
+            self.close_connection = True
+            self.connection.shutdown(socket.SHUT_RDWR)
+            return
+        self.send_response(200)
+        self.send_header("Content-Length", "2")
+        self.end_headers()
+        self.wfile.write(b"ok")
+        self.wfile.flush()
+        self.server.responses.append(time.monotonic())
+
+    def do_POST(self):
+        assert self.path == "/stream"
+        body = bytearray()
+        while True:
+            size = int(self.rfile.readline().strip(), 16)
+            if not size:
+                assert self.rfile.readline() == b"\r\n"
+                break
+            body.extend(self.rfile.read(size))
+            assert self.rfile.read(2) == b"\r\n"
+        assert bytes(body) == bytes(i % 251 for i in range(65536))
+        self.server.requests.append((self.path, self.connection, time.monotonic()))
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        self.wfile.flush()
+
+
+def check_https(work, cfg):
+    fixture_dir = REPO / "tools/fixtures/https"
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(str(fixture_dir / "server.pem"), str(fixture_dir / "server.key"))
+    names = []
+    context.set_servername_callback(lambda sock, name, ctx: names.append(name))
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), HttpsRegressionHandler)
+    server.daemon_threads = True
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    server.requests = []
+    server.responses = []
+    server.hello = threading.Event()
+    server.wait_for_hello = False
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05})
+    thread.start()
+    stall = socket.socket()
+    stall.bind(("127.0.0.1", 0))
+    stall.listen()
+    stall.settimeout(5)
+    accepted = []
+    closed = []
+    def stall_handshake():
+        try:
+            conn, _ = stall.accept()
+            accepted.append(time.monotonic())
+            with conn:
+                conn.settimeout(4)
+                data = conn.recv(4096)
+                assert data and data[0] == 0x16, "missing TLS ClientHello"
+                server.hello.set()
+                while conn.recv(4096):
+                    pass
+                closed.append(time.monotonic())
+        except OSError:
+            pass
+    stalled_thread = threading.Thread(target=stall_handshake)
+    try:
+        port = server.server_address[1]
+        base = (REPO / "deploy/config/webclient.toml").read_text(encoding="utf-8-sig")
+        def run(host, ca_file, case):
+            config = base.replace('ip = "127.0.0.1"', 'ip = ' + json.dumps(host))
+            config = config.replace('port = 18080', 'port = %d' % port)
+            config = config.replace('https = false', 'https = true')
+            config = config.replace('ca_file = ""', 'ca_file = ' + json.dumps(ca_file))
+            config += '\ntls_case = %s\nstall_port = %d\n' % (json.dumps(case), stall.getsockname()[1])
+            (cfg / "webclient.toml").write_text(config, encoding="utf-8")
+            client = subprocess.run([str(work / ("webclient" + SUFFIX))], cwd=work, capture_output=True, text=True, timeout=15)
+            assert client.returncode == 0 and "https regression case=%s bad=0" % case in client.stdout, (case, client.returncode, client.stdout, client.stderr)
+        ca = str(fixture_dir / "ca.pem")
+        normal = http.server.ThreadingHTTPServer(("127.0.0.1", 0), HostHttpRegression)
+        normal.daemon_threads = True
+        normal.socket = context.wrap_socket(normal.socket, server_side=True)
+        normal.hosts, normal.connections, normal.connection_headers = [], [], []
+        normal_thread = threading.Thread(target=normal.serve_forever, kwargs={"poll_interval": 0.05})
+        normal_thread.start()
+        try:
+            config = base.replace('ip = "127.0.0.1"', 'ip = "localhost"')
+            config = config.replace('port = 18080', 'port = %d' % normal.server_address[1])
+            config = config.replace('https = false', 'https = true')
+            config = config.replace('ca_file = ""', 'ca_file = ' + json.dumps(ca))
+            (cfg / "webclient.toml").write_text(config, encoding="utf-8")
+            client = subprocess.run([str(work / ("webclient" + SUFFIX))], cwd=work, capture_output=True, text=True, timeout=30)
+            assert client.returncode == 0 and "rpc=1 bin=1 bad=0" in client.stdout, (client.stdout, client.stderr)
+            assert len(normal.hosts) == 9 and len({id(conn) for conn in normal.connections}) == 1
+        finally:
+            normal.shutdown()
+            normal_thread.join(timeout=3)
+            normal.server_close()
+            assert not normal_thread.is_alive()
+        names.clear()
+        run("localhost", ca, "success")
+        assert [item[0] for item in server.requests] == ["/health", "/health", "/truncated", "/health", "/stream", "/clean-eof", "/bad-eof"], server.requests
+        assert server.requests[0][1] is server.requests[1][1] is server.requests[2][1]
+        assert server.requests[3][1] is not server.requests[2][1]
+        assert names and all(name == "localhost" for name in names), names
+        request_count = len(server.requests)
+        run("127.0.0.1", ca, "hostname")
+        assert len(server.requests) == request_count
+        run("localhost", "", "untrusted")
+        assert len(server.requests) == request_count
+        server.wait_for_hello = True
+        stalled_thread.start()
+        run("localhost", ca, "stall")
+        stalled_thread.join(timeout=3)
+        assert accepted and closed and server.responses[-1] < closed[0], (accepted, closed, server.responses)
+        print("https PASS: trusted CA, hostname, untrusted CA, SNI, reuse, truncation, reconnect, nonblocking handshake", flush=True)
+    finally:
+        stall.close()
+        if stalled_thread.ident is not None:
+            stalled_thread.join(timeout=5)
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+        if stalled_thread.is_alive() or thread.is_alive():
+            raise RuntimeError("HTTPS fixture failed to stop")
+
+
 def run_web(args):
     # 仍使用模块自带的 WebClient 用例，验证别名键和未改名键的 HTTP/JSON/二进制收发。
     with regression_directory(prefix="oi-regression-web-p%d-" % PORT_OFFSET) as tmp:
@@ -1389,6 +1724,9 @@ def run_web(args):
                         thread.join(timeout=3)
                         if thread.is_alive():
                             raise RuntimeError("IPv6 HTTP fixture failed to stop")
+                check_http_pool(work, cfg)
+                check_url_client(work, cfg)
+                check_https(work, cfg)
                 check_web_transport(port, root / "server.out")
                 check_web_json(port)
                 check_web_stream_length(port)

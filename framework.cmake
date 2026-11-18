@@ -216,7 +216,7 @@ if(OI_CLANGD_REFRESH AND NOT TARGET oi_clangd_db)
 	if(OI_NINJA)
 		# 和主构建共用 deploy 下的产物，开关要一致，否则会把 oi_test_hooks.txt 刷回默认值。
 		set(oi_clangd_options)
-		foreach(oi_option OI_IPC_SINGLE_THREAD OI_ENABLE_TEST_HOOKS OI_ENABLE_MYSQL OI_MYSQL_INCLUDE_DIR OI_MYSQL_LIBRARY)
+		foreach(oi_option OPENSSL_ROOT_DIR OPENSSL_USE_STATIC_LIBS CMAKE_TOOLCHAIN_FILE VCPKG_TARGET_TRIPLET OI_WEBCLIENT_SINGLE_THREAD OI_IPC_SINGLE_THREAD OI_ENABLE_TEST_HOOKS OI_ENABLE_MYSQL OI_MYSQL_INCLUDE_DIR OI_MYSQL_LIBRARY)
 			if(DEFINED ${oi_option})
 				list(APPEND oi_clangd_options "-D${oi_option}=${${oi_option}}")
 			endif()

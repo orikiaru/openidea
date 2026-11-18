@@ -17,7 +17,8 @@ target_include_directories(webclient
 )
 
 # 客户端挂在 poll 的 libuv 上，单线程就能 co_await。多线程模块改链 http_m_static。
-set(SINGLE_THREAD TRUE)
+option(OI_WEBCLIENT_SINGLE_THREAD "Run webclient on the single-thread scheduler" ON)
+set(SINGLE_THREAD ${OI_WEBCLIENT_SINGLE_THREAD})
 
 if(MSVC)
 	if(SINGLE_THREAD)

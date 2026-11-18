@@ -151,6 +151,16 @@ class MatrixOutcomeTests(unittest.TestCase):
         for step in configure_steps:
             self.assertIn("-DA=B", self.commands[step])
 
+    def test_webclient_thread_mode_tracks_matrix_on_both_platforms(self):
+        for windows in (False, True):
+            with self.subTest(windows=windows):
+                code, _, _ = self.exercise(windows=windows)
+                self.assertEqual(0, code)
+                for mode, value in (("mt", "OFF"), ("st", "ON")):
+                    command = self.commands[mode + "-configure"]
+                    self.assertIn("-DOI_IPC_SINGLE_THREAD=" + value, command)
+                    self.assertIn("-DOI_WEBCLIENT_SINGLE_THREAD=" + value, command)
+
     def test_missing_toolset_names_the_gap_and_the_install(self):
         with patch.object(matrix.shutil, "which", return_value=None):
             text = matrix.missing_toolset(False)

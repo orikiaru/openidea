@@ -1,9 +1,13 @@
 #include "oi_http.h"
+#include "oi_config.h"
+#include "oi_tcp_channel.h"
+#include "oi_singleton.h"
+#include <compare>
 #include "oi_http_stream.h"
+#include "oi_tls_session.h"
 #include "oi_http_header_fields.h"
 #include "oi_bytes.h"
 #include "oi_rpc_coro.h"
-#include "oi_net_session.h"
 #include "oi_poll.h"
 #include "oi_session_manager.h"
 #include "oi_socket.h"
@@ -240,7 +244,7 @@ bool ParseHex(const std::string& sText, size_t iPosition, size_t iEnd, uint64_t&
 	return iDigits > 0;
 }
 
-std::string HostHeader(const std::string& sHost, int32_t iPort)
+std::string HostHeader(const std::string& sHost, int32_t iPort, bool bSecure)
 {
 	std::string sLine = "Host: ";
 	::OI::Net::Ipv6Addr stAddress;
@@ -252,7 +256,7 @@ std::string HostHeader(const std::string& sHost, int32_t iPort)
 	{
 		sLine += sHost;
 	}
-	if (iPort != 80)
+	if (iPort != (bSecure ? 443 : 80))
 	{
 		sLine += ":";
 		sLine += std::to_string(iPort);
@@ -263,6 +267,15 @@ std::string HostHeader(const std::string& sHost, int32_t iPort)
 }
 
 class HttpSession;
+class HttpDial;
+
+struct Origin
+{
+	std::string sHost;
+	int32_t iPort = 0;
+	bool bHttps = false;
+	auto operator<=>(const Origin&) const = default;
+};
 
 struct Call::Request
 {
@@ -272,8 +285,13 @@ struct Call::Request
 	{
 		return (pSource && pSource->IsCancelled()) || (pSink && pSink->IsCancelled());
 	}
-	std::shared_ptr<Client::Impl> pImpl; // 所属连接。Client 析构后由它留到结果发布。
-	std::string sRequest;                // 待发报文。发布结果前释放，晚到的超时不再留着大包。
+	Origin stOrigin;
+	std::string sCaFile;
+	bool bReuse = true;
+	sid_t iSessionId = INVALID_SID;
+	HttpDial* pDial = nullptr; // poll thread only
+
+	std::string sRequest; // 待发报文。发布结果前释放，晚到的超时不再留着大包。
 	Headers vHeaders;
 	std::string sBody;                 // 正文。exchange(Ready) 之前写完。
 	std::string sError;                // 失败原因。成功时为空。
@@ -292,79 +310,51 @@ struct Call::Request
 	}
 };
 
-struct Client::Impl : public ::OI::Net::SessionManager
+class HttpSessionManager final : public Net::SessionManager
 {
-  private:
-	std::string m_sHost;
-	int32_t m_iPort;
-	int32_t m_iTimeoutMilliseconds;
-	std::deque<std::shared_ptr<Call::Request>> m_vQueue;
-	Detail::StreamPump m_stQueuePump;
-	void CheckQueuedStreams();
-	std::shared_ptr<Call::Request> m_pFlight;
-	HttpSession* m_pSession;
-	std::weak_ptr<Impl> m_pSelf;
-	sid_t m_iSessionId;
-	bool m_bConnected;
-	bool m_bConnecting;
-	bool m_bClosed;
-	bool m_bReuse;
-
-	void Publish(const std::shared_ptr<Call::Request>& pRequestLocal, int32_t iCode, const char* pWhy);
-	void EnqueueOnLoop(const std::shared_ptr<Call::Request>& pRequestLocal);
-	void ArmTimer(const std::shared_ptr<Call::Request>& pRequestLocal);
-	void Pump();
-	void BeginConnect();
-	void UseAddress(const std::string& sIp);
-	void FailFront(const char* pWhy);
+	DECLARE_SINGLETON(HttpSessionManager)
+	using Pending = std::shared_ptr<Call::Request>;
+	struct Pool
+	{
+		std::deque<Pending> vWaiting;
+		std::set<Pending> vActive;
+		std::deque<HttpSession*> vIdle;
+		std::unique_ptr<Net::TlsClientContext> pTls;
+		std::string sCaFile;
+		bool bPumping = false;
+	};
+	std::map<Origin, Pool> m_mPools;
+	std::map<sid_t, HttpSession*> m_mSessions;
+	size_t m_iLimit = 4;
+	uint64_t m_iIdleMilliseconds = 60000;
+	bool m_bStopped = false;
+	HttpSessionManager();
+	void EnqueueOnLoop(const Pending& pCall);
+	void Pump(const Origin& stOrigin, Pool& stPool);
+	void Send(HttpSession& stSession, const Pending& pCall);
+	static void Resolved(void* pArgument, bool bOk, Net::NetAddr stAddress);
+	void Finish(const Pending& pCall, int32_t iCode, const char* pReason);
+	static void Publish(const Pending& pCall, int32_t iCode, const char* pReason);
+	static void Stop();
+	void Sweep();
+	Net::Session* CloneSession() override
+	{
+		return nullptr;
+	}
+	void OnAddSession(Net::Session* pSession) override;
+	void OnDelSession(const Net::Session*) override
+	{
+	}
+	void OnSessionClosed(sid_t iSessionId) override;
 
   public:
-	Impl(const std::string& sHost, int32_t iPort, int32_t iTimeoutMilliseconds, bool bReuse);
-	~Impl() override;
-	const std::string GetIDString() override;
-	int32_t Timeout() const
-	{
-		return m_iTimeoutMilliseconds;
-	}
-	bool Reuse() const
-	{
-		return m_bReuse;
-	}
-	bool FlightCancelled() const
-	{
-		return m_pFlight && m_pFlight->Cancelled();
-	}
-	const std::string& Host() const
-	{
-		return m_sHost;
-	}
-	int32_t Port() const
-	{
-		return m_iPort;
-	}
-	void Attach(const std::shared_ptr<Impl>& pSelf)
-	{
-		m_pSelf = pSelf;
-	}
-	std::shared_ptr<Impl> Hold()
-	{
-		return m_pSelf.lock();
-	}
-	void Enqueue(const std::shared_ptr<Call::Request>& pRequestLocal);
-	void OnTimeout(const std::shared_ptr<Call::Request>& pRequestLocal);
-	void Shutdown();
-	void OnHttpFinished(HttpSession* pSession, int32_t iCode, const char* pWhy, bool bClose, int32_t iStatusLocal, std::string sBodyLocal, Headers vHeaders);
-	void OnIdleBytes(HttpSession* pSession);
-
-  protected:
-	::OI::Net::Session* CloneSession() override;
-	void OnAddSession(::OI::Net::Session* pSession) override;
-	void OnDelSession(const ::OI::Net::Session* pSession) override;
-	void OnConnectFailed() override;
-	void OnSessionClosed(sid_t iSessionId) override;
+	void Enqueue(const Pending& pCall);
+	void Connected(const Pending& pCall, net_socket_t iSocket);
+	void Complete(HttpSession& stSession, int32_t iCode, const char* pReason, bool bClose, int32_t iStatus, std::string sBody, Headers vHeaders);
+	Coro::Task OnSecondUpdate(time_t);
 };
 
-class HttpSession : public ::OI::Net::NetSession
+class HttpSession : public ::OI::Net::TlsSession
 {
 	Detail::StreamPump m_stStreamPump;
 	Detail::StreamBody m_stStreamBody;
@@ -373,7 +363,11 @@ class HttpSession : public ::OI::Net::NetSession
 	bool m_bReadPaused = false;
 	void PumpStream();
 	void ClearStream(bool bCancel);
-	std::shared_ptr<Client::Impl> m_pImpl;
+	friend class HttpSessionManager;
+	std::shared_ptr<Call::Request> m_pFlight;
+	Origin m_stOrigin;
+	std::string m_sCaFile;
+	uint64_t m_iIdleSince = 0;
 	std::string m_sIncoming;
 	Headers m_vHeaders;
 	std::string m_sBody;
@@ -397,36 +391,27 @@ class HttpSession : public ::OI::Net::NetSession
 	void Fail(const char* pWhy, int32_t iCode = OI_ERR_PROTOCOL);
 
   public:
-	explicit HttpSession(const std::shared_ptr<Client::Impl>& pImpl);
+	HttpSession(HttpSessionManager& stManager, const Origin& stOrigin, const Net::TlsClientContext* pTls);
 	~HttpSession() override;
 	bool BeginResponse(const Call::Request& stCall);
 	void Abandon();
 	void FinishEof();
-	void OnDataIn() override;
+	void OnPlaintext(std::string_view sData) override;
+	void OnTransportEnd(int32_t iCode, const char* pReason) override;
 	void OnDataOut() override;
-	void OnClose() override;
-};
-
-struct LoopRequest
-{
-	std::shared_ptr<Client::Impl> pImpl;
-	std::shared_ptr<Call::Request> pRequest;
 };
 
 Call::Request::~Request() = default;
-Client::Impl::~Impl() = default;
 HttpSession::~HttpSession() = default;
 
-HttpSession::HttpSession(const std::shared_ptr<Client::Impl>& pImpl)
-    : ::OI::Net::NetSession(pImpl.get()), m_pImpl(pImpl), m_iHeaderBytes(0), m_iContentLength(0), m_iChunkPosition(0), m_iInterimResponses(0), m_iStatus(0), m_bHeadersReady(false), m_bHasLength(false), m_bChunked(false), m_bCloseAfter(false), m_bActive(false)
+HttpSession::HttpSession(HttpSessionManager& stManager, const Origin& stOrigin, const Net::TlsClientContext* pTls)
+    : Net::TlsSession(&stManager, pTls, stOrigin.sHost), m_stOrigin(stOrigin), m_iHeaderBytes(0), m_iContentLength(0), m_iChunkPosition(0), m_iInterimResponses(0), m_iStatus(0), m_bHeadersReady(false), m_bHasLength(false), m_bChunked(false), m_bCloseAfter(false), m_bActive(false)
 {
 }
 
 void HttpSession::ReleaseIncoming()
 {
 	std::string().swap(m_sIncoming);
-	::OI::Base::Bytes stEmpty;
-	stInputBuffer.Swap(stEmpty);
 }
 
 bool HttpSession::BeginResponse(const Call::Request& stCall)
@@ -473,9 +458,13 @@ void HttpSession::ClearStream(bool bCancel)
 
 void HttpSession::PumpStream()
 {
-	if (m_pImpl->FlightCancelled())
+	if (m_pFlight && m_pFlight->Cancelled())
 	{
 		Fail("stream cancelled", OI_ERR_CANCELLED);
+		return;
+	}
+	if (!TransportReady())
+	{
 		return;
 	}
 	if (m_pSource)
@@ -494,7 +483,10 @@ void HttpSession::PumpStream()
 	}
 	if (m_bReadPaused)
 	{
-		Consume();
+		if (!Consume() && !m_bReadPaused && PeerEnded())
+		{
+			FinishEof();
+		}
 	}
 }
 
@@ -807,11 +799,15 @@ void HttpSession::Succeed(size_t iConsumed)
 	}
 	m_bActive = false;
 	int32_t iStatusLocal = m_iStatus;
-	bool bCloseLocal = m_bCloseAfter || bool(m_pSource);
+	bool bCloseLocal = m_bCloseAfter || bool(m_pSource) || PeerEnded();
+	if (bCloseLocal || !m_pFlight->bReuse)
+	{
+		ShutdownTransport();
+	}
 	ClearStream(false);
 	std::string sBodyLocal = std::move(m_sBody);
 	ReleaseIncoming();
-	m_pImpl->OnHttpFinished(this, OI_OK, NULL, bCloseLocal, iStatusLocal, std::move(sBodyLocal), std::move(m_vHeaders));
+	HttpSessionManager::GetInstance().Complete(*this, OI_OK, NULL, bCloseLocal, iStatusLocal, std::move(sBodyLocal), std::move(m_vHeaders));
 }
 
 void HttpSession::Fail(const char* pWhy, int32_t iCode)
@@ -824,7 +820,7 @@ void HttpSession::Fail(const char* pWhy, int32_t iCode)
 	ClearStream(true);
 	int32_t iStatusLocal = m_iStatus;
 	ReleaseIncoming();
-	m_pImpl->OnHttpFinished(this, iCode, pWhy, true, iStatusLocal, std::string(), {});
+	HttpSessionManager::GetInstance().Complete(*this, iCode, pWhy, true, iStatusLocal, std::string(), {});
 }
 
 void HttpSession::FinishEof()
@@ -833,7 +829,7 @@ void HttpSession::FinishEof()
 	{
 		return;
 	}
-	if (Consume())
+	if (Consume() || m_bReadPaused)
 	{
 		return;
 	}
@@ -850,58 +846,49 @@ void HttpSession::FinishEof()
 	Succeed(m_sIncoming.size());
 }
 
-void HttpSession::OnDataIn()
+void HttpSession::OnPlaintext(std::string_view sData)
 {
 	if (!m_bActive)
 	{
-		if (stInputBuffer.Size() > 0)
+		if (!IsClosed())
 		{
-			::OI::Base::Bytes stEmpty;
-			stInputBuffer.Swap(stEmpty);
-			m_pImpl->OnIdleBytes(this);
+			HttpSessionManager::GetInstance().CloseSession(GetSessionID());
 		}
 		return;
 	}
-	if (m_sIncoming.size() + stInputBuffer.Size() > kMaxHeader + kMaxBody)
+	if (sData.size() > kMaxHeader + kMaxBody - m_sIncoming.size())
 	{
-		::OI::Base::Bytes stEmpty;
-		stInputBuffer.Swap(stEmpty);
 		Fail("size");
 		return;
 	}
-	if (stInputBuffer.Size() > 0)
-	{
-		m_sIncoming.append(stInputBuffer.Data(), stInputBuffer.Size());
-	}
-	{
-		::OI::Base::Bytes stEmpty;
-		stInputBuffer.Swap(stEmpty);
-	}
+	m_sIncoming.append(sData);
 	Consume();
+}
+
+void HttpSession::OnTransportEnd(int32_t iCode, const char* pReason)
+{
+	if (!m_bActive)
+	{
+		if (!IsClosed())
+		{
+			HttpSessionManager::GetInstance().CloseSession(GetSessionID());
+		}
+	}
+	else if (iCode != OI_OK)
+	{
+		Fail(pReason, iCode);
+	}
+	else if (!m_bReadPaused)
+	{
+		FinishEof();
+	}
 }
 
 void HttpSession::OnDataOut()
 {
 }
 
-void HttpSession::OnClose()
-{
-	FinishEof();
-	::OI::Net::NetSession::OnClose();
-}
-
-Client::Impl::Impl(const std::string& sHost, int32_t iPort, int32_t iTimeoutMilliseconds, bool bReuse)
-    : m_sHost(sHost), m_iPort(iPort), m_iTimeoutMilliseconds(iTimeoutMilliseconds), m_pSession(NULL), m_iSessionId(INVALID_SID), m_bConnected(false), m_bConnecting(false), m_bClosed(false), m_bReuse(bReuse)
-{
-	iMaxReceiveBufferBytes = kMaxHeader + kMaxBody;
-}
-
-const std::string Client::Impl::GetIDString()
-{
-	return "HttpClient";
-}
-
-void Client::Impl::Publish(const std::shared_ptr<Call::Request>& pRequestLocal, int32_t iCode, const char* pWhy)
+void HttpSessionManager::Publish(const std::shared_ptr<Call::Request>& pRequestLocal, int32_t iCode, const char* pWhy)
 {
 	if (!pRequestLocal)
 	{
@@ -936,326 +923,389 @@ void Client::Impl::Publish(const std::shared_ptr<Call::Request>& pRequestLocal, 
 	}
 }
 
-void Client::Impl::UseAddress(const std::string& sIp)
+// One in-progress TCP connect. The manager owns its request until completion or cancellation.
+class HttpDial final : public Net::Channel
 {
-	std::string sPortLocal = std::to_string(m_iPort);
-	DefaultInit(sIp, sPortLocal);
-	sEndpoint = ::OI::Net::NetAddr::Endpoint(sIp, sPortLocal);
-}
-
-void Client::Impl::FailFront(const char* pWhy)
-{
-	if (m_vQueue.empty())
+	std::shared_ptr<Call::Request> m_pCall;
+	void Ready(bool bReadEvent)
 	{
-		return;
-	}
-	std::shared_ptr<Call::Request> pRequestLocal = m_vQueue.front();
-	m_vQueue.pop_front();
-	Publish(pRequestLocal, OI_ERR_CONNECT, pWhy);
-}
-
-void Client::Impl::OnHttpFinished(HttpSession* pSession, int32_t iCode, const char* pWhy, bool bClose, int32_t iStatusLocal, std::string sBodyLocal, Headers vHeaders)
-{
-	if (m_pFlight && pSession == m_pSession)
-	{
-		std::shared_ptr<Call::Request> pFlightLocal = std::move(m_pFlight);
-		pFlightLocal->iStatus = iStatusLocal;
-		if (iCode == OI_OK)
+		if (!m_pCall)
 		{
-			pFlightLocal->vHeaders = std::move(vHeaders);
-			pFlightLocal->sBody = std::move(sBodyLocal);
-		}
-		Publish(pFlightLocal, iCode, pWhy);
-	}
-	bool bDropLocal = iCode != OI_OK || bClose || !m_bReuse;
-	if (bDropLocal && pSession == m_pSession && pSession && !pSession->IsClosed())
-	{
-		pSession->Abandon();
-		CloseSession(pSession->GetSessionID());
-		return;
-	}
-	if (!m_bClosed)
-	{
-		Pump();
-	}
-}
-
-void Client::Impl::OnIdleBytes(HttpSession* pSession)
-{
-	if (pSession == m_pSession && pSession && !pSession->IsClosed())
-	{
-		CloseSession(pSession->GetSessionID());
-	}
-}
-
-void Client::Impl::Pump()
-{
-	while (!m_vQueue.empty() && m_vQueue.front()->Cancelled())
-	{
-		auto pCancelled = std::move(m_vQueue.front());
-		m_vQueue.pop_front();
-		Publish(pCancelled, OI_ERR_CANCELLED, "cancelled");
-	}
-	if (m_bClosed || m_pFlight || m_vQueue.empty())
-	{
-		return;
-	}
-	if (m_bConnected && m_pSession && !m_pSession->IsClosed())
-	{
-		std::shared_ptr<Call::Request> pRequestLocal = m_vQueue.front();
-		m_vQueue.pop_front();
-		m_pFlight = pRequestLocal;
-		const bool bReady = m_pSession->BeginResponse(*pRequestLocal);
-		::OI::Base::Bytes stBytes(pRequestLocal->sRequest.data(), pRequestLocal->sRequest.size());
-		const int32_t iSendStatus = bReady ? SendBytes(m_iSessionId, stBytes) : OI_ERR_FAIL;
-		if (iSendStatus != OI_OK)
-		{
-			m_pFlight.reset();
-			m_pSession->Abandon();
-			Publish(pRequestLocal, iSendStatus, "send");
-			if (m_pSession && !m_pSession->IsClosed())
-			{
-				CloseSession(m_iSessionId);
-			}
 			return;
 		}
-		return;
-	}
-	if (m_bConnecting)
-	{
-		return;
-	}
-	m_bConnecting = true;
-	BeginConnect();
-}
-
-void Client::Impl::BeginConnect()
-{
-	UseAddress(m_sHost);
-	StartClient();
-}
-
-void Client::Impl::ArmTimer(const std::shared_ptr<Call::Request>& pRequestLocal)
-{
-	std::shared_ptr<Call::Request> pHeld = pRequestLocal;
-	int32_t iTimeout = pHeld->iTimeoutMilliseconds > 0 ? pHeld->iTimeoutMilliseconds : 5000;
-	::OI::Timer::BaseTimerManager::GetInstance().AddTimer([pHeld]()
-	{
-		auto pJob = std::make_unique<std::shared_ptr<Call::Request>>(pHeld);
-		::OI::Net::Poll::GetInstance().CallOnLoop([](void* pArgument)
+		const int iError = NetOs_GetSocketError(stSocket.GetSocket());
+		if (!bReadEvent && (iError == EINPROGRESS || iError == EINTR))
 		{
-			std::unique_ptr<std::shared_ptr<Call::Request>> pOwned(static_cast<std::shared_ptr<Call::Request>*>(pArgument));
-			if (*pOwned && (*pOwned)->pImpl)
+			return;
+		}
+		auto pCall = std::move(m_pCall);
+		pCall->pDial = nullptr;
+		HttpSessionManager::GetInstance().Connected(pCall, iError ? INVALID_SOCKET_ID : NetOs_Dup(stSocket.GetSocket()));
+	}
+
+  public:
+	HttpDial(Net::NetSocket stSocketLocal, const std::shared_ptr<Call::Request>& pCall)
+	    : Channel(stSocketLocal, nullptr), m_pCall(pCall)
+	{
+	}
+	void DataIn() override
+	{
+		Ready(true);
+	}
+	void DataOut() override
+	{
+		Ready(false);
+	}
+	bool TryClose() override
+	{
+		if (m_pCall)
+		{
+			return false;
+		}
+		delete this;
+		return true;
+	}
+};
+
+HttpSessionManager::HttpSessionManager()
+{
+	int64_t iLimit = 4, iIdle = 60000;
+	TryGetConfig("HttpClientPool.max_connections_per_server", iLimit);
+	TryGetConfig("HttpClientPool.idle_timeout_ms", iIdle);
+	m_iLimit = iLimit > 0 ? static_cast<size_t>(iLimit) : 4;
+	m_iIdleMilliseconds = iIdle > 0 ? static_cast<uint64_t>(iIdle) : 60000;
+	iMaxReceiveBufferBytes = kMaxHeader + kMaxBody;
+}
+
+void HttpSessionManager::Enqueue(const Pending& pCall)
+{
+	if (Net::Poll::GetInstance().InLoopThread())
+	{
+		EnqueueOnLoop(pCall);
+		return;
+	}
+	Net::Poll::GetInstance().PostOnLoop([](void* pArg)
+	{
+		std::unique_ptr<Pending> pCallLocal(static_cast<Pending*>(pArg));
+		GetInstance().EnqueueOnLoop(*pCallLocal);
+	}, new Pending(pCall));
+}
+
+void HttpSessionManager::EnqueueOnLoop(const Pending& pCall)
+{
+	if (m_bStopped || Thread::ThreadPool::GetInstance().AddStopHandler(&Stop) != OI_OK)
+	{
+		Publish(pCall, OI_ERR_CONNECT, "HTTP pool stopped");
+		return;
+	}
+	if (pCall->Cancelled())
+	{
+		Publish(pCall, OI_ERR_CANCELLED, "cancelled");
+		return;
+	}
+	// Only a live call needs a timeout. Completed requests and their bodies can be released immediately.
+	std::weak_ptr<Call::Request> pWeak = pCall;
+	const int32_t iTimerCode = Timer::BaseTimerManager::GetInstance().AddTimer([pWeak]()
+	{
+		if (auto pHeld = pWeak.lock(); pHeld && !pHeld->iDone.load(std::memory_order_acquire))
+		{
+			Net::Poll::GetInstance().CallOnLoop([](void* pArg)
 			{
-				(*pOwned)->pImpl->OnTimeout(*pOwned);
+				std::unique_ptr<Pending> pCallLocal(static_cast<Pending*>(pArg));
+				GetInstance().Finish(*pCallLocal, OI_ERR_TIMEOUT, "timeout");
+			}, new Pending(std::move(pHeld)));
+		}
+	}, pCall->iTimeoutMilliseconds > 0 ? pCall->iTimeoutMilliseconds : 5000);
+	if (iTimerCode != OI_OK)
+	{
+		Publish(pCall, iTimerCode, "HTTP request timer");
+		return;
+	}
+	auto& stPool = m_mPools[pCall->stOrigin];
+	stPool.vWaiting.push_back(pCall);
+	Pump(pCall->stOrigin, stPool);
+}
+
+void HttpSessionManager::Pump(const Origin& stOrigin, Pool& stPool)
+{
+	if (m_bStopped || stPool.bPumping)
+	{
+		return;
+	}
+	stPool.bPumping = true;
+	while (!stPool.vWaiting.empty() && stPool.vActive.size() < m_iLimit)
+	{
+		auto pCall = std::move(stPool.vWaiting.front());
+		stPool.vWaiting.pop_front();
+		if (pCall->Cancelled())
+		{
+			Publish(pCall, OI_ERR_CANCELLED, "cancelled");
+			continue;
+		}
+		if (pCall->bReuse)
+		{
+			auto it = std::find_if(stPool.vIdle.begin(), stPool.vIdle.end(), [pCall](const HttpSession* pSession)
+			{
+				return pSession->m_sCaFile == pCall->sCaFile;
+			});
+			if (it != stPool.vIdle.end())
+			{
+				auto* pSession = *it;
+				stPool.vIdle.erase(it);
+				stPool.vActive.insert(pCall);
+				Send(*pSession, pCall);
+				continue;
 			}
-		}, pJob.release());
-	}, iTimeout);
+		}
+		if (stPool.vIdle.size() + stPool.vActive.size() >= m_iLimit)
+		{
+			CloseSession(stPool.vIdle.front()->GetSessionID());
+		}
+		stPool.vActive.insert(pCall);
+		Net::NetAddr::Resolve(stOrigin.sHost, std::to_string(stOrigin.iPort), &Resolved, new Pending(pCall));
+	}
+	stPool.bPumping = false;
 }
 
-void Client::Impl::OnTimeout(const std::shared_ptr<Call::Request>& pRequestLocal)
+void HttpSessionManager::Resolved(void* pArgument, bool bOk, Net::NetAddr stAddress)
 {
-	if (!pRequestLocal || pRequestLocal->iDone.load(std::memory_order_acquire) != 0)
+	std::unique_ptr<Pending> pHeld(static_cast<Pending*>(pArgument));
+	const auto& pCall = *pHeld;
+	if (pCall->iDone.load())
 	{
 		return;
 	}
-	if (m_pFlight == pRequestLocal)
+	if (!bOk)
 	{
-		if (m_pSession)
-		{
-			m_pSession->Abandon();
-		}
-		m_pFlight.reset();
-		Publish(pRequestLocal, OI_ERR_TIMEOUT, "timeout");
-		if (m_pSession && !m_pSession->IsClosed())
-		{
-			CloseSession(m_iSessionId);
-		}
-		else if (!m_bClosed)
-		{
-			Pump();
-		}
+		GetInstance().Finish(pCall, OI_ERR_CONNECT, "DNS resolution failed");
 		return;
 	}
-	for (auto it = m_vQueue.begin(); it != m_vQueue.end(); ++it)
+	Net::NetSocket stSocket;
+	stSocket.Attach(stAddress.CreateTcp(true));
+	if (stSocket.GetSocket() == INVALID_SOCKET_ID)
 	{
-		if (*it == pRequestLocal)
-		{
-			m_vQueue.erase(it);
-			Publish(pRequestLocal, OI_ERR_TIMEOUT, "timeout");
-			break;
-		}
+		GetInstance().Finish(pCall, OI_ERR_CONNECT, "TCP socket creation failed");
+		return;
+	}
+	const int iResult = NetOs_Connect(stSocket.GetSocket(), stAddress.NetAttrPtr(), stAddress.NetAttrLen());
+	if (iResult == 0)
+	{
+		GetInstance().Connected(pCall, stSocket.GetSocket());
+		return;
+	}
+	if (errno != EINPROGRESS)
+	{
+		NetOs_Close(stSocket.GetSocket());
+		GetInstance().Finish(pCall, OI_ERR_CONNECT, "TCP connect failed");
+		return;
+	}
+	pCall->pDial = new HttpDial(stSocket, pCall);
+	Net::Poll::GetInstance().IOEventRegister(pCall->pDial, false, true);
+	if (!pCall->pDial->pPollToken)
+	{
+		GetInstance().Finish(pCall, OI_ERR_CONNECT, "TCP connect registration failed");
 	}
 }
 
-void Client::Impl::CheckQueuedStreams()
+void HttpSessionManager::Connected(const Pending& pCall, net_socket_t iSocket)
 {
-	bool bWaiting = false;
-	for (auto it = m_vQueue.begin(); it != m_vQueue.end();)
+	if (iSocket == INVALID_SOCKET_ID)
 	{
-		if ((*it)->Cancelled())
+		Finish(pCall, OI_ERR_CONNECT, "TCP connect failed");
+		return;
+	}
+	auto& stPool = m_mPools.at(pCall->stOrigin);
+	if (pCall->stOrigin.bHttps && (!stPool.pTls || stPool.sCaFile != pCall->sCaFile))
+	{
+		stPool.pTls = std::make_unique<Net::TlsClientContext>(pCall->sCaFile);
+		stPool.sCaFile = pCall->sCaFile;
+	}
+	auto* pSession = new HttpSession(*this, pCall->stOrigin, stPool.pTls.get());
+	pSession->m_sCaFile = pCall->sCaFile;
+	Net::NetSocket stSocket;
+	stSocket.Attach(iSocket);
+	auto* pChannel = new Net::TCP_Channel(stSocket, pSession);
+	pSession->SetChannel(pChannel);
+	AddSession(pSession, Net::NetAddr::Endpoint(pCall->stOrigin.sHost, std::to_string(pCall->stOrigin.iPort)), iMaxSendQueueBytes, iMaxReceiveBufferBytes);
+	Net::Poll::GetInstance().IOEventRegister(pChannel, true, false);
+	if (!pChannel->pPollToken)
+	{
+		CloseSession(pSession->GetSessionID());
+		pChannel->TryClose();
+		Finish(pCall, OI_ERR_CONNECT, "TCP session registration failed");
+		return;
+	}
+	Send(*pSession, pCall);
+}
+
+void HttpSessionManager::OnAddSession(Net::Session* pSession)
+{
+	m_mSessions.emplace(pSession->GetSessionID(), static_cast<HttpSession*>(pSession));
+}
+
+void HttpSessionManager::Send(HttpSession& stSession, const Pending& pCall)
+{
+	stSession.m_pFlight = pCall;
+	pCall->iSessionId = stSession.GetSessionID();
+	if (pCall->Cancelled())
+	{
+		Finish(pCall, OI_ERR_CANCELLED, "cancelled");
+		return;
+	}
+	const bool bReady = stSession.BeginResponse(*pCall);
+	const int32_t iCode = bReady ? SendBytes(pCall->iSessionId, Base::Bytes(pCall->sRequest.data(), pCall->sRequest.size())) : OI_ERR_FAIL;
+	if (iCode != OI_OK)
+	{
+		Finish(pCall, iCode, stSession.TransportError());
+	}
+}
+
+void HttpSessionManager::Finish(const Pending& pCall, int32_t iCode, const char* pReason)
+{
+	if (pCall->iDone.load())
+	{
+		return;
+	}
+	auto& stPool = m_mPools.at(pCall->stOrigin);
+	if (auto* pDial = std::exchange(pCall->pDial, nullptr))
+	{
+		delete pDial;
+	}
+	if (pCall->iSessionId != INVALID_SID)
+	{
+		auto it = m_mSessions.find(pCall->iSessionId);
+		if (it != m_mSessions.end())
 		{
-			auto pCancelled = std::move(*it);
-			it = m_vQueue.erase(it);
-			Publish(pCancelled, OI_ERR_CANCELLED, "cancelled");
+			it->second->Abandon();
+			it->second->m_pFlight.reset();
+			CloseSession(pCall->iSessionId);
+		}
+	}
+	if (!stPool.vActive.erase(pCall))
+	{
+		std::erase(stPool.vWaiting, pCall);
+	}
+	Publish(pCall, iCode, pReason);
+	Pump(pCall->stOrigin, stPool);
+}
+
+void HttpSessionManager::Complete(HttpSession& stSession, int32_t iCode, const char* pReason, bool bClose, int32_t iStatus, std::string sBody, Headers vHeaders)
+{
+	auto pCall = std::move(stSession.m_pFlight);
+	if (!pCall)
+	{
+		return;
+	}
+	auto& stPool = m_mPools.at(pCall->stOrigin);
+	pCall->iStatus = iStatus;
+	pCall->sBody = std::move(sBody);
+	pCall->vHeaders = std::move(vHeaders);
+	stPool.vActive.erase(pCall);
+	if (iCode != OI_OK || bClose || !pCall->bReuse || stSession.IsClosed())
+	{
+		if (!stSession.IsClosed())
+		{
+			CloseSession(stSession.GetSessionID());
+		}
+	}
+	else
+	{
+		stSession.m_iIdleSince = uv_now(Net::Poll::GetInstance().Loop());
+		stPool.vIdle.push_back(&stSession);
+	}
+	Publish(pCall, iCode, pReason);
+	Pump(pCall->stOrigin, stPool);
+}
+
+void HttpSessionManager::OnSessionClosed(sid_t iSessionId)
+{
+	auto it = m_mSessions.find(iSessionId);
+	if (it == m_mSessions.end())
+	{
+		return;
+	}
+	auto* pSession = it->second;
+	m_mSessions.erase(it);
+	auto& stPool = m_mPools.at(pSession->m_stOrigin);
+	std::erase(stPool.vIdle, pSession);
+	pSession->EndTransport();
+	if (auto pCall = pSession->m_pFlight)
+	{
+		pSession->Abandon();
+		pSession->m_pFlight.reset();
+		Finish(pCall, OI_ERR_CONNECT, "connection closed");
+	}
+}
+
+void HttpSessionManager::Stop()
+{
+	auto& stManager = GetInstance();
+	stManager.m_bStopped = true;
+	for (auto& [stOrigin, stPool] : stManager.m_mPools)
+	{
+		while (!stPool.vWaiting.empty())
+		{
+			auto pCall = stPool.vWaiting.front();
+			stManager.Finish(pCall, OI_ERR_CONNECT, "HTTP pool stopped");
+		}
+		while (!stPool.vActive.empty())
+		{
+			auto pCall = *stPool.vActive.begin();
+			stManager.Finish(pCall, OI_ERR_CONNECT, "HTTP pool stopped");
+		}
+	}
+	stManager.CloseAllSessions();
+	stManager.m_mPools.clear();
+}
+
+Coro::Task HttpSessionManager::OnSecondUpdate(time_t)
+{
+	Net::Poll::GetInstance().CallOnLoop([](void*)
+	{
+		GetInstance().Sweep();
+	}, nullptr);
+	co_return;
+}
+
+void HttpSessionManager::Sweep()
+{
+	const auto iNow = uv_now(Net::Poll::GetInstance().Loop());
+	for (auto it = m_mPools.begin(); it != m_mPools.end();)
+	{
+		auto& stPool = it->second;
+		while (!stPool.vIdle.empty() && iNow - stPool.vIdle.front()->m_iIdleSince >= m_iIdleMilliseconds)
+		{
+			CloseSession(stPool.vIdle.front()->GetSessionID());
+		}
+		std::vector<Pending> vCancelled;
+		for (const auto& pCall : stPool.vWaiting)
+		{
+			if (pCall->Cancelled())
+			{
+				vCancelled.push_back(pCall);
+			}
+		}
+		for (const auto& pCall : stPool.vActive)
+		{
+			if (pCall->Cancelled())
+			{
+				vCancelled.push_back(pCall);
+			}
+		}
+		for (const auto& pCall : vCancelled)
+		{
+			Finish(pCall, OI_ERR_CANCELLED, "cancelled");
+		}
+		if (stPool.vIdle.empty() && stPool.vActive.empty() && stPool.vWaiting.empty())
+		{
+			it = m_mPools.erase(it);
 		}
 		else
 		{
-			bWaiting |= bool((*it)->pSource) || bool((*it)->pSink);
 			++it;
 		}
 	}
-	if (!bWaiting)
-	{
-		m_stQueuePump.Stop();
-	}
 }
-
-void Client::Impl::EnqueueOnLoop(const std::shared_ptr<Call::Request>& pRequestLocal)
-{
-	if (pRequestLocal->Cancelled())
-	{
-		Publish(pRequestLocal, OI_ERR_CANCELLED, "cancelled");
-		return;
-	}
-	if (m_bClosed)
-	{
-		Publish(pRequestLocal, OI_ERR_CONNECT, "closed");
-		return;
-	}
-	if (m_iPort <= 0 || m_iPort > 65535 || m_sHost.empty())
-	{
-		Publish(pRequestLocal, OI_ERR_INVALID_ARGUMENT, "host");
-		return;
-	}
-	if ((pRequestLocal->pSource || pRequestLocal->pSink) && !m_stQueuePump.Start(this, [](uv_timer_t* pTimer)
-	{
-		static_cast<Impl*>(pTimer->data)->CheckQueuedStreams();
-	}))
-	{
-		Publish(pRequestLocal, OI_ERR_FAIL, "stream timer");
-		return;
-	}
-	m_vQueue.push_back(pRequestLocal);
-	ArmTimer(pRequestLocal);
-	Pump();
-}
-
-void Client::Impl::Enqueue(const std::shared_ptr<Call::Request>& pRequestLocal)
-{
-	if (!::OI::Net::Poll::GetInstance().InLoopThread())
-	{
-		auto pJob = std::make_unique<LoopRequest>();
-		pJob->pImpl = Hold();
-		pJob->pRequest = pRequestLocal;
-		::OI::Net::Poll::GetInstance().PostOnLoop([](void* pArgument)
-		{
-			std::unique_ptr<LoopRequest> pOwned(static_cast<LoopRequest*>(pArgument));
-			pOwned->pImpl->EnqueueOnLoop(pOwned->pRequest);
-		}, pJob.release());
-		return;
-	}
-	EnqueueOnLoop(pRequestLocal);
-}
-
-void Client::Impl::Shutdown()
-{
-	if (!::OI::Net::Poll::GetInstance().InLoopThread())
-	{
-		auto pJob = std::make_unique<std::shared_ptr<Impl>>(Hold());
-		::OI::Net::Poll::GetInstance().PostOnLoop([](void* pArgument)
-		{
-			std::unique_ptr<std::shared_ptr<Impl>> pOwned(static_cast<std::shared_ptr<Impl>*>(pArgument));
-			(*pOwned)->Shutdown();
-		}, pJob.release());
-		return;
-	}
-	if (m_bClosed)
-	{
-		return;
-	}
-	m_bClosed = true;
-	m_stQueuePump.Stop();
-	if (m_pSession)
-	{
-		m_pSession->Abandon();
-	}
-	std::shared_ptr<Call::Request> pFlightLocal = std::move(m_pFlight);
-	std::deque<std::shared_ptr<Call::Request>> vQueueLocal = std::move(m_vQueue);
-	if (pFlightLocal)
-	{
-		Publish(pFlightLocal, OI_ERR_CONNECT, "closed");
-	}
-	for (const auto& pRequestLocal : vQueueLocal)
-	{
-		Publish(pRequestLocal, OI_ERR_CONNECT, "closed");
-	}
-	CancelConnect();
-	CloseAllSessions();
-}
-
-::OI::Net::Session* Client::Impl::CloneSession()
-{
-	return new HttpSession(Hold());
-}
-
-void Client::Impl::OnAddSession(::OI::Net::Session* pSession)
-{
-	m_pSession = static_cast<HttpSession*>(pSession);
-	m_iSessionId = pSession->GetSessionID();
-	m_bConnected = true;
-	m_bConnecting = false;
-	if (m_bClosed)
-	{
-		CloseSession(m_iSessionId);
-		return;
-	}
-	Pump();
-}
-
-void Client::Impl::OnDelSession(const ::OI::Net::Session* pSession)
-{
-	if (m_pSession == pSession)
-	{
-		m_pSession = NULL;
-		m_bConnected = false;
-		m_iSessionId = INVALID_SID;
-	}
-}
-
-void Client::Impl::OnConnectFailed()
-{
-	m_bConnecting = false;
-	m_bConnected = false;
-	m_pSession = NULL;
-	m_iSessionId = INVALID_SID;
-	if (m_bClosed)
-	{
-		return;
-	}
-	FailFront("connect");
-	Pump();
-}
-
-void Client::Impl::OnSessionClosed(sid_t iSessionId)
-{
-	if (m_pSession && m_pSession->GetSessionID() == iSessionId)
-	{
-		HttpSession* pSessionLocal = m_pSession;
-		pSessionLocal->FinishEof();
-		if (m_pSession == pSessionLocal)
-		{
-			m_pSession = NULL;
-			m_bConnected = false;
-			m_iSessionId = INVALID_SID;
-		}
-	}
-	if (!m_bClosed)
-	{
-		Pump();
-	}
-}
-
 Call::Call(std::shared_ptr<Request> pRequestLocal)
     : m_pRequest(std::move(pRequestLocal))
 {
@@ -1279,12 +1329,7 @@ bool Call::await_suspend(std::coroutine_handle<> stHandleLocal)
 	{
 		return false;
 	}
-	std::shared_ptr<Client::Impl> pImplLocal = m_pRequest->pImpl;
-	if (!pImplLocal)
-	{
-		throw std::logic_error("HTTP Call can only be awaited once and must not be moved from");
-	}
-	pImplLocal->Enqueue(m_pRequest);
+	HttpSessionManager::GetInstance().Enqueue(m_pRequest);
 	// Idle→Waiting：还在等，挂起。Ready→Waiting：入队时已经写完结果，不挂起。
 	return m_pRequest->iGate.exchange(OI::Coro::Gate::Waiting, std::memory_order_acq_rel) != OI::Coro::Gate::Ready;
 }
@@ -1313,23 +1358,18 @@ Response Call::await_resume()
 }
 
 Client::Client(const std::string& sHost, int32_t iPort, int32_t iTimeoutMilliseconds, bool bReuse)
-    : m_pImpl(std::make_shared<Impl>(sHost, iPort, iTimeoutMilliseconds, bReuse))
+    : m_sHost(sHost), m_iPort(iPort), m_stOptions{iTimeoutMilliseconds, {}}, m_bHttps(false), m_bReuse(bReuse)
 {
-	m_pImpl->Attach(m_pImpl);
 }
 
-Client::~Client()
+Client::Client(const std::string& sHost, int32_t iPort, const TlsOptions& stTls, int32_t iTimeoutMilliseconds, bool bReuse)
+    : m_sHost(sHost), m_iPort(iPort), m_stOptions{iTimeoutMilliseconds, stTls.sCaFile}, m_bHttps(true), m_bReuse(bReuse)
 {
-	if (m_pImpl)
-	{
-		m_pImpl->Shutdown();
-		m_pImpl.reset();
-	}
 }
 
-static std::string QueryTarget(const std::string& sPath, std::span<const std::pair<std::string, std::string>> vQuery)
+static std::string QueryTarget(std::string_view sPath, std::span<const std::pair<std::string, std::string>> vQuery)
 {
-	std::string sTarget = sPath.empty() ? "/" : sPath;
+	std::string sTarget(sPath.empty() ? "/" : sPath);
 	if (!vQuery.empty())
 	{
 		const size_t iQueryStart = sTarget.find('?');
@@ -1355,6 +1395,93 @@ static std::string QueryTarget(const std::string& sPath, std::span<const std::pa
 	return sTarget;
 }
 
+Call Client::GetUrl(std::string_view sUrl, const ClientOptions& stOptions)
+{
+	return SendUrl(sUrl, Request{}, stOptions);
+}
+
+Call Client::PostUrl(std::string_view sUrl, const std::string& sBody, const std::string& sContentType, const ClientOptions& stOptions)
+{
+	Request stRequest;
+	stRequest.sMethod = "POST";
+	stRequest.sBody = sBody;
+	stRequest.sContentType = sContentType;
+	return SendUrl(sUrl, stRequest, stOptions);
+}
+
+Call Client::SendUrl(std::string_view sUrl, const Request& stRequest, const ClientOptions& stOptions)
+{
+	auto fnInvalid = []()
+	{
+		auto pCall = std::make_shared<Call::Request>();
+		pCall->iCode = OI_ERR_INVALID_ARGUMENT;
+		pCall->sError = "invalid absolute HTTP URL";
+		return Call(std::move(pCall));
+	};
+	const size_t iScheme = sUrl.find("://");
+	if (iScheme == sUrl.npos)
+	{
+		return fnInvalid();
+	}
+	const auto sScheme = sUrl.substr(0, iScheme);
+	const bool bHttps = HeaderFields::NameEqual(sScheme, "https");
+	if (!bHttps && !HeaderFields::NameEqual(sScheme, "http"))
+	{
+		return fnInvalid();
+	}
+	sUrl.remove_prefix(iScheme + 3);
+	sUrl = sUrl.substr(0, sUrl.find('#'));
+	const size_t iPath = sUrl.find_first_of("/?");
+	const auto sAuthority = sUrl.substr(0, iPath);
+	auto sHost = sAuthority;
+	size_t iColon = sAuthority.find(':');
+	if (sAuthority.starts_with('['))
+	{
+		const size_t iEnd = sAuthority.find(']');
+		if (iEnd == sAuthority.npos || (iEnd + 1 != sAuthority.size() && sAuthority[iEnd + 1] != ':'))
+		{
+			return fnInvalid();
+		}
+		sHost = sAuthority.substr(1, iEnd - 1);
+		Net::Ipv6Addr stAddress;
+		if (!stAddress.Init(std::string(sHost), 0))
+		{
+			return fnInvalid();
+		}
+		iColon = iEnd + 1 == sAuthority.size() ? sAuthority.npos : iEnd + 1;
+	}
+	else
+	{
+		sHost = sAuthority.substr(0, iColon);
+		if (sHost.find_first_of("[]") != sHost.npos)
+		{
+			return fnInvalid();
+		}
+	}
+	int32_t iPort = bHttps ? 443 : 80;
+	if (iColon != sAuthority.npos)
+	{
+		const auto sPort = sAuthority.substr(iColon + 1);
+		auto stResult = std::from_chars(sPort.data(), sPort.data() + sPort.size(), iPort);
+		if (stResult.ec != std::errc{} || stResult.ptr != sPort.data() + sPort.size())
+		{
+			return fnInvalid();
+		}
+	}
+	Client stClient(std::string(sHost), iPort, stOptions.iTimeoutMilliseconds);
+	stClient.m_bHttps = bHttps;
+	if (bHttps)
+	{
+		stClient.m_stOptions.sCaFile = stOptions.sCaFile;
+	}
+	const auto sPath = iPath == sUrl.npos ? std::string_view("/") : sUrl.substr(iPath);
+	if (sPath.starts_with('?'))
+	{
+		return stClient.Build(stRequest, "/" + std::string(sPath));
+	}
+	return stClient.Build(stRequest, sPath);
+}
+
 Call Client::Get(const std::string& sPath, const std::vector<std::pair<std::string, std::string>>& vQuery)
 {
 	Request stRequest;
@@ -1374,9 +1501,40 @@ Call Client::Post(const std::string& sPath, const std::string& sBodyLocal, const
 
 Call Client::Send(const Request& stRequest)
 {
+	return Build(stRequest, stRequest.sPath);
+}
+
+Call Client::Build(const Request& stRequest, std::string_view sPath) const
+{
 	auto pRequest = std::make_shared<Call::Request>();
-	pRequest->pImpl = m_pImpl;
-	pRequest->iTimeoutMilliseconds = m_pImpl->Timeout();
+	pRequest->stOrigin = {m_sHost, m_iPort, m_bHttps};
+	Net::Ipv6Addr stIpv6;
+	if (stIpv6.Init(m_sHost, 0))
+	{
+		pRequest->stOrigin.sHost = stIpv6.Host();
+	}
+	else
+	{
+		for (auto& iByte : pRequest->stOrigin.sHost)
+		{
+			if (iByte >= 'A' && iByte <= 'Z')
+			{
+				iByte += 'a' - 'A';
+			}
+		}
+	}
+	pRequest->sCaFile = m_stOptions.sCaFile;
+	pRequest->bReuse = m_bReuse && !stRequest.bFreshConnection;
+	pRequest->iTimeoutMilliseconds = m_stOptions.iTimeoutMilliseconds;
+	if (m_iPort <= 0 || m_iPort > 65535 || m_sHost.empty() || std::any_of(m_sHost.begin(), m_sHost.end(), [](unsigned char iByte)
+	{
+		return iByte <= 32 || iByte == 127 || std::string_view("/?#@").find(iByte) != std::string_view::npos;
+	}))
+	{
+		pRequest->iCode = OI_ERR_INVALID_ARGUMENT;
+		pRequest->sError = "invalid HTTP authority";
+		return Call(pRequest);
+	}
 	const bool bPost = stRequest.sMethod == "POST";
 	if ((!bPost && stRequest.sMethod != "GET") || (!bPost && (!stRequest.sBody.empty() || stRequest.pBodySource)) ||
 	    (stRequest.pBodySource && !stRequest.sBody.empty()) ||
@@ -1386,7 +1544,7 @@ Call Client::Send(const Request& stRequest)
 		pRequest->sError = "invalid HTTP method, body or headers";
 		return Call(pRequest);
 	}
-	std::string sTarget = QueryTarget(stRequest.sPath, {stRequest.mQuery.begin(), stRequest.mQuery.end()});
+	std::string sTarget = QueryTarget(sPath, {stRequest.mQuery.begin(), stRequest.mQuery.end()});
 	if (sTarget.front() != '/' || std::any_of(sTarget.begin(), sTarget.end(), [](unsigned char iByte)
 	{
 		return iByte <= 32 || iByte == 127 || iByte == '#';
@@ -1398,7 +1556,7 @@ Call Client::Send(const Request& stRequest)
 	}
 	auto& sWire = pRequest->sRequest;
 	sWire = stRequest.sMethod + " " + sTarget + " HTTP/1.1\r\n";
-	sWire += HostHeader(m_pImpl->Host(), m_pImpl->Port());
+	sWire += HostHeader(m_sHost, m_iPort, m_bHttps);
 	for (const auto& [sKey, sValue] : stRequest.vHeaders)
 	{
 		sWire += sKey + ": " + sValue + "\r\n";
@@ -1417,7 +1575,7 @@ Call Client::Send(const Request& stRequest)
 	{
 		sWire += "Content-Length: " + std::to_string(stRequest.sBody.size()) + "\r\n";
 	}
-	sWire += m_pImpl->Reuse() ? "Connection: keep-alive\r\n\r\n" : "Connection: close\r\n\r\n";
+	sWire += pRequest->bReuse ? "Connection: keep-alive\r\n\r\n" : "Connection: close\r\n\r\n";
 	sWire += stRequest.sBody;
 	return Call(pRequest);
 }

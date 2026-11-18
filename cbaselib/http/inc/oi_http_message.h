@@ -120,6 +120,7 @@ class QueryParams
 
 struct Request : Message
 {
+	bool bFreshConnection = false;
 	std::string sMethod = "GET";
 	std::string sPath;
 	QueryParams mQuery;

@@ -1,4 +1,5 @@
 #include "web_client.h"
+#include <optional>
 #include "oi_http_json.h"
 #include "web_stream_fixture.h"
 #include "web_json_regression.h"
@@ -122,14 +123,200 @@ static bool PlainJsonKeys(const std::string& sText)
 	return true;
 }
 
-static OI::Coro::Task Run()
+OI::Coro::Task WebClient::PoolGet(std::string sUrl, int32_t iTimeoutMilliseconds, bool bFresh, OI::Http::Response& stResponse)
+{
+	OI::Http::ClientOptions stOptions;
+	stOptions.iTimeoutMilliseconds = iTimeoutMilliseconds;
+	OI::Http::Request stRequest;
+	stRequest.sMethod = "GET";
+	stRequest.bFreshConnection = bFresh;
+	stResponse = co_await OI::Http::Client::SendUrl(std::move(sUrl), stRequest, stOptions);
+}
+
+OI::Coro::Task WebClient::PoolRelease(std::string sControlUrl, OI::Http::Response& stResponse)
+{
+	co_await OI::Coro::yield(700);
+	stResponse = co_await OI::Http::Client::GetUrl(sControlUrl + "/release");
+}
+
+OI::Coro::Task WebClient::PoolQueue(std::string sBase, std::string sControlUrl, OI::Http::Response& stQueued, OI::Http::Response& stQueuedSuccess, OI::Http::Response& stReady, OI::Http::Response& stRelease)
+{
+	stReady = co_await OI::Http::Client::GetUrl(sControlUrl + "/ready");
+	if (stReady.iCode != OI_OK)
+	{
+		co_return;
+	}
+	std::vector<OI::Coro::Task> vTasks;
+	vTasks.push_back(PoolGet(sBase + "/queued", 300, false, stQueued));
+	vTasks.push_back(PoolGet(sBase + "/queued-success", 3000, false, stQueuedSuccess));
+	vTasks.push_back(PoolRelease(std::move(sControlUrl), stRelease));
+	co_await OI::Coro::WhenAll(std::move(vTasks));
+}
+
+OI::Coro::Task WebClient::RunPoolRegression(int32_t iPort, int32_t iControlPort)
+{
+	const std::string sBase = "http://127.0.0.1:" + std::to_string(iPort);
+	const std::string sControlUrl = "http://127.0.0.1:" + std::to_string(iControlPort);
+	OI::Http::Response stHoldOne;
+	OI::Http::Response stHoldTwo;
+	OI::Http::Response stQueued;
+	OI::Http::Response stQueuedSuccess;
+	OI::Http::Response stReady;
+	OI::Http::Response stRelease;
+	std::vector<OI::Coro::Task> vTasks;
+	vTasks.push_back(PoolGet(sBase + "/hold-one", 5000, false, stHoldOne));
+	vTasks.push_back(PoolGet(sBase + "/hold-two", 5000, false, stHoldTwo));
+	vTasks.push_back(PoolQueue(sBase, sControlUrl, stQueued, stQueuedSuccess, stReady, stRelease));
+	co_await OI::Coro::WhenAll(std::move(vTasks));
+	auto stAfterQueue = co_await OI::Http::Client::GetUrl(sBase + "/after-queue");
+	OI::Http::Response stBusy;
+	OI::Http::Response stFresh;
+	std::vector<OI::Coro::Task> vFreshTasks;
+	vFreshTasks.push_back(PoolGet(sBase + "/busy", 3000, false, stBusy));
+	vFreshTasks.push_back(PoolGet(sBase + "/fresh-full", 3000, true, stFresh));
+	co_await OI::Coro::WhenAll(std::move(vFreshTasks));
+	co_await OI::Coro::yield(5500);
+	auto stAfterIdle = co_await OI::Http::Client::GetUrl(sBase + "/after-idle");
+	int32_t iBad = 0;
+	if (stHoldOne.iCode != OI_OK || stHoldOne.sBody != "/hold-one" || stHoldTwo.iCode != OI_OK || stHoldTwo.sBody != "/hold-two" || stQueued.iCode != OI_ERR_TIMEOUT || stQueuedSuccess.iCode != OI_OK || stQueuedSuccess.sBody != "/queued-success" || stReady.iCode != OI_OK || stRelease.iCode != OI_OK || stAfterQueue.iCode != OI_OK || stAfterQueue.sBody != "/after-queue" || stBusy.iCode != OI_OK || stBusy.sBody != "/busy" || stFresh.iCode != OI_OK || stFresh.sBody != "/fresh-full" || stAfterIdle.iCode != OI_OK || stAfterIdle.sBody != "/after-idle")
+	{
+		LOG_ERROR("pool regression failed hold1=%d hold2=%d queued=%d queued_success=%d ready=%d release=%d after=%d busy=%d fresh=%d idle=%d", stHoldOne.iCode, stHoldTwo.iCode, stQueued.iCode, stQueuedSuccess.iCode, stReady.iCode, stRelease.iCode, stAfterQueue.iCode, stBusy.iCode, stFresh.iCode, stAfterIdle.iCode);
+		++iBad;
+	}
+	LOG_TRACE("pool regression bad=%d", iBad);
+	fflush(stdout);
+	OI::Thread::ThreadPool::GetInstance().RequestStop(iBad == 0 ? 0 : 1);
+}
+
+OI::Coro::Task WebClient::UrlGet(std::string sUrl, OI::Http::Response& stResponse)
+{
+	stResponse = co_await OI::Http::Client::GetUrl(std::move(sUrl));
+}
+
+OI::Coro::Task WebClient::RunUrlRegression(int32_t iPort, int32_t iTlsPort, const std::string& sCaFile)
+{
+	const std::string sBase = "http://127.0.0.1:" + std::to_string(iPort);
+	const std::string sTlsBase = "https://localhost:" + std::to_string(iTlsPort);
+	int32_t iBad = 0;
+	auto stFirst = co_await OI::Http::Client("127.0.0.1", iPort).Get("/first");
+	auto stSecond = co_await OI::Http::Client::GetUrl(sBase + "/second?x=1");
+	auto stThird = co_await OI::Http::Client("127.0.0.1", iPort).Get("/third");
+	OI::Http::Request stFreshRequest;
+	stFreshRequest.sMethod = "GET";
+	stFreshRequest.bFreshConnection = true;
+	auto stFresh = co_await OI::Http::Client::SendUrl(sBase + "/fresh", stFreshRequest);
+	auto stAfter = co_await OI::Http::Client::GetUrl(sBase + "/after");
+	OI::Http::Response stSlow;
+	OI::Http::Response stFast;
+	std::vector<OI::Coro::Task> vTasks;
+	vTasks.push_back(UrlGet(sBase + "/slow", stSlow));
+	vTasks.push_back(UrlGet(sBase + "/fast", stFast));
+	co_await OI::Coro::WhenAll(std::move(vTasks));
+	auto stTemporaryCall = OI::Http::Client::GetUrl(std::string(sBase + "/temporary"));
+	auto stTemporary = co_await std::move(stTemporaryCall);
+	auto stPost = co_await OI::Http::Client::PostUrl(sBase + "/post", "payload", "text/plain");
+	OI::Http::ClientOptions stOptions;
+	stOptions.sCaFile = sCaFile;
+	stOptions.iTimeoutMilliseconds = 1500;
+	auto stTls = co_await OI::Http::Client::GetUrl(sTlsBase + "/tls", stOptions);
+	OI::Http::ClientOptions stUntrusted;
+	stUntrusted.iTimeoutMilliseconds = 1500;
+	auto stTlsUntrusted = co_await OI::Http::Client::GetUrl(sTlsBase + "/untrusted", stUntrusted);
+	auto stWrongScheme = co_await OI::Http::Client::GetUrl("http://localhost:" + std::to_string(iTlsPort) + "/wrong", stOptions);
+	auto stInvalid = co_await OI::Http::Client::GetUrl("http://:80/bad");
+	if (stFirst.iCode != OI_OK || stFirst.sBody != "/first" || stSecond.iCode != OI_OK || stSecond.sBody != "/second?x=1" || stThird.iCode != OI_OK || stThird.sBody != "/third" || stFresh.iCode != OI_OK || stFresh.sBody != "/fresh" || stAfter.iCode != OI_OK || stAfter.sBody != "/after" || stSlow.iCode != OI_OK || stSlow.sBody != "/slow" || stFast.iCode != OI_OK || stFast.sBody != "/fast" || stTemporary.iCode != OI_OK || stTemporary.sBody != "/temporary" || stPost.iCode != OI_OK || stPost.sBody != "payload" || stTls.iCode != OI_OK || stTls.sBody != "/tls" || stTlsUntrusted.iCode != OI_ERR_CONNECT || stWrongScheme.iCode == OI_OK || stInvalid.iCode == OI_OK)
+	{
+		LOG_ERROR("url regression failed first=%d second=%d third=%d fresh=%d after=%d slow=%d fast=%d temporary=%d post=%d tls=%d untrusted=%d scheme=%d invalid=%d", stFirst.iCode, stSecond.iCode, stThird.iCode, stFresh.iCode, stAfter.iCode, stSlow.iCode, stFast.iCode, stTemporary.iCode, stPost.iCode, stTls.iCode, stTlsUntrusted.iCode, stWrongScheme.iCode, stInvalid.iCode);
+		++iBad;
+	}
+	LOG_TRACE("url regression bad=%d", iBad);
+	fflush(stdout);
+	OI::Thread::ThreadPool::GetInstance().RequestStop(iBad == 0 ? 0 : 1);
+}
+
+OI::Coro::Task WebClient::TlsGet(OI::Http::Client& stClient, OI::Http::Response& stResponse)
+{
+	stResponse = co_await stClient.Get("/health");
+}
+
+OI::Coro::Task WebClient::RunTlsRegression(const std::string& sHost, int32_t iPort, const std::string& sCaFile, const std::string& sCase, int32_t iStallPort)
+{
+	OI::Http::Client stClient(sHost, iPort, OI::Http::TlsOptions{sCaFile}, 1500, true);
+	int32_t iBad = 0;
+	if (sCase == "stall")
+	{
+		OI::Http::Client stStall(sHost, iStallPort, OI::Http::TlsOptions{sCaFile}, 1500, true);
+		OI::Http::Response stStalled;
+		OI::Http::Response stHealthy;
+		std::vector<OI::Coro::Task> vTasks;
+		vTasks.push_back(TlsGet(stStall, stStalled));
+		vTasks.push_back(TlsGet(stClient, stHealthy));
+		co_await OI::Coro::WhenAll(std::move(vTasks));
+		if (stStalled.iCode != OI_ERR_TIMEOUT || stHealthy.iCode != OI_OK || stHealthy.sBody != "ok")
+		{
+			LOG_ERROR("https stall failed timeout=%d health=%d", stStalled.iCode, stHealthy.iCode);
+			++iBad;
+		}
+	}
+	else if (sCase == "hostname" || sCase == "untrusted")
+	{
+		auto stResponse = co_await stClient.Get("/health");
+		if (stResponse.iCode != OI_ERR_CONNECT || (sCase == "hostname" ? stResponse.sError.find("mismatch") == std::string::npos : stResponse.sError.find("certificate") == std::string::npos))
+		{
+			LOG_ERROR("https verification failed code=%d reason=%s", stResponse.iCode, stResponse.sError.c_str());
+			++iBad;
+		}
+	}
+	else
+	{
+		auto stFirst = co_await stClient.Get("/health");
+		auto stSecond = co_await stClient.Get("/health");
+		auto stTruncated = co_await stClient.Get("/truncated");
+		auto stAfter = co_await stClient.Get("/health");
+		OI::Http::Request stStreamRequest;
+		stStreamRequest.sMethod = "POST";
+		stStreamRequest.sPath = "/stream";
+		stStreamRequest.pBodySource = std::make_shared<WebTestSource>(65536);
+		auto pStreamSink = std::make_shared<WebTestSink>();
+		stStreamRequest.pBodySink = pStreamSink;
+		auto stStream = co_await stClient.Send(stStreamRequest);
+		auto stCleanEof = co_await stClient.Get("/clean-eof");
+		auto stBadEof = co_await stClient.Get("/bad-eof");
+		if (stFirst.iCode != OI_OK || stFirst.sBody != "ok" || stSecond.iCode != OI_OK || stSecond.sBody != "ok" || stTruncated.iCode == OI_OK || stAfter.iCode != OI_OK || stAfter.sBody != "ok" || stStream.iCode != OI_OK || pStreamSink->Size() != 65536 || !pStreamSink->Valid() || stCleanEof.iCode != OI_OK || stCleanEof.sBody != "clean" || stBadEof.iCode == OI_OK)
+		{
+			LOG_ERROR("https roundtrip failed first=%d second=%d truncated=%d after=%d stream=%d clean=%d bad=%d", stFirst.iCode, stSecond.iCode, stTruncated.iCode, stAfter.iCode, stStream.iCode, stCleanEof.iCode, stBadEof.iCode);
+			++iBad;
+		}
+	}
+	LOG_TRACE("https regression case=%s bad=%d", sCase.c_str(), iBad);
+	fflush(stdout);
+	OI::Thread::ThreadPool::GetInstance().RequestStop(iBad == 0 ? 0 : 1);
+}
+
+OI::Coro::Task WebClient::Run()
 {
 	std::string sIpLocal = "127.0.0.1";
 	int32_t iPortLocal = 18080;
 	int64_t iTimeoutMilliseconds = 5000;
 	bool bReuse = true;
+	bool bHttps = false;
+	std::string sCaFile;
+	std::string sTlsCase;
+	int32_t iStallPort = 0;
+	int32_t iUrlTlsPort = 0;
+	int32_t iPoolControlPort = 0;
+	bool bUrlCase = false;
+	bool bPoolCase = false;
 	bool bCheckEchoHeader = false;
 	int32_t iStreamFixturePort = 0;
+	TryGetConfig("WebClient.pool_case", bPoolCase);
+	TryGetConfig("WebClient.pool_control_port", iPoolControlPort);
+	TryGetConfig("WebClient.url_case", bUrlCase);
+	TryGetConfig("WebClient.url_tls_port", iUrlTlsPort);
+	TryGetConfig("WebClient.https", bHttps);
+	TryGetConfig("WebClient.ca_file", sCaFile);
+	TryGetConfig("WebClient.tls_case", sTlsCase);
+	TryGetConfig("WebClient.stall_port", iStallPort);
 	TryGetConfig("WebClient.stream_fixture_port", iStreamFixturePort);
 	TryGetConfig("WebClient.check_echo_header", bCheckEchoHeader);
 	TryGetConfig("WebClient.ip", sIpLocal);
@@ -143,7 +330,31 @@ static OI::Coro::Task Run()
 		co_return;
 	}
 
-	::OI::Http::Client stCli(sIpLocal, iPortLocal, static_cast<int32_t>(iTimeoutMilliseconds), bReuse);
+	if (bPoolCase)
+	{
+		co_await RunPoolRegression(iPortLocal, iPoolControlPort);
+		co_return;
+	}
+	if (bUrlCase)
+	{
+		co_await RunUrlRegression(iPortLocal, iUrlTlsPort, sCaFile);
+		co_return;
+	}
+	if (!sTlsCase.empty())
+	{
+		co_await RunTlsRegression(sIpLocal, iPortLocal, sCaFile, sTlsCase, iStallPort);
+		co_return;
+	}
+	std::optional<OI::Http::Client> stClient;
+	if (bHttps)
+	{
+		stClient.emplace(sIpLocal, iPortLocal, OI::Http::TlsOptions{sCaFile}, static_cast<int32_t>(iTimeoutMilliseconds), bReuse);
+	}
+	else
+	{
+		stClient.emplace(sIpLocal, iPortLocal, static_cast<int32_t>(iTimeoutMilliseconds), bReuse);
+	}
+	auto& stCli = *stClient;
 	int iBadLocal = 0;
 
 	::OI::Http::Response stMissingQuery = co_await stCli.Get("/query");

@@ -561,6 +561,9 @@ class RegressionCleanupTests(unittest.TestCase):
              patch.object(self.runner.socket, "create_connection"), \
              patch.object(self.runner, "IPv6HttpServer", return_value=fixture), \
              patch.object(self.runner, "stream_response_fixture", return_value=contextlib.nullcontext(12345)), \
+             patch.object(self.runner, "check_http_pool"), \
+             patch.object(self.runner, "check_url_client"), \
+             patch.object(self.runner, "check_https"), \
              patch.object(self.runner, "check_web_transport"), \
              patch.object(self.runner, "check_web_json"), \
              patch.object(self.runner, "check_web_stream_length"), \

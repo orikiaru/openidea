@@ -283,6 +283,7 @@ def main():
             mode_configure = [cmake, "-S", ROOT, "-B", mode_build, *configure[5:]]
             mode_build_command = [cmake, "--build", mode_build, "--config", "Release", "-j", args.jobs]
             flags = ["-DOI_IPC_SINGLE_THREAD=" + ("ON" if mode == "st" else "OFF"),
+                     "-DOI_WEBCLIENT_SINGLE_THREAD=" + ("ON" if mode == "st" else "OFF"),
                      "-DOI_ENABLE_TEST_HOOKS=" + ("ON" if WINDOWS else "OFF")]
             if run(mode + "-configure", mode_configure + flags) or run(mode + "-build", mode_build_command):
                 failed = True
