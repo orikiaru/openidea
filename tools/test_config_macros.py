@@ -38,13 +38,14 @@ def main():
             'else()\ntarget_compile_options(config_test PRIVATE -ffunction-sections -fdata-sections)\n'
             'target_link_options(config_test PRIVATE -Wl,--gc-sections)\nendif()\n'
             % (source, config_source, paths, source, paths), encoding="utf-8")
-        (temp / "config.toml").write_text("value = 42\n", encoding="utf-8")
+        (temp / "config.toml").write_text('value = 42\ntext = "wrong"\nbad_array = ["wrong", "type"]\ngood_array = [1, 2]\n', encoding="utf-8")
+        (temp / "invalid.toml").write_text("value = 99\nbroken = [\n", encoding="utf-8")
         for mode in ("Debug", "Release"):
             build = temp / ("build-" + mode.lower())
             subprocess.run([cmake, "-S", str(temp), "-B", str(build), "-DCMAKE_BUILD_TYPE=" + mode], check=True)
             subprocess.run([cmake, "--build", str(build), "--target", "config_test", "--config", mode], check=True)
             executable = build / mode / "config_test.exe" if test_matrix.WINDOWS else build / "config_test"
-            subprocess.run([str(executable), str(temp / "config.toml")], check=True)
+            subprocess.run([str(executable), str(temp / "config.toml"), str(temp / "invalid.toml")], check=True)
             print(mode, "config macros PASS", flush=True)
         result = subprocess.run([cmake, "--build", str(build), "--target", "invalid", "--config", "Release"],
                                 capture_output=True, text=True, errors="replace")

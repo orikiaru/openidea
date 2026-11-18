@@ -190,10 +190,17 @@ def set_echo_total(config, total):
     start, end = echo_total_match(config)
     return config[:start] + str(total) + config[end:]
 
+
+def check_echo(text, expected_total):
+    assert re.search(r"ipc mode=\S+ total=%d ok=%d mismatch=0 rpc_fail=0\b" % (expected_total, expected_total), text), "echo count mismatch"
+    assert text.count("ipc client connect sid=") == 1, "echo test started more than once"
+
+
 def check_admission_rounds(text):
-    for round_number in range(3):
-        marker = "hold rpc admission round=%d ok=2 busy=4 bad=0" % round_number
-        assert text.count(marker) == 1, "missing or duplicate admission round %d" % round_number
+    lines = re.findall(r"hold rpc admission round=[^\r\n]*", text)
+    assert len(lines) == 3, "expected exactly three admission rounds"
+    expected = {"hold rpc admission round=%d ok=2 busy=4 bad=0" % i for i in range(3)}
+    assert {line.strip() for line in lines} == expected, "invalid or duplicate admission round"
 
 
 def bytes_on_disk(root):
@@ -808,8 +815,7 @@ def run(case, args):
             if mode == "coro":
                 assert "coro live=" in text and "bad=0" in text
             elif mode == "echo":
-                assert re.search(r"ipc mode=\S+ total=%d ok=%d mismatch=0 rpc_fail=0\b" % (expected_echo_total, expected_echo_total), text), "echo count mismatch"
-                assert text.count("ipc client connect sid=") == 1, "echo test started more than once"
+                check_echo(text, expected_echo_total)
             elif mode == "empty":
                 assert re.search(r"empty mode=\S+ total=1000000 ms=\d+ rate=\d+/s rpc_fail=0", text)
             elif mode == "pool":
