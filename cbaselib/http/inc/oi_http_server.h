@@ -7,8 +7,6 @@
 
 namespace OI::Http
 {
-using ServerRequest = Request;
-using ServerReply = Response;
 
 class ServerManager : public Net::SessionManager
 {
@@ -16,7 +14,7 @@ class ServerManager : public Net::SessionManager
 	using Handler = Coro::Task (*)(const Request&, Response&);
 	// 在监听前注册。请求和回复由框架保活到 handler 完成。
 	void Register(std::string sMethod, std::string sPath, Handler fnHandler);
-	Handler Find(const ServerRequest& stRequest) const;
+	Handler Find(const Request& stRequest) const;
 
   private:
 	std::map<std::pair<std::string, std::string>, Handler> m_mRoutes;

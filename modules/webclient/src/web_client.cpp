@@ -363,6 +363,35 @@ static OI::Coro::Task Run()
 	stBinaryRequest.sBody = sBin;
 	stBinaryRequest.sContentType = "application/octet-stream";
 	stBinaryRequest.vHeaders.emplace_back("X-Echo-Tag", "sample-tag");
+	const std::string sCookieBytes("a b;\x00\xff", 6);
+	const std::string sCookieEncoded = ::OI::Http::Cookie::EncodeValue(sCookieBytes);
+	if (bCheckEchoHeader)
+	{
+		if (stBinaryRequest.AddCookie("token", "first") != OI_OK ||
+		    stBinaryRequest.AddCookie("token", "second") != OI_OK ||
+		    stBinaryRequest.AddCookie("Token", "case") != OI_OK ||
+		    stBinaryRequest.AddCookie("empty", "") != OI_OK ||
+		    stBinaryRequest.AddCookie("encoded", sCookieEncoded) != OI_OK)
+		{
+			LOG_ERROR("web cookie request construction failed");
+			++iBadLocal;
+		}
+		std::vector<std::pair<std::string, std::string>> vRequestCookies;
+		const std::vector<std::pair<std::string, std::string>> vExpectedCookies = {
+		    {"token", "first"}, {"token", "second"}, {"Token", "case"}, {"empty", ""}, {"encoded", sCookieEncoded}};
+		if (stBinaryRequest.GetCookies(vRequestCookies) != OI_OK || vRequestCookies != vExpectedCookies)
+		{
+			LOG_ERROR("web request cookie parsing failed");
+			++iBadLocal;
+		}
+		const auto vHeadersBefore = stBinaryRequest.vHeaders;
+		if (stBinaryRequest.AddCookie("invalid name", "ok") == OI_OK ||
+		    stBinaryRequest.AddCookie("invalid", "bad;value") == OI_OK || stBinaryRequest.vHeaders != vHeadersBefore)
+		{
+			LOG_ERROR("web invalid cookie request accepted or changed headers");
+			++iBadLocal;
+		}
+	}
 	::OI::Http::Response stRaw = co_await stCli.Send(stBinaryRequest);
 	const std::string* pEchoTag = stRaw.GetHeader("x-echo-tag");
 	int iBinOk = 0;
@@ -374,6 +403,88 @@ static OI::Coro::Task Run()
 	else
 	{
 		iBadLocal += 1;
+	}
+
+	if (bCheckEchoHeader)
+	{
+		std::vector<::OI::Http::Cookie> vCookies;
+		const int32_t iCookieCode = stRaw.GetCookies(vCookies);
+		if (iCookieCode != OI_OK || vCookies.size() != 5)
+		{
+			LOG_ERROR("web cookie response count failed code=%d count=%zu", iCookieCode, vCookies.size());
+			++iBadLocal;
+		}
+		else
+		{
+			const std::vector<std::pair<std::string, std::string>> vExpected = {
+			    {"token", "first"}, {"token", "second"}, {"Token", "case"}, {"empty", ""}, {"encoded", sCookieEncoded}};
+			for (size_t iIndex = 0; iIndex < vCookies.size(); ++iIndex)
+			{
+				const auto& stCookie = vCookies[iIndex];
+				if (stCookie.sName != vExpected[iIndex].first || stCookie.sValue != vExpected[iIndex].second ||
+				    stCookie.sPath != "/" || stCookie.sDomain != "example.test" || stCookie.sExpires != "Wed, 09 Jun 2027 10:18:14 GMT" ||
+				    !stCookie.iMaxAge.has_value() || *stCookie.iMaxAge != 0 || !stCookie.bHttpOnly || !stCookie.bSecure || stCookie.sSameSite != "Lax")
+				{
+					LOG_ERROR("web cookie response mismatch index=%zu", iIndex);
+					++iBadLocal;
+				}
+			}
+			std::string sDecoded;
+			if (::OI::Http::Cookie::DecodeValue(vCookies[4].sValue, sDecoded) != OI_OK || sDecoded != sCookieBytes)
+			{
+				LOG_ERROR("web cookie encoded value roundtrip failed");
+				++iBadLocal;
+			}
+		}
+		::OI::Http::Response stMixedCase;
+		stMixedCase.vHeaders.emplace_back("sEt-CoOkIe", "Mixed=value; pAtH=/; dOmAiN=example.test; eXpIrEs=Wed, 09 Jun 2027 10:18:14 GMT; mAx-AgE=0; hTtPoNlY; sEcUrE; sAmEsItE=Lax");
+		std::vector<::OI::Http::Cookie> vMixed;
+		if (stMixedCase.GetCookies(vMixed) != OI_OK || vMixed.size() != 1 || vMixed[0].sName != "Mixed" ||
+		    vMixed[0].sPath != "/" || vMixed[0].sDomain != "example.test" || vMixed[0].sExpires != "Wed, 09 Jun 2027 10:18:14 GMT" ||
+		    !vMixed[0].iMaxAge.has_value() || *vMixed[0].iMaxAge != 0 || !vMixed[0].bSecure || !vMixed[0].bHttpOnly || vMixed[0].sSameSite != "Lax")
+		{
+			LOG_ERROR("web mixed case cookie attributes failed");
+			++iBadLocal;
+		}
+		::OI::Http::Request stBadRequestCookie;
+		stBadRequestCookie.vHeaders.emplace_back("Cookie", "bad=bad value");
+		std::vector<std::pair<std::string, std::string>> vPreservedRequest = {{"sentinel", "value"}};
+		if (stBadRequestCookie.GetCookies(vPreservedRequest) == OI_OK ||
+		    vPreservedRequest != std::vector<std::pair<std::string, std::string>>{{"sentinel", "value"}})
+		{
+			LOG_ERROR("web invalid request cookie did not preserve output");
+			++iBadLocal;
+		}
+		::OI::Http::Response stBadCookie;
+		::OI::Http::Cookie stInvalidCookie;
+		stInvalidCookie.sName = "bad name";
+		stInvalidCookie.sValue = "value";
+		if (stBadCookie.AddCookie(stInvalidCookie) == OI_OK || !stBadCookie.vHeaders.empty())
+		{
+			LOG_ERROR("web invalid response cookie accepted or changed headers");
+			++iBadLocal;
+		}
+		stBadCookie.vHeaders.emplace_back("Set-Cookie", "bad=bad value");
+		std::vector<::OI::Http::Cookie> vPreserved(1);
+		vPreserved[0].sName = "sentinel";
+		std::string sPreserved = "sentinel";
+		if (stBadCookie.GetCookies(vPreserved) == OI_OK || vPreserved.size() != 1 || vPreserved[0].sName != "sentinel" ||
+		    ::OI::Http::Cookie::DecodeValue("%GG", sPreserved) == OI_OK || sPreserved != "sentinel")
+		{
+			LOG_ERROR("web invalid cookie decode did not preserve output");
+			++iBadLocal;
+		}
+		::OI::Http::Request stPlainRequest;
+		stPlainRequest.sMethod = "POST";
+		stPlainRequest.sPath = "/bin";
+		stPlainRequest.vHeaders.emplace_back("X-Echo-Tag", "sample-tag");
+		::OI::Http::Response stPlain = co_await stCli.Send(stPlainRequest);
+		std::vector<::OI::Http::Cookie> vPlain;
+		if (stPlain.iCode != OI_OK || stPlain.iStatus != 200 || stPlain.GetCookies(vPlain) != OI_OK || !vPlain.empty())
+		{
+			LOG_ERROR("web cookie jar isolation failed code=%d status=%d count=%zu", stPlain.iCode, stPlain.iStatus, vPlain.size());
+			++iBadLocal;
+		}
 	}
 
 	LOG_TRACE("web query=%d text=%s json_n=%d json_s=%s json_ok=%d rpc=%d bin=%d bad=%d",

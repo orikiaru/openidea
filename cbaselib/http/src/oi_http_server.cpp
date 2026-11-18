@@ -1,4 +1,5 @@
 #include "oi_http_server.h"
+#include "oi_http_header_fields.h"
 #include "oi_net_session.h"
 #include "oi_timer_manager.h"
 #include <algorithm>
@@ -70,7 +71,7 @@ bool Decode(View sText, std::string& sOutput, bool bQuery)
 	return true;
 }
 
-bool ParseTarget(View sTarget, ServerRequest& stRequest)
+bool ParseTarget(View sTarget, Request& stRequest)
 {
 	const auto iQuery = sTarget.find('?');
 	if (sTarget.empty() || sTarget.front() != '/' || !Decode(sTarget.substr(0, iQuery), stRequest.sPath, false))
@@ -105,7 +106,7 @@ bool ParseTarget(View sTarget, ServerRequest& stRequest)
 
 struct RequestFrame
 {
-	ServerRequest stRequest;
+	Request stRequest;
 	size_t iRemaining = 0;
 	size_t iScan = 0;
 	bool bHeaders = false;
@@ -332,14 +333,14 @@ class ServerSession final : public Net::NetSession
 	struct Completion
 	{
 		std::weak_ptr<ServerSession*> pBinding;
-		ServerReply stReply;
+		Response stReply;
 		bool bClose;
 		Net::Poll::QueuedCall stCall;
 	};
 	// 仅 poll 线程解引用；断连立即失效，迟到的完成回调不持有会话。
 	std::shared_ptr<ServerSession*> m_pBinding;
 
-	static Coro::Task Dispatch(std::unique_ptr<Completion> pDone, ServerManager::Handler fnHandler, ServerRequest stRequest)
+	static Coro::Task Dispatch(std::unique_ptr<Completion> pDone, ServerManager::Handler fnHandler, Request stRequest)
 	{
 		try
 		{
@@ -362,14 +363,14 @@ class ServerSession final : public Net::NetSession
 		Net::Poll::GetInstance().PostOnLoop(pPending->stCall);
 	}
 
-	void Reply(const ServerReply& stReply, bool bClose)
+	void Reply(const Response& stReply, bool bClose)
 	{
 		if (IsClosed())
 		{
 			return;
 		}
 		const bool bValid = stReply.iStatus >= 200 && stReply.iStatus <= 599 &&
-		                    Detail::ValidValue(stReply.sContentType) && Detail::ValidExtraHeaders(stReply.vHeaders);
+		                    HeaderFields::ValidForSend(stReply);
 		const int iStatusLocal = bValid ? stReply.iStatus : 500;
 		std::string sWire = "HTTP/1.1 " + std::to_string(iStatusLocal) + " " + Reason(iStatusLocal) + "\r\n";
 		const bool bBody = iStatusLocal != 204 && iStatusLocal != 304;
@@ -441,7 +442,7 @@ class ServerSession final : public Net::NetSession
 		m_bPartial = false;
 		if (iCode != 200)
 		{
-			ServerReply stReply;
+			Response stReply;
 			stReply.iStatus = iCode;
 			Reply(stReply, true);
 			return;
@@ -511,7 +512,7 @@ void ServerManager::Register(std::string sMethod, std::string sPath, Handler fnH
 	}
 }
 
-ServerManager::Handler ServerManager::Find(const ServerRequest& stRequest) const
+ServerManager::Handler ServerManager::Find(const Request& stRequest) const
 {
 	auto it = m_mRoutes.find({stRequest.sMethod, stRequest.sPath});
 	return it == m_mRoutes.end() ? nullptr : it->second;

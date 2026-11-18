@@ -24,7 +24,7 @@ Windows 多线程注册发现用例完成了业务检查，删除临时目录内
 
 对照 [libhv HttpMessage.h](https://github.com/ithewei/libhv/blob/master/http/HttpMessage.h) 的消息接口，当前提供请求/响应、原始正文和可重复 header；不以接口名称相同或数量相等作为兼容承诺。以下按需求独立实施并保留既有接口。
 
-- [ ] **Cookie**：提供解析与构造能力；以多个 Set-Cookie、大小写与空值、转义往返验收。Cookie 属性至少覆盖 domain、path、expires、max-age、secure、httponly 和 SameSite；自动 cookie jar 单独决策，不隐式跨请求保存。
+- [x] **Cookie**：提供解析与构造能力；以多个 Set-Cookie、大小写与空值、转义往返验收。Cookie 属性至少覆盖 domain、path、expires、max-age、secure、httponly 和 SameSite；自动 cookie jar 单独决策，不隐式跨请求保存。
 - [ ] **重复 query**：提供解析与构造能力，明确多值顺序及缺失值语义；以重复参数、空值和转义往返验收。
 - [ ] **URL 编码表单**：支持 `application/x-www-form-urlencoded`，明确重复字段、空值及尺寸上限；以真实服务往返、边界拆包和空字段验收。
 - [ ] **multipart 表单**：支持文本及文件字段，明确重复字段、二进制内容和尺寸上限；以真实服务往返、边界拆包、空字段和文件内容字节一致验收。JSON 继续使用现有 JsonCpp 和 rpcdata 能力。

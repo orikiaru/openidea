@@ -1162,6 +1162,8 @@ def run_web(args):
             shutil.copy2(args.bin_dir / (name + SUFFIX), work / (name + SUFFIX))
             text = shift_ports((REPO / "deploy/config" / (name + ".toml")).read_text(encoding="utf-8-sig"))
             text = text.replace("port = 18080", "port = " + str(port))
+            if name == "webserver":
+                text += "\necho_cookies = true\n"
             if name == "webclient":
                 text += "\ncheck_echo_header = true\n"
             (cfg / (name + ".toml")).write_text(text, encoding="utf-8")

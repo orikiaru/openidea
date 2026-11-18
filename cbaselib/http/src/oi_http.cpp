@@ -1,4 +1,5 @@
 #include "oi_http.h"
+#include "oi_http_header_fields.h"
 #include "oi_bytes.h"
 #include "oi_rpc_coro.h"
 #include "oi_net_session.h"
@@ -16,6 +17,18 @@ namespace OI
 {
 namespace Http
 {
+
+const std::string* Message::GetHeader(std::string_view sName) const
+{
+	for (const auto& [sKey, sValue] : vHeaders)
+	{
+		if (HeaderFields::NameEqual(sKey, sName))
+		{
+			return &sValue;
+		}
+	}
+	return nullptr;
+}
 
 namespace
 {
@@ -1115,7 +1128,7 @@ Call Client::Send(const Request& stRequest)
 	pRequest->iTimeoutMilliseconds = m_pImpl->Timeout();
 	const bool bPost = stRequest.sMethod == "POST";
 	if ((!bPost && stRequest.sMethod != "GET") || (!bPost && !stRequest.sBody.empty()) ||
-	    !Detail::ValidExtraHeaders(stRequest.vHeaders) || !Detail::ValidValue(stRequest.sContentType))
+	    !HeaderFields::ValidForSend(stRequest))
 	{
 		pRequest->iCode = OI_ERR_INVALID_ARGUMENT;
 		pRequest->sError = "invalid HTTP method, body or headers";

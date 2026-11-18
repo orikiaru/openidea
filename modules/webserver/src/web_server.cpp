@@ -12,8 +12,8 @@
 
 namespace
 {
-using OI::Http::ServerReply;
-using OI::Http::ServerRequest;
+using OI::Http::Response;
+using OI::Http::Request;
 
 class WebRpc : public OI::Rpc::ProtoClientManager
 {
@@ -31,7 +31,7 @@ class WebRpc : public OI::Rpc::ProtoClientManager
 	}
 };
 
-void SetJson(const Json::Value& stValue, ServerReply& stReply)
+void SetJson(const Json::Value& stValue, Response& stReply)
 {
 	Json::StreamWriterBuilder stBuilder;
 	stBuilder["indentation"] = "";
@@ -39,13 +39,13 @@ void SetJson(const Json::Value& stValue, ServerReply& stReply)
 	stReply.sBody = Json::writeString(stBuilder, stValue);
 }
 
-OI::Coro::Task Health(const ServerRequest&, ServerReply& stReply)
+OI::Coro::Task Health(const Request&, Response& stReply)
 {
 	stReply.sBody = "ok";
 	co_return;
 }
 
-OI::Coro::Task JsonEcho(const ServerRequest& stRequest, ServerReply& stReply)
+OI::Coro::Task JsonEcho(const Request& stRequest, Response& stReply)
 {
 	Json::CharReaderBuilder stBuilder;
 	std::unique_ptr<Json::CharReader> pReader(stBuilder.newCharReader());
@@ -61,7 +61,7 @@ OI::Coro::Task JsonEcho(const ServerRequest& stRequest, ServerReply& stReply)
 	SetJson(stBody, stReply);
 }
 
-OI::Coro::Task RpcJson(const ServerRequest& stRequest, ServerReply& stReply)
+OI::Coro::Task RpcJson(const Request& stRequest, Response& stReply)
 {
 	OI::RpcData::JsonAll stData;
 	if (!stData.FromJson(stRequest.sBody) || stData.iGap == INT32_MAX)
@@ -74,19 +74,48 @@ OI::Coro::Task RpcJson(const ServerRequest& stRequest, ServerReply& stReply)
 	stReply.sContentType = "application/json";
 }
 
-OI::Coro::Task Binary(const ServerRequest& stRequest, ServerReply& stReply)
+}
+
+OI::Coro::Task WebServer::Binary(const Request& stRequest, Response& stReply)
 {
 	if (const auto* pTag = stRequest.GetHeader("x-echo-tag"))
 	{
 		stReply.vHeaders.emplace_back("X-Echo-Tag", *pTag);
 	}
+	if (GetInstance().m_bEchoCookies)
+	{
+		std::vector<std::pair<std::string, std::string>> vPairs;
+		if (stRequest.GetCookies(vPairs) != OI_OK)
+		{
+			stReply.iStatus = 400;
+			co_return;
+		}
+		for (const auto& [sName, sValue] : vPairs)
+		{
+			OI::Http::Cookie stCookie;
+			stCookie.sName = sName;
+			stCookie.sValue = sValue;
+			stCookie.sPath = "/";
+			stCookie.sDomain = "example.test";
+			stCookie.sExpires = "Wed, 09 Jun 2027 10:18:14 GMT";
+			stCookie.iMaxAge = 0;
+			stCookie.bSecure = true;
+			stCookie.bHttpOnly = true;
+			stCookie.sSameSite = "Lax";
+			if (stReply.AddCookie(stCookie) != OI_OK)
+			{
+				stReply.vHeaders.clear();
+				stReply.iStatus = 500;
+				co_return;
+			}
+		}
+	}
 	stReply.sBody = stRequest.sBody;
 	stReply.sContentType = "application/octet-stream";
 	co_return;
 }
-}
 
-OI::Coro::Task WebServer::Query(const ServerRequest& stRequest, ServerReply& stReply)
+OI::Coro::Task WebServer::Query(const Request& stRequest, Response& stReply)
 {
 	if (!stRequest.mQuery.count("text"))
 	{
@@ -145,6 +174,7 @@ int32_t WebServer::Init()
 	int32_t iPort = 18080;
 	TryGetConfig("WebServer.ip", sIp);
 	TryGetConfig("WebServer.port", iPort);
+	TryGetConfig("WebServer.echo_cookies", m_bEchoCookies);
 	if (iPort <= 0 || iPort > 65535)
 	{
 		std::fprintf(stderr, "web server bad port=%d\n", iPort);
