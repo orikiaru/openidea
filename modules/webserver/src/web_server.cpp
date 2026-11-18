@@ -117,7 +117,8 @@ OI::Coro::Task WebServer::Binary(const Request& stRequest, Response& stReply)
 
 OI::Coro::Task WebServer::Query(const Request& stRequest, Response& stReply)
 {
-	if (!stRequest.mQuery.count("text"))
+	const auto vText = stRequest.mQuery.GetAll("text");
+	if (vText.empty())
 	{
 		stReply.iStatus = 400;
 		co_return;
@@ -155,7 +156,14 @@ OI::Coro::Task WebServer::Query(const Request& stRequest, Response& stReply)
 		}
 	}
 	Json::Value stBody(Json::objectValue);
-	stBody["text"] = stRequest.mQuery.at("text");
+	stBody["text"] = vText.front();
+	if (vText.size() > 1)
+	{
+		for (const auto& sText : vText)
+		{
+			stBody["texts"].append(sText);
+		}
+	}
 	if (auto it = stRequest.mQuery.find("existing"); it != stRequest.mQuery.end())
 	{
 		stBody["existing"] = it->second;

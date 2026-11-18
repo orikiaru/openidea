@@ -39,10 +39,16 @@ if (stGot.iCode != OI_OK)
 
 请求和响应共享有序 `vHeaders`，保留重复字段；`GetHeader` 大小写不敏感，返回首个匹配项的指针，缺失时返回空指针；需要全部值时遍历 `vHeaders`。指针随对应消息对象及其 header 容器的修改或销毁失效。`Send` 目前支持 GET 和 POST；`Get`、`Post` 保留。请求自定义头不允许覆盖 `Host`、`Connection`、`Content-Length`、`Transfer-Encoding`、`Content-Type`、`Trailer`、`Upgrade` 或 `Expect`，正文类型由 `sContentType` 指定。非法方法、请求目标或自定义头等输入错误在 `co_await` 返回 `OI_ERR_INVALID_ARGUMENT`，状态码为 0，请求不会发送。服务端 handler 也使用同一消息类型。
 
-当前正文整体缓冲；重复 query、表单、流式收发和 TLS 尚未提供专门接口，后续分期见 [待办](../todo.md)。
+当前正文整体缓冲；表单、流式收发和 TLS 尚未提供专门接口，后续分期见 [待办](../todo.md)。
 
 ## Cookie
 
 `Request::AddCookie(name, value)` 和 `Request::GetCookies(output)` 处理请求 Cookie；`Response::AddCookie(cookie)` 和 `Response::GetCookies(output)` 处理响应 Set-Cookie。均返回 `int32_t`，失败时保持输出不变。重复项保留顺序和同名值，Cookie 名区分大小写；属性名解析不区分大小写。`Cookie` 包含 domain、path、expires、可选 max-age、secure、httponly 和 SameSite，`iMaxAge` 区分未指定与 0。
 
 值默认是原始 wire cookie-octets，不自动编码或解码。任意字节先用 `Cookie::EncodeValue` 编码，再传给 `AddCookie`；读取后显式调用 `Cookie::DecodeValue`，先检查返回码再使用输出。客户端不自动保存或附加 Cookie，跨请求由调用方管理。
+
+## Query 参数
+
+`Request::mQuery` 按添加顺序保存键值对，`Add(name, value)` 追加而不覆盖同名项。`Get(name)` 返回首个值的指针，缺键返回空指针；`GetAll(name)` 返回按原序排列的所有值，缺键返回空集合。裸 key 和 `key=` 都解析为空串。指针在容器修改或销毁后不再保证有效。
+
+`Client::Get(path, vector<pair<string, string>>)` 和 `Client::Send(request)` 都支持重复参数；路径已带查询时追加参数并编码新键值，保留已有查询内容。服务端 `/query` 保持 `text` 为首个值；有多个 `text` 时额外返回有序 `texts` 数组。旧的单值调用保持兼容。

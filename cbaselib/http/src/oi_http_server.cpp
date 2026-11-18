@@ -94,7 +94,7 @@ bool ParseTarget(View sTarget, Request& stRequest)
 		{
 			return false;
 		}
-		stRequest.mQuery.emplace(std::move(sKey), std::move(sValue));
+		stRequest.mQuery.Add(std::move(sKey), std::move(sValue));
 		if (iEnd == View::npos)
 		{
 			break;

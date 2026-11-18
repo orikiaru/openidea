@@ -167,6 +167,56 @@ static OI::Coro::Task Run()
 		}
 	}
 
+	bool bCheckEchoHeader = false;
+	TryGetConfig("WebClient.check_echo_header", bCheckEchoHeader);
+	if (bCheckEchoHeader)
+	{
+		const std::vector<std::pair<std::string, std::string>> vRepeatQuery = {{"text", ""}, {"text", "a b+&"}};
+		const std::vector<std::string> vExpectedTexts = {"path first", "", "", "a b+&"};
+		auto fnCheckRepeat = [vExpectedTexts](const ::OI::Http::Response& stResponse)
+		{
+			Json::Value stBody;
+			if (stResponse.iCode != OI_OK || stResponse.iStatus != 200 || !ParseJson(stResponse.sBody, stBody) ||
+			    !stBody["text"].isString() || stBody["text"].asString() != vExpectedTexts[0] ||
+			    !stBody["texts"].isArray() || stBody["texts"].size() != vExpectedTexts.size())
+			{
+				return false;
+			}
+			for (size_t iIndex = 0; iIndex < vExpectedTexts.size(); ++iIndex)
+			{
+				if (!stBody["texts"][static_cast<Json::ArrayIndex>(iIndex)].isString() ||
+				    stBody["texts"][static_cast<Json::ArrayIndex>(iIndex)].asString() != vExpectedTexts[iIndex])
+				{
+					return false;
+				}
+			}
+			return true;
+		};
+		::OI::Http::Response stRepeatedGet = co_await stCli.Get("/query?text=path%20first&text", vRepeatQuery);
+		if (!fnCheckRepeat(stRepeatedGet))
+		{
+			LOG_ERROR("web repeated query Get failed code=%d status=%d", stRepeatedGet.iCode, stRepeatedGet.iStatus);
+			++iBadLocal;
+		}
+		::OI::Http::Request stRepeatRequest;
+		stRepeatRequest.sPath = "/query?text=path%20first&text";
+		stRepeatRequest.mQuery.Add("text", "");
+		stRepeatRequest.mQuery.Add("text", "a b+&");
+		const std::string* pFirstText = stRepeatRequest.mQuery.Get("text");
+		if (!pFirstText || !pFirstText->empty() || stRepeatRequest.mQuery.GetAll("text") != std::vector<std::string>{"", "a b+&"} ||
+		    stRepeatRequest.mQuery.Get("missing") != nullptr || !stRepeatRequest.mQuery.GetAll("missing").empty())
+		{
+			LOG_ERROR("web query accessors failed");
+			++iBadLocal;
+		}
+		::OI::Http::Response stRepeatedSend = co_await stCli.Send(stRepeatRequest);
+		if (!fnCheckRepeat(stRepeatedSend))
+		{
+			LOG_ERROR("web repeated query Send failed code=%d status=%d", stRepeatedSend.iCode, stRepeatedSend.iStatus);
+			++iBadLocal;
+		}
+	}
+
 	Json::Value stRequestLocal(Json::objectValue);
 	stRequestLocal["n"] = 1;
 	stRequestLocal["s"] = "hi";
@@ -339,8 +389,6 @@ static OI::Coro::Task Run()
 		}
 	}
 
-	bool bCheckEchoHeader = false;
-	TryGetConfig("WebClient.check_echo_header", bCheckEchoHeader);
 	TryGetConfig("WebClient.ip", sIpLocal);
 	TryGetConfig("WebClient.port", iPortLocal);
 	if (bCheckEchoHeader)

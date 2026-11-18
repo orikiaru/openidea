@@ -10,6 +10,7 @@
 #include <atomic>
 #include <deque>
 #include <memory>
+#include <span>
 #include <stdexcept>
 #include <utility>
 
@@ -17,6 +18,87 @@ namespace OI
 {
 namespace Http
 {
+
+QueryParams::QueryParams(std::initializer_list<Entry> vEntries)
+    : m_vEntries(vEntries)
+{
+}
+
+void QueryParams::Add(std::string sName, std::string sValue)
+{
+	m_vEntries.emplace_back(std::move(sName), std::move(sValue));
+}
+
+QueryParams::const_iterator QueryParams::find(std::string_view sName) const
+{
+	return std::find_if(begin(), end(), [sName](const auto& stEntry)
+	{
+		return stEntry.first == sName;
+	});
+}
+
+const std::string* QueryParams::Get(std::string_view sName) const
+{
+	auto it = find(sName);
+	return it == end() ? nullptr : &it->second;
+}
+
+std::vector<std::string> QueryParams::GetAll(std::string_view sName) const
+{
+	std::vector<std::string> vResult;
+	for (const auto& [sKey, sValue] : m_vEntries)
+	{
+		if (sKey == sName)
+		{
+			vResult.push_back(sValue);
+		}
+	}
+	return vResult;
+}
+
+const std::string& QueryParams::at(std::string_view sName) const
+{
+	if (const auto* pValue = Get(sName))
+	{
+		return *pValue;
+	}
+	throw std::out_of_range("HTTP query parameter");
+}
+
+size_t QueryParams::count(std::string_view sName) const
+{
+	return std::count_if(begin(), end(), [sName](const auto& stEntry)
+	{
+		return stEntry.first == sName;
+	});
+}
+
+std::pair<QueryParams::const_iterator, bool> QueryParams::emplace(std::string sName, std::string sValue)
+{
+	auto it = find(sName);
+	if (it != end())
+	{
+		return {it, false};
+	}
+	Add(std::move(sName), std::move(sValue));
+	return {end() - 1, true};
+}
+
+std::string& QueryParams::operator[](std::string sName)
+{
+	auto it = emplace(std::move(sName), {}).first;
+	return m_vEntries[it - begin()].second;
+}
+
+QueryParams::const_iterator QueryParams::begin() const
+{
+	return m_vEntries.begin();
+}
+
+QueryParams::const_iterator QueryParams::end() const
+{
+	return m_vEntries.end();
+}
 
 const std::string* Message::GetHeader(std::string_view sName) const
 {
@@ -1076,7 +1158,7 @@ Client::~Client()
 	}
 }
 
-static std::string QueryTarget(const std::string& sPath, const std::vector<std::pair<std::string, std::string>>& vQuery)
+static std::string QueryTarget(const std::string& sPath, std::span<const std::pair<std::string, std::string>> vQuery)
 {
 	std::string sTarget = sPath.empty() ? "/" : sPath;
 	if (!vQuery.empty())
