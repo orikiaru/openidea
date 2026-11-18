@@ -61,6 +61,14 @@ class RegressionChecksTest(unittest.TestCase):
             with self.subTest(lines=invalid), self.assertRaises(AssertionError):
                 regression.check_admission_rounds("\n".join(invalid))
 
+    def test_web_skips_unrelated_port_preflight(self):
+        with patch.object(regression.socket, "socket", side_effect=OSError("port occupied")) as probe:
+            regression.preflight_ports("web")
+            probe.assert_not_called()
+            with self.assertRaisesRegex(OSError, "port occupied"):
+                regression.preflight_ports("echo")
+            probe.assert_called_once()
+
     def test_web_transport_runs_all_stages(self):
         payload = bytes(range(256)) * 2048
         ok = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"
@@ -86,13 +94,29 @@ class RegressionChecksTest(unittest.TestCase):
         bad.close.assert_called_once_with()
         healthy.close.assert_called_once_with()
 
-    def test_web_skips_unrelated_port_preflight(self):
-        with patch.object(regression.socket, "socket", side_effect=OSError("port occupied")) as probe:
-            regression.preflight_ports("web")
-            probe.assert_not_called()
-            with self.assertRaisesRegex(OSError, "port occupied"):
-                regression.preflight_ports("echo")
-            probe.assert_called_once()
+    def test_hold_scene_preflight_only_checks_required_ports(self):
+        for case, ports, udp in (
+            ("web-coro", [regression.IPC_PORT, regression.REDIS_SERVER_PORT, regression.REDIS_PORT], False),
+            ("hold-blocking", [regression.LOGD_PORT, regression.IPC_PORT], True),
+            ("hold-timer", [regression.LOGD_PORT], False),
+            ("hold-redis", [regression.LOGD_PORT, regression.REDIS_SERVER_PORT, regression.REDIS_PORT], False),
+        ):
+            with self.subTest(case=case), patch.object(regression.socket, "socket") as factory:
+                regression.preflight_ports(case)
+                calls = factory.return_value.__enter__.return_value.bind.call_args_list
+                expected = ports + ([regression.UDP_PORT] if udp else [])
+                self.assertEqual([call.args[0][1] for call in calls], expected)
+
+    def test_hold_scenes_are_accepted_and_all_retains_hold(self):
+        script = Path(regression.__file__)
+        result = subprocess.run([sys.executable, str(script), "--help"], capture_output=True, text=True, check=True)
+        for case in ("hold-blocking", "hold-timer", "hold-redis"):
+            self.assertIn(case, result.stdout)
+        self.assertEqual(regression.ALL_CASES.count("web"), 1)
+        self.assertEqual(regression.ALL_CASES.count("web-coro"), 1)
+        self.assertEqual(regression.ALL_CASES.count("hold"), 1)
+        for case in ("hold-blocking", "hold-timer", "hold-redis"):
+            self.assertNotIn(case, regression.ALL_CASES)
 
     def test_optimized_python_is_rejected(self):
         script = Path(regression.__file__)

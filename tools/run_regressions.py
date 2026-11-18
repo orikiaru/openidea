@@ -197,6 +197,22 @@ def check_echo(text, expected_total):
     assert text.count("ipc client connect sid=") == 1, "echo test started more than once"
 
 
+ALL_CASES = ("echo", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "registry", "udp", "multi", "local", "web", "web-coro")
+
+
+def check_hold_timer(text):
+    assert "hold timer exceptions executed=5 destroyed=5 bad=0" in text
+    assert re.search(r"hold timer update tick=[1-9][0-9]* second=[1-9][0-9]* overlap=0/0 skipped=[0-9]+ bad=0", text)
+
+
+def check_hold_blocking(text):
+    for marker in ("hold blocking delay seed=20261110 min_ms=1 max_ms=20",
+                   "hold blocking tasks=128 waiters=64 runs=1 bad=0",
+                   "hold blocking read started=1 timer=1 rpc=1 early=0 content=1 bad=0",
+                   "hold blocking categories bad=0", "hold blocking access bad=0"):
+        assert marker in text, marker
+
+
 def check_admission_rounds(text):
     lines = re.findall(r"hold rpc admission round=[^\r\n]*", text)
     assert len(lines) == 3, "expected exactly three admission rounds"
@@ -215,15 +231,16 @@ def log_payload_on_disk(root):
 def preflight_ports(case):
     if case == "web":
         return
-    ports = (IPC_PORT, REDIS_SERVER_PORT, REDIS_PORT) if case == "web-coro" else (LOGD_PORT, IPC_PORT, REDIS_SERVER_PORT, REDIS_PORT, REGISTRY_PORT) + GAME_PORTS
-    for port in ports:
+    scene_ports = {"web-coro": (IPC_PORT, REDIS_SERVER_PORT, REDIS_PORT),
+                   "hold-blocking": (LOGD_PORT, IPC_PORT), "hold-timer": (LOGD_PORT,),
+                   "hold-redis": (LOGD_PORT, REDIS_SERVER_PORT, REDIS_PORT)}
+    for port in scene_ports.get(case, (LOGD_PORT, IPC_PORT, REDIS_SERVER_PORT, REDIS_PORT, REGISTRY_PORT) + GAME_PORTS):
         with socket.socket() as probe:
             probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             probe.bind(("127.0.0.1", port))
-    if case == "web-coro":
-        return
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
-        probe.bind(("127.0.0.1", UDP_PORT))
+    if case not in ("hold-timer", "hold-redis", "web-coro"):
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.bind(("127.0.0.1", UDP_PORT))
 
 
 def reset_connections():
@@ -365,7 +382,8 @@ class RawHttpRegression(socketserver.BaseRequestHandler):
 
 
 def run(case, args):
-    mode = "hold" if case.startswith(("clock-", "rpc-admission-")) else ("echo" if case in ("reset", "registry", "rpc-ingress") else case)
+    scene = case[len("hold-"):] if case in ("hold-blocking", "hold-timer", "hold-redis") else None
+    mode = "hold" if scene or case.startswith(("clock-", "rpc-admission-")) else ("echo" if case in ("reset", "registry", "rpc-ingress") else case)
     mode = "db" if case == "mysql" else mode
     mode = "pool" if case in ("local", "registry-static") else mode
     mode = "log" if case in ("disk-full", "log-backpressure") else mode
@@ -404,9 +422,14 @@ def run(case, args):
         for p in (work, cfg, logs):
             p.mkdir()
         copy_runtime_dlls(args.bin_dir, work)
-        for name in ("logd", "ipcclient", "ipcserver", "redisserver") + (("registry",) if case in ("registry", "registry-static") or mode in ("hold", "multi") else ()):
+        names = ("logd", "ipcclient") + (("ipcserver",) if scene not in ("timer", "redis") else ())
+        names += (("redisserver",) if scene in (None, "redis") else ())
+        names += (("registry",) if case in ("registry", "registry-static") or (mode in ("hold", "multi") and not scene) else ())
+        for name in names:
             shutil.copy2(args.bin_dir / (name + SUFFIX), work / (name + SUFFIX))
             text = shift_ports((REPO / "deploy/config" / (name + ".toml")).read_text(encoding="utf-8-sig"))
+            if scene:
+                text = re.sub(r'(?m)^(\[Registry\]\s*\n)ip = "[^"\n]*"\s*\nport = "[^"\n]*"\s*\ntype = "[^"\n]*"\s*\n', r'\1', text, count=1)
             if name in ("redisserver", "registry"):
                 assert 'port = "6379"' in text, name
                 text = text.replace('port = "6379"', 'port = "%d"' % REDIS_PORT)
@@ -484,6 +507,8 @@ def run(case, args):
                         '[Registry]\ninstances = [\n    "peerserver 1 127.0.0.1 %d",\n    "peerserver 2 127.0.0.1 %d",\n]\n' % GAME_PORTS,
                         text,
                         count=1)
+                if scene:
+                    text += "\n[Regression]\nhold_scene = \"%s\"\n" % scene
                 if mode == "hold":
                     text = replace(text, "pull_ms", "60000")
                     text = replace(text, "max_clients", "8")
@@ -531,7 +556,7 @@ def run(case, args):
             raise RuntimeError("start timeout: " + str(path))
 
         try:
-            if mode == "hold":
+            if mode == "hold" and not scene:
                 http_fixture = socketserver.ThreadingTCPServer(("127.0.0.1", 0), RawHttpRegression)
                 http_fixture.daemon_threads = True
                 http_thread = threading.Thread(target=http_fixture.serve_forever, kwargs={"poll_interval": 0.05})
@@ -592,7 +617,7 @@ def run(case, args):
                 subprocess.run(command, check=True, timeout=30)
                 registry, registry_path = start("registry")
                 ready(registry, registry_path, "registry server listen")
-            if mode in ("redis", "hold", "multi") or case == "registry":
+            if (mode in ("redis", "hold", "multi") and scene not in ("blocking", "timer")) or case == "registry":
                 redis_conf = root / "redis.conf"
                 redis_conf.write_text('bind 127.0.0.1\nport %d\nsave ""\nappendonly no\n' % REDIS_PORT +
                                       'maxmemory 1536mb\nmaxmemory-policy allkeys-lru\n'
@@ -604,7 +629,7 @@ def run(case, args):
                     monitor = socket.create_connection(("127.0.0.1", REDIS_PORT), timeout=2)
                     monitor.sendall(b"*1\r\n$7\r\nMONITOR\r\n")
                     assert monitor.recv(100) == b"+OK\r\n"
-                elif case == "hold" and getattr(args, "redis_timeline", False):
+                elif case in ("hold", "hold-redis") and getattr(args, "redis_timeline", False):
                     monitor = socket.create_connection(("127.0.0.1", REDIS_PORT), timeout=2)
                     monitor.sendall(b"*1\r\n$7\r\nMONITOR\r\n")
                     assert monitor.recv(100) == b"+OK\r\n"
@@ -645,7 +670,7 @@ def run(case, args):
 
                     timeline_thread = threading.Thread(target=collect_timeline)
                     timeline_thread.start()
-                if case == "registry" or mode in ("hold", "multi"):
+                if case == "registry" or (mode in ("hold", "multi") and not scene):
                     registry, registry_path = start("registry")
                     ready(registry, registry_path, "registry server listen")
                 if case not in ("registry", "multi", "local", "registry-static"):
@@ -677,9 +702,10 @@ def run(case, args):
                 assert "pure virtual" not in output and "terminate called" not in output, output
                 assert "ipc server listen" not in output, output
                 print("rpc init error startup failure PASS", flush=True)
-            server, serverpath = start("ipcserver")
-            ready(server, serverpath, "ipc server listen")
-            if mode == "hold":
+            if scene not in ("timer", "redis"):
+                server, serverpath = start("ipcserver")
+                ready(server, serverpath, "ipc server listen")
+            if mode == "hold" and not scene:
                 for zone, port in zip(("1001", "1002"), GAME_PORTS):
                     text = (cfg / "ipcserver.toml").read_text(encoding="utf-8")
                     text = text.replace('name = "ipcserver"', 'name = "gameserver"', 1)
@@ -750,7 +776,7 @@ def run(case, args):
                     ready(db, dbpath, "Ready to accept connections")
                     redis_restarted = True
                     (root / "redis-disconnect.ack").write_text("restarted", encoding="utf-8")
-                if mode == "hold":
+                if mode == "hold" and not scene:
                     request_path = root / "registry-fault.request"
                     command = request_path.read_text(encoding="utf-8").strip() if request_path.exists() else ""
                     if command in ("pause", "resume", "budget") and command != registry_fault_command:
@@ -913,22 +939,28 @@ def run(case, args):
             elif case.startswith("rpc-admission-"):
                 assert "hold rpc admission done bad=0" in text
                 check_admission_rounds(text)
+            elif scene:
+                assert "hold scene=%s bad=0" % scene in text
+                if scene == "blocking":
+                    check_hold_blocking(text)
+                elif scene == "timer":
+                    check_hold_timer(text)
+                else:
+                    for label in ("", "late ", "race "):
+                        assert re.search(r"hold redis " + label + r"ping ok=1 status=0 reply_type=\d+ wall_ms=\d+", text)
+                    assert re.search(r"hold redis late timeout=1 cpu_ms=\d+ wall_ms=\d+", text)
+                    assert re.search(r"hold redis race (?:timeout=1 nil=[01]|timeout=0 nil=1) cpu_ms=\d+ wall_ms=\d+", text)
             elif mode == "hold":
                 assert "hold rpc session index calls=4096 bad=0" in text
-                assert "hold timer exceptions executed=5 destroyed=5 bad=0" in text
-                assert re.search(r"hold timer update tick=[1-9][0-9]* second=[1-9][0-9]* overlap=0/0 skipped=[0-9]+ bad=0", text)
+                check_hold_timer(text)
                 assert "hold nested results completed=32768 caught=16384 bad=0" in text
                 assert "hold hot start inline=1 queued=1 bad=0" in text
                 assert "hold shared tasks waiters=64 bad=0" in text
-                assert "hold blocking delay seed=20261110 min_ms=1 max_ms=20" in text
+                check_hold_blocking(text)
                 assert ("hold foreign task st rejected=1 runs=0 bad=0" in text or
                         "hold foreign task mt skipped=1 bad=0" in text)
                 if "hold foreign task st rejected=1 runs=0 bad=0" in text:
                     assert "warning: coroutine start rejected: current thread is not the single-thread poll thread" in text
-                assert "hold blocking tasks=128 waiters=64 runs=1 bad=0" in text
-                assert "hold blocking read started=1 timer=1 rpc=1 early=0 content=1 bad=0" in text
-                assert "hold blocking categories bad=0" in text
-                assert "hold blocking access bad=0" in text
                 for waiter_count in (2, 8, 64, 256):
                     for shared_mode in range(3):
                         assert f"hold started task mode={shared_mode} waiters={waiter_count} runs=1 awakened={waiter_count} bad=0" in text
@@ -1061,11 +1093,23 @@ def run(case, args):
 
 
 class HostHttpRegression(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
     def respond(self):
         self.server.hosts.append(self.headers.get("Host"))
+        self.server.connections.append(self.connection)
+        self.server.connection_headers.append(self.headers.get("Connection"))
         path = urllib.parse.urlsplit(self.path)
-        if path.path == "/query":
+        status = 200
+        if path.path == "/health":
+            body = b"ok"
+        elif path.path == "/query":
             params = urllib.parse.parse_qs(path.query)
+            if "text" not in params:
+                self.send_response(400)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             data = {"text": params["text"][0]}
             if "existing" in params:
                 data["existing"] = params["existing"][0]
@@ -1079,7 +1123,7 @@ class HostHttpRegression(http.server.BaseHTTPRequestHandler):
                 else:
                     data["gap"] += 1
                 body = json.dumps(data).encode()
-        self.send_response(200)
+        self.send_response(status)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -1093,6 +1137,7 @@ class HostHttpRegression(http.server.BaseHTTPRequestHandler):
 
 class IPv6HttpServer(http.server.ThreadingHTTPServer):
     address_family = socket.AF_INET6
+    daemon_threads = True
 
 
 def check_web_transport(port):
@@ -1184,20 +1229,27 @@ def run_web(args):
                 assert client.returncode == 0 and "rpc=1 bin=1 bad=0" in client.stdout, client.stderr
                 with IPv6HttpServer(("::1", 0), HostHttpRegression) as fixture:
                     fixture.hosts = []
+                    fixture.connections = []
+                    fixture.connection_headers = []
                     thread = threading.Thread(target=fixture.serve_forever, kwargs={"poll_interval": 0.05})
                     thread.start()
                     try:
                         fixture_port = fixture.server_address[1]
-                        for host in ("::1", "[::1]"):
+                        for host, reuse in (("::1", True), ("[::1]", False)):
                             config = (REPO / "deploy/config/webclient.toml").read_text(encoding="utf-8-sig")
                             config = shift_ports(config).replace('[WebClient]\nip = "127.0.0.1"', '[WebClient]\nip = "' + host + '"')
                             config = config.replace("port = 18080", "port = " + str(fixture_port))
+                            config = config.replace("reuse = true", "reuse = " + str(reuse).lower())
                             (cfg / "webclient.toml").write_text(config, encoding="utf-8")
                             fixture.hosts.clear()
+                            fixture.connections.clear()
+                            fixture.connection_headers.clear()
                             client = subprocess.run([str(work / ("webclient" + SUFFIX))], cwd=work, capture_output=True, text=True, timeout=30)
                             assert client.returncode == 0 and "rpc=1 bin=1 bad=0" in client.stdout, (host, client.stdout, client.stderr)
-                            assert fixture.hosts == ["[::1]:%d" % fixture_port] * 7, (host, fixture.hosts)
-                            print("web ipv6 host %s PASS" % host, flush=True)
+                            assert fixture.hosts == ["[::1]:%d" % fixture_port] * 9, (host, fixture.hosts)
+                            assert fixture.connection_headers == [("keep-alive" if reuse else "close")] * 9, (host, fixture.connection_headers)
+                            assert len({id(connection) for connection in fixture.connections}) == (1 if reuse else 9), (host, fixture.connections)
+                            print("web ipv6 host %s reuse=%s PASS" % (host, reuse), flush=True)
                     finally:
                         fixture.shutdown()
                         thread.join(timeout=3)
@@ -1343,7 +1395,7 @@ class EnvironmentBlocked(RuntimeError):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case", default="all", choices=("all", "mysql", "coro", "echo", "empty", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "clock-forward", "clock-back", "registry", "udp", "multi", "local", "registry-static", "web", "web-coro"))
+    parser.add_argument("--case", default="all", choices=("all", "mysql", "coro", "echo", "empty", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "hold-blocking", "hold-timer", "hold-redis", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "clock-forward", "clock-back", "registry", "udp", "multi", "local", "registry-static", "web", "web-coro"))
     parser.add_argument("--bin-dir", type=Path, default=REPO / "deploy/bin")
     parser.add_argument("--redis-binary", type=Path, help="default: redis-server on PATH")
     parser.add_argument("--clock-fault-so", type=Path)
@@ -1353,8 +1405,8 @@ if __name__ == "__main__":
     parser.add_argument("--redis-timeline", action="store_true", help="capture hold PING and BLPOP execution timestamps from the owned Redis fixture")
     parser.add_argument("--port-offset", type=int, default=0, help="shift every test port; parallel work copies need distinct offsets")
     options = parser.parse_args()
-    if options.redis_timeline and (options.case != "hold" or not options.artifacts):
-        parser.error("--redis-timeline requires --case hold and --artifacts")
+    if options.redis_timeline and (options.case not in ("hold", "hold-redis") or not options.artifacts):
+        parser.error("--redis-timeline requires --case hold or hold-redis and --artifacts")
     options.redis_binary = options.redis_binary or Path(shutil.which("redis-server") or "/usr/local/bin/redis-server")
     if options.redis_wsl and not WINDOWS:
         parser.error("--redis-wsl is only for native Windows tests")
@@ -1365,7 +1417,7 @@ if __name__ == "__main__":
         options.artifacts.mkdir(parents=True, exist_ok=True)
     apply_port_offset(options.port_offset)
     preflight_ports(options.case)
-    cases = ("echo", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "registry", "udp", "multi", "local", "web", "web-coro") if options.case == "all" else (options.case,)
+    cases = ALL_CASES if options.case == "all" else (options.case,)
     results = []
     for item in cases:
         started = time.monotonic()

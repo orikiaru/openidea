@@ -63,12 +63,19 @@ HoldMgr::HoldMgr()
 {
 }
 
-void HoldMgr::Load()
+int32_t HoldMgr::Load()
 {
 	TryGetConfig("Test.hold", m_bEnabled);
+	TryGetConfig("Regression.hold_scene", m_sScene);
+	if (!m_sScene.empty() && m_sScene != "blocking" && m_sScene != "timer" && m_sScene != "redis")
+	{
+		LOG_ERROR("unknown Regression.hold_scene: %s", m_sScene.c_str());
+		return OI_ERR_INVALID_ARGUMENT;
+	}
 	TryGetConfig("RedisClient.timeout_ms", m_iRedisTimeoutMilliseconds);
 	// 跳更新跟着 TimerMgr 的首次构造注册，必须赶在 RunFramework 之前。
 	TimerMgr::GetInstance();
+	return OI_OK;
 }
 
 void HoldMgr::Start(sid_t iSessionId)
@@ -367,6 +374,26 @@ OI::Coro::TaskResult<int> HoldMgr::CheckRpcDisconnect(sid_t iSessionId)
 // 按固定顺序跑各主题 mgr，再测标准回包、迟到回包、回包撞车、Redis 迟到 PING 和断连收尾。
 OI::Coro::Task HoldMgr::Pump()
 {
+	if (!m_sScene.empty())
+	{
+		int iBad = 0;
+		if (m_sScene == "timer")
+		{
+			iBad = co_await TimerMgr::GetInstance().Run();
+		}
+		else if (m_sScene == "blocking")
+		{
+			iBad = co_await BlockingMgr::GetInstance().Run();
+		}
+		else
+		{
+			iBad = co_await CheckRedisLateReply(m_iRedisTimeoutMilliseconds);
+		}
+		LOG_TRACE("hold scene=%s bad=%d", m_sScene.c_str(), iBad);
+		fflush(stdout);
+		TestBoard::GetInstance().Done(iBad == 0 ? 0 : 1);
+		co_return;
+	}
 	bool bAdmission = false;
 	TryGetConfig("Regression.rpc_admission", bAdmission);
 	if (bAdmission)

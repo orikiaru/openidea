@@ -48,8 +48,12 @@ int32_t IpcClient::Init()
 	}
 	MultiMgr::GetInstance().Start();
 	RedisMgr::GetInstance().Load();
-	HoldMgr::GetInstance().Load();
-	if (!RedisMgr::GetInstance().Enabled() && !HoldMgr::GetInstance().Enabled())
+	iCode = HoldMgr::GetInstance().Load();
+	if (iCode != OI_OK)
+	{
+		return iCode;
+	}
+	if (!RedisMgr::GetInstance().Enabled() && !HoldMgr::GetInstance().NeedsRedis())
 	{
 		return OI_OK;
 	}

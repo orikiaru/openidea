@@ -2,6 +2,7 @@
 #include "oi_rpc_coro.h"
 #include "oi_singleton.h"
 #include <cstdint>
+#include <string>
 
 // 超时、回包撞车和 Redis 迟到回包。其余检查在各自的 mgr，Pump 按原来的顺序调用。
 class HoldMgr
@@ -32,15 +33,20 @@ class HoldMgr
 	// 真断开当前会话：已发出的 RPC 应及时失败，不能继续等十秒超时。
 	OI::Coro::TaskResult<int> CheckRpcDisconnect(sid_t iSessionId);
 	bool m_bEnabled;
+	std::string m_sScene;
 	sid_t m_iSessionId;
 	int32_t m_iRedisTimeoutMilliseconds;
 
   public:
 	// 读 Test.hold 开关，并登记反向 Hold。
-	void Load();
-	bool Enabled() const
+	int32_t Load();
+	bool NeedsRedis() const
 	{
-		return m_bEnabled;
+		return m_bEnabled && (m_sScene.empty() || m_sScene == "redis");
+	}
+	bool RunsWithoutIpc() const
+	{
+		return m_bEnabled && (m_sScene == "timer" || m_sScene == "redis");
 	}
 	// 记下会话并拉起 Pump。
 	void Start(sid_t iSessionId);

@@ -15,3 +15,6 @@ pull_ms = 1000
 [WebClient]
 ip = "127.0.0.1"
 port = 18080
+# 单次请求从入队起算的超时；同一客户端默认串行复用连接。
+timeout_ms = 5000
+reuse = true

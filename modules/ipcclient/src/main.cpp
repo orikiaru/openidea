@@ -3,6 +3,7 @@
 #include "oi_net.h"
 #include "oi_base.h"
 #include "ipcclient.h"
+#include "hold_mgr.h"
 
 int main(int iArgumentCount, char* vArguments[])
 {
@@ -30,7 +31,14 @@ int main(int iArgumentCount, char* vArguments[])
 				fprintf(stderr, "IpcClient Init failed: code=%d\n", iCode);
 				return iCode;
 			}
-			IpcClient::GetInstance().StartClient();
+			if (HoldMgr::GetInstance().RunsWithoutIpc())
+			{
+				HoldMgr::GetInstance().Start(INVALID_SID);
+			}
+			else
+			{
+				IpcClient::GetInstance().StartClient();
+			}
 		}
 		catch (const std::exception& stError)
 		{

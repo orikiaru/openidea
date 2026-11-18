@@ -130,6 +130,8 @@ python3 tools/test_matrix.py --case hold --mode all
 python3 tools/run_regressions.py --case all --artifacts /tmp/oi-test-artifacts
 ```
 
+可定向运行 `--case hold-blocking`、`--case hold-timer` 或 `--case hold-redis`。三项分别只执行阻塞、定时器或 Redis 迟到回包检查；阻塞场景启动 ipcserver，定时器场景不启动其他业务服务，Redis 场景只启动 redisserver 和临时 Redis，三项均启动日志服。端口预检只检查对应服务端口。完整 `hold` 和 `all` 的覆盖保持不变。定向用例检查各自的完成标记和真实结果，Redis 场景也支持 `--redis-timeline --artifacts <目录>`。
+
 排查 Hold 的 Redis 迟到回包时，可对本次测试启动的 Redis 开启只读 MONITOR：
 
 ```sh

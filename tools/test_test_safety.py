@@ -544,11 +544,16 @@ class RegressionCleanupTests(unittest.TestCase):
         client = subprocess.CompletedProcess([], 0, "rpc=1 bin=1 bad=0", "")
         fixture = Mock()
         fixture.server_address = ("::1", 12345)
+        fixture.completed_reuse = False
         fixture.__enter__ = Mock(return_value=fixture)
         fixture.__exit__ = Mock(return_value=False)
         def run_client(*args, **kwargs):
             if hasattr(fixture, "hosts") and isinstance(fixture.hosts, list):
-                fixture.hosts.extend(["[::1]:12345"] * 7)
+                fixture.hosts.extend(["[::1]:12345"] * 9)
+                reuse = not fixture.connection_headers and not getattr(fixture, "completed_reuse", False)
+                fixture.connection_headers.extend(["keep-alive" if reuse else "close"] * 9)
+                fixture.connections.extend(([object()] * 9) if reuse else [object() for _ in range(9)])
+                fixture.completed_reuse = True
             return client
         with patch.object(self.runner.shutil, "copy2"), \
              patch.object(self.runner, "launch", return_value=self.first), \

@@ -34,7 +34,7 @@ static int32_t OkStatus(const ::OI::Http::Response& stResponse)
 {
 	if (stResponse.iCode != OI_OK)
 	{
-		LOG_ERROR("web request failed code=%d status=%d", stResponse.iCode, stResponse.iStatus);
+		LOG_ERROR("web request failed code=%d status=%d reason=%s", stResponse.iCode, stResponse.iStatus, stResponse.sError.c_str());
 		return stResponse.iCode;
 	}
 	if (stResponse.iStatus != 200)
@@ -123,11 +123,36 @@ static OI::Coro::Task Run()
 {
 	std::string sIpLocal = "127.0.0.1";
 	int32_t iPortLocal = 18080;
+	int64_t iTimeoutMilliseconds = 5000;
+	bool bReuse = true;
+	bool bCheckEchoHeader = false;
+	TryGetConfig("WebClient.check_echo_header", bCheckEchoHeader);
 	TryGetConfig("WebClient.ip", sIpLocal);
 	TryGetConfig("WebClient.port", iPortLocal);
+	TryGetConfig("WebClient.timeout_ms", iTimeoutMilliseconds);
+	TryGetConfig("WebClient.reuse", bReuse);
+	if (iTimeoutMilliseconds <= 0 || iTimeoutMilliseconds > INT32_MAX)
+	{
+		LOG_ERROR("invalid WebClient.timeout_ms=%lld", static_cast<long long>(iTimeoutMilliseconds));
+		::OI::Thread::ThreadPool::GetInstance().RequestStop(OI_ERR_INVALID_ARGUMENT);
+		co_return;
+	}
 
-	::OI::Http::Client stCli(sIpLocal, iPortLocal);
+	::OI::Http::Client stCli(sIpLocal, iPortLocal, static_cast<int32_t>(iTimeoutMilliseconds), bReuse);
 	int iBadLocal = 0;
+
+	::OI::Http::Response stMissingQuery = co_await stCli.Get("/query");
+	if (stMissingQuery.iCode != OI_OK || stMissingQuery.iStatus != 400)
+	{
+		LOG_ERROR("web missing query failed code=%d status=%d expected_status=400", stMissingQuery.iCode, stMissingQuery.iStatus);
+		iBadLocal += 1;
+	}
+	::OI::Http::Response stHealth = co_await stCli.Get("/health");
+	if (stHealth.iCode != OI_OK || stHealth.iStatus != 200 || stHealth.sBody != "ok")
+	{
+		LOG_ERROR("web health failed code=%d status=%d body_ok=%d", stHealth.iCode, stHealth.iStatus, stHealth.sBody == "ok" ? 1 : 0);
+		iBadLocal += 1;
+	}
 
 	const std::string sText = "a b+";
 	std::vector<std::pair<std::string, std::string>> vQuery;
@@ -167,8 +192,6 @@ static OI::Coro::Task Run()
 		}
 	}
 
-	bool bCheckEchoHeader = false;
-	TryGetConfig("WebClient.check_echo_header", bCheckEchoHeader);
 	if (bCheckEchoHeader)
 	{
 		const std::vector<std::pair<std::string, std::string>> vRepeatQuery = {{"text", ""}, {"text", "a b+&"}};
@@ -389,8 +412,6 @@ static OI::Coro::Task Run()
 		}
 	}
 
-	TryGetConfig("WebClient.ip", sIpLocal);
-	TryGetConfig("WebClient.port", iPortLocal);
 	if (bCheckEchoHeader)
 	{
 		::OI::Http::Request stInvalidRequest;
