@@ -19,3 +19,14 @@ Windows 多线程注册发现用例完成了业务检查，删除临时目录内
 ## 定时极端溢出
 
 暂缓，待有明确复现或实际需求后再分析。
+
+## HTTP 消息能力后续分期
+
+对照 [libhv HttpMessage.h](https://github.com/ithewei/libhv/blob/master/http/HttpMessage.h) 的消息接口，当前提供请求/响应、原始正文和可重复 header；不以接口名称相同或数量相等作为兼容承诺。按需求分期，每期独立覆盖客户端和服务端，并保留既有接口。
+
+1. **Cookie 和重复 query**：提供解析与构造能力，明确多值顺序及缺失值语义；以重复 query、多个 Set-Cookie、大小写与空值、转义往返验收。Cookie 属性至少覆盖 domain、path、expires、max-age、secure、httponly 和 SameSite；自动 cookie jar 单独决策，不隐式跨请求保存。
+2. **表单**：支持 `application/x-www-form-urlencoded` 和 multipart 文本及文件字段，明确重复字段、二进制内容和尺寸上限；以真实服务往返、边界拆包、空字段和文件内容字节一致验收。JSON 继续使用现有 JsonCpp 和 rpcdata 能力。
+3. **流式收发**：提供分段读取、写入及背压，定义取消、超时、断连和资源生命周期；以大文件分段收发、慢消费者、断连和内存上限验证。现有 chunked 解析仍会累积正文，不能视作流式接口。
+4. **TLS**：提供客户端证书链和主机名校验及服务端证书配置；以本地可信 CA 成功、错误主机名和不受信任证书失败、握手超时及连接关闭验收。证书管理与部署单独设计。
+
+libhv 消息还提供文件、JSON、类型化值等便捷接口；是否引入以实际需求为准，不影响上述阶段的验收。

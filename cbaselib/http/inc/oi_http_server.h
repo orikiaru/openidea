@@ -1,30 +1,19 @@
 #pragma once
 #include "oi_coro.h"
+#include "oi_http_message.h"
 #include "oi_session_manager.h"
 #include <map>
 #include <string>
 
 namespace OI::Http
 {
-struct ServerRequest
-{
-	std::string sMethod;
-	std::string sPath;
-	std::map<std::string, std::string> mQuery;
-	std::string sBody;
-};
-
-struct ServerReply
-{
-	int32_t iStatus = 200;
-	std::string sContentType = "text/plain";
-	std::string sBody;
-};
+using ServerRequest = Request;
+using ServerReply = Response;
 
 class ServerManager : public Net::SessionManager
 {
   public:
-	using Handler = Coro::Task (*)(const ServerRequest&, ServerReply&);
+	using Handler = Coro::Task (*)(const Request&, Response&);
 	// 在监听前注册。请求和回复由框架保活到 handler 完成。
 	void Register(std::string sMethod, std::string sPath, Handler fnHandler);
 	Handler Find(const ServerRequest& stRequest) const;

@@ -339,10 +339,35 @@ static OI::Coro::Task Run()
 		}
 	}
 
+	bool bCheckEchoHeader = false;
+	TryGetConfig("WebClient.check_echo_header", bCheckEchoHeader);
+	TryGetConfig("WebClient.ip", sIpLocal);
+	TryGetConfig("WebClient.port", iPortLocal);
+	if (bCheckEchoHeader)
+	{
+		::OI::Http::Request stInvalidRequest;
+		stInvalidRequest.sPath = "/health";
+		stInvalidRequest.vHeaders.emplace_back("Content-Length", "0");
+		::OI::Http::Response stInvalidResponse = co_await stCli.Send(stInvalidRequest);
+		if (stInvalidResponse.iCode != OI_ERR_INVALID_ARGUMENT || stInvalidResponse.iStatus != 0)
+		{
+			LOG_ERROR("web invalid header check failed code=%d status=%d", stInvalidResponse.iCode, stInvalidResponse.iStatus);
+			++iBadLocal;
+		}
+	}
+
 	std::string sBin("\x00\x01\xff", 3);
-	::OI::Http::Response stRaw = co_await stCli.Post("/bin", sBin, "application/octet-stream");
+	::OI::Http::Request stBinaryRequest;
+	stBinaryRequest.sMethod = "POST";
+	stBinaryRequest.sPath = "/bin";
+	stBinaryRequest.sBody = sBin;
+	stBinaryRequest.sContentType = "application/octet-stream";
+	stBinaryRequest.vHeaders.emplace_back("X-Echo-Tag", "sample-tag");
+	::OI::Http::Response stRaw = co_await stCli.Send(stBinaryRequest);
+	const std::string* pEchoTag = stRaw.GetHeader("x-echo-tag");
 	int iBinOk = 0;
-	if (OkStatus(stRaw) == OI_OK && stRaw.sBody.size() == sBin.size() && std::memcmp(stRaw.sBody.data(), sBin.data(), sBin.size()) == 0)
+	if (OkStatus(stRaw) == OI_OK && stRaw.sBody.size() == sBin.size() && std::memcmp(stRaw.sBody.data(), sBin.data(), sBin.size()) == 0 &&
+	    (!bCheckEchoHeader || (pEchoTag && *pEchoTag == "sample-tag")))
 	{
 		iBinOk = 1;
 	}

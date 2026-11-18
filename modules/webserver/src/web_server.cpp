@@ -76,6 +76,10 @@ OI::Coro::Task RpcJson(const ServerRequest& stRequest, ServerReply& stReply)
 
 OI::Coro::Task Binary(const ServerRequest& stRequest, ServerReply& stReply)
 {
+	if (const auto* pTag = stRequest.GetHeader("x-echo-tag"))
+	{
+		stReply.vHeaders.emplace_back("X-Echo-Tag", *pTag);
+	}
 	stReply.sBody = stRequest.sBody;
 	stReply.sContentType = "application/octet-stream";
 	co_return;

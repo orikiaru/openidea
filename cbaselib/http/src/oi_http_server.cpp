@@ -150,7 +150,12 @@ struct RequestFrame
 			{
 				return 400;
 			}
-			if (EqualName(sName, "content-length"))
+			stRequest.vHeaders.emplace_back(sName, sValue);
+			if (EqualName(sName, "content-type"))
+			{
+				stRequest.sContentType = sValue;
+			}
+			else if (EqualName(sName, "content-length"))
 			{
 				if (bLength || !Number(sValue, iRemaining, 10))
 				{
@@ -364,16 +369,23 @@ class ServerSession final : public Net::NetSession
 			return;
 		}
 		const bool bValid = stReply.iStatus >= 200 && stReply.iStatus <= 599 &&
-		                    stReply.sContentType.find_first_of("\r\n") == std::string::npos;
+		                    Detail::ValidValue(stReply.sContentType) && Detail::ValidExtraHeaders(stReply.vHeaders);
 		const int iStatusLocal = bValid ? stReply.iStatus : 500;
 		std::string sWire = "HTTP/1.1 " + std::to_string(iStatusLocal) + " " + Reason(iStatusLocal) + "\r\n";
 		const bool bBody = iStatusLocal != 204 && iStatusLocal != 304;
 		if (bBody)
 		{
 			sWire += "Content-Length: " + std::to_string(bValid ? stReply.sBody.size() : 0) + "\r\n";
-			if (bValid)
+			if (bValid && !stReply.sContentType.empty())
 			{
 				sWire += "Content-Type: " + stReply.sContentType + "\r\n";
+			}
+		}
+		if (bValid)
+		{
+			for (const auto& [sName, sValue] : stReply.vHeaders)
+			{
+				sWire += sName + ": " + sValue + "\r\n";
 			}
 		}
 		sWire += bClose ? "Connection: close\r\n\r\n" : "Connection: keep-alive\r\n\r\n";
@@ -437,6 +449,9 @@ class ServerSession final : public Net::NetSession
 		m_bBusy = true;
 		auto fnHandler = m_stServer.Find(m_stFrame.stRequest);
 		auto pDone = std::make_unique<Completion>();
+		pDone->stReply.iStatus = 200;
+		pDone->stReply.iCode = OI_OK;
+		pDone->stReply.sContentType = "text/plain";
 		pDone->pBinding = m_pBinding;
 		pDone->bClose = m_stFrame.bClose;
 		pDone->stCall.fnCall = [](void* pArg)

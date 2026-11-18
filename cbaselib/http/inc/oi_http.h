@@ -1,7 +1,7 @@
 #pragma once
 #include <coroutine>
 #include <cstdint>
-#include "oi_errno.h"
+#include "oi_http_message.h"
 #include <memory>
 #include <string>
 #include <utility>
@@ -11,23 +11,6 @@ namespace OI
 {
 namespace Http
 {
-
-// iStatus 是 HTTP 状态码；iCode 是框架操作错误码。
-struct Response
-{
-	// HTTP 状态码。没拿到状态行是 0。
-	int32_t iStatus;
-	// 响应体原始字节。
-	std::string sBody;
-	// 连接、超时或报文不完整的具体错误码；HTTP 4xx/5xx 本身不算传输失败。
-	int32_t iCode;
-	// 失败时的简短原因。
-	std::string sError;
-	Response()
-	    : iStatus(0), iCode(OI_ERR_CONNECT)
-	{
-	}
-};
 
 // 一次请求。co_await 挂起，poll 线程上收完再 Schedule 回来，不在回调里 resume。
 // 复用时，同一个 Client 上的请求串行走 SessionManager 的一条连接，发完不主动拆。
@@ -77,8 +60,10 @@ class Client
 	Client(const Client&) = delete;
 	Client& operator=(const Client&) = delete;
 
+	Call Send(const Request& stRequest);
+
 	// 发 GET。查询参数按百分号编码。
-	Call Get(const std::string& sPath, const std::vector<std::pair<std::string, std::string>>& vQuery);
+	Call Get(const std::string& sPath, const std::vector<std::pair<std::string, std::string>>& vQuery = {});
 	// 发 POST。正文按字节送出，Content-Type 用调用方给的。
 	Call Post(const std::string& sPath, const std::string& sBody, const std::string& sContentType);
 };

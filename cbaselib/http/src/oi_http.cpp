@@ -172,6 +172,7 @@ struct Call::Request
 {
 	std::shared_ptr<Client::Impl> pImpl; // 所属连接。Client 析构后由它留到结果发布。
 	std::string sRequest;                // 待发报文。发布结果前释放，晚到的超时不再留着大包。
+	Headers vHeaders;
 	std::string sBody;                   // 正文。exchange(Ready) 之前写完。
 	std::string sError;                  // 失败原因。成功时为空。
 	std::coroutine_handle<> stHandle;    // 调用方句柄。门已经是 Waiting 才 Schedule。
@@ -244,7 +245,7 @@ struct Client::Impl : public ::OI::Net::SessionManager
 	void Enqueue(const std::shared_ptr<Call::Request>& pRequestLocal);
 	void OnTimeout(const std::shared_ptr<Call::Request>& pRequestLocal);
 	void Shutdown();
-	void OnHttpFinished(HttpSession* pSession, int32_t iCode, const char* pWhy, bool bClose, int32_t iStatusLocal, std::string sBodyLocal);
+	void OnHttpFinished(HttpSession* pSession, int32_t iCode, const char* pWhy, bool bClose, int32_t iStatusLocal, std::string sBodyLocal, Headers vHeaders);
 	void OnIdleBytes(HttpSession* pSession);
 
   protected:
@@ -259,6 +260,7 @@ class HttpSession : public ::OI::Net::NetSession
 {
 	std::shared_ptr<Client::Impl> m_pImpl;
 	std::string m_sIncoming;
+	Headers m_vHeaders;
 	std::string m_sBody;
 	size_t m_iHeaderBytes;
 	uint64_t m_iContentLength;
@@ -385,6 +387,7 @@ void HttpSession::NoteConnection(const std::string& sValue)
 
 bool HttpSession::ParseHeaders(size_t iHeaderEnd)
 {
+	m_vHeaders.clear();
 	size_t iLineEnd = m_sIncoming.find("\r\n");
 	if (iLineEnd == std::string::npos || iLineEnd > iHeaderEnd)
 	{
@@ -434,6 +437,7 @@ bool HttpSession::ParseHeaders(size_t iHeaderEnd)
 			{
 				iNameEnd -= 1;
 			}
+			m_vHeaders.emplace_back(m_sIncoming.substr(iPosition, iNameEnd - iPosition), m_sIncoming.substr(iValue, iValueEnd - iValue));
 			if (EqName(m_sIncoming, iPosition, iNameEnd, "content-length") && iPosition + std::strlen("content-length") == iNameEnd)
 			{
 				uint64_t iLength = 0;
@@ -600,7 +604,7 @@ void HttpSession::Succeed(size_t iConsumed)
 	bool bCloseLocal = m_bCloseAfter;
 	std::string sBodyLocal = std::move(m_sBody);
 	ReleaseIncoming();
-	m_pImpl->OnHttpFinished(this, OI_OK, NULL, bCloseLocal, iStatusLocal, std::move(sBodyLocal));
+	m_pImpl->OnHttpFinished(this, OI_OK, NULL, bCloseLocal, iStatusLocal, std::move(sBodyLocal), std::move(m_vHeaders));
 }
 
 void HttpSession::Fail(const char* pWhy)
@@ -612,7 +616,7 @@ void HttpSession::Fail(const char* pWhy)
 	m_bActive = false;
 	int32_t iStatusLocal = m_iStatus;
 	ReleaseIncoming();
-	m_pImpl->OnHttpFinished(this, OI_ERR_PROTOCOL, pWhy, true, iStatusLocal, std::string());
+	m_pImpl->OnHttpFinished(this, OI_ERR_PROTOCOL, pWhy, true, iStatusLocal, std::string(), {});
 }
 
 void HttpSession::FinishEof()
@@ -729,7 +733,7 @@ void Client::Impl::FailFront(const char* pWhy)
 	Publish(pRequestLocal, OI_ERR_CONNECT, pWhy);
 }
 
-void Client::Impl::OnHttpFinished(HttpSession* pSession, int32_t iCode, const char* pWhy, bool bClose, int32_t iStatusLocal, std::string sBodyLocal)
+void Client::Impl::OnHttpFinished(HttpSession* pSession, int32_t iCode, const char* pWhy, bool bClose, int32_t iStatusLocal, std::string sBodyLocal, Headers vHeaders)
 {
 	if (m_pFlight && pSession == m_pSession)
 	{
@@ -737,6 +741,7 @@ void Client::Impl::OnHttpFinished(HttpSession* pSession, int32_t iCode, const ch
 		pFlightLocal->iStatus = iStatusLocal;
 		if (iCode == OI_OK)
 		{
+			pFlightLocal->vHeaders = std::move(vHeaders);
 			pFlightLocal->sBody = std::move(sBodyLocal);
 		}
 		Publish(pFlightLocal, iCode, pWhy);
@@ -1006,6 +1011,10 @@ bool Call::await_suspend(std::coroutine_handle<> stHandleLocal)
 		throw std::logic_error("HTTP Call can only be awaited once and must not be moved from");
 	}
 	m_pRequest->stHandle = stHandleLocal;
+	if (m_pRequest->iCode == OI_ERR_INVALID_ARGUMENT)
+	{
+		return false;
+	}
 	std::shared_ptr<Client::Impl> pImplLocal = m_pRequest->pImpl;
 	if (!pImplLocal)
 	{
@@ -1030,6 +1039,11 @@ Response Call::await_resume()
 	{
 		stOutput.iCode = OI_ERR_PROTOCOL;
 	}
+	stOutput.vHeaders = std::move(m_pRequest->vHeaders);
+	if (const auto* pType = stOutput.GetHeader("content-type"))
+	{
+		stOutput.sContentType = *pType;
+	}
 	stOutput.sError = std::move(m_pRequest->sError);
 	return stOutput;
 }
@@ -1049,7 +1063,7 @@ Client::~Client()
 	}
 }
 
-Call Client::Get(const std::string& sPath, const std::vector<std::pair<std::string, std::string>>& vQuery)
+static std::string QueryTarget(const std::string& sPath, const std::vector<std::pair<std::string, std::string>>& vQuery)
 {
 	std::string sTarget = sPath.empty() ? "/" : sPath;
 	if (!vQuery.empty())
@@ -1074,27 +1088,66 @@ Call Client::Get(const std::string& sPath, const std::vector<std::pair<std::stri
 			sTarget += EncodeQuery(vQuery[iIndexLocal].second);
 		}
 	}
-	auto pRequest = std::make_shared<Call::Request>();
-	pRequest->pImpl = m_pImpl;
-	pRequest->iTimeoutMilliseconds = m_pImpl->Timeout();
-	pRequest->sRequest = "GET " + sTarget + " HTTP/1.1\r\n";
-	pRequest->sRequest += HostHeader(m_pImpl->Host(), m_pImpl->Port());
-	pRequest->sRequest += m_pImpl->Reuse() ? "Connection: keep-alive\r\n\r\n" : "Connection: close\r\n\r\n";
-	return Call(pRequest);
+	return sTarget;
+}
+
+Call Client::Get(const std::string& sPath, const std::vector<std::pair<std::string, std::string>>& vQuery)
+{
+	Request stRequest;
+	stRequest.sPath = QueryTarget(sPath, vQuery);
+	return Send(stRequest);
 }
 
 Call Client::Post(const std::string& sPath, const std::string& sBodyLocal, const std::string& sContentType)
 {
-	std::string sTarget = sPath.empty() ? "/" : sPath;
+	Request stRequest;
+	stRequest.sMethod = "POST";
+	stRequest.sPath = sPath;
+	stRequest.sBody = sBodyLocal;
+	stRequest.sContentType = sContentType;
+	return Send(stRequest);
+}
+
+Call Client::Send(const Request& stRequest)
+{
 	auto pRequest = std::make_shared<Call::Request>();
 	pRequest->pImpl = m_pImpl;
 	pRequest->iTimeoutMilliseconds = m_pImpl->Timeout();
-	pRequest->sRequest = "POST " + sTarget + " HTTP/1.1\r\n";
-	pRequest->sRequest += HostHeader(m_pImpl->Host(), m_pImpl->Port());
-	pRequest->sRequest += "Content-Type: " + sContentType + "\r\n";
-	pRequest->sRequest += "Content-Length: " + std::to_string(sBodyLocal.size()) + "\r\n";
-	pRequest->sRequest += m_pImpl->Reuse() ? "Connection: keep-alive\r\n\r\n" : "Connection: close\r\n\r\n";
-	pRequest->sRequest.append(sBodyLocal.data(), sBodyLocal.size());
+	const bool bPost = stRequest.sMethod == "POST";
+	if ((!bPost && stRequest.sMethod != "GET") || (!bPost && !stRequest.sBody.empty()) ||
+	    !Detail::ValidExtraHeaders(stRequest.vHeaders) || !Detail::ValidValue(stRequest.sContentType))
+	{
+		pRequest->iCode = OI_ERR_INVALID_ARGUMENT;
+		pRequest->sError = "invalid HTTP method, body or headers";
+		return Call(pRequest);
+	}
+	std::string sTarget = QueryTarget(stRequest.sPath, {stRequest.mQuery.begin(), stRequest.mQuery.end()});
+	if (sTarget.front() != '/' || std::any_of(sTarget.begin(), sTarget.end(), [](unsigned char iByte)
+	{
+		return iByte <= 32 || iByte == 127 || iByte == '#';
+	}))
+	{
+		pRequest->iCode = OI_ERR_INVALID_ARGUMENT;
+		pRequest->sError = "invalid HTTP request target";
+		return Call(pRequest);
+	}
+	auto& sWire = pRequest->sRequest;
+	sWire = stRequest.sMethod + " " + sTarget + " HTTP/1.1\r\n";
+	sWire += HostHeader(m_pImpl->Host(), m_pImpl->Port());
+	for (const auto& [sKey, sValue] : stRequest.vHeaders)
+	{
+		sWire += sKey + ": " + sValue + "\r\n";
+	}
+	if (!stRequest.sContentType.empty())
+	{
+		sWire += "Content-Type: " + stRequest.sContentType + "\r\n";
+	}
+	if (bPost)
+	{
+		sWire += "Content-Length: " + std::to_string(stRequest.sBody.size()) + "\r\n";
+	}
+	sWire += m_pImpl->Reuse() ? "Connection: keep-alive\r\n\r\n" : "Connection: close\r\n\r\n";
+	sWire += stRequest.sBody;
 	return Call(pRequest);
 }
 
