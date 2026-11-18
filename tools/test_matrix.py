@@ -265,6 +265,13 @@ def main():
             failed = True
         if run("matrix-outcomes", [sys.executable, ROOT / "tools/test_matrix_outcomes.py"]):
             failed = True
+        for name, script in (("regression-checks", "test_regression_checks.py"),
+                             ("build-tests", "test_build.py"),
+                             ("linux-sync-tests", "test_sync_linux_remote.py")):
+            if run(name, [sys.executable, ROOT / "tools" / script]):
+                failed = True
+        if args.case == "all" and run("config-macros", [sys.executable, ROOT / "tools/test_config_macros.py", "--cmake", cmake]):
+            failed = True
         gap = missing_toolset(WINDOWS)
         if gap:
             print(gap, flush=True)

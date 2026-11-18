@@ -56,7 +56,7 @@ python tools/build.py
 python tools/build.py --mode st
 ```
 
-Windows 用 `build-win`、Visual Studio 17 2022、x64、Release。Linux 用 `$HOME/openidea-build-gcc13`、gcc-13。`--mode st` 只把 ipcclient/ipcserver 编成单线程，不会自动编回多线程。产物仍由最外层 `CMakeLists.txt` 放到 `deploy/bin`。
+Windows 多线程用 `build-win`、单线程用 `build-win-st`，使用 Visual Studio 17 2022、x64、Release。Linux 多线程用 `$HOME/openidea-build-gcc13`、单线程用 `$HOME/openidea-build-gcc13-st`，使用 gcc-13。`--build-dir` 显式指定时直接使用指定目录；`--mode st` 只把 ipcclient/ipcserver 编成单线程，不会自动编回多线程。产物仍由最外层 `CMakeLists.txt` 放到 `deploy/bin`。
 
 WSL 的 clang 严格编译使用独立目录，分别配置单线程和多线程并构建全部目标：
 
@@ -148,7 +148,7 @@ Windows 的日志故障测试要求该产物以 `-DOI_ENABLE_TEST_HOOKS=ON` 构�
 
 主要成功标记：
 
-- echo / registry：`ok=1000000 mismatch=0 rpc_fail=0`，连接只启动一次。客户端同时在途的请求数由 `[TestEcho] inflight` 限定（默认 2048），必须低于服务端 `[Rpc] session_max_inflight_count`，否则多线程下会被回 `OI_ERR_BUSY`。
+- echo：按 `[TestEcho] total` 核对 `total` 和 `ok`（仓库配置为 1000000），`mismatch=0 rpc_fail=0`，连接只启动一次。registry、reset、rpc-ingress 在临时配置中将回声数设为 100，并按该数量核对端到端收发；registry 的直连后备端口故意设错，以验证通过注册发现连接。客户端同时在途的请求数由 `[TestEcho] inflight` 限定（默认 2048），必须低于服务端 `[Rpc] session_max_inflight_count`，否则多线程下会被回 `OI_ERR_BUSY`。
 - empty：显式 `--case empty` 才跑，不包含在 `all`。仓库配置 `[Test] empty = false`。请求和回复都没有字段。每条协议单独 `StartTask`，在途数由 `[TestEmpty] inflight`（默认 2048）限制。主协程每 1 毫秒 `yield` 一次看完成数，完成数用互斥锁保护。日志只留一行 `empty mode=... total=1000000 ms=... rate=.../s rpc_fail=0`。
 - 客户端时限：跑 hold 那套的用例（含 rpc-admission、clock）120 秒，Redis 压力类和 redis-shutdown 20 秒，coro、empty 各 180 秒，其余 60 秒。超时按失败处理并打印客户端输出。
 - log：逐条核对实际磁盘记录、字节数和内容；端到端速度以落盘字节除以客户端开始到文件最后增长的时间，不能拿 enqueue_rate 代替。
@@ -275,3 +275,7 @@ Hold 二进制容器检查还覆盖嵌套结构、结构数组和结构字典的
 阻塞池线程访问回归用同步具名函数调用会话管理器发送、会话发送及发送许可入口：单线程构建要求发送、连接启动、监听、UDP 对端创建、重连、路由通知、会话关闭、注册发现、Redis 同步调用及定时器操作返回 `OI_ERR_WRONG_THREAD`，并检查 UDP 对端输出参数、发送队列、事件掩码和已登记定时器不变、被拒绝的定时器闭包已释放；多线程构建核对空路由、空负载发送及入队行为。正常线程检查发送和定时器返回 `OI_OK`，未登记定时器返回 `OI_ERR_NOT_FOUND`。Redis 单线程模式还从阻塞池工作线程检查同步调用被拒绝，保留 poll 线程同步收发验证。随后原有管道、定时器与 RPC 检查继续验证 poll 活性。驱动检查 `hold blocking access bad=0`。
 
 `BlockingMgr` 通过 `uv_pipe` 创建阻塞管道，在后台普通同步函数中调用 `uv_fs_read`；后台回调只执行普通同步代码，不调用 `co_await`、`StartTask` 或其他框架协程接口。空管道读开始后，前台协程计时 200 毫秒并完成真实 RPC，确认写入前读尚未结束；随后向管道写入 `pipe-ok`，等待读取结束并检查内容与返回码。异常和写入失败路径也要释放读端并等待后台结束。另以固定种子 20261110 在前台生成 1–20 毫秒延迟，128 个后台任务分别同步等待并返回不同值，按提交顺序核对 WhenAll 结果，不要求实际完成顺序必须变化。驱动强制检查 `hold blocking delay seed=20261110 min_ms=1 max_ms=20`、`hold blocking read started=1 timer=1 rpc=1 early=0 content=1 bad=0`，以及 `hold blocking tasks=128 waiters=64 runs=1 bad=0`。
+
+回归脚本必须使用未启用 `-O` 的 Python 运行，避免跳过断言。`disk-full` 仅在日志服非零退出且记录 `fwrite`、`fflush` 或注入的写盘失败时通过；RPC admission 分别核对第 0、1、2 轮的结果。
+
+矩阵执行脚本级回归检查、构建命令和远程同步测试；配置宏编译探针仅在 `--case all` 时执行，定向用例不重复编译探针。

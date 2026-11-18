@@ -23,10 +23,9 @@ def default_jobs():
     return os.cpu_count() or 1
 
 
-def default_build_dir():
-    if WINDOWS:
-        return ROOT / "build-win"
-    return Path.home() / "openidea-build-gcc13"
+def default_build_dir(mode="mt"):
+    build = ROOT / "build-win" if WINDOWS else Path.home() / "openidea-build-gcc13"
+    return build.with_name(build.name + "-st") if mode == "st" else build
 
 
 def configure_command(cmake, build, mode, defines, vs_instance):
@@ -69,7 +68,7 @@ def main(argv=None):
         print(gap, flush=True)
         return 2
     cmake = test_matrix.find_cmake(args.cmake)
-    build = (args.build_dir or default_build_dir()).resolve()
+    build = (args.build_dir or default_build_dir(args.mode)).resolve()
     configure = configure_command(cmake, build, args.mode, args.define, args.vs_instance)
     compile_cmd = build_command(cmake, build, args.jobs)
     print("CONFIGURE", " ".join(configure), flush=True)

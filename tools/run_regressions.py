@@ -7,6 +7,8 @@ from test_process_owner import write_owner, record_process
 import argparse
 import contextlib
 import sys
+if not __debug__:
+    raise SystemExit("run_regressions.py requires assertions; do not use Python -O")
 import datetime
 import os
 from pathlib import Path
@@ -163,12 +165,54 @@ def replace(text, key, value):
     return re.sub(r"(?m)^" + re.escape(key) + r"\s*=.*$", key + " = " + value, text)
 
 
+def disk_failure(exit_code, message):
+    return exit_code is not None and exit_code != 0 and bool(re.search(
+        r"(?m)^logd (?:fwrite|fflush|injected fwrite ENOSPC) failed: .+$", message))
+
+
+def echo_total_match(config):
+    section = re.search(r"(?ms)^\[TestEcho\][ \t]*\n(.*?)(?=^\[|\Z)", config)
+    if not section:
+        raise RuntimeError("missing [TestEcho] configuration")
+    matches = list(re.finditer(r"(?m)^total[ \t]*=[ \t]*(\d+)[ \t]*(?:#.*)?$", section.group(1)))
+    if len(matches) != 1 or int(matches[0].group(1)) <= 0:
+        raise RuntimeError("invalid or duplicate [TestEcho] total")
+    match = matches[0]
+    return section.start(1) + match.start(1), section.start(1) + match.end(1)
+
+
+def echo_total(config):
+    start, end = echo_total_match(config)
+    return int(config[start:end])
+
+
+def set_echo_total(config, total):
+    start, end = echo_total_match(config)
+    return config[:start] + str(total) + config[end:]
+
+def check_admission_rounds(text):
+    for round_number in range(3):
+        marker = "hold rpc admission round=%d ok=2 busy=4 bad=0" % round_number
+        assert text.count(marker) == 1, "missing or duplicate admission round %d" % round_number
+
+
 def bytes_on_disk(root):
     return sum(p.stat().st_size for p in root.rglob("*") if p.is_file() and not p.is_symlink())
 
 
 def log_payload_on_disk(root):
     return sum(p.stat().st_size for p in root.rglob("info") if p.is_file() and not p.is_symlink())
+
+
+def preflight_ports(case):
+    if case == "web":
+        return
+    for port in (LOGD_PORT, IPC_PORT, REDIS_SERVER_PORT, REDIS_PORT, REGISTRY_PORT) + GAME_PORTS:
+        with socket.socket() as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            probe.bind(("127.0.0.1", port))
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        probe.bind(("127.0.0.1", UDP_PORT))
 
 
 def reset_connections():
@@ -315,6 +359,7 @@ def run(case, args):
     mode = "pool" if case in ("local", "registry-static") else mode
     mode = "log" if case in ("disk-full", "log-backpressure") else mode
     mode = "redis" if case.startswith("redis-") else mode
+    expected_echo_total = None
     fairness = case == "redis-fairness"
     pressure = case.startswith("redis-backpressure-") or fairness
     db = None
@@ -388,6 +433,10 @@ def run(case, args):
                 text = replace(text, "max_pending_commands", str(maximum_count))
                 if fairness: text = replace(text, "offset_ms", "1000")
             if name == "ipcclient":
+                if case in ("reset", "registry", "rpc-ingress"):
+                    text = set_echo_total(text, 100)
+                if mode == "echo":
+                    expected_echo_total = echo_total(text)
                 if case in ("multi", "local"):
                     text = text.replace("max_send_queue_bytes = 65536", "", 1)
                     if case == "multi":
@@ -506,7 +555,7 @@ def run(case, args):
                         break
                 except OSError:
                     if logd.poll() is not None or time.monotonic() > deadline:
-                        if case == "disk-full" and "logd " in logpath.read_text(encoding="utf-8", errors="replace"):
+                        if case == "disk-full" and disk_failure(logd.poll(), logpath.read_text(encoding="utf-8", errors="replace")):
                             print(case, "PASS: disk error detected", flush=True)
                             return
                         raise RuntimeError(logpath.read_text(encoding="utf-8", errors="replace"))
@@ -741,7 +790,7 @@ def run(case, args):
                     raise RuntimeError("test log exceeds 2GiB limit")
                 if case == "disk-full" and logd.poll() is not None:
                     message = logpath.read_text(encoding="utf-8", errors="replace")
-                    if logd.returncode != 0 and "failed:" in message:
+                    if disk_failure(logd.returncode, message):
                         print(case, "PASS: disk error detected", flush=True)
                         return
                     raise RuntimeError(message)
@@ -759,7 +808,7 @@ def run(case, args):
             if mode == "coro":
                 assert "coro live=" in text and "bad=0" in text
             elif mode == "echo":
-                assert "ok=1000000 mismatch=0 rpc_fail=0" in text
+                assert re.search(r"ipc mode=\S+ total=%d ok=%d mismatch=0 rpc_fail=0\b" % (expected_echo_total, expected_echo_total), text), "echo count mismatch"
                 assert text.count("ipc client connect sid=") == 1, "echo test started more than once"
             elif mode == "empty":
                 assert re.search(r"empty mode=\S+ total=1000000 ms=\d+ rate=\d+/s rpc_fail=0", text)
@@ -853,7 +902,7 @@ def run(case, args):
                     assert re.search(r"redis stress .*bad=0", text)
             elif case.startswith("rpc-admission-"):
                 assert "hold rpc admission done bad=0" in text
-                assert text.count("ok=2 busy=4 bad=0") == 3
+                check_admission_rounds(text)
             elif mode == "hold":
                 assert "hold rpc session index calls=4096 bad=0" in text
                 assert "hold timer exceptions executed=5 destroyed=5 bad=0" in text
@@ -920,6 +969,12 @@ def run(case, args):
                 # Stop drains accepted batches; inspect actual files and the final backlog accounting.
                 stop(logd)
                 logd.wait(timeout=10)
+                if case == "disk-full":
+                    message = logpath.read_text(encoding="utf-8", errors="replace")
+                    if disk_failure(logd.returncode, message):
+                        print(case, "PASS: disk error detected", flush=True)
+                        return
+                    raise RuntimeError("disk-full did not report a write failure\n" + message)
                 assert logd.returncode == 0, logpath.read_text(encoding="utf-8", errors="replace")
                 size = bytes_on_disk(logs)
                 line_bytes, target_bytes = (131072, 64 * 1024**2) if case == "log-backpressure" else (65536, 1024**3)
@@ -1115,12 +1170,7 @@ if __name__ == "__main__":
         options.artifacts = options.artifacts.resolve()
         options.artifacts.mkdir(parents=True, exist_ok=True)
     apply_port_offset(options.port_offset)
-    for port in (LOGD_PORT, IPC_PORT, REDIS_SERVER_PORT, REDIS_PORT, REGISTRY_PORT) + GAME_PORTS:
-        with socket.socket() as probe:
-            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            probe.bind(("127.0.0.1", port))
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
-        probe.bind(("127.0.0.1", UDP_PORT))
+    preflight_ports(options.case)
     cases = ("echo", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "registry", "udp", "multi", "local", "web") if options.case == "all" else (options.case,)
     results = []
     for item in cases:

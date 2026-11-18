@@ -28,6 +28,36 @@ class BuildCommandTests(unittest.TestCase):
         self.assertNotIn("--", compile_cmd)
         self.assertEqual(compile_cmd[compile_cmd.index("-j") + 1], "4")
 
+    def test_main_build_directories_per_platform_and_mode(self):
+        for windows in (True, False):
+            for mode in ("mt", "st"):
+                with self.subTest(windows=windows, mode=mode):
+                    expected = (build.ROOT / "build-win" if windows else Path.home() / "openidea-build-gcc13")
+                    if mode == "st":
+                        expected = expected.with_name(expected.name + "-st")
+                    with mock.patch.object(build, "WINDOWS", windows), \
+                         mock.patch.object(build.test_matrix, "missing_toolset", return_value=""), \
+                         mock.patch.object(build.test_matrix, "find_cmake", return_value="cmake"), \
+                         mock.patch.object(build.subprocess, "call", return_value=0) as call:
+                        self.assertEqual(build.main(["--mode", mode]), 0)
+                    configure, compile_cmd = (item.args[0] for item in call.call_args_list)
+                    self.assertEqual(Path(configure[configure.index("-B") + 1]), expected.resolve())
+                    self.assertEqual(Path(compile_cmd[compile_cmd.index("--build") + 1]), expected.resolve())
+
+    def test_explicit_build_directory_is_used_for_all_modes(self):
+        for windows in (True, False):
+            for mode in ("mt", "st"):
+                with self.subTest(windows=windows, mode=mode):
+                    expected = Path("custom-build").resolve()
+                    with mock.patch.object(build, "WINDOWS", windows), \
+                         mock.patch.object(build.test_matrix, "missing_toolset", return_value=""), \
+                         mock.patch.object(build.test_matrix, "find_cmake", return_value="cmake"), \
+                         mock.patch.object(build.subprocess, "call", return_value=0) as call:
+                        self.assertEqual(build.main(["--mode", mode, "--build-dir", str(expected)]), 0)
+                    configure, compile_cmd = (item.args[0] for item in call.call_args_list)
+                    self.assertEqual(Path(configure[configure.index("-B") + 1]), expected)
+                    self.assertEqual(Path(compile_cmd[compile_cmd.index("--build") + 1]), expected)
+
     def test_default_jobs_follows_cpu(self):
         with mock.patch.object(build.os, "cpu_count", return_value=16):
             self.assertEqual(build.default_jobs(), 16)

@@ -112,10 +112,16 @@ class MatrixOutcomeTests(unittest.TestCase):
 
     def test_nonzero_steps_cannot_pass(self):
         for step in ("field-names", "inheritance-tests", "inheritance", "process-fixtures", "test-safety", "matrix-outcomes",
+                     "regression-checks", "build-tests", "linux-sync-tests", "config-macros",
                      "mt-configure", "mt-build", "mt-tests", "st-tests"):
             with self.subTest(step=step):
                 code, _, _ = self.exercise({step: 1})
                 self.assertEqual(1, code)
+
+    def test_config_macro_probe_only_runs_for_all(self):
+        _, _, calls = self.exercise(extra_args=("--case", "echo"))
+        self.assertNotIn("config-macros", calls)
+        self.assertIn("regression-checks", calls)
 
     def test_original_interrupt_is_not_swallowed(self):
         self.exercise({"mt-tests": KeyboardInterrupt()}, KeyboardInterrupt)
