@@ -1,8 +1,9 @@
+import io
 import subprocess
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import run_regressions as regression
 
@@ -59,6 +60,31 @@ class RegressionChecksTest(unittest.TestCase):
                         [lines[0].replace("bad=0", "bad=1")] + lines[1:]):
             with self.subTest(lines=invalid), self.assertRaises(AssertionError):
                 regression.check_admission_rounds("\n".join(invalid))
+
+    def test_web_transport_runs_all_stages(self):
+        payload = bytes(range(256)) * 2048
+        ok = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"
+        binary = (b"HTTP/1.1 200 OK\r\nContent-Length: 524288\r\n"
+                  b"Connection: close\r\n\r\n" + payload)
+        keep, chunk = MagicMock(), MagicMock()
+        keep.__enter__.return_value = keep
+        chunk.__enter__.return_value = chunk
+        keep.makefile.return_value = io.BytesIO(ok + ok)
+        chunk.makefile.return_value = io.BytesIO(binary)
+        bad, healthy = MagicMock(), MagicMock()
+        bad.getresponse.return_value.status = 400
+        healthy.getresponse.return_value.status = 200
+        healthy.getresponse.return_value.read.return_value = b"ok"
+        with patch.object(regression.socket, "create_connection", side_effect=[keep, chunk]), \
+             patch.object(regression.http.client, "HTTPConnection", side_effect=[bad, healthy]), \
+             patch.object(regression.time, "sleep"):
+            regression.check_web_transport(18080)
+        self.assertEqual(keep.sendall.call_count, 3)
+        self.assertEqual(chunk.sendall.call_count, 18)
+        bad.request.assert_called_once_with("GET", "/query")
+        healthy.request.assert_called_once_with("GET", "/health")
+        bad.close.assert_called_once_with()
+        healthy.close.assert_called_once_with()
 
     def test_web_skips_unrelated_port_preflight(self):
         with patch.object(regression.socket, "socket", side_effect=OSError("port occupied")) as probe:

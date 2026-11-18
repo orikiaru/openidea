@@ -6,7 +6,7 @@
 
 - Windows 原生 MSVC x64 Release、Linux WSL GCC 13，各运行多线程 MT 和单线程 ST，共四组。
 - ST/MT 只切换 ipcclient、ipcserver；logd 固定多线程，redisserver/registry 按各自配置单线程。
-- `all` 包含 21 项：echo、log、log-backpressure、redis、redis-limit、redis-shutdown、redis-queue-timeout、rpc-ingress、redis-backpressure-bytes、redis-backpressure-count、redis-fairness、hold、rpc-admission-count、rpc-admission-bytes、reset、disk-full、registry、udp、multi、local、web。`local` 不起 registry，用 `[Registry] instances` 的两台地址，`CallAny` 两台都命中，`CallAll` 按实例号返回两份。`multi` 仍走动态配置，业务进程上报后登记，同样要求 `CallAny` 两台都命中。`--mysqld` 在数据库用例之后再跑 `registry-static`：registry 的 `config=static`，名单由表提供，业务进程不上报，`CallAny` 同样打到两台。
+- `all` 包含 22 项：echo、log、log-backpressure、redis、redis-limit、redis-shutdown、redis-queue-timeout、rpc-ingress、redis-backpressure-bytes、redis-backpressure-count、redis-fairness、hold、rpc-admission-count、rpc-admission-bytes、reset、disk-full、registry、udp、multi、local、web、web-coro。`local` 不起 registry，用 `[Registry] instances` 的两台地址，`CallAny` 两台都命中，`CallAll` 按实例号返回两份。`multi` 仍走动态配置，业务进程上报后登记，同样要求 `CallAny` 两台都命中。`--mysqld` 在数据库用例之后再跑 `registry-static`：registry 的 `config=static`，名单由表提供，业务进程不上报，`CallAny` 同样打到两台。
 - Linux 可额外运行 clock-forward、clock-back，以及纯协程 ASan。校时故障只影响测试子进程，绝不调整宿主机时钟。
 - 必须全部返回 0；不能用删除断言、扩大超时、提高容量或重试掩盖失败。偶发失败保留日志，记录复测结果及根因是否确认。
 - 本次源码正在变化时不要声称覆盖了最新版本；核对结果目录的 environment.json、Git HEAD、diff 摘要后再报告。
@@ -279,3 +279,7 @@ Hold 二进制容器检查还覆盖嵌套结构、结构数组和结构字典的
 回归脚本必须使用未启用 `-O` 的 Python 运行，避免跳过断言。`disk-full` 仅在日志服非零退出且记录 `fwrite`、`fflush` 或注入的写盘失败时通过；RPC admission 分别核对第 0、1、2 轮的结果。
 
 矩阵执行脚本级回归检查、构建命令和远程同步测试；配置宏编译探针仅在 `--case all` 时执行，定向用例不重复编译探针。
+
+`web-coro` 使用独立临时配置启动专属 Redis、redisserver、ipcserver 和 webserver，不连接注册表。慢查询等待真实 Hold RPC 与 Redis PING 时检查 health 先返回，再检查同连接流水线的响应顺序和请求断开后新连接的响应，并等待旧处理协程完成。各查询成功必须返回原请求文本。
+
+`web` 另检查分段请求头、同连接连续请求、二进制 chunked 上传及大响应完整刷新后关闭连接，以及 HTTP 错误后新连接仍可用。

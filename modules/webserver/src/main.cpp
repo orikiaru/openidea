@@ -1,22 +1,36 @@
-#include <stdio.h>
 #include "oi_base.h"
 #include "web_server.h"
+#include <cstdio>
+#include <exception>
 
-int main(int iArgumentCount, char* vArguments[])
+int main()
 {
-	(void)iArgumentCount;
-	(void)vArguments;
-	int32_t iCode = ::OI::Base::Config::GlobalMutableConfig().Parse("../config/webserver.toml");
+	int32_t iCode = OI::Base::StartFramework("../config/webserver.toml");
 	if (iCode != OI_OK)
 	{
-		fprintf(stderr, "web server config parse failed: code=%d\n", iCode);
 		return iCode;
 	}
-	iCode = WebServer::GetInstance().Run();
+	auto& stServer = WebServer::GetInstance();
+	try
+	{
+		iCode = stServer.Init();
+		if (iCode == OI_OK)
+		{
+			iCode = stServer.StartServer();
+		}
+	}
+	catch (const std::exception& stError)
+	{
+		std::fprintf(stderr, "web server startup failed: %s\n", stError.what());
+		iCode = OI_ERR_FAIL;
+	}
 	if (iCode != OI_OK)
 	{
-		fprintf(stderr, "web server run failed: code=%d\n", iCode);
+		std::fprintf(stderr, "web server startup failed code=%d\n", iCode);
+		OI::Base::StopFramework();
 		return iCode;
 	}
-	return 0;
+	std::printf("web server listen %s:%s\n", stServer.GetStrIP().c_str(), stServer.GetStrPort().c_str());
+	std::fflush(stdout);
+	return OI::Base::RunFramework();
 }

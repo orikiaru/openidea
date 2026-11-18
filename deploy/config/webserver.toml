@@ -3,15 +3,10 @@
 name = "webserver"
 id = 1
 
-# 注册进程的地址。查不到服务名时仍用下面各段的 ip/port。
-[Registry]
-ip = "127.0.0.1"
-port = "17990"
-type = "tcp"
-heartbeat_ms = 1000
-pull_ms = 1000
+[ThreadPool]
+threadcount = 3
 
-# 只听 HTTP。query、JSON、二进制 body 由 cpp-httplib 和 JsonCpp 处理。
+# HTTP 监听端口；请求在框架协程中处理。
 [WebServer]
 ip = "127.0.0.1"
 port = 18080

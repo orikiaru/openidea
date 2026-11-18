@@ -1,111 +1,183 @@
 #include "web_server.h"
 #include "oi_config.h"
-#include "oi_errno.h"
+#include "oi_rpc_call.h"
+#include "oi_rpcdata_holdreq.h"
+#include "oi_rpcdata_holdres.h"
 #include "oi_rpcdata_jsonall.h"
-#include "httplib.h"
+#include "rpc_ids.h"
+#include "oi_redis.h"
 #include "json/json.h"
 #include <cstdio>
-#include <cerrno>
-#include <cstdlib>
-#include <memory>
-#include <string>
+#include <cstring>
 
-static std::string DumpJson(const Json::Value& stValue)
+namespace
+{
+using OI::Http::ServerReply;
+using OI::Http::ServerRequest;
+
+class WebRpc : public OI::Rpc::ProtoClientManager
+{
+	DECLARE_SINGLETON(WebRpc)
+	WebRpc() = default;
+	const std::string GetIDString() override
+	{
+		return "WebRpc";
+	}
+	void OnClientConnect(OI::Net::Session*) override
+	{
+	}
+	void OnClientDisconnect(const OI::Net::Session*) override
+	{
+	}
+};
+
+void SetJson(const Json::Value& stValue, ServerReply& stReply)
 {
 	Json::StreamWriterBuilder stBuilder;
 	stBuilder["indentation"] = "";
-	return Json::writeString(stBuilder, stValue);
+	stReply.sContentType = "application/json";
+	stReply.sBody = Json::writeString(stBuilder, stValue);
 }
 
-static bool ParseJson(const std::string& sText, Json::Value& stOutput)
+OI::Coro::Task Health(const ServerRequest&, ServerReply& stReply)
+{
+	stReply.sBody = "ok";
+	co_return;
+}
+
+OI::Coro::Task JsonEcho(const ServerRequest& stRequest, ServerReply& stReply)
 {
 	Json::CharReaderBuilder stBuilder;
+	std::unique_ptr<Json::CharReader> pReader(stBuilder.newCharReader());
+	Json::Value stBody;
 	std::string sErrors;
-	const std::unique_ptr<Json::CharReader> pReader(stBuilder.newCharReader());
-	const char* pBegin = sText.data();
-	return pReader->parse(pBegin, pBegin + sText.size(), &stOutput, &sErrors);
+	const char* pBegin = stRequest.sBody.data();
+	if (!pReader->parse(pBegin, pBegin + stRequest.sBody.size(), &stBody, &sErrors) || !stBody.isObject())
+	{
+		stReply.iStatus = 400;
+		co_return;
+	}
+	stBody["ok"] = true;
+	SetJson(stBody, stReply);
 }
 
-int32_t WebServer::Run()
+OI::Coro::Task RpcJson(const ServerRequest& stRequest, ServerReply& stReply)
 {
-	std::string sIpLocal = "127.0.0.1";
-	int iPortLocal = 18080;
-	TryGetConfig("WebServer.ip", sIpLocal);
-	TryGetConfig("WebServer.port", iPortLocal);
-	if (iPortLocal <= 0 || iPortLocal > 65535)
+	OI::RpcData::JsonAll stData;
+	if (!stData.FromJson(stRequest.sBody) || stData.iGap == INT32_MAX)
 	{
-		fprintf(stderr, "web server bad port=%d\n", iPortLocal);
+		stReply.iStatus = 400;
+		co_return;
+	}
+	++stData.iGap;
+	stReply.sBody = stData.ToJson();
+	stReply.sContentType = "application/json";
+}
+
+OI::Coro::Task Binary(const ServerRequest& stRequest, ServerReply& stReply)
+{
+	stReply.sBody = stRequest.sBody;
+	stReply.sContentType = "application/octet-stream";
+	co_return;
+}
+}
+
+OI::Coro::Task WebServer::Query(const ServerRequest& stRequest, ServerReply& stReply)
+{
+	if (!stRequest.mQuery.count("text"))
+	{
+		stReply.iStatus = 400;
+		co_return;
+	}
+	auto& stServer = GetInstance();
+	if (stServer.m_bRpc)
+	{
+		OI::RpcData::HoldReq stCall;
+		OI::RpcData::HoldRes stResult;
+		stCall.iMark = 1;
+		stCall.iDelayMilliseconds = stServer.m_iDelayMilliseconds;
+		if (stServer.m_iDelayMilliseconds > 0)
+		{
+			std::puts("web rpc begin");
+			std::fflush(stdout);
+		}
+		const int32_t iCode = co_await OI::Rpc::RpcCall(WebRpc::GetInstance(), stCall, stResult, OI::Timer::Seconds(5));
+		if (iCode != OI_OK || stResult.iMark != stCall.iMark)
+		{
+			std::fprintf(stderr, "web upstream RPC failed code=%d\n", iCode);
+			stReply.iStatus = 502;
+			co_return;
+		}
+	}
+	if (stServer.m_bRedis)
+	{
+		std::vector<std::string> vCommand{"PING"};
+		auto stResult = co_await OI::Redis::CallRedis(std::move(vCommand));
+		if (stResult.GetRet() != OI_OK || !stResult.pReply || stResult.pReply->type != REDIS_REPLY_STATUS ||
+		    !stResult.pReply->str || std::strcmp(stResult.pReply->str, "PONG") != 0)
+		{
+			std::fprintf(stderr, "web upstream Redis PING failed code=%d\n", stResult.GetRet());
+			stReply.iStatus = 502;
+			co_return;
+		}
+	}
+	Json::Value stBody(Json::objectValue);
+	stBody["text"] = stRequest.mQuery.at("text");
+	if (auto it = stRequest.mQuery.find("existing"); it != stRequest.mQuery.end())
+	{
+		stBody["existing"] = it->second;
+	}
+	SetJson(stBody, stReply);
+	if (stServer.m_bRpc && stServer.m_iDelayMilliseconds > 0)
+	{
+		std::puts("web handler complete");
+		std::fflush(stdout);
+	}
+}
+
+int32_t WebServer::Init()
+{
+	std::string sIp = "127.0.0.1";
+	int32_t iPort = 18080;
+	TryGetConfig("WebServer.ip", sIp);
+	TryGetConfig("WebServer.port", iPort);
+	if (iPort <= 0 || iPort > 65535)
+	{
+		std::fprintf(stderr, "web server bad port=%d\n", iPort);
 		return OI_ERR_INVALID_ARGUMENT;
 	}
-
-	httplib::Server stSvr;
-	stSvr.Get("/health", [](const httplib::Request&, httplib::Response& stResponse)
+	DefaultInit(sIp, std::to_string(iPort));
+	int32_t iCode = LoadSessionLimits();
+	if (iCode != OI_OK)
 	{
-		stResponse.set_content("ok", "text/plain");
-	});
-	stSvr.Get("/query", [](const httplib::Request& stRequest, httplib::Response& stResponse)
-	{
-		if (!stRequest.has_param("text"))
-		{
-			stResponse.status = 400;
-			return;
-		}
-		Json::Value stOutput(Json::objectValue);
-		stOutput["text"] = stRequest.get_param_value("text");
-		if (stRequest.has_param("existing"))
-		{
-			stOutput["existing"] = stRequest.get_param_value("existing");
-		}
-		stResponse.set_content(DumpJson(stOutput), "application/json");
-	});
-	stSvr.Post("/json", [](const httplib::Request& stRequest, httplib::Response& stResponse)
-	{
-		Json::Value stBody;
-		if (!ParseJson(stRequest.body, stBody) || !stBody.isObject())
-		{
-			stResponse.status = 400;
-			return;
-		}
-		stBody["ok"] = true;
-		stResponse.set_content(DumpJson(stBody), "application/json");
-	});
-	stSvr.Post("/rpcjson", [](const httplib::Request& stRequest, httplib::Response& stResponse)
-	{
-		::OI::RpcData::JsonAll stDataLocal;
-		if (!stDataLocal.FromJson(stRequest.body))
-		{
-			stResponse.status = 400;
-			return;
-		}
-		stDataLocal.iGap += 1;
-		stResponse.set_content(stDataLocal.ToJson(), "application/json");
-	});
-	stSvr.Post("/bin", [](const httplib::Request& stRequest, httplib::Response& stResponse)
-	{
-		stResponse.set_content(stRequest.body.data(), stRequest.body.size(), "application/octet-stream");
-	});
-
-	if (!stSvr.bind_to_port(sIpLocal, iPortLocal))
-	{
-#ifdef _WIN32
-		int iSystemError = WSAGetLastError();
-#else
-		int iSystemError = errno;
-#endif
-		fprintf(stderr, "web server bind/listen failed %s:%d system_error=%d\n", sIpLocal.c_str(), iPortLocal, iSystemError);
-		return OI_ERR_LISTEN;
+		return iCode;
 	}
-	printf("web server listen %s:%d\n", sIpLocal.c_str(), iPortLocal);
-	fflush(stdout);
-	if (!stSvr.listen_after_bind())
+	Register("GET", "/health", Health);
+	Register("GET", "/query", Query);
+	Register("POST", "/json", JsonEcho);
+	Register("POST", "/rpcjson", RpcJson);
+	Register("POST", "/bin", Binary);
+	std::string sPort;
+	m_bRpc = TryGetConfig("WebRpc.port", sPort);
+	if (m_bRpc)
 	{
-#ifdef _WIN32
-		int iSystemError = WSAGetLastError();
-#else
-		int iSystemError = errno;
-#endif
-		fprintf(stderr, "web server listen loop failed %s:%d system_error=%d\n", sIpLocal.c_str(), iPortLocal, iSystemError);
-		return OI_ERR_LISTEN;
+		TryGetConfig("WebRpc.delay_ms", m_iDelayMilliseconds);
+		iCode = WebRpc::GetInstance().Init();
+		if (iCode != OI_OK)
+		{
+			return iCode;
+		}
+		WebRpc::GetInstance().StartClient();
+	}
+	m_bRedis = TryGetConfig("RedisClient.port", sPort);
+	if (m_bRedis)
+	{
+		iCode = OI::Redis::RedisClient::GetInstance().Init();
+		if (iCode != OI_OK)
+		{
+			return iCode;
+		}
+		OI::Redis::RedisClient::GetInstance().StartClient();
 	}
 	return OI_OK;
 }

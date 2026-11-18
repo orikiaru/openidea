@@ -1,6 +1,6 @@
 # HTTP 客户端
 
-只有客户端，在 `OI::Http`。服务端不在这个库里，`webserver` 仍用 `cpp-httplib`。标准例子是 [`web_client.cpp`](../../modules/webclient/src/web_client.cpp#L45)。
+客户端和服务端都在 `OI::Http`。`webserver` 使用框架会话管理器接收请求，处理函数以协程执行。标准例子是 [`web_client.cpp`](../../modules/webclient/src/web_client.cpp#L45)。
 
 ## 接口
 

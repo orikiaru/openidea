@@ -6,6 +6,7 @@ set(LIBRARY_M ${LIBNAME}_m_static)
 
 set(LIBSRC
 	src/oi_http.cpp
+	src/oi_http_server.cpp
 	)
 
 add_library(${LIBRARY} STATIC ${LIBSRC})
