@@ -31,3 +31,39 @@ Windows 多线程注册发现用例完成了业务检查，删除临时目录内
 服务端 TLS 由 Nginx 等反向代理终止，代理与后端之间走 HTTP，本项目不实现服务端 TLS。
 
 libhv 消息还提供文件、JSON、类型化值等便捷接口；是否引入以实际需求为准，不影响上述阶段的验收。
+
+## 2026-11-19 全仓审查：待修复
+
+2026-11-19 对 HEAD `52dd507` 做了全仓只读审查（cbaselib、modules、tools 第一方代码；未编译、未跑回归；生成器异常输入在临时目录实测）。确认 0 个 P1、6 个 P2、12 个 P3，本轮先登记、不修改代码。P2 按顺序修；P3 随相关模块下次改动一并收口。
+
+### P2
+
+- **明文 HTTP 把传输错误当正常 EOF，close-delimited 响应可被静默截断**（`cbaselib/net/src/oi_tls_session.cpp` 的 `EndTransport`，`cbaselib/http/src/oi_http.cpp` 的 `FinishEof`）。触发：`http://` 请求，响应无 `Content-Length` 且非 chunked，body 中途 RST/读错误。现状：明文分支固定 `OnTransportEnd(OI_OK, nullptr)`；`FinishEof` 把已收到字节当完整 body 成功返回；有长度响应丢失原始 errno，只报 `OI_ERR_PROTOCOL`。修复：明文分支按 `GetError()` 判定，大于 0 报 `OI_ERR_CONNECT` 并带系统错误文本。
+- **Windows `SO_REUSEADDR` 允许重复监听，回归端口预检失效**（`cbaselib/port/oi_net_os.cpp` 的 `NetOs_Bind`，`tools/run_regressions.py` 的 `preflight_ports`）。触发：已有带 `SO_REUSEADDR` 的监听时再 bind。现状：Winsock 下第二个 bind 成功，两个实例同时监听，连接归属不确定；预检把占用端口判为空闲，可能把用例跑到上一轮残留进程上。修复：Windows 分支改 `SO_EXCLUSIVEADDRUSE`（或不设），`SO_REUSEADDR` 仅保留给非 Windows；预检改用 `connect_ex` 探测活监听。
+- **注册中心同值重复登记后，旧会话 Withdraw 会删掉在线登记**（`cbaselib/registry/src/registry_server.cpp` 的 `kRegisterLua`、`OnDelSession`、`Withdraw`）。触发：旧连接半开时新连接用相同 name/id/ip/port 登记成功，旧会话随后被判死。现状：`Withdraw` 先按值删 Redis 键，再检查是否还有同 name/id 的在线 Binding；快照也会被摘掉。空档内别的进程可抢同名同 id，原进程收到 `OI_ERR_EXIST` 后 `m_bLost` 永久停止登记。修复：`Withdraw` 发 EVAL 前先检查是否还有同 name/id 的在线 Binding；或 `Register` 成功时接管并摘掉旧会话的绑定；`OnDelSession` 的 `DropSnapshot` 同样按条件判断。
+- **定时器时间快照 getter 无同步，跨线程读与 Update 写构成数据竞争**（`cbaselib/timer/inc/oi_timer_manager.h` 的 `GetCurTick`/`GetTime`/`GetCurTickTime`/`GetTm`，`cbaselib/timer/src/oi_timer_manager.cpp` 的 `Update`）。触发：多线程构建下非 poll 线程读取，仓库自己的定时器回归协程在工人线程读 `GetTime`/`GetCurTick`。现状：写侧在 `m_stWheelMutex` 里原地覆写，读侧无锁；`GetCurTickTime`/`GetTm` 返回内部对象引用。修复：两个标量改原子量；引用返回改锁内拷贝按值返回。
+- **logd 延后帧缺单帧限额，可永久卡住队列并让 Stop 退不掉**（`cbaselib/logd/src/log_manager.cpp` 的 `DeferWrite`/`QueueWaiter`/`ResumeWaiting`，`cbaselib/logd/src/log_server_session.cpp` 的延后分支）。触发：`Log.max_pending_bytes` 取最小值附近（回归配成 8MiB+8），客户端一次读里第二帧的 `sText` 超过 `max - 标题长度` 且仍在 `LOG_FRAME_MAX+64` 内。现状：该帧仍入队，但队首永远放不下；本地日志持续 BUSY，`Stop()` 等待一个不会再被 Signal 的条件。修复：入队前做与 `WriteLog` 相同的单帧检查（含 `sText < LOG_FRAME_MAX`），超限按协议错误关闭会话。
+- **HTTP 连接池在 EOF 处理前复用会话，排队请求被误判协议错误**（`cbaselib/http/src/oi_http.cpp` 的 `Complete`/`Pump`，`cbaselib/net/src/oi_tcp_channel.cpp` 的 `peer_close`）。触发：keep-alive 响应后对端关闭，响应与 EOF 落在同一次读事件，池中有排队请求。现状：缓冲数据先完成响应，会话回空闲并被 `Pump` 立即复用于下一个请求；随后 `PassiveClose(0)` 交付 EOF，新请求在无响应头时走 `Fail("eof")`，报 `OI_ERR_PROTOCOL` 且不自动换连接重试。修复：读返回 0 时先标记会话不可复用再交付缓冲；或把“零响应字节即 EOF”按连接错误处理并用新连接重试一次。
+
+### P3
+
+- **生成器输入校验不足**（`cbaselib/proto/proto_tool/field_naming.py`、`serialize_data_file_gen.py`）：`long`/`size_t` 能通过命名校验并按 `sizeof(T)` 序列化（Linux 8 字节、Windows 4 字节，同一协议两边不兼容）；`rpcdata class` 生成 `class class`；超大 enum 值原样生成；`OI::Base::Bytes` 被 `QualType` 正则拼成 `OI::Base::::OI::Base::Bytes`。已用临时目录实测。修复：字段类型白名单、声明名校验、enum 范围校验，`QualType` 改整类型匹配。
+- **组件生成路径不可达**（`cbaselib/proto/proto_tool/module_data_parse.py`）：`ParseComponent` 无调用方，module 里写 `component` 必然报 `NoComponent`，文档仍描述组件生成。修复：接入文本组件的解析，或删除组件生成与文档。
+- **HTTP 服务端缓冲 body 与接收缓冲耦合**（`cbaselib/http/src/oi_http_server.cpp`、`cbaselib/net/src/oi_tcp_channel.cpp`）：非 chunked/chunked 都等整段 body 到齐才消费；`max_receive_buffer_bytes` 小于 body 时被 `ENOBUFS` 断连，既无 200 也无 413（web 回归把接收上限配成 131072）。修复：增量消费，或初始化时要求上限覆盖 header+body 并明确回 413。
+- **服务端流空闲被当残包超时**（`cbaselib/http/src/oi_http_server.cpp` 的 `PumpStream`）：source 返回 `OI_ERR_BUSY` 不算进度，连续 10 秒无产出即断连；长轮询/SSE/慢生产者会被误杀。需确认是否设计意图；若要限制空闲，单独提供 `stream_idle_timeout` 并写入文档。
+- **服务端 keep-alive 无空闲回收**（`modules/webserver/src/web_server.cpp`）：请求完成后空闲会话一直占着会话和 fd，缺少 `idle_timeout_ms`。建议补空闲计时器。
+- **客户端非流式 chunked trailer 无 64 KiB 限长**（`cbaselib/http/src/oi_http.cpp` 的 `ConsumeChunks`）：只受整体缓冲上限约束，恶意对端可让客户端缓存约 8 MiB trailer；sink 路径有 64 KiB 限制。修复：累计 trailer 字节，超过 `kMaxHeader` 失败。
+- **TLS `Flush` 把可重试的 BUSY 当永久错误**（`cbaselib/net/src/oi_tls_session.cpp`）：置 `m_sError` 后 `StartTransport` 一律返回 `OI_ERR_CONNECT`，SSL 已消费的明文留在 BIO 无重试路径。修复：只在不可恢复时置错误，BUSY 保留 BIO 并在可写时重试。
+- **`StartServer` 登记失败不回滚监听**（`cbaselib/net/src/oi_session_manager.cpp`、`cbaselib/net/src/oi_accept_channel.cpp`）：accept 通道创建后不保存也不返回，Publish 失败时监听仍在 accept，重试因端口占用失败。修复：管理器持有 accept 通道，失败/析构时关闭。
+- **RPC 完成回调抛异常时槽已摘除、协程永久挂起**（`cbaselib/proto/src/oi_rpc_call.cpp` 的 `Sweep`/`Deliver`）：`Sweep` 的 `FinishSlot` 循环没有逐槽 `try/catch`，`FailSession` 已有。触发需完成回调抛异常（概率低），后果是等待方永久挂起、同批其余到期项不收尾。修复：对齐 `FailSession` 的逐槽保护。
+- **选路用旧名单回写 `ServiceGroup`**（`cbaselib/proto/src/oi_rpc_route.cpp`）：每次 `Group` 都 `Apply` 调用方缓存的名单，可能与秒更新下发的新名单竞争，短暂退役新实例或复活下线实例（≤1s）。修复：名单只由秒更新一个写者下发，或给快照加版本号拒绝旧版本。
+- **`IpcUdp` 会话计数只增不减**（`modules/ipcserver/src/ipcudp.cpp`）：`UDP_PROBE_SESSIONS` 返回历史累计值而非活跃会话数；当前回归查询顺序绕开。修复：删除时减一并按 sid 去重，或改活跃集合。
+- **测试工具与规则类**：
+  - `tools/run_regressions.py` 清理阶段不校验服务退出码，最后一次窗口检查后崩溃的服务仍可能 PASS；建议对 `procs` 逐个校验 `returncode`。
+  - `tools/build.py` 不传 `OI_WEBCLIENT_SINGLE_THREAD`，默认 MT 构建产出单线程 webclient，与矩阵 MT 不一致；按 mode 同步传该开关。
+  - `tools/test_matrix.py --platform both` 的 `--define` 只加给 Linux 侧；同步加到 Windows 侧。
+  - `tools/parallel_matrix.py` 启动与等待之间没有 `try/finally`，异常/中断会把已启动 lane 留在后台。
+  - `cbaselib/registry/src/main.cpp`、两个模块 `main.cpp`、`modules/ipcclient/src/rpc_pending_mgr.cpp` 及生成器模板仍用默认捕获 `[&]`，违反 `docs/09-key-rules.md` 第 6 节；统一改显式捕获。
+  - `modules/ipcserver/src/ipcserver.cpp` 的 `iMark == -2147483598` 反向 RPC 分支全仓库无客户端触发，属于空覆盖；补回归或删除。
+
+验证边界与关闭条件：本轮为静态审查，未编译、未跑回归；P2 修复后按 `docs/testing.md` 跑 Linux/Windows、单线程/多线程回归，P3 随相关模块改动验证。历史 2026-11-04 的三个 P2 已核对为已修（分区路由、清理循环、矩阵中断），不重复登记。
