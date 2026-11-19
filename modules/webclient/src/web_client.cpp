@@ -291,10 +291,24 @@ OI::Coro::Task WebClient::RunDisconnectRegression(int32_t iPort, int32_t iContro
 	vTasks.push_back(DisconnectQueue(sBase, sControl, stSecond, stReady, stProbe, stRelease));
 	vTasks.push_back(DisconnectSignal(pFinSink, sControl, "fin", stFinSignal));
 	co_await OI::Coro::WhenAll(std::move(vTasks));
+	auto stLateFirst = co_await OI::Http::Client::GetUrl(sBase + "/late-first");
+	auto stLateSecond = co_await OI::Http::Client::GetUrl(sBase + "/late-second");
+	auto stPartialFin = co_await OI::Http::Client::GetUrl(sBase + "/partial-fin");
+	auto stInformationalFin = co_await OI::Http::Client::GetUrl(sBase + "/informational-fin");
 	int32_t iBad = 0;
 	if (stClean.iCode != OI_OK || stClean.sBody != "clean" || stReset.iCode != OI_ERR_CONNECT || pResetSink->Body() != "partial" || stResetSignal.iCode != OI_OK || stResetSignal.iStatus != 200 || stReady.iCode != OI_OK || stReady.iStatus != 200 || stProbe.iCode != OI_ERR_TIMEOUT || stRelease.iCode != OI_OK || stRelease.iStatus != 200 || stFinSignal.iCode != OI_OK || stFinSignal.iStatus != 200 || stFirst.iCode != OI_OK || pFinSink->Body() != "first" || stSecond.iCode != OI_OK || stSecond.sBody != "second")
 	{
 		LOG_ERROR("disconnect regression failed clean=%d reset=%d reset_signal=%d ready=%d probe=%d release=%d fin_signal=%d first=%d second=%d", stClean.iCode, stReset.iCode, stResetSignal.iCode, stReady.iCode, stProbe.iCode, stRelease.iCode, stFinSignal.iCode, stFirst.iCode, stSecond.iCode);
+		++iBad;
+	}
+	if (stPartialFin.iCode != OI_ERR_PROTOCOL || stInformationalFin.iCode != OI_ERR_PROTOCOL)
+	{
+		LOG_ERROR("truncated FIN regression failed partial=%d informational=%d", stPartialFin.iCode, stInformationalFin.iCode);
+		++iBad;
+	}
+	if (stLateFirst.iCode != OI_OK || stLateFirst.sBody != "first" || stLateSecond.iCode != OI_ERR_CONNECT || !stLateSecond.sBody.empty())
+	{
+		LOG_ERROR("late FIN regression failed first=%d second=%d body_size=%zu", stLateFirst.iCode, stLateSecond.iCode, stLateSecond.sBody.size());
 		++iBad;
 	}
 	LOG_TRACE("disconnect regression bad=%d", iBad);

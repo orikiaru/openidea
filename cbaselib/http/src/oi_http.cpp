@@ -835,7 +835,8 @@ void HttpSession::FinishEof()
 	}
 	if (!m_bHeadersReady || m_bHasLength || m_bChunked)
 	{
-		Fail("eof");
+		const bool bNoResponse = !m_bHeadersReady && m_iInterimResponses == 0 && m_sIncoming.empty();
+		Fail("eof", bNoResponse ? OI_ERR_CONNECT : OI_ERR_PROTOCOL);
 		return;
 	}
 	if (!m_pSink)

@@ -93,12 +93,14 @@ class RegressionChecksTest(unittest.TestCase):
         ok = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"
         binary = (b"HTTP/1.1 200 OK\r\nContent-Length: 524288\r\n"
                   b"Connection: close\r\n\r\n" + payload)
-        keep, chunk, multipart, abandoned = MagicMock(), MagicMock(), MagicMock(), MagicMock()
+        keep, half, chunk, multipart, abandoned = MagicMock(), MagicMock(), MagicMock(), MagicMock(), MagicMock()
         keep.__enter__.return_value = keep
+        half.__enter__.return_value = half
         chunk.__enter__.return_value = chunk
         multipart.__enter__.return_value = multipart
         abandoned.__enter__.return_value = abandoned
         keep.makefile.return_value = io.BytesIO(ok + ok)
+        half.makefile.return_value = io.BytesIO(ok)
         chunk.makefile.return_value = io.BytesIO(binary)
         multipart.makefile.return_value = io.BytesIO(
             b"HTTP/1.1 200 OK\r\nContent-Type: multipart/form-data; boundary=fixture\r\n" +
@@ -107,12 +109,13 @@ class RegressionChecksTest(unittest.TestCase):
         bad.getresponse.return_value.status = 400
         healthy.getresponse.return_value.status = 200
         healthy.getresponse.return_value.read.return_value = b"ok"
-        with patch.object(regression.socket, "create_connection", side_effect=[keep, chunk, multipart, abandoned]), \
+        with patch.object(regression.socket, "create_connection", side_effect=[keep, half, chunk, multipart, abandoned]), \
              patch.object(regression.http.client, "HTTPConnection", side_effect=[bad, healthy]), \
              patch.object(regression.time, "sleep"), \
              patch.object(regression, "wait_web_marker") as wait_marker:
             regression.check_web_transport(18080, Path("server.out"))
         self.assertEqual(keep.sendall.call_count, 3)
+        half.shutdown.assert_called_once_with(regression.socket.SHUT_WR)
         self.assertEqual(chunk.sendall.call_count, 18)
         self.assertGreater(multipart.sendall.call_count, 2)
         abandoned.sendall.assert_called_once()

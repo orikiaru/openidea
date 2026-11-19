@@ -1207,6 +1207,14 @@ def check_web_transport(port, output_path):
             status, _, body = read_response(reader)
             assert status.startswith("HTTP/1.1 200 ") and body == b"ok", (status, body)
 
+    with socket.create_connection(("127.0.0.1", port), timeout=10) as conn:
+        conn.sendall(b"GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        conn.shutdown(socket.SHUT_WR)
+        with conn.makefile("rb") as reader:
+            status, _, body = read_response(reader)
+            assert status.startswith("HTTP/1.1 200 ") and body == b"ok", (status, body)
+            assert reader.read(1) == b"", "half-closed connection did not reach EOF"
+
     payload = bytes(range(256)) * 2048
     with socket.create_connection(("127.0.0.1", port), timeout=10) as conn:
         with conn.makefile("rb") as reader:
@@ -1320,6 +1328,7 @@ def check_web_stream_length(port):
     with socket.create_connection(("127.0.0.1", port), timeout=180) as conn:
         conn.sendall(("POST /test-stream HTTP/1.0\r\nHost: localhost\r\nContent-Length: %d\r\n\r\n" % size).encode())
         conn.sendall(payload)
+        conn.shutdown(socket.SHUT_WR)
         response = http.client.HTTPResponse(conn)
         response.begin()
         body = response.read()
@@ -1451,7 +1460,24 @@ class DisconnectRegressionHandler(socketserver.BaseRequestHandler):
             self.request.shutdown(socket.SHUT_WR)
             self.server.fin_closed.set()
         elif path == b"/queued":
-            self.request.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nsecond")
+            self.request.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nsecond")
+        elif path == b"/partial-fin":
+            self.request.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\npart")
+            self.request.shutdown(socket.SHUT_WR)
+        elif path == b"/informational-fin":
+            self.request.sendall(b"HTTP/1.1 100 Continue\r\n\r\n")
+            self.request.shutdown(socket.SHUT_WR)
+        elif path == b"/late-first":
+            self.request.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nfirst")
+            data = b""
+            while b"\r\n\r\n" not in data:
+                chunk = self.request.recv(4096)
+                if not chunk:
+                    return
+                data += chunk
+            second_path = data.split(b" ", 2)[1]
+            self.server.requests.append((second_path, self.request, time.monotonic()))
+            self.request.shutdown(socket.SHUT_WR)
 
 
 def check_http_disconnect(work, cfg):
@@ -1476,8 +1502,9 @@ def check_http_disconnect(work, cfg):
         client = subprocess.run([str(work / ("webclient" + SUFFIX))], cwd=work, capture_output=True, text=True, timeout=15)
         assert client.returncode == 0 and "disconnect regression bad=0" in client.stdout, (client.returncode, client.stdout, client.stderr)
         requests = server.requests
-        assert [item[0] for item in requests] == [b"/clean", b"/reset", b"/fin", b"/queued"], requests
+        assert [item[0] for item in requests] == [b"/clean", b"/reset", b"/fin", b"/queued", b"/late-first", b"/late-second", b"/partial-fin", b"/informational-fin"], requests
         assert requests[2][1] is not requests[3][1] and requests[3][2] >= server.fin_sent, requests
+        assert requests[4][1] is requests[5][1], requests
         print("HTTP disconnect PASS: close-delimited RST and queued request after FIN", flush=True)
     finally:
         server.fin_start.set()
@@ -1966,6 +1993,7 @@ def run_web_coro(args):
                 response(slow.makefile("rb"), "slow")
             with socket.create_connection(("127.0.0.1", web_port), timeout=8) as pipe:
                 pipe.sendall(request("first") + request("second"))
+                pipe.shutdown(socket.SHUT_WR)
                 reader = pipe.makefile("rb")
                 response(reader, "first")
                 response(reader, "second")

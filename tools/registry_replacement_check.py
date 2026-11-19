@@ -1,4 +1,4 @@
-"""Registry replacement regression using two real RPC sessions."""
+"""Registry replacement regression using real RPC sessions."""
 import socket
 import struct
 import time
@@ -18,7 +18,7 @@ def receive(stream, size):
     return data
 
 
-def rpc(stream, protocol, payload, call_id, allow_not_ready=False):
+def rpc(stream, protocol, payload, call_id, allow_not_ready=False, expected_code=0):
     body = struct.pack("<Q", (1 << 63) | call_id) + payload
     stream.sendall(struct.pack("<iI", protocol, len(body)) + body)
     reply_protocol, size = struct.unpack("<iI", receive(stream, 8))
@@ -28,7 +28,7 @@ def rpc(stream, protocol, payload, call_id, allow_not_ready=False):
     assert reply_protocol == protocol and received_id == call_id, (reply_protocol, received_id)
     if allow_not_ready and code != 0:
         return None
-    assert code == 0, (protocol, received_id, code)
+    assert code == expected_code, (protocol, received_id, code, expected_code)
     return reply[12:]
 
 
@@ -83,6 +83,8 @@ def check(registry_port, redis_port):
     prefix = b"oi:{openidea.dev}:svc:"
     key = prefix + name + b":77"
     sentinel_key = prefix + sentinel + b":78"
+    owner_key = b"oi:{openidea.dev}:owner:" + name + b":77"
+    heartbeat = field(0, name) + field(1, struct.pack("<i", 77))
 
     def request(service, ident):
         return b"".join((field(0, service), field(1, struct.pack("<i", ident)),
@@ -98,15 +100,27 @@ def check(registry_port, redis_port):
         assert snapshot(observer, b"replacement_absent") == [], "unexpected nonempty snapshot"
         rpc(old, -1004, request(name, 77), 1)
         rpc(old, -1004, request(sentinel, 78), 2)
+        old_owner = redis_get(redis_port, owner_key)
+        assert old_owner, "old registration missing owner"
         rpc(new, -1004, request(name, 77), 3)
+        new_owner = redis_get(redis_port, owner_key)
+        assert new_owner and new_owner != old_owner, "replacement did not acquire a new owner"
+        rpc(old, -1006, heartbeat, 5, expected_code=-4)
+        rpc(old, -1004, request(name, 77), 6, expected_code=-4)
+        rpc(new, -1006, heartbeat, 7)
+        assert redis_get(redis_port, owner_key) == new_owner, "old session changed replacement owner"
         assert redis_get(redis_port, key) == value
         assert redis_get(redis_port, sentinel_key) == value
+        assert any(item.get(0) == name and item.get(1) == struct.pack("<i", 77)
+                   and item.get(2) == b"127.0.0.1" and item.get(3) == b"43210"
+                   for item in snapshot(observer)), "old requests changed replacement snapshot"
         old.close()
         deadline = time.monotonic() + 2
         while redis_get(redis_port, sentinel_key) is not None:
             assert time.monotonic() < deadline, "old session sentinel was not removed"
             time.sleep(0.02)
         assert redis_get(redis_port, key) == value, "old close removed replacement lease"
+        assert redis_get(redis_port, owner_key) == new_owner, "old close removed replacement owner"
         instances = snapshot(observer)
         assert any(item.get(0) == name and item.get(1) == struct.pack("<i", 77)
                    and item.get(2) == b"127.0.0.1" and item.get(3) == b"43210"
@@ -115,8 +129,20 @@ def check(registry_port, redis_port):
         deadline = time.monotonic() + 2
         while time.monotonic() < deadline:
             instances = snapshot(observer)
-            if redis_get(redis_port, key) is None and not any(item.get(0) == name for item in instances):
+            if (redis_get(redis_port, key) is None and redis_get(redis_port, owner_key) is None
+                    and not any(item.get(0) == name for item in instances)):
                 break
             time.sleep(0.02)
         else:
             raise AssertionError("new close did not remove lease and snapshot")
+
+        # A fresh session may claim the same instance after the current owner closes.
+        with socket.create_connection(("127.0.0.1", registry_port), timeout=2) as third:
+            rpc(third, -1004, request(name, 77), 8)
+            third_owner = redis_get(redis_port, owner_key)
+            assert third_owner and third_owner != new_owner, "fresh session did not acquire owner"
+            rpc(third, -1006, heartbeat, 9)
+            assert redis_get(redis_port, key) == value, "fresh session did not register address"
+            assert any(item.get(0) == name and item.get(1) == struct.pack("<i", 77)
+                       and item.get(2) == b"127.0.0.1" and item.get(3) == b"43210"
+                       for item in snapshot(observer)), "fresh session missing from snapshot"

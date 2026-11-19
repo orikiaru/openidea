@@ -404,7 +404,7 @@ class ServerSession final : public Net::NetSession
 			{
 				m_pSource.reset();
 				m_stPump.Stop();
-				m_bCloseAfter = m_bStreamClose;
+				m_bCloseAfter = m_bStreamClose || (bReadEnded && stInputBuffer.Size() == 0);
 				m_bBusy = false;
 				if (m_bCloseAfter && PendingSendBytes() == 0)
 				{
@@ -465,6 +465,8 @@ class ServerSession final : public Net::NetSession
 		}
 		const bool bValid = stReply.iStatus >= 200 && stReply.iStatus <= 599 &&
 		                    HeaderFields::ValidForSend(stReply) && (!stReply.pBodySource || stReply.sBody.empty());
+		// FIN 后仍按序处理已经收全的流水请求，只在最后一响排空后关连接。
+		bClose = bClose || (bReadEnded && stInputBuffer.Size() == 0);
 		const int iStatusLocal = bValid ? stReply.iStatus : 500;
 		std::string sWire = std::string(bHttp10 ? "HTTP/1.0 " : "HTTP/1.1 ") + std::to_string(iStatusLocal) + " " + Reason(iStatusLocal) + "\r\n";
 		const bool bBody = iStatusLocal != 204 && iStatusLocal != 304;
@@ -553,7 +555,7 @@ class ServerSession final : public Net::NetSession
 				m_bReadPaused = false;
 				AllowRead();
 			}
-			if (iCode == OI_ERR_BUSY || iCode == 0)
+			if (iCode == OI_ERR_BUSY || (iCode == 0 && !bReadEnded))
 			{
 				if (!StartPump())
 				{
@@ -565,6 +567,11 @@ class ServerSession final : public Net::NetSession
 		}
 		if (iCode == 0)
 		{
+			if (bReadEnded)
+			{
+				PassiveClose(0);
+				return;
+			}
 			if (!m_bPartial)
 			{
 				m_bPartial = true;
@@ -618,6 +625,24 @@ class ServerSession final : public Net::NetSession
 		{
 			return Dispatch(std::move(pDone), fnHandler, std::move(stRequest));
 		});
+	}
+
+	void PassiveClose(int iError) override
+	{
+		if (iError == 0 && bReadEnded && !IsClosed())
+		{
+			ForbidRead();
+			if (m_bBusy || m_bReadPaused)
+			{
+				return;
+			}
+			m_bCloseAfter = true;
+			if (PendingSendBytes() != 0)
+			{
+				return;
+			}
+		}
+		NetSession::PassiveClose(iError);
 	}
 
 	void OnDataOut() override

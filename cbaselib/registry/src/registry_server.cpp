@@ -36,6 +36,7 @@ namespace
 const char* kRegisterLua =
     "local v = redis.call('GET', KEYS[1]) "
     "if v and v ~= ARGV[1] then return 0 end "
+    "if v and ARGV[6] == '1' and redis.call('GET', KEYS[4]) ~= ARGV[5] then return 0 end "
     "redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2]) redis.call('SET', KEYS[4], ARGV[5], 'PX', ARGV[2]) "
     "redis.call('SADD', KEYS[2], ARGV[3]) redis.call('SADD', KEYS[3], ARGV[4]) return 1";
 
@@ -347,6 +348,10 @@ void RegistryServer::OnDelSession(const ::OI::Net::Session* pSession)
 		for (size_t iIndexLocal = 0; iIndexLocal < vList.size(); ++iIndexLocal)
 		{
 			Binding stSecond = vList[iIndexLocal];
+			if (stSecond.bSuperseded)
+			{
+				continue;
+			}
 			DropSnapshot(stSecond.sName, stSecond.iId);
 			LOG_TRACE("registry offline %s id=%d (connection closed)", stSecond.sName.c_str(), stSecond.iId);
 			OI::Coro::StartTask([this, stSecond](OI::Coro::Token)
@@ -533,6 +538,10 @@ OI::Coro::Task RegistryServer::ReloadMysql()
 	{
 		co_return OI_ERR_FAIL;
 	}
+	if (!m_vAlive.contains(iSessionId))
+	{
+		co_return OI_ERR_CONNECT;
+	}
 	Binding stSecond;
 	stSecond.sName = stRequest.sName;
 	stSecond.iId = stRequest.iId;
@@ -545,13 +554,27 @@ OI::Coro::Task RegistryServer::ReloadMysql()
 		stSecond.sValue += " " + stSecond.sZone;
 	}
 	// 实例值保留原格式，相同地址的两次登记用独立租约区分。
-	stSecond.sOwner.resize(16);
-	if (uv_random(nullptr, nullptr, stSecond.sOwner.data(), stSecond.sOwner.size(), 0, nullptr) != 0)
+	bool bExisting = false;
+	if (const Binding* pPrevious = FindBinding(iSessionId, stSecond.sName, stSecond.iId))
 	{
-		LOG_ERROR("registry lease token generation failed sid=%d", iSessionId);
-		co_return OI_ERR_FAIL;
+		if (pPrevious->bSuperseded)
+		{
+			co_return OI_ERR_EXIST;
+		}
+		bExisting = true;
+		stSecond.sOwner = pPrevious->sOwner;
+	}
+	else
+	{
+		stSecond.sOwner.resize(16);
+		if (uv_random(nullptr, nullptr, stSecond.sOwner.data(), stSecond.sOwner.size(), 0, nullptr) != 0)
+		{
+			LOG_ERROR("registry lease token generation failed sid=%d", iSessionId);
+			co_return OI_ERR_FAIL;
+		}
 	}
 	std::vector<std::string> vArgumentsLocal = EvalArgs(kRegisterLua, stSecond);
+	vArgumentsLocal.emplace_back(bExisting ? "1" : "0");
 	::OI::Redis::RedisResult stR = co_await ::OI::Redis::CallRedis(std::move(vArgumentsLocal));
 	int iReturnCodeLocal = ReplyInt(stR);
 	if (m_vAlive.count(iSessionId) == 0)
@@ -563,19 +586,27 @@ OI::Coro::Task RegistryServer::ReloadMysql()
 		}
 		co_return OI_ERR_CONNECT;
 	}
+	Binding* pFound = FindBinding(iSessionId, stSecond.sName, stSecond.iId);
+	if (pFound && pFound->bSuperseded)
+	{
+		co_return OI_ERR_EXIST;
+	}
 	if (iReturnCodeLocal == REG_OK)
 	{
 		for (auto& [iOtherSessionId, vBindings] : m_mBindings)
 		{
 			if (iOtherSessionId != iSessionId)
 			{
-				std::erase_if(vBindings, [sName = stSecond.sName, iId = stSecond.iId](const Binding& stBinding)
+				for (auto& stBinding : vBindings)
 				{
-					return stBinding.sName == sName && stBinding.iId == iId;
-				});
+					if (!stBinding.bSuperseded && stBinding.sName == stSecond.sName && stBinding.iId == stSecond.iId)
+					{
+						stBinding.bSuperseded = true;
+						LOG_TRACE("registry takeover %s id=%d old_sid=%d new_sid=%d", stSecond.sName.c_str(), stSecond.iId, iOtherSessionId, iSessionId);
+					}
+				}
 			}
 		}
-		Binding* pFound = FindBinding(iSessionId, stSecond.sName, stSecond.iId);
 		if (!pFound)
 		{
 			m_mBindings[iSessionId].push_back(stSecond);
@@ -616,17 +647,21 @@ OI::Coro::Task RegistryServer::ReloadMysql()
 		{
 			co_return OI_ERR_FAIL;
 		}
+		if (pBinding->bSuperseded)
+		{
+			co_return OI_ERR_EXIST;
+		}
 		stSecond = *pBinding;
 	}
 	std::vector<std::string> vArgumentsLocal = EvalArgs(kRefreshLua, stSecond);
 	::OI::Redis::RedisResult stR = co_await ::OI::Redis::CallRedis(std::move(vArgumentsLocal));
 	int iReturnCodeLocal = ReplyInt(stR);
-	bool bValid = false;
+	Binding* pCurrent = FindBinding(iSessionId, stSecond.sName, stSecond.iId);
+	if (pCurrent && pCurrent->bSuperseded)
 	{
-		Binding* pFound = m_vAlive.count(iSessionId) ? FindBinding(iSessionId, stSecond.sName, stSecond.iId) : NULL;
-		bValid = pFound && pFound->sOwner == stSecond.sOwner;
+		co_return OI_ERR_EXIST;
 	}
-	if (!bValid)
+	if (!pCurrent || pCurrent->sOwner != stSecond.sOwner)
 	{
 		// 续期过程中连接断了或换了登记。续期可能把键又写回去了，按这份值删掉。
 		if (iReturnCodeLocal == REG_OK || iReturnCodeLocal == REG_RENEWED)
@@ -647,15 +682,8 @@ OI::Coro::Task RegistryServer::ReloadMysql()
 	}
 	else if (iReturnCodeLocal == REG_TAKEN)
 	{
-		std::vector<Binding>& vList = m_mBindings[iSessionId];
-		for (size_t iIndexLocal = 0; iIndexLocal < vList.size(); ++iIndexLocal)
-		{
-			if (vList[iIndexLocal].sName == stSecond.sName && vList[iIndexLocal].iId == stSecond.iId)
-			{
-				vList.erase(vList.begin() + iIndexLocal);
-				break;
-			}
-		}
+		// Redis 可能先看到接管，登记协程稍后才发布快照。保留旧会话的失效记录直到断开。
+		pCurrent->bSuperseded = true;
 		// 新主人登记时已经换过快照。只摘还指着本连接地址的那份。
 		for (size_t iIndexLocal = 0; iIndexLocal < m_vSnapshot.size(); ++iIndexLocal)
 		{
@@ -687,7 +715,7 @@ OI::Coro::Task RegistryServer::Withdraw(Binding stSecond)
 	{
 		for (size_t iIndexLocal = 0; iIndexLocal < vBindings.size(); ++iIndexLocal)
 		{
-			if (vBindings[iIndexLocal].sName == stSecond.sName && vBindings[iIndexLocal].iId == stSecond.iId)
+			if (!vBindings[iIndexLocal].bSuperseded && vBindings[iIndexLocal].sName == stSecond.sName && vBindings[iIndexLocal].iId == stSecond.iId)
 			{
 				co_return;
 			}

@@ -45,6 +45,7 @@ class RegistryServer : public ::OI::Rpc::ProtoSessionManager
 		std::string sZone;
 		std::string sValue;
 		std::string sOwner;
+		bool bSuperseded = false;
 	};
 	enum
 	{
