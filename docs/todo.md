@@ -53,6 +53,8 @@ libhv 消息还提供文件、JSON、类型化值等便捷接口；是否引入�
 - **服务端流空闲被当残包超时**（`cbaselib/http/src/oi_http_server.cpp` 的 `PumpStream`）：source 返回 `OI_ERR_BUSY` 不算进度，连续 10 秒无产出即断连；长轮询/SSE/慢生产者会被误杀。需确认是否设计意图；若要限制空闲，单独提供 `stream_idle_timeout` 并写入文档。
 - **服务端 keep-alive 无空闲回收**（`modules/webserver/src/web_server.cpp`）：请求完成后空闲会话一直占着会话和 fd，缺少 `idle_timeout_ms`。建议补空闲计时器。
 - **客户端非流式 chunked trailer 无 64 KiB 限长**（`cbaselib/http/src/oi_http.cpp` 的 `ConsumeChunks`）：只受整体缓冲上限约束，恶意对端可让客户端缓存约 8 MiB trailer；sink 路径有 64 KiB 限制。修复：累计 trailer 字节，超过 `kMaxHeader` 失败。
+- **客户端接受无冒号的响应头行**（`cbaselib/http/src/oi_http.cpp` 的 `ParseHeaders`）：没有冒号的行被跳过，函数仍可返回成功。服务端同一行回 400。畸形头可能被悄悄丢掉，其余头（含 `Content-Length`）继续生效。修复：遇到无冒号行直接失败。
+- **客户端接受数值相同的重复 Content-Length**（同函数）：已有长度且新值相同则继续，值不同才失败。服务端第二个 `Content-Length` 一律 400。RFC 7230 要求重复长度直接失败。修复：只要已经有过 `Content-Length` 就失败。
 - **TLS `Flush` 把可重试的 BUSY 当永久错误**（`cbaselib/net/src/oi_tls_session.cpp`）：置 `m_sError` 后 `StartTransport` 一律返回 `OI_ERR_CONNECT`，SSL 已消费的明文留在 BIO 无重试路径。修复：只在不可恢复时置错误，BUSY 保留 BIO 并在可写时重试。
 - **`StartServer` 登记失败不回滚监听**（`cbaselib/net/src/oi_session_manager.cpp`、`cbaselib/net/src/oi_accept_channel.cpp`）：accept 通道创建后不保存也不返回，Publish 失败时监听仍在 accept，重试因端口占用失败。修复：管理器持有 accept 通道，失败/析构时关闭。
 - **RPC 完成回调抛异常时槽已摘除、协程永久挂起**（`cbaselib/proto/src/oi_rpc_call.cpp` 的 `Sweep`/`Deliver`）：`Sweep` 的 `FinishSlot` 循环没有逐槽 `try/catch`，`FailSession` 已有。触发需完成回调抛异常（概率低），后果是等待方永久挂起、同批其余到期项不收尾。修复：对齐 `FailSession` 的逐槽保护。
@@ -67,3 +69,5 @@ libhv 消息还提供文件、JSON、类型化值等便捷接口；是否引入�
   - `modules/ipcserver/src/ipcserver.cpp` 的 `iMark == -2147483598` 反向 RPC 分支全仓库无客户端触发，属于空覆盖；补回归或删除。
 
 验证边界与关闭条件：本轮为静态审查，未编译、未跑回归；P2 修复后按 `docs/testing.md` 跑 Linux/Windows、单线程/多线程回归，P3 随相关模块改动验证。历史 2026-11-04 的三个 P2 已核对为已修（分区路由、清理循环、矩阵中断），不重复登记。
+
+2026-11-19 对 HEAD `7e1c9fe` 又沿调用链复核了已修的断连、注册租约和定时器快照，未改代码，未编译，未跑回归。这三项修复的调用链与上面的「已修」描述一致。logd 延后帧和 Windows 生产监听 `SO_REUSEADDR` 仍未修。其余 P3 没有逐条重走。客户端响应头两条是这次新登记的。
