@@ -27,6 +27,7 @@ class Session
 	friend class Poll;
 	friend class NetChannel;
 	friend class UDP_Channel;
+	friend class TCP_Channel;
 
   protected:
 	// 连接状态，取 IO_ST_*。
@@ -38,6 +39,8 @@ class Session
 	size_t iQueuedBytes = 0;
 	// 发送队列上限。再写就会返回忙。
 	size_t iMaxSendQueueBytes = 64 * 1024 * 1024;
+	// TCP 在交付最后一批字节前标记，只在 poll 线程读写。
+	bool bReadEnded = false;
 	// 接收缓冲上限。会话发布前设置，之后只由 poll 线程看。
 	size_t iMaxReceiveBufferBytes = 64 * 1024 * 1024 + 8;
 	// 待写到套接字的字节。

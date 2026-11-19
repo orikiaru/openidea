@@ -1,5 +1,6 @@
 #include "oi_tls_session.h"
 #include "oi_session.h"
+#include "oi_net_os.h"
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 #include <openssl/x509v3.h>
@@ -388,6 +389,12 @@ void TlsSession::EndTransport()
 	}
 	m_bEnded = true;
 	std::string().swap(m_sPending);
+	const int32_t iError = GetError();
+	if (!m_pTls && (iError != 0 || !bReadEnded))
+	{
+		OnTransportEnd(OI_ERR_CONNECT, iError > 0 ? NetOs_StrError(iError) : "transport closed");
+		return;
+	}
 	if (m_pTls && !m_pTls->ReceivedClose())
 	{
 		OnTransportEnd(OI_ERR_CONNECT, TransportReady() ? "TLS connection closed without close_notify" : "TLS handshake closed");

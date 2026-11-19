@@ -266,6 +266,7 @@ def main():
         if run("matrix-outcomes", [sys.executable, ROOT / "tools/test_matrix_outcomes.py"]):
             failed = True
         for name, script in (("regression-checks", "test_regression_checks.py"),
+                             ("preflight-ports", "test_preflight_ports.py"),
                              ("build-tests", "test_build.py"),
                              ("linux-sync-tests", "test_sync_linux_remote.py")):
             if run(name, [sys.executable, ROOT / "tools" / script]):

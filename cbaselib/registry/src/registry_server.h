@@ -44,6 +44,7 @@ class RegistryServer : public ::OI::Rpc::ProtoSessionManager
 		std::string sPort;
 		std::string sZone;
 		std::string sValue;
+		std::string sOwner;
 	};
 	enum
 	{

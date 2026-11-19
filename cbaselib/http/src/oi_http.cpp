@@ -799,7 +799,7 @@ void HttpSession::Succeed(size_t iConsumed)
 	}
 	m_bActive = false;
 	int32_t iStatusLocal = m_iStatus;
-	bool bCloseLocal = m_bCloseAfter || bool(m_pSource) || PeerEnded();
+	bool bCloseLocal = m_bCloseAfter || bool(m_pSource) || bReadEnded || PeerEnded();
 	if (bCloseLocal || !m_pFlight->bReuse)
 	{
 		ShutdownTransport();

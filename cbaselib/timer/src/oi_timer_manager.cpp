@@ -107,6 +107,7 @@ void BaseTimerManager::OnSignal()
 
 std::string BaseTimerManager::GenTraceLog()
 {
+	::OI::Thread::MutexGuard stLock(m_stWheelMutex);
 	char vBuffer[1024];
 	snprintf(vBuffer, sizeof(vBuffer) - 1,
 	    "BaseTimerManager::Update mono_ms=%lld wall=[%lld,%lld] tick_num=%lld",
@@ -187,7 +188,8 @@ int32_t BaseTimerManager::AddTimer(BaseTimer* pTimer, int iMillisecond)
 		return OI_ERR_INVALID_ARGUMENT;
 	}
 	::OI::Thread::MutexGuard stLock(m_stWheelMutex);
-	pTimer->InitData(this, iMillisecond, TicksFromNow(iMillisecond));
+	const int64_t iTicks = TicksFromNow(iMillisecond);
+	pTimer->InitData(iMillisecond, m_iCurrentTick + iTicks, m_stCurrentTimeValue, iTicks * m_iTickOffsetMilliseconds);
 	add_timer(pTimer);
 	return OI_OK;
 }
@@ -253,7 +255,7 @@ void BaseTimerManager::run_timer(BaseTimer* pTimer)
 		::OI::Thread::MutexGuard stLock(m_stWheelMutex);
 		// 周期定时器按逻辑 tick 续，停顿时后面的跳还能补上。
 		int64_t iTicks = milling2tick(pTimer->GetOffsetTime());
-		pTimer->InitData(this, pTimer->GetOffsetTime(), iTicks);
+		pTimer->InitData(pTimer->GetOffsetTime(), m_iCurrentTick + iTicks, m_stCurrentTimeValue, iTicks * m_iTickOffsetMilliseconds);
 		add_timer(pTimer);
 	}
 }

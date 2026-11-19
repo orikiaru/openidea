@@ -12,6 +12,8 @@ void TCP_Channel::DataIn()
 	// 水平触发。一轮读够上限就先交给会话，剩下的下一轮再进来。
 	const size_t iItemIndexRoundMax = 4 * 1024 * 1024;
 	size_t iRound = 0;
+	int iReadError = 0;
+	bool bReadEndedLocal = false;
 	for (;;)
 	{
 		const size_t iAllowance = pSession->ReceiveAllowance();
@@ -27,7 +29,7 @@ void TCP_Channel::DataIn()
 		}
 		if (iRound >= iItemIndexRoundMax)
 		{
-			goto read_finish;
+			break;
 		}
 		if (stInputBuffer.Capacity() - stInputBuffer.Size() < 16 * 1024)
 		{
@@ -44,31 +46,25 @@ void TCP_Channel::DataIn()
 		}
 		else if (iReadNumber == -1 && errno == EAGAIN)
 		{
-			goto read_finish;
+			break;
 		}
 		else if (iReadNumber == -1 && errno == EINTR)
 		{
 			continue;
 		}
-		if (iReadNumber == 0)
-		{
-			goto peer_close;
-		}
-		goto read_fault;
+		iReadError = iReadNumber == 0 ? 0 : errno;
+		bReadEndedLocal = true;
+		break;
 	}
-read_finish:
-	pSession->SwapInBuff(stInputBuffer);
-	return;
-read_fault:
-	pSession->SwapInBuff(stInputBuffer);
-	pSession->PassiveClose(errno);
-	return;
-peer_close:
+	if (bReadEndedLocal)
+	{
+		pSession->bReadEnded = true;
+	}
 	pSession->SwapInBuff(stInputBuffer);
 	// 接收方可能正在等应用消费最后一片。恢复读事件后，再交付 EOF。
-	if (iEventMask & IO_EV_READ)
+	if (bReadEndedLocal && (iReadError || (iEventMask & IO_EV_READ)))
 	{
-		pSession->PassiveClose(0);
+		pSession->PassiveClose(iReadError);
 	}
 	return;
 }

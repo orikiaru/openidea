@@ -4,6 +4,7 @@
 先编出待测版本，单、多线程分别运行一次。Redis 默认使用已有的源码编译产物。
 """
 from test_process_owner import write_owner, record_process
+from registry_replacement_check import check as check_registry_replacement
 import argparse
 import contextlib
 import sys
@@ -239,7 +240,10 @@ def preflight_ports(case):
                    "hold-redis": (LOGD_PORT, REDIS_SERVER_PORT, REDIS_PORT)}
     for port in scene_ports.get(case, (LOGD_PORT, IPC_PORT, REDIS_SERVER_PORT, REDIS_PORT, REGISTRY_PORT) + GAME_PORTS):
         with socket.socket() as probe:
-            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            if WINDOWS:
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            else:
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             probe.bind(("127.0.0.1", port))
     if case not in ("hold-timer", "hold-redis", "web-coro"):
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
@@ -436,6 +440,8 @@ def run(case, args):
             if name in ("redisserver", "registry"):
                 assert 'port = "6379"' in text, name
                 text = text.replace('port = "6379"', 'port = "%d"' % REDIS_PORT)
+            if name == "registry" and case == "registry":
+                text = replace(text, "expire_ms", "30000")
             if name == "logd":
                 text = replace(text, "root_path", '"' + logs.as_posix() + '"')
                 if case == "log-backpressure":
@@ -676,6 +682,8 @@ def run(case, args):
                 if case == "registry" or (mode in ("hold", "multi") and not scene):
                     registry, registry_path = start("registry")
                     ready(registry, registry_path, "registry server listen")
+                    if case == "registry":
+                        check_registry_replacement(REGISTRY_PORT, REDIS_PORT)
                 if case not in ("registry", "multi", "local", "registry-static"):
                     rs, rsp = start("redisserver")
                     ready(rs, rsp, "redis server listen")
@@ -1402,6 +1410,118 @@ def check_url_client(work, cfg):
             raise RuntimeError("URL fixture failed to stop")
 
 
+class DisconnectRegressionServer(socketserver.ThreadingTCPServer):
+    def shutdown_request(self, request):
+        # Preserve SO_LINGER's abortive close; shutdown(SHUT_WR) sends FIN first.
+        if request in self.reset_connections:
+            request.close()
+            self.reset_closed.set()
+        else:
+            super().shutdown_request(request)
+
+
+class DisconnectRegressionHandler(socketserver.BaseRequestHandler):
+    def handle(self):
+        self.request.settimeout(4)
+        data = b""
+        while b"\r\n\r\n" not in data:
+            chunk = self.request.recv(4096)
+            if not chunk:
+                return
+            data += chunk
+        path = data.split(b" ", 2)[1]
+        self.server.requests.append((path, self.request, time.monotonic()))
+        if path == b"/reset":
+            self.request.sendall(b"HTTP/1.1 200 OK\r\n\r\npartial")
+            if not self.server.reset_release.wait(3):
+                return
+            self.request.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("HH" if WINDOWS else "ii", 1, 0))
+            self.server.reset_connections.add(self.request)
+        elif path == b"/clean":
+            self.request.sendall(b"HTTP/1.1 200 OK\r\n\r\nclean")
+        elif path == b"/fin":
+            self.server.fin_ready.set()
+            if not self.server.fin_start.wait(4):
+                return
+            self.request.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nf")
+            if not self.server.fin_release.wait(3):
+                return
+            self.server.fin_sent = time.monotonic()
+            self.request.sendall(b"irst")
+            self.request.shutdown(socket.SHUT_WR)
+            self.server.fin_closed.set()
+        elif path == b"/queued":
+            self.request.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nsecond")
+
+
+def check_http_disconnect(work, cfg):
+    server = DisconnectRegressionServer(("127.0.0.1", 0), DisconnectRegressionHandler)
+    server.daemon_threads = True
+    server.requests, server.fin_sent, server.reset_connections = [], None, set()
+    server.reset_release, server.reset_closed = threading.Event(), threading.Event()
+    server.fin_release, server.fin_closed = threading.Event(), threading.Event()
+    server.fin_ready, server.fin_start = threading.Event(), threading.Event()
+    control = http.server.ThreadingHTTPServer(("127.0.0.1", 0), DisconnectControlHandler)
+    control.daemon_threads = True
+    control.target = server
+    control_thread = threading.Thread(target=control.serve_forever, kwargs={"poll_interval": 0.05})
+    control_thread.start()
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05})
+    thread.start()
+    try:
+        config = (REPO / "deploy/config/webclient.toml").read_text(encoding="utf-8-sig")
+        config = config.replace('port = 18080', 'port = %d' % server.server_address[1])
+        config += '\ndisconnect_case = true\npool_control_port = %d\n[HttpClientPool]\nmax_connections_per_server = 1\n' % control.server_address[1]
+        (cfg / "webclient.toml").write_text(config, encoding="utf-8")
+        client = subprocess.run([str(work / ("webclient" + SUFFIX))], cwd=work, capture_output=True, text=True, timeout=15)
+        assert client.returncode == 0 and "disconnect regression bad=0" in client.stdout, (client.returncode, client.stdout, client.stderr)
+        requests = server.requests
+        assert [item[0] for item in requests] == [b"/clean", b"/reset", b"/fin", b"/queued"], requests
+        assert requests[2][1] is not requests[3][1] and requests[3][2] >= server.fin_sent, requests
+        print("HTTP disconnect PASS: close-delimited RST and queued request after FIN", flush=True)
+    finally:
+        server.fin_start.set()
+        server.fin_release.set()
+        server.reset_release.set()
+        server.shutdown()
+        control.shutdown()
+        thread.join(timeout=5)
+        control_thread.join(timeout=5)
+        server.server_close()
+        control.server_close()
+        if thread.is_alive() or control_thread.is_alive():
+            raise RuntimeError("HTTP disconnect fixture failed to stop")
+
+
+class DisconnectControlHandler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
+    def do_GET(self):
+        if self.path == "/ready":
+            if not self.server.target.fin_ready.wait(4):
+                self.send_error(503)
+                return
+        elif self.path == "/release":
+            self.server.target.fin_start.set()
+        elif self.path == "/signal-reset":
+            self.server.target.reset_release.set()
+            if not self.server.target.reset_closed.wait(3):
+                self.send_error(503)
+                return
+        elif self.path == "/signal-fin":
+            self.server.target.fin_release.set()
+            if not self.server.target.fin_closed.wait(3):
+                self.send_error(503)
+                return
+        else:
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+
 class PoolRegressionHandler(UrlRegressionHandler):
     def finish(self):
         try:
@@ -1725,6 +1845,7 @@ def run_web(args):
                         if thread.is_alive():
                             raise RuntimeError("IPv6 HTTP fixture failed to stop")
                 check_http_pool(work, cfg)
+                check_http_disconnect(work, cfg)
                 check_url_client(work, cfg)
                 check_https(work, cfg)
                 check_web_transport(port, root / "server.out")

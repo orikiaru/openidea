@@ -10,6 +10,7 @@
 #include "oi_rpcdata_jsonall.h"
 #include "oi_thread.h"
 #include "json/json.h"
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -17,6 +18,65 @@
 #include <string>
 #include <utility>
 #include <vector>
+
+class DisconnectTestSink : public OI::Http::BodySink
+{
+  public:
+	explicit DisconnectTestSink(bool bPause)
+	    : m_bPause(bPause)
+	{
+	}
+	int32_t Write(std::string_view sBytes) override
+	{
+		if (m_bPause && !m_bReleased.load())
+		{
+			m_bSeen.store(true);
+			return OI_ERR_BUSY;
+		}
+		m_sBody.append(sBytes);
+		m_bSeen.store(true);
+		return OI_OK;
+	}
+	bool Seen() const
+	{
+		return m_bSeen.load();
+	}
+	void Release()
+	{
+		m_bReleased.store(true);
+	}
+	const std::string& Body() const
+	{
+		return m_sBody;
+	}
+
+  private:
+	bool m_bPause;
+	std::atomic<bool> m_bSeen{false};
+	std::atomic<bool> m_bReleased{false};
+	std::string m_sBody;
+};
+
+static OI::Coro::Task DisconnectSignal(std::shared_ptr<DisconnectTestSink> pSink, std::string sControl, std::string sSignal, OI::Http::Response& stResponse)
+{
+	for (int32_t iWait = 0; iWait < 300 && !pSink->Seen(); ++iWait)
+	{
+		co_await OI::Coro::yield(10);
+	}
+	if (pSink->Seen())
+	{
+		stResponse = co_await OI::Http::Client::GetUrl(sControl + "/signal-" + sSignal);
+	}
+	pSink->Release();
+}
+
+static OI::Coro::Task DisconnectRequest(std::string sUrl, std::shared_ptr<DisconnectTestSink> pSink, OI::Http::Response& stResponse)
+{
+	OI::Http::Request stRequest;
+	stRequest.sMethod = "GET";
+	stRequest.pBodySink = std::move(pSink);
+	stResponse = co_await OI::Http::Client::SendUrl(std::move(sUrl), stRequest);
+}
 
 static std::string DumpJson(const Json::Value& stValue)
 {
@@ -188,6 +248,60 @@ OI::Coro::Task WebClient::RunPoolRegression(int32_t iPort, int32_t iControlPort)
 	OI::Thread::ThreadPool::GetInstance().RequestStop(iBad == 0 ? 0 : 1);
 }
 
+OI::Coro::Task WebClient::DisconnectRelease(std::string sBase, std::string sControl, OI::Http::Response& stProbe, OI::Http::Response& stRelease)
+{
+	co_await PoolGet(sBase + "/probe", 300, false, stProbe);
+	stRelease = co_await OI::Http::Client::GetUrl(sControl + "/release");
+}
+
+OI::Coro::Task WebClient::DisconnectQueue(std::string sBase, std::string sControl, OI::Http::Response& stSecond, OI::Http::Response& stReady, OI::Http::Response& stProbe, OI::Http::Response& stRelease)
+{
+	stReady = co_await OI::Http::Client::GetUrl(sControl + "/ready");
+	if (stReady.iCode != OI_OK || stReady.iStatus != 200)
+	{
+		co_return;
+	}
+	std::vector<OI::Coro::Task> vTasks;
+	vTasks.push_back(PoolGet(sBase + "/queued", 3000, false, stSecond));
+	vTasks.push_back(DisconnectRelease(sBase, sControl, stProbe, stRelease));
+	co_await OI::Coro::WhenAll(std::move(vTasks));
+}
+
+OI::Coro::Task WebClient::RunDisconnectRegression(int32_t iPort, int32_t iControlPort)
+{
+	const std::string sBase = "http://127.0.0.1:" + std::to_string(iPort);
+	const std::string sControl = "http://127.0.0.1:" + std::to_string(iControlPort);
+	auto stClean = co_await OI::Http::Client::GetUrl(sBase + "/clean");
+	auto pResetSink = std::make_shared<DisconnectTestSink>(false);
+	OI::Http::Response stReset;
+	OI::Http::Response stResetSignal;
+	std::vector<OI::Coro::Task> vResetTasks;
+	vResetTasks.push_back(DisconnectRequest(sBase + "/reset", pResetSink, stReset));
+	vResetTasks.push_back(DisconnectSignal(pResetSink, sControl, "reset", stResetSignal));
+	co_await OI::Coro::WhenAll(std::move(vResetTasks));
+	OI::Http::Response stFirst;
+	OI::Http::Response stSecond;
+	OI::Http::Response stReady;
+	OI::Http::Response stProbe;
+	OI::Http::Response stRelease;
+	OI::Http::Response stFinSignal;
+	auto pFinSink = std::make_shared<DisconnectTestSink>(true);
+	std::vector<OI::Coro::Task> vTasks;
+	vTasks.push_back(DisconnectRequest(sBase + "/fin", pFinSink, stFirst));
+	vTasks.push_back(DisconnectQueue(sBase, sControl, stSecond, stReady, stProbe, stRelease));
+	vTasks.push_back(DisconnectSignal(pFinSink, sControl, "fin", stFinSignal));
+	co_await OI::Coro::WhenAll(std::move(vTasks));
+	int32_t iBad = 0;
+	if (stClean.iCode != OI_OK || stClean.sBody != "clean" || stReset.iCode != OI_ERR_CONNECT || pResetSink->Body() != "partial" || stResetSignal.iCode != OI_OK || stResetSignal.iStatus != 200 || stReady.iCode != OI_OK || stReady.iStatus != 200 || stProbe.iCode != OI_ERR_TIMEOUT || stRelease.iCode != OI_OK || stRelease.iStatus != 200 || stFinSignal.iCode != OI_OK || stFinSignal.iStatus != 200 || stFirst.iCode != OI_OK || pFinSink->Body() != "first" || stSecond.iCode != OI_OK || stSecond.sBody != "second")
+	{
+		LOG_ERROR("disconnect regression failed clean=%d reset=%d reset_signal=%d ready=%d probe=%d release=%d fin_signal=%d first=%d second=%d", stClean.iCode, stReset.iCode, stResetSignal.iCode, stReady.iCode, stProbe.iCode, stRelease.iCode, stFinSignal.iCode, stFirst.iCode, stSecond.iCode);
+		++iBad;
+	}
+	LOG_TRACE("disconnect regression bad=%d", iBad);
+	fflush(stdout);
+	OI::Thread::ThreadPool::GetInstance().RequestStop(iBad == 0 ? 0 : 1);
+}
+
 OI::Coro::Task WebClient::UrlGet(std::string sUrl, OI::Http::Response& stResponse)
 {
 	stResponse = co_await OI::Http::Client::GetUrl(std::move(sUrl));
@@ -307,9 +421,11 @@ OI::Coro::Task WebClient::Run()
 	int32_t iPoolControlPort = 0;
 	bool bUrlCase = false;
 	bool bPoolCase = false;
+	bool bDisconnectCase = false;
 	bool bCheckEchoHeader = false;
 	int32_t iStreamFixturePort = 0;
 	TryGetConfig("WebClient.pool_case", bPoolCase);
+	TryGetConfig("WebClient.disconnect_case", bDisconnectCase);
 	TryGetConfig("WebClient.pool_control_port", iPoolControlPort);
 	TryGetConfig("WebClient.url_case", bUrlCase);
 	TryGetConfig("WebClient.url_tls_port", iUrlTlsPort);
@@ -330,6 +446,11 @@ OI::Coro::Task WebClient::Run()
 		co_return;
 	}
 
+	if (bDisconnectCase)
+	{
+		co_await RunDisconnectRegression(iPortLocal, iPoolControlPort);
+		co_return;
+	}
 	if (bPoolCase)
 	{
 		co_await RunPoolRegression(iPortLocal, iPoolControlPort);

@@ -32,18 +32,18 @@ Windows 多线程注册发现用例完成了业务检查，删除临时目录内
 
 libhv 消息还提供文件、JSON、类型化值等便捷接口；是否引入以实际需求为准，不影响上述阶段的验收。
 
-## 2026-11-19 全仓审查：待修复
+## 2026-11-19 全仓审查：修复进度
 
-2026-11-19 对 HEAD `52dd507` 做了全仓只读审查（cbaselib、modules、tools 第一方代码；未编译、未跑回归；生成器异常输入在临时目录实测）。确认 0 个 P1、6 个 P2、12 个 P3，本轮先登记、不修改代码。P2 按顺序修；P3 随相关模块下次改动一并收口。
+2026-11-19 对 HEAD `52dd507` 做了全仓只读审查（cbaselib、modules、tools 第一方代码；未编译、未跑回归；生成器异常输入在临时目录实测）。确认 0 个 P1、6 个 P2、12 个 P3，本轮先登记、不修改代码。P2 第 1、3、4、6 项已修，第 2 项的回归预检已修但生产监听待修，第 5 项待修；修复后的完整矩阵仍待验证。P3 随相关模块下次改动一并收口。
 
 ### P2
 
-- **明文 HTTP 把传输错误当正常 EOF，close-delimited 响应可被静默截断**（`cbaselib/net/src/oi_tls_session.cpp` 的 `EndTransport`，`cbaselib/http/src/oi_http.cpp` 的 `FinishEof`）。触发：`http://` 请求，响应无 `Content-Length` 且非 chunked，body 中途 RST/读错误。现状：明文分支固定 `OnTransportEnd(OI_OK, nullptr)`；`FinishEof` 把已收到字节当完整 body 成功返回；有长度响应丢失原始 errno，只报 `OI_ERR_PROTOCOL`。修复：明文分支按 `GetError()` 判定，大于 0 报 `OI_ERR_CONNECT` 并带系统错误文本。
-- **Windows `SO_REUSEADDR` 允许重复监听，回归端口预检失效**（`cbaselib/port/oi_net_os.cpp` 的 `NetOs_Bind`，`tools/run_regressions.py` 的 `preflight_ports`）。触发：已有带 `SO_REUSEADDR` 的监听时再 bind。现状：Winsock 下第二个 bind 成功，两个实例同时监听，连接归属不确定；预检把占用端口判为空闲，可能把用例跑到上一轮残留进程上。修复：Windows 分支改 `SO_EXCLUSIVEADDRUSE`（或不设），`SO_REUSEADDR` 仅保留给非 Windows；预检改用 `connect_ex` 探测活监听。
-- **注册中心同值重复登记后，旧会话 Withdraw 会删掉在线登记**（`cbaselib/registry/src/registry_server.cpp` 的 `kRegisterLua`、`OnDelSession`、`Withdraw`）。触发：旧连接半开时新连接用相同 name/id/ip/port 登记成功，旧会话随后被判死。现状：`Withdraw` 先按值删 Redis 键，再检查是否还有同 name/id 的在线 Binding；快照也会被摘掉。空档内别的进程可抢同名同 id，原进程收到 `OI_ERR_EXIST` 后 `m_bLost` 永久停止登记。修复：`Withdraw` 发 EVAL 前先检查是否还有同 name/id 的在线 Binding；或 `Register` 成功时接管并摘掉旧会话的绑定；`OnDelSession` 的 `DropSnapshot` 同样按条件判断。
-- **定时器时间快照 getter 无同步，跨线程读与 Update 写构成数据竞争**（`cbaselib/timer/inc/oi_timer_manager.h` 的 `GetCurTick`/`GetTime`/`GetCurTickTime`/`GetTm`，`cbaselib/timer/src/oi_timer_manager.cpp` 的 `Update`）。触发：多线程构建下非 poll 线程读取，仓库自己的定时器回归协程在工人线程读 `GetTime`/`GetCurTick`。现状：写侧在 `m_stWheelMutex` 里原地覆写，读侧无锁；`GetCurTickTime`/`GetTm` 返回内部对象引用。修复：两个标量改原子量；引用返回改锁内拷贝按值返回。
+- **已修：明文 HTTP 传输错误被当成正常 EOF**。明文传输结束时保留底层错误，RST 等读错误返回连接错误，避免无长度响应被静默截断。
+- **部分修复：Windows 端口占用预检失效**。回归预检使用 `SO_EXCLUSIVEADDRUSE`，已有普通监听或复用监听均会被识别；生产监听仍使用 `SO_REUSEADDR`，待修。
+- **已修：注册中心同值重复登记后旧会话删除在线登记**。新登记接管旧绑定，Redis 租约使用独立 owner 令牌，撤销时仅删除自身租约；双会话回归检查旧连接关闭后租约和快照仍在、新连接关闭后清除。
+- **已修：定时器时间快照跨线程读写竞争**。四个 getter 均在锁内读取，时间结构按值返回。
 - **logd 延后帧缺单帧限额，可永久卡住队列并让 Stop 退不掉**（`cbaselib/logd/src/log_manager.cpp` 的 `DeferWrite`/`QueueWaiter`/`ResumeWaiting`，`cbaselib/logd/src/log_server_session.cpp` 的延后分支）。触发：`Log.max_pending_bytes` 取最小值附近（回归配成 8MiB+8），客户端一次读里第二帧的 `sText` 超过 `max - 标题长度` 且仍在 `LOG_FRAME_MAX+64` 内。现状：该帧仍入队，但队首永远放不下；本地日志持续 BUSY，`Stop()` 等待一个不会再被 Signal 的条件。修复：入队前做与 `WriteLog` 相同的单帧检查（含 `sText < LOG_FRAME_MAX`），超限按协议错误关闭会话。
-- **HTTP 连接池在 EOF 处理前复用会话，排队请求被误判协议错误**（`cbaselib/http/src/oi_http.cpp` 的 `Complete`/`Pump`，`cbaselib/net/src/oi_tcp_channel.cpp` 的 `peer_close`）。触发：keep-alive 响应后对端关闭，响应与 EOF 落在同一次读事件，池中有排队请求。现状：缓冲数据先完成响应，会话回空闲并被 `Pump` 立即复用于下一个请求；随后 `PassiveClose(0)` 交付 EOF，新请求在无响应头时走 `Fail("eof")`，报 `OI_ERR_PROTOCOL` 且不自动换连接重试。修复：读返回 0 时先标记会话不可复用再交付缓冲；或把“零响应字节即 EOF”按连接错误处理并用新连接重试一次。
+- **已修：HTTP 连接池在 EOF 处理前复用会话**。读到 EOF 时先标记连接不可复用，再交付已收到的数据，避免排队请求使用即将关闭的连接。
 
 ### P3
 

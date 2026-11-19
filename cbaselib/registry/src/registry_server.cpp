@@ -18,6 +18,7 @@
 #include "oi_db_table.h"
 #include "oi_mysql.h"
 #include "framework_protocol/oi_rpcdata_servicelease.h"
+#include <uv.h>
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
@@ -35,20 +36,21 @@ namespace
 const char* kRegisterLua =
     "local v = redis.call('GET', KEYS[1]) "
     "if v and v ~= ARGV[1] then return 0 end "
-    "redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2]) "
+    "redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2]) redis.call('SET', KEYS[4], ARGV[5], 'PX', ARGV[2]) "
     "redis.call('SADD', KEYS[2], ARGV[3]) redis.call('SADD', KEYS[3], ARGV[4]) return 1";
 
 // 还是自己的就延长。过期了没人占就重新占上。被别人占了不动它。
 const char* kRefreshLua =
     "local v = redis.call('GET', KEYS[1]) "
-    "if v == ARGV[1] then redis.call('PEXPIRE', KEYS[1], ARGV[2]) "
+    "if v == ARGV[1] and redis.call('GET', KEYS[4]) == ARGV[5] then redis.call('PEXPIRE', KEYS[1], ARGV[2]) redis.call('PEXPIRE', KEYS[4], ARGV[2]) "
     "  redis.call('SADD', KEYS[2], ARGV[3]) redis.call('SADD', KEYS[3], ARGV[4]) return 1 end "
     "if v then return 0 end "
-    "redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2]) "
+    "redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2]) redis.call('SET', KEYS[4], ARGV[5], 'PX', ARGV[2]) "
     "redis.call('SADD', KEYS[2], ARGV[3]) redis.call('SADD', KEYS[3], ARGV[4]) return 2";
 
 const char* kWithdrawLua =
-    "if redis.call('GET', KEYS[1]) == ARGV[1] then redis.call('DEL', KEYS[1]) redis.call('SREM', KEYS[2], ARGV[2]) end "
+    "if redis.call('GET', KEYS[3]) ~= ARGV[1] or redis.call('GET', KEYS[1]) ~= ARGV[3] then return 0 end "
+    "redis.call('DEL', KEYS[1], KEYS[3]) redis.call('SREM', KEYS[2], ARGV[2]) "
     "return 1";
 
 // 一次取回整个空间。过期的 id、空了的名字顺手摘掉。
@@ -168,11 +170,12 @@ std::string RegistryServer::Key(const std::string& sTail) const
 	return m_sPrefix + sTail;
 }
 
-// 登记和续期共用：三个键是实例、id 集合、名字集合。
+// 实例地址、id 集合、名字集合和连接租约在同一 Redis 槽。
 std::vector<std::string> RegistryServer::EvalArgs(const char* pLua, const Binding& stSecond) const
 {
-	return {"EVAL", pLua, "3", Key("svc:" + stSecond.sName + ":" + std::to_string(stSecond.iId)), Key("svc:" + stSecond.sName), Key("svc"),
-	    stSecond.sValue, std::to_string(m_iExpireMilliseconds), std::to_string(stSecond.iId), stSecond.sName};
+	const std::string sInstance = stSecond.sName + ":" + std::to_string(stSecond.iId);
+	return {"EVAL", pLua, "4", Key("svc:" + sInstance), Key("svc:" + stSecond.sName), Key("svc"), Key("owner:" + sInstance),
+	    stSecond.sValue, std::to_string(m_iExpireMilliseconds), std::to_string(stSecond.iId), stSecond.sName, stSecond.sOwner};
 }
 
 int32_t RegistryServer::Init()
@@ -541,6 +544,13 @@ OI::Coro::Task RegistryServer::ReloadMysql()
 	{
 		stSecond.sValue += " " + stSecond.sZone;
 	}
+	// 实例值保留原格式，相同地址的两次登记用独立租约区分。
+	stSecond.sOwner.resize(16);
+	if (uv_random(nullptr, nullptr, stSecond.sOwner.data(), stSecond.sOwner.size(), 0, nullptr) != 0)
+	{
+		LOG_ERROR("registry lease token generation failed sid=%d", iSessionId);
+		co_return OI_ERR_FAIL;
+	}
 	std::vector<std::string> vArgumentsLocal = EvalArgs(kRegisterLua, stSecond);
 	::OI::Redis::RedisResult stR = co_await ::OI::Redis::CallRedis(std::move(vArgumentsLocal));
 	int iReturnCodeLocal = ReplyInt(stR);
@@ -555,6 +565,16 @@ OI::Coro::Task RegistryServer::ReloadMysql()
 	}
 	if (iReturnCodeLocal == REG_OK)
 	{
+		for (auto& [iOtherSessionId, vBindings] : m_mBindings)
+		{
+			if (iOtherSessionId != iSessionId)
+			{
+				std::erase_if(vBindings, [sName = stSecond.sName, iId = stSecond.iId](const Binding& stBinding)
+				{
+					return stBinding.sName == sName && stBinding.iId == iId;
+				});
+			}
+		}
 		Binding* pFound = FindBinding(iSessionId, stSecond.sName, stSecond.iId);
 		if (!pFound)
 		{
@@ -604,7 +624,7 @@ OI::Coro::Task RegistryServer::ReloadMysql()
 	bool bValid = false;
 	{
 		Binding* pFound = m_vAlive.count(iSessionId) ? FindBinding(iSessionId, stSecond.sName, stSecond.iId) : NULL;
-		bValid = pFound && pFound->sValue == stSecond.sValue;
+		bValid = pFound && pFound->sOwner == stSecond.sOwner;
 	}
 	if (!bValid)
 	{
@@ -655,8 +675,13 @@ OI::Coro::Task RegistryServer::ReloadMysql()
 
 OI::Coro::Task RegistryServer::Withdraw(Binding stSecond)
 {
-	std::vector<std::string> vArgumentsLocal = {"EVAL", kWithdrawLua, "2", Key("svc:" + stSecond.sName + ":" + std::to_string(stSecond.iId)), Key("svc:" + stSecond.sName), stSecond.sValue, std::to_string(stSecond.iId)};
-	co_await ::OI::Redis::CallRedis(std::move(vArgumentsLocal));
+	const std::string sInstance = stSecond.sName + ":" + std::to_string(stSecond.iId);
+	std::vector<std::string> vArgumentsLocal = {"EVAL", kWithdrawLua, "3", Key("svc:" + sInstance), Key("svc:" + stSecond.sName), Key("owner:" + sInstance), stSecond.sOwner, std::to_string(stSecond.iId), stSecond.sValue};
+	auto stResult = co_await ::OI::Redis::CallRedis(std::move(vArgumentsLocal));
+	if (ReplyInt(stResult) != REG_OK)
+	{
+		co_return;
+	}
 	// 撤销之前发出的整量拉取可能又把它带回快照。这时还没人重新登记，就再摘一次。
 	for (const auto& [iSessionId, vBindings] : m_mBindings)
 	{

@@ -62,21 +62,25 @@ class BaseTimerManager
 	// 已经推进到的 tick。相对定时用它，不看系统时间。
 	timer_tick_t GetCurTick()
 	{
+		::OI::Thread::MutexGuard stLock(m_stWheelMutex);
 		return m_iCurrentTick;
 	}
 	// 最近一次 Update 的日历时间。
-	const struct timeval& GetCurTickTime()
+	struct timeval GetCurTickTime()
 	{
+		::OI::Thread::MutexGuard stLock(m_stWheelMutex);
 		return m_stCurrentTimeValue;
 	}
 	// 最近一次 Update 的秒。
 	time_t GetTime()
 	{
+		::OI::Thread::MutexGuard stLock(m_stWheelMutex);
 		return m_iCurrentTime;
 	}
 	// 最近一次 Update 的本地日历。
-	const tm& GetTm()
+	tm GetTm()
 	{
+		::OI::Thread::MutexGuard stLock(m_stWheelMutex);
 		return m_stCurrentCalendarTime;
 	}
 	// 一跳多少毫秒，来自配置。
