@@ -238,16 +238,21 @@ def preflight_ports(case):
     scene_ports = {"web-coro": (IPC_PORT, REDIS_SERVER_PORT, REDIS_PORT),
                    "hold-blocking": (LOGD_PORT, IPC_PORT), "hold-timer": (LOGD_PORT,),
                    "hold-redis": (LOGD_PORT, REDIS_SERVER_PORT, REDIS_PORT)}
+    def probe_port(port, kind):
+        # Winsock can allow a specific-address bind beside an existing wildcard bind.
+        addresses = ("127.0.0.1", "0.0.0.0") if WINDOWS else ("127.0.0.1",)
+        for address in addresses:
+            with socket.socket(socket.AF_INET, kind) as probe:
+                if WINDOWS:
+                    probe.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+                elif kind == socket.SOCK_STREAM:
+                    probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                probe.bind((address, port))
+
     for port in scene_ports.get(case, (LOGD_PORT, IPC_PORT, REDIS_SERVER_PORT, REDIS_PORT, REGISTRY_PORT) + GAME_PORTS):
-        with socket.socket() as probe:
-            if WINDOWS:
-                probe.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-            else:
-                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            probe.bind(("127.0.0.1", port))
+        probe_port(port, socket.SOCK_STREAM)
     if case not in ("hold-timer", "hold-redis", "web-coro"):
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
-            probe.bind(("127.0.0.1", UDP_PORT))
+        probe_port(UDP_PORT, socket.SOCK_DGRAM)
 
 
 def reset_connections():
@@ -1803,7 +1808,117 @@ def check_https(work, cfg):
             raise RuntimeError("HTTPS fixture failed to stop")
 
 
+def check_web_bind_restart(args):
+    # Real listeners exercise overlapping addresses and server-side connection closure.
+    with regression_directory(prefix="oi-regression-web-bind-p%d-" % PORT_OFFSET) as tmp:
+        root = Path(tmp)
+        write_owner(root, REPO, PORT_OFFSET)
+        procs, handles = [], []
+        runtime = root / "runtime"
+        runtime.mkdir()
+        copy_runtime_dlls(args.bin_dir, runtime)
+        executable = runtime / ("webserver" + SUFFIX)
+        shutil.copy2(args.bin_dir / executable.name, executable)
+        try:
+            for index, (first_ip, second_ip) in enumerate((
+                    ("127.0.0.1", "127.0.0.1"), ("127.0.0.1", "0.0.0.0"),
+                    ("0.0.0.0", "127.0.0.1"), ("0.0.0.0", "0.0.0.0"))):
+                with socket.socket() as probe:
+                    probe.bind(("127.0.0.1", 0))
+                    port = probe.getsockname()[1]
+
+                def prepare(name, ip):
+                    instance = root / (str(index) + name)
+                    work, cfg = instance / "bin", instance / "config"
+                    work.mkdir(parents=True)
+                    cfg.mkdir()
+                    config = (REPO / "deploy/config/webserver.toml").read_text(encoding="utf-8-sig")
+                    config = config.replace('ip = "127.0.0.1"', 'ip = "' + ip + '"')
+                    config = config.replace("port = 18080", "port = " + str(port))
+                    (cfg / "webserver.toml").write_text(config, encoding="utf-8")
+                    path = root / (str(index) + name + ".out")
+                    output = path.open("w")
+                    handles.append(output)
+                    return work, path, output
+
+                def start(prepared):
+                    work, path, output = prepared
+                    proc = launch([str(executable)], cwd=work,
+                                  stdout=output, stderr=subprocess.STDOUT)
+                    procs.append(proc)
+                    record_process(root, proc)
+                    return proc, path
+
+                def ready(proc, path, ip):
+                    deadline = time.monotonic() + 10
+                    while True:
+                        output = path.read_text(encoding="utf-8", errors="replace")
+                        if "web server listen %s:%d" % (ip, port) in output:
+                            return
+                        if proc.poll() is not None or time.monotonic() > deadline:
+                            raise RuntimeError("web listener failed: " + output)
+                        time.sleep(0.05)
+
+                def health(conn):
+                    conn.request("GET", "/health")
+                    response = conn.getresponse()
+                    body = response.read()
+                    assert response.status == 200 and body == b"ok", (response.status, body)
+
+                first_prepared = prepare("first", first_ip)
+                second_prepared = prepare("second", second_ip)
+                restart_prepared = prepare("restart", first_ip)
+                first, first_path = start(first_prepared)
+                ready(first, first_path, first_ip)
+                second, second_path = start(second_prepared)
+                second.wait(timeout=10)
+                output = second_path.read_text(encoding="utf-8", errors="replace")
+                assert second.returncode != 0 and "web server startup failed code=-15" in output, (first_ip, second_ip, second.returncode, output)
+                assert first.poll() is None, (first_ip, second_ip, first.returncode)
+                # Request an orderly server-side close before stopping the listener.
+                with socket.create_connection(("127.0.0.1", port), timeout=10) as closing:
+                    closing.sendall(b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+                    response = http.client.HTTPResponse(closing)
+                    response.begin()
+                    body = response.read()
+                    assert response.status == 200 and body == b"ok", (response.status, body)
+                    assert closing.recv(1) == b"", "server did not close Connection: close request"
+                    response.close()
+                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+                try:
+                    health(conn)
+                    # Also exercise shutdown with a previously served keep-alive connection.
+                    sock = conn.sock
+                    assert sock is not None
+                    stop(first)
+                    first.wait(timeout=10)
+                    assert first.returncode == 0, ("first shutdown", first.returncode)
+                    try:
+                        assert sock.recv(1) == b"", "server did not close the existing connection"
+                        close_result = "EOF"
+                    except ConnectionResetError:
+                        close_result = "reset"
+                    print("web shutdown active connection: " + close_result, flush=True)
+                    conn.close()
+                    restarted, restarted_path = start(restart_prepared)
+                    ready(restarted, restarted_path, first_ip)
+                    fresh = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+                    try:
+                        health(fresh)
+                    finally:
+                        fresh.close()
+                    stop(restarted)
+                    restarted.wait(timeout=10)
+                    assert restarted.returncode == 0, ("restart shutdown", restarted.returncode)
+                finally:
+                    conn.close()
+                print("web bind %s / %s restart PASS" % (first_ip, second_ip), flush=True)
+        finally:
+            cleanup_owned(procs, handles, root, args, "web-bind", primary=sys.exc_info()[1])
+
+
 def run_web(args):
+    check_web_bind_restart(args)
     # 仍使用模块自带的 WebClient 用例，验证别名键和未改名键的 HTTP/JSON/二进制收发。
     with regression_directory(prefix="oi-regression-web-p%d-" % PORT_OFFSET) as tmp:
         root = Path(tmp)

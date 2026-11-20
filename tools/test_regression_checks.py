@@ -137,7 +137,9 @@ class RegressionChecksTest(unittest.TestCase):
                 regression.preflight_ports(case)
                 calls = factory.return_value.__enter__.return_value.bind.call_args_list
                 expected = ports + ([regression.UDP_PORT] if udp else [])
-                self.assertEqual([call.args[0][1] for call in calls], expected)
+                addresses = ("127.0.0.1", "0.0.0.0") if regression.WINDOWS else ("127.0.0.1",)
+                self.assertEqual([call.args[0] for call in calls],
+                                 [(address, port) for port in expected for address in addresses])
 
     def test_hold_scenes_are_accepted_and_all_retains_hold(self):
         script = Path(regression.__file__)

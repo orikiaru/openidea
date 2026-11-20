@@ -527,7 +527,8 @@ class RegressionCleanupTests(unittest.TestCase):
             if Path(source).suffix == ".out":
                 return original_copy(source, destination)
         client = subprocess.CompletedProcess([], 1, "bad=1", "original client failure")
-        with patch.object(self.runner.shutil, "copy2", side_effect=copy), \
+        with patch.object(self.runner, "check_web_bind_restart"), \
+             patch.object(self.runner.shutil, "copy2", side_effect=copy), \
              patch.object(self.runner, "launch", return_value=server), \
              patch.object(self.runner, "record_process"), \
              patch.object(self.runner.socket, "create_connection"), \
@@ -555,7 +556,8 @@ class RegressionCleanupTests(unittest.TestCase):
                 fixture.connections.extend(([object()] * 9) if reuse else [object() for _ in range(9)])
                 fixture.completed_reuse = True
             return client
-        with patch.object(self.runner.shutil, "copy2"), \
+        with patch.object(self.runner, "check_web_bind_restart"), \
+             patch.object(self.runner.shutil, "copy2"), \
              patch.object(self.runner, "launch", return_value=self.first), \
              patch.object(self.runner, "record_process"), \
              patch.object(self.runner.socket, "create_connection"), \

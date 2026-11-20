@@ -382,10 +382,9 @@ net_socket_t NetOs_Dup(net_socket_t iDescriptor)
 
 int NetOs_Bind(net_socket_t iDescriptor, const sockaddr* pAddr, int iLength)
 {
-	// 监听口关掉之后，旧连接还会在 TIME_WAIT 里占着这个端口。允许复用，重启才能再绑上。
 	int iOn = 1;
 #ifdef _WIN32
-	if (setsockopt((SOCKET)iDescriptor, SOL_SOCKET, SO_REUSEADDR, (const char*)&iOn, sizeof(iOn)) != 0)
+	if (setsockopt((SOCKET)iDescriptor, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (const char*)&iOn, sizeof(iOn)) != 0)
 	{
 		NetOs_MapError(WSAGetLastError());
 		return -1;
