@@ -79,43 +79,56 @@ def main():
     artifacts.mkdir(parents=True, exist_ok=True)
 
     processes = []
-    for platform, mode, offset in LANES:
-        lane = "%s-%s" % (platform, mode)
-        if args.lane and lane not in args.lane:
-            continue
-        output = artifacts / lane
-        log = (artifacts / (lane + ".log")).open("w", encoding="utf-8")
-        common = ["--mode", mode, "--case", args.case, "--jobs", str(args.jobs), "--port-offset", str(offset)]
-        if platform == "windows":
-            copy = args.windows_root / lane
-            sync_windows(copy)
-            command = [sys.executable, str(copy / "tools/test_matrix.py"), "--build-dir", str(copy / "build-win"),
-                       "--redis-binary", args.windows_redis_binary, "--artifacts", str(output)] + common
-            cwd = copy
-        else:
-            copy = args.linux_root + "/" + lane
-            sync_linux(args.wsl_user, copy)
-            command = ["wsl", "-u", args.wsl_user, "--exec", "python3", copy + "/tools/test_matrix.py",
-                       "--build-dir", copy + "/build", "--artifacts", linux_path(args.wsl_user, output)] + common
-            if args.redis_binary:
-                command += ["--redis-binary", args.redis_binary]
-            if args.mysqld:
-                command += ["--mysqld", args.mysqld]
-            for item in args.define:
-                command += ["--define", item]
-            cwd = ROOT
-        print("START", lane, "port_offset=%d" % offset, flush=True)
-        processes.append((lane, subprocess.Popen(command, cwd=cwd, stdout=log, stderr=subprocess.STDOUT), log, time.monotonic()))
+    try:
+        for platform, mode, offset in LANES:
+            lane = "%s-%s" % (platform, mode)
+            if args.lane and lane not in args.lane:
+                continue
+            output = artifacts / lane
+            log = (artifacts / (lane + ".log")).open("w", encoding="utf-8")
+            common = ["--mode", mode, "--case", args.case, "--jobs", str(args.jobs), "--port-offset", str(offset)]
+            if platform == "windows":
+                copy = args.windows_root / lane
+                sync_windows(copy)
+                command = [sys.executable, str(copy / "tools/test_matrix.py"), "--build-dir", str(copy / "build-win"),
+                           "--redis-binary", args.windows_redis_binary, "--artifacts", str(output)] + common
+                cwd = copy
+            else:
+                copy = args.linux_root + "/" + lane
+                sync_linux(args.wsl_user, copy)
+                command = ["wsl", "-u", args.wsl_user, "--exec", "python3", copy + "/tools/test_matrix.py",
+                           "--build-dir", copy + "/build", "--artifacts", linux_path(args.wsl_user, output)] + common
+                if args.redis_binary:
+                    command += ["--redis-binary", args.redis_binary]
+                if args.mysqld:
+                    command += ["--mysqld", args.mysqld]
+                for item in args.define:
+                    command += ["--define", item]
+                cwd = ROOT
+            print("START", lane, "port_offset=%d" % offset, flush=True)
+            processes.append((lane, subprocess.Popen(command, cwd=cwd, stdout=log, stderr=subprocess.STDOUT), log, time.monotonic()))
 
-    results = {}
-    for lane, process, log, started in processes:
-        code = process.wait()
-        log.close()
-        results[lane] = {"exit_code": code, "seconds": round(time.monotonic() - started, 1)}
-        print("PASS" if code == 0 else "FAIL", lane, "seconds=%.1f" % results[lane]["seconds"],
-              "log=", artifacts / (lane + ".log"), flush=True)
-    (artifacts / "parallel.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
-    return int(any(item["exit_code"] for item in results.values()))
+        results = {}
+        for lane, process, log, started in processes:
+            code = process.wait()
+            log.close()
+            results[lane] = {"exit_code": code, "seconds": round(time.monotonic() - started, 1)}
+            print("PASS" if code == 0 else "FAIL", lane, "seconds=%.1f" % results[lane]["seconds"],
+                  "log=", artifacts / (lane + ".log"), flush=True)
+        (artifacts / "parallel.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
+        return int(any(item["exit_code"] for item in results.values()))
+    finally:
+        # 启动或等待中出错时，只回收本进程已经拉起的 lane，不碰别人的。
+        for lane, process, log, started in processes:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=10)
+            if not log.closed:
+                log.close()
 
 
 if __name__ == "__main__":

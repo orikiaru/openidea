@@ -4,16 +4,16 @@
 
 ## 全量
 
-2026-11-21，基于提交 `cd33b7f8` 之上的冻结工作区，四组 `--case all` 均通过 22/22。覆盖 UDP 数据报排队与合包、FIFO 唤醒、通道注销和事件循环退出等改动。协程压力和序列化压力不计入全量。
+2026-11-21，基于提交 `9fcc4f6` 之上、含本轮回归拆分与边界补齐的工作区，四组 `--case all` 均通过 22/22。覆盖回归驱动拆分、IPv4 数据报上限、FIFO 万次唤醒、`StopAndJoin` 忙碌退出、反向 Hold、监听登记回滚和清理退出码校验。协程压力和序列化压力不计入全量。
 
 | 平台 | 线程 | CPU | 报告频率（MHz） | 通过 | 耗时 |
 | --- | --- | --- | --- | --- | --- |
-| Windows MSVC x64 Release | 多线程 | AMD Ryzen 7 9800X3D | 4700 | 22/22 | 388.7 秒 |
-| Windows MSVC x64 Release | 单线程 | AMD Ryzen 7 9800X3D | 4700 | 22/22 | 421.7 秒 |
-| 远程 Linux Release，4 核 KVM | 多线程 | Intel Xeon Platinum 8255C | 2494.140 | 22/22 | 00:53:46–01:04:26，含 clean-first 重编 |
-| 远程 Linux Release，2 核 KVM | 单线程 | Intel Xeon Gold 6271C | 2593.904 | 22/22 | clean-first 重编 |
+| Windows MSVC x64 Release | 多线程 | AMD Ryzen 7 9800X3D | 4700 | 22/22 | 401.6 秒 |
+| Windows MSVC x64 Release | 单线程 | AMD Ryzen 7 9800X3D | 4700 | 22/22 | 436.7 秒 |
+| WSL2 Linux Release，16 逻辑核 | 多线程 | AMD Ryzen 7 9800X3D | 4699.916 | 22/22 | 248.5 秒 |
+| WSL2 Linux Release，16 逻辑核 | 单线程 | AMD Ryzen 7 9800X3D | 4699.916 | 22/22 | 289.9 秒 |
 
-Windows 频率为 CIM `CurrentClockSpeed` 报告值；Linux 频率为 KVM 来宾报告值，不视作物理核瞬时频率。四路对应定向用例均通过。
+Windows 频率为 CIM `CurrentClockSpeed` 报告值；WSL 频率为 `/proc/cpuinfo` 报告值，均不是运行期连续采样。两路 Linux 另跑 `mysql` 与 `registry-static`，`mysql row mapping`、`mysql rows`、`mysql done` 均为 `bad=0`。
 
 ## 显式用例
 

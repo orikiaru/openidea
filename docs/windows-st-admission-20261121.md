@@ -15,7 +15,7 @@ python tools/run_regressions.py --case <case> --port-offset 1000 --bin-dir F:/oi
 python tools/kill_test_procs.py --lane windows-st
 ```
 
-两项用例及各轮断言仍保留在 `tools/run_regressions.py` 和 `RpcAdmissionMgr`；不以本记录替代回归。上述目录后来已同步新源码并重建，直接再次执行会测试当前产物，不能当成旧二进制复现。
+两项用例及各轮断言仍在 `tools/regression/cases/admission.py`（入口 `tools/run_regressions.py`，`--case rpc-admission-*`）和 `RpcAdmissionMgr`；不以本记录替代回归。上述目录后来已同步新源码并重建，直接再次执行会测试当前产物，不能当成旧二进制复现。
 
 ## 调试器原始证据
 

@@ -32,6 +32,7 @@ enum SESSION_TYPE
 	SESSION_TYPE_FIFO,
 };
 class SessionManager;
+class AcceptChannel;
 class ConnectChannel;
 class UDP_Channel;
 class NetAddr;
@@ -78,6 +79,8 @@ class SessionManager
 	uint64_t iIdleTimeoutMilliseconds = 60000;
 	// UDP 的本端口。客户端或服务端绑定成功后可用。
 	UDP_Channel* pUdpChannel = NULL;
+	// 监听通道。StartServer 成功后才有；登记失败时用 StopAccept 回滚。
+	AcceptChannel* pAcceptChannel = nullptr;
 	// 下一个要分配的会话号。
 	sid_t iCurrentSessionId;
 	// 保护会话表和连接状态。

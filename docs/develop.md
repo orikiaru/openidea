@@ -46,7 +46,7 @@
 
 ## 7. 测试
 
-- 框架的新能力要在 `ipcclient` / `ipcserver` 里加回归：一个 Mgr，一个 `[Test]` 开关，`run_regressions.py` 里加用例和标记断言，并收进 `--case all`，同步改 [测试规程](testing.md) 里的用例数和端口。例：`udp` 用例对应 `UdpMgr` 和 `IpcUdp`。
+- 框架的新能力要在 `ipcclient` / `ipcserver` 里加回归：一个 Mgr，一个 `[Test]` 开关，在 `tools/regression/cases/<组>.py` 的 `Case` 里加 `configure`/`scenario`/`on_poll`/`check`，并注册到 `tools/regression/cases/__init__.py`（进 `--case all` 的加到 `ALL_CASES`），同步改 [测试规程](testing.md) 里的用例数和端口。入口仍是 `python tools/run_regressions.py`，新增用例不影响调用方式。例：`udp` 用例对应 `UdpMgr` 和 `IpcUdp`。
 - 测试自己起 Redis 等依赖的临时实例，不借用户自己的服务，也不让用户去起。
 - 全量是 Windows、Linux 各跑多线程和单线程，按 [测试规程](testing.md) 执行，编译和矩阵交给 subagent（见 `AGENTS.md`）。应用仓库另跑自己的用例，例如 lanroom 的 `python test\run_cases.py`。
 - 改完代码在本机编一次，让 clangd 用的编译数据库是新的，跳转才对。

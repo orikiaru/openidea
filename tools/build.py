@@ -39,6 +39,7 @@ def configure_command(cmake, build, mode, defines, vs_instance):
     else:
         command += ["-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_C_COMPILER=gcc-13", "-DCMAKE_CXX_COMPILER=g++-13"]
     command.append("-DOI_IPC_SINGLE_THREAD=" + ("ON" if mode == "st" else "OFF"))
+    command.append("-DOI_WEBCLIENT_SINGLE_THREAD=" + ("ON" if mode == "st" else "OFF"))
     command.append("-DOI_ENABLE_TEST_HOOKS=OFF")
     command += ["-D" + item for item in defines]
     return command

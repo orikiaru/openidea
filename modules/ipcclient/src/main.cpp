@@ -2,6 +2,7 @@
 #include <exception>
 #include <cstring>
 #include <thread>
+#include <uv.h>
 #include "oi_channel.h"
 #include "oi_poll.h"
 #include "oi_socket.h"
@@ -105,6 +106,35 @@ static int32_t CheckPollUdpClose()
 	return iPause == OI_OK && iClose == 0 ? OI_OK : OI_ERR_FAIL;
 }
 
+static int32_t CheckPollLoopBusy()
+{
+	// 留一个不属于 watch 的活跃句柄，loop 关闭必须失败，且状态要能传回调用方。
+	const int32_t iArmed = ::OI::Net::Poll::GetInstance().StartListener([](void*) -> int32_t
+	{
+		auto* pTimer = new uv_timer_t();
+		if (uv_timer_init(::OI::Net::Poll::GetInstance().Loop(), pTimer) != 0)
+		{
+			delete pTimer;
+			return OI_ERR_FAIL;
+		}
+		if (uv_timer_start(pTimer, [](uv_timer_t*) {}, 60000, 60000) != 0)
+		{
+			return OI_ERR_FAIL;
+		}
+		return OI_OK;
+	}, nullptr);
+	if (iArmed != OI_OK)
+	{
+		std::fprintf(stderr, "poll loop busy arm=%d\n", iArmed);
+		return OI_ERR_FAIL;
+	}
+	const int32_t iClose = ::OI::Net::Poll::GetInstance().StopAndJoin();
+	const bool bBusy = iClose != 0;
+	std::printf("poll loop busy code=%d bad=%d\n", iClose, bBusy ? 0 : 1);
+	std::fflush(stdout);
+	return bBusy ? OI_OK : OI_ERR_FAIL;
+}
+
 int main(int iArgumentCount, char* vArguments[])
 {
 	int32_t iCode = ::OI::Base::StartFramework("../config/ipcclient.toml");
@@ -116,6 +146,10 @@ int main(int iArgumentCount, char* vArguments[])
 	if (iArgumentCount == 2 && std::strcmp(vArguments[1], "--poll-udp-close") == 0)
 	{
 		return CheckPollUdpClose();
+	}
+	if (iArgumentCount == 2 && std::strcmp(vArguments[1], "--poll-loop-busy") == 0)
+	{
+		return CheckPollLoopBusy();
 	}
 	if (iArgumentCount == 2 && std::strcmp(vArguments[1], "--poll-wrong-thread") == 0)
 	{

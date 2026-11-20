@@ -199,6 +199,8 @@ python3 tools/format_cpp.py --check --clang-format /path/to/clang-format-18.1.8
 git diff --check
 ```
 
+脚本级回归另含 `python tools/test_regression_checks.py`、`python tools/test_preflight_ports.py` 和 `python tools/test_test_safety.py`，矩阵会自动执行。回归驱动实现在 `tools/regression/`：`runner.py` 是通用流程，`cases/` 是按用例的配置、启动和断言，`ports.py` 持有会被 `--port-offset` 重新绑定的端口常量；命令行入口仍是 `tools/run_regressions.py`。
+
 结果目录包含：environment.json（环境、HEAD、diff 摘要）、matrix.json（每一步命令和退出码）、每一步日志、每个用例的进程输出、results.json（逐例通过/失败）、summary.json（整体结果）。同时运行两端时还有 platforms.json。
 
 矩阵启动时先使旧汇总失效；只有本次所有步骤完成，`summary.json` 才能标记 `passed: true`。中断和配置失败算未通过，检查 `completed` 和异常字段。单线程和多线程各用各的构建目录，不再编回另一种模式；`restore_skipped` 为 true，`restored` 为 false。`--no-restore` 保留但不起作用。`tools/test_matrix_outcomes.py` 用模拟子进程覆盖这些分支，矩阵自动执行。
@@ -317,3 +319,10 @@ Poll 注销回归先向已绑定 UDP 套接字发送数据，再同时登记读�
 UDP 排队回归以两个真实本地接收端区分目标：在同一 poll 回调中交错提交不同长度的数据报，逐端按顺序检查包界；另在同一回调内先提交旧包、关闭并重开会话，检查旧号拒绝、新包到达且旧包未到达。独立管理器使用正常空闲时限，并记录旧包观察段实耗；单独设置 4 字节队列额度，核对首包入队、次包 BUSY、实际写出后恢复。多线程另由两个同步起跑的线程各向不同 sid 连续发送 16 包，逐端检查原始顺序、内容和重复；单线程不启动后台发送线程。源端口由已有 source 断言单独验证。
 
 UDP 退出回归在独立客户端进程真实绑定后停止 poll，要求实际 loop 关闭返回 0；另在单线程专用子进程登记通道后由后台线程销毁，要求 fatal 诊断及非零退出，多线程明确跳过该负例。阻塞回归检查管理器 FIFO 类型和 `fifo` 名称映射，唤醒延迟定向用例仍单独执行。
+
+UDP 数据报上限边界：IPv4 下 65507 字节入队后必须完整收到，65508 字节在入队前返回 `INVALID_ARGUMENT` 且不产生数据报。驱动要求 `udp datagram max=0 over=-6 received=65507 bad=0`。
+
+阻塞回执与 poll 唤醒的批量边界：后台线程一次投递 10000 个 poll 回调，全部执行完才通过，验证 FIFO 唤醒只在队列由空变非空时写一个字节也不丢投递。驱动要求 `hold poll wake burst posts=10000 done=10000 bad=0`。
+
+Poll 退出返回值边界：loop 上保留一个不属于通道 watch 的活跃句柄时，`StopAndJoin` 必须返回非零并在标准错误记录 `poll loop close failed`，调用方据此判定退出不完整。驱动要求子进程输出 `poll loop busy code=` 且 `bad=0`。
+

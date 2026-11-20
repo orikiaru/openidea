@@ -46,6 +46,33 @@ struct PollWakeProbe
 	std::atomic<bool> bDone{false};
 };
 
+struct PollWakeBurst
+{
+	std::atomic<int32_t> iDone{0};
+};
+
+static int32_t PostPollWakeBurst(std::shared_ptr<PollWakeBurst> pBurst)
+{
+	for (int32_t iIndex = 0; iIndex < 10000; ++iIndex)
+	{
+		auto* pOwned = new std::shared_ptr<PollWakeBurst>(pBurst);
+		try
+		{
+			OI::Net::Poll::GetInstance().PostOnLoop([](void* pArgument)
+			{
+				std::unique_ptr<std::shared_ptr<PollWakeBurst>> pHolder(static_cast<std::shared_ptr<PollWakeBurst>*>(pArgument));
+				(*pHolder)->iDone.fetch_add(1);
+			}, pOwned);
+		}
+		catch (...)
+		{
+			delete pOwned;
+			throw;
+		}
+	}
+	return OI_OK;
+}
+
 static int32_t PostPollWake(std::shared_ptr<PollWakeProbe> pProbe)
 {
 	pProbe->bWorker.store(!OI::Net::Poll::GetInstance().InLoopThread());
@@ -564,6 +591,18 @@ OI::Coro::TaskResult<int> BlockingMgr::CheckBlockingWork()
 	}
 	LOG_TRACE("hold poll worker wake worker=%d poll=%d done=%d bad=%d", pWakeProbe->bWorker.load(),
 	    pWakeProbe->bPoll.load(), pWakeProbe->bDone.load(), bWake ? 0 : 1);
+	auto pBurst = std::make_shared<PollWakeBurst>();
+	const int32_t iBurstPost = co_await OI::Coro::RunBlocking(PostPollWakeBurst, std::shared_ptr<PollWakeBurst>(pBurst));
+	for (int32_t iWait = 0; iWait < 300 && pBurst->iDone.load() < 10000; ++iWait)
+	{
+		co_await OI::Coro::yield(10);
+	}
+	const bool bBurst = iBurstPost == OI_OK && pBurst->iDone.load() == 10000;
+	if (!bBurst)
+	{
+		++iBad;
+	}
+	LOG_TRACE("hold poll wake burst posts=10000 done=%d bad=%d", pBurst->iDone.load(), bBurst ? 0 : 1);
 	iBad += co_await CheckPollUnregister();
 	BlockingAccessSession stAccessSession;
 	BlockingAccessChannel stAccessChannel;

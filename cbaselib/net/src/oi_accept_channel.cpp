@@ -116,7 +116,24 @@ int32_t AcceptChannel::StartTcpAccept(SessionManager* pMgr, bool bAsync)
 		delete pChannelLocal;
 		return iRegisterStatus;
 	}
+	pMgr->pAcceptChannel = pChannelLocal;
 	return OI_OK;
+}
+
+void AcceptChannel::StopAccept(SessionManager* pMgr)
+{
+	if (!pMgr)
+	{
+		return;
+	}
+	AcceptChannel* pChannelLocal = pMgr->pAcceptChannel;
+	pMgr->pAcceptChannel = nullptr;
+	if (!pChannelLocal)
+	{
+		return;
+	}
+	Poll::GetInstance().IOEventUnRegister(pChannelLocal);
+	delete pChannelLocal;
 }
 }
 }

@@ -27,6 +27,8 @@ class AcceptChannel : public Channel
   public:
 	// 创建监听套接字并挂上 poll。失败返回 false。
 	static int32_t StartAccept(SessionManager* pMgr, bool bAsync);
+	// 关闭并释放本管理器已登记的监听口。用于 StartServer 登记失败时回滚。
+	static void StopAccept(SessionManager* pMgr);
 
   private:
 	static int32_t StartTcpAccept(SessionManager* pMgr, bool bAsync);

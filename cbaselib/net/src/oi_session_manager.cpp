@@ -421,7 +421,13 @@ int32_t SessionManager::StartServer(bool bAsync)
 	{
 		return OI_OK;
 	}
-	return ::OI::Base::RegistryClient::GetInstance().Publish(GetIDString(), GetStrIP(), GetStrPort());
+	const int32_t iPublishStatus = ::OI::Base::RegistryClient::GetInstance().Publish(GetIDString(), GetStrIP(), GetStrPort());
+	if (iPublishStatus != OI_OK)
+	{
+		// 登记失败不能留下仍在收连接的监听口，否则调用方重试会撞端口。
+		AcceptChannel::StopAccept(this);
+	}
+	return iPublishStatus;
 }
 
 SESSION_TYPE SessionManager::GetSessionTypeByString(const std::string& sType)
@@ -572,6 +578,7 @@ int32_t SessionManager::GetPeerAddr(sid_t iSessionId, NetAddr& stAddr)
 
 SessionManager::~SessionManager()
 {
+	AcceptChannel::StopAccept(this);
 	::OI::Thread::MutexGuard stLock(stLocker);
 	for (const auto& [iSessionId, pSession] : mSessionMap)
 	{

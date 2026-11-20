@@ -590,7 +590,31 @@ static OI::Coro::TaskResult<int> CheckUdpQueue()
 	                     iBudgetAfter == OI_OK && vBudgetPackets == std::vector<std::string>{"FULL", "OK"};
 	std::printf("udp queue budget first=%d busy=%d after=%d packets=%zu bad=%d\n", stProbe.iBudgetFirst,
 	    stProbe.iBudgetBusy, iBudgetAfter, vBudgetPackets.size(), bBudget ? 0 : 1);
-	const int32_t iBad = bPackets && bReopen && bConcurrent && bBudget && iMergeBad == 0 ? 0 : 1;
+	// IPv4 数据报上限：65507 收下整包，65508 在入队前拒绝。
+	const std::string sMaxDatagram(65507, 'M');
+	const std::string sOverDatagram(65508, 'O');
+	const int32_t iMaxSend = UdpQueueSend(stManager, stProbe.iReopened, sMaxDatagram);
+	const int32_t iOverSend = UdpQueueSend(stManager, stProbe.iReopened, sOverDatagram);
+	int32_t iMaxReceived = 0;
+	std::vector<char> vMaxBuffer(65536);
+	for (int32_t iWait = 0; iWait < 300 && iMaxReceived == 0; ++iWait)
+	{
+		sockaddr_storage stFrom{};
+		socklen_t iLength = sizeof(stFrom);
+		const int32_t iRead = NetOs_RecvFrom(stProbe.vSockets[0], vMaxBuffer.data(), vMaxBuffer.size(), (sockaddr*)&stFrom, &iLength);
+		if (iRead > 0)
+		{
+			iMaxReceived = iRead;
+		}
+		co_await OI::Coro::yield(10);
+	}
+	const bool bMaxDatagram = iMaxSend == OI_OK && iOverSend == OI_ERR_INVALID_ARGUMENT && iMaxReceived == 65507;
+	if (!bMaxDatagram)
+	{
+		std::fprintf(stderr, "udp datagram max=%d over=%d received=%d\n", iMaxSend, iOverSend, iMaxReceived);
+	}
+	std::printf("udp datagram max=%d over=%d received=%d bad=%d\n", iMaxSend, iOverSend, iMaxReceived, bMaxDatagram ? 0 : 1);
+	const int32_t iBad = bPackets && bReopen && bConcurrent && bBudget && bMaxDatagram && iMergeBad == 0 ? 0 : 1;
 	std::printf("udp queue packets=%d reopen=%d concurrent=%d workers=%d queued=%d requeue=%d old=%d count=%zu/%zu after=%zu observe_ms=%lld bad=%d\n",
 	    bPackets ? 1 : 0, bReopen ? 1 : 0, bConcurrent ? 1 : 0, iWorkers, iQueued, iRequeue, stProbe.iOldSend,
 	    vReceived[0].size(), vReceived[1].size(), vAfter.size(), (long long)iObserveMilliseconds, iBad);

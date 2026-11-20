@@ -1,12 +1,29 @@
 # 回归与故障测试
 
-**统一操作规程：[docs/testing.md](../docs/testing.md)。跨平台矩阵入口：`python tools/test_matrix.py --platform both --redis-wsl`（Windows 宿主）。**
+**统一操作规程：[docs/testing.md](../docs/testing.md)。跨平台矩阵入口：`python tools/test_matrix.py --platform both --windows-redis-binary <Windows 原生 redis-server.exe>`（Windows 宿主）。**
 
 远程 Linux 源码同步只用 `python tools/sync_linux_remote.py --role mt|st|all`（读 `.local/linux-hosts.json`），不要手写 tar/scp。单测：`python tools/test_sync_linux_remote.py`。
 
 只编译用 `python tools/build.py`（`--mode mt|st`，默认吃满逻辑核），不要手写 cmake。单测：`python tools/test_build.py`。
 
 下文为单项测试的补充说明，平台环境、完整用例清单和结果判定以统一规程为准。
+
+## 回归脚本结构
+
+入口仍是 `python tools/run_regressions.py --case all`，它只做 `-O` 拒绝（stderr 含 “requires assertions”）、保留 docstring、re-export 测试用到的名字并转调；驱动和用例拆在 `tools/regression/`：
+
+- `ports.py`：端口常量、`--port-offset` 平移和 `preflight_ports`。常量会被 `apply_port_offset` 重新绑定，其他模块一律通过 `ports.<名字>` 读取，不要 `from ... import REDIS_PORT` 取快照。
+- `probes.py`：断言和磁盘/日志探针（`check_echo`、`check_admission_rounds`、`check_hold_timer`、`check_hold_blocking`、`disk_failure`、`bytes_on_disk` 等）。
+- `config.py`：toml 文本助手（`shift_ports`、`replace`、`set_test_flags`）。
+- `rpc_faults.py`：RST 断连和 rpc-ingress 畸形/分片帧注入。
+- `procs.py`：临时目录、进程台账、`Context`（start/ready/stop/pause/start_logd/stop_backends）和 `cleanup_owned`。
+- `web.py`：HTTP 夹具，以及 `web` / `web-coro` 两个独立入口。
+- `runner.py`：通用 driver（建环境 → 配置 → 起服务 → 跑 client → 断言 → 清理）和 `main()`。
+- `cases/`：`Case` 数据类、`ALL_CASES`/`REGISTRY`/`get_case`；`echo`、`log`、`redis`、`hold`、`multi`、`udp`、`admission`、`db`、`coro` 每组实现自己的 `configure`/`prepare`/`scenario`/`client_env`/`on_poll`/`check`/`diagnostics`。
+
+新增用例：在对应组模块里加或改 `Case`，补 `configure`（toml 改写）、`prepare`（配置追加/环境）、`scenario`（额外进程）、`on_poll`（轮询中注入）、`check`（断言），再加进该组的 `CASES`；进 `--case all` 的写入 `cases/__init__.py` 的 `ALL_CASES`（顺序即执行顺序），只在定向运行（如 hold-blocking、mysql、clock-*）的写入 `TARGETED_CASES`，并同步 `runner.py` 的 `--case` choices。保持原有语句顺序、打印和断言文本。
+
+脚本级自检：`python tools/test_regression_checks.py`、`python tools/test_preflight_ports.py`、`python tools/test_test_safety.py`，矩阵会自动执行。测试要 patch 名字实际查找的模块（`regression.ports`、`regression.procs`、`regression.web` 等），不要 patch 薄入口 `run_regressions.py`，否则补丁不会生效。
 
 在 WSL 中执行，复用 `ipcclient` 的四个 Mgr。每个用例创建自己的临时配置和日志目录，退出时清理本次进程和目录。已有端口被占用时直接报错，不终止其他进程。日志超过 2GiB 立即失败，Redis 内存上限为 1536MiB。
 

@@ -93,7 +93,7 @@ static OI::Rpc::RpcTask HandleEncodingRegression(const OI::Rpc::RpcContext& stCo
 			stReverse.iDelayMilliseconds = 1000;
 			OI::RpcData::HoldRes stReply;
 			const int32_t iRet = co_await OI::Rpc::RpcCall(*pManager, iSessionId, stReverse, stReply, OI::Timer::Seconds(5));
-			LOG_TRACE("hold reverse reply bad=%d", iRet != 0 || stReply.iMark != stReverse.iMark ? 1 : 0);
+			std::printf("hold reverse reply bad=%d\n", iRet != 0 || stReply.iMark != stReverse.iMark ? 1 : 0);
 			fflush(stdout);
 		});
 	}

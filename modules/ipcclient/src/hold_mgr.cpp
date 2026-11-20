@@ -63,6 +63,21 @@ HoldMgr::HoldMgr()
 {
 }
 
+// 服务端反向 Hold 分支的接收端：回同一 mark，证明两个方向都能完成。
+static std::atomic<int32_t> g_iReverseServed{0};
+
+static ::OI::Rpc::RpcTask HandleReverseHold(const ::OI::RpcData::HoldReq& stRequest, ::OI::RpcData::HoldRes& stResponse)
+{
+	stResponse.iMark = stRequest.iMark;
+	if (stRequest.iMark == -2147483598)
+	{
+		g_iReverseServed.fetch_add(1);
+		LOG_TRACE("hold reverse request served delay=%d", stRequest.iDelayMilliseconds);
+		fflush(stdout);
+	}
+	co_return OI_OK;
+}
+
 int32_t HoldMgr::Load()
 {
 	TryGetConfig("Test.hold", m_bEnabled);
@@ -73,6 +88,7 @@ int32_t HoldMgr::Load()
 		return OI_ERR_INVALID_ARGUMENT;
 	}
 	TryGetConfig("RedisClient.timeout_ms", m_iRedisTimeoutMilliseconds);
+	IpcClient::GetInstance().RegisterRpcHandler(HandleReverseHold);
 	// 跳更新跟着 TimerMgr 的首次构造注册，必须赶在 RunFramework 之前。
 	TimerMgr::GetInstance();
 	return OI_OK;
@@ -456,6 +472,24 @@ OI::Coro::Task HoldMgr::Pump()
 		iBad += co_await HttpMgr::GetInstance().Run(iHttpPort);
 	}
 	iBad += BudgetMgr::GetInstance().Run();
+	// 触发服务端反向 Hold：服务端收到这个 mark 会另起一条反向调用，客户端必须能应答。
+	::OI::RpcData::HoldReq stReverse;
+	stReverse.iMark = -2147483598;
+	stReverse.iDelayMilliseconds = 0;
+	::OI::RpcData::HoldRes stReverseReply;
+	const int32_t iReverseRet = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), m_iSessionId, stReverse, stReverseReply, ::OI::Timer::Seconds(5));
+	for (int32_t iWait = 0; iWait < 300 && g_iReverseServed.load() == 0; ++iWait)
+	{
+		co_await OI::Coro::yield(10);
+	}
+	const bool bReverse = iReverseRet == OI_OK && stReverseReply.iMark == stReverse.iMark && g_iReverseServed.load() > 0;
+	LOG_TRACE("hold reverse trigger ret=%d mark=%d served=%d bad=%d", iReverseRet, stReverseReply.iMark,
+	    g_iReverseServed.load(), bReverse ? 0 : 1);
+	fflush(stdout);
+	if (!bReverse)
+	{
+		++iBad;
+	}
 	iBad += co_await ScheduleMgr::GetInstance().RunFairness();
 	iBad += co_await ScheduleMgr::GetInstance().RunScope();
 	iBad += co_await ScheduleMgr::GetInstance().RunCaptured();

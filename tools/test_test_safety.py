@@ -397,8 +397,10 @@ class RealProbeSafetyTests(unittest.TestCase):
 
 class RegressionCleanupTests(unittest.TestCase):
     def setUp(self):
-        import run_regressions
-        self.runner = run_regressions
+        from regression import procs, runner, web
+        self.procs = procs
+        self.runner = runner
+        self.web = web
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -407,9 +409,10 @@ class RegressionCleanupTests(unittest.TestCase):
         self.first = Mock(args=["first-owned"])
         for proc in (self.old, self.first):
             proc.poll.return_value = None
+            proc.returncode = 0
         self.handles = [Mock(), Mock()]
         (self.root / "process.out").write_text("test evidence")
-        self.stop = patch.object(self.runner, "stop", side_effect=[subprocess.CalledProcessError(1, "helper"), None])
+        self.stop = patch.object(self.procs, "stop", side_effect=[subprocess.CalledProcessError(1, "helper"), None])
         self.stopped = self.stop.start()
         self.addCleanup(self.stop.stop)
         self.stderr = contextlib.redirect_stderr(io.StringIO())
@@ -417,7 +420,7 @@ class RegressionCleanupTests(unittest.TestCase):
         self.addCleanup(self.stderr.__exit__, None, None, None)
 
     def cleanup(self, **kwargs):
-        self.runner.cleanup_owned([self.old, self.first], self.handles, self.root, self.args, "echo", **kwargs)
+        self.procs.cleanup_owned([self.old, self.first], self.handles, self.root, self.args, "echo", **kwargs)
 
     def assert_all_attempted(self):
         self.assertEqual([self.first, self.old], [c.args[0] for c in self.stopped.call_args_list])
@@ -432,6 +435,13 @@ class RegressionCleanupTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "graceful shutdown"):
             self.cleanup()
         self.assert_all_attempted()
+
+    def test_service_nonzero_exit_is_reported(self):
+        self.stopped.side_effect = None
+        self.old.returncode = 7
+        with self.assertRaisesRegex(RuntimeError, "exited code=7"):
+            self.cleanup()
+        self.first.kill.assert_not_called()
 
     def test_kill_failure_still_reaps_and_cleans_resources(self):
         self.first.kill.side_effect = OSError("kill denied")
@@ -474,13 +484,13 @@ class RegressionCleanupTests(unittest.TestCase):
     def test_artifact_copy_failure_does_not_skip_other_outputs(self):
         (self.root / "second.out").write_text("second")
         self.stopped.side_effect = None
-        with patch.object(self.runner.shutil, "copy2", side_effect=[OSError("copy denied"), None]) as copy:
+        with patch.object(self.procs.shutil, "copy2", side_effect=[OSError("copy denied"), None]) as copy:
             with self.assertRaisesRegex(RuntimeError, "copy denied"):
                 self.cleanup()
         self.assertEqual(2, copy.call_count)
 
     def test_resume_failure_does_not_skip_processes(self):
-        with patch.object(self.runner, "pause", side_effect=OSError("resume failed")):
+        with patch.object(self.procs, "pause", side_effect=OSError("resume failed")):
             with self.assertRaisesRegex(RuntimeError, "resume failed"):
                 self.cleanup(db=Mock(poll=Mock(return_value=None)), db_paused=True)
         # Exercise the ordinary stop branch for the fixture on either host.
@@ -490,7 +500,7 @@ class RegressionCleanupTests(unittest.TestCase):
     def test_registry_resume_failure_cleans_other_processes_and_reports_error(self):
         # The paused registry is an owned child, not an unrelated process.
         output = io.StringIO()
-        with patch.object(self.runner, "pause", side_effect=OSError("registry resume denied")) as resume, \
+        with patch.object(self.procs, "pause", side_effect=OSError("registry resume denied")) as resume, \
              contextlib.redirect_stderr(output):
             with self.assertRaisesRegex(RuntimeError, "resume registry.*registry resume denied") as caught:
                 self.cleanup(registry=self.first, registry_paused=True)
@@ -510,10 +520,13 @@ class RegressionCleanupTests(unittest.TestCase):
         final = next(node.finalbody for node in ast.walk(tree) if isinstance(node, ast.Try) and
                      any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "cleanup_owned"
                          for statement in node.finalbody for n in ast.walk(statement)))
-        scope = dict(self.runner.__dict__, procs=[self.old, self.first], handles=self.handles,
-                     root=self.root, args=self.args, case="echo", db=None, db_paused=False,
-                     monitor=None, http_fixture=None, http_thread=None, timeline_thread=None,
-                     registry=None, registry_paused=False)
+        ctx = SimpleNamespace(procs=[self.old, self.first], handles=self.handles,
+                              root=self.root, args=self.args, name="echo", db=None, db_paused=False,
+                              monitor=None, http_fixture=None, http_thread=None,
+                              timeline_thread=None, timeline_stop=None,
+                              timeline_lines=[], timeline_errors=[],
+                              registry=None, registry_paused=False)
+        scope = dict(self.runner.__dict__, ctx=ctx)
         with self.assertRaisesRegex(RuntimeError, "graceful shutdown"):
             exec(compile(ast.Module(body=final, type_ignores=[]), "normal-finally", "exec"), scope)
         self.assert_all_attempted()
@@ -522,20 +535,20 @@ class RegressionCleanupTests(unittest.TestCase):
         self.args.bin_dir = self.root
         self.stopped.side_effect = subprocess.CalledProcessError(1, "helper")
         server = self.first
-        original_copy = self.runner.shutil.copy2
+        original_copy = self.procs.shutil.copy2
         def copy(source, destination):
             if Path(source).suffix == ".out":
                 return original_copy(source, destination)
         client = subprocess.CompletedProcess([], 1, "bad=1", "original client failure")
-        with patch.object(self.runner, "check_web_bind_restart"), \
-             patch.object(self.runner.shutil, "copy2", side_effect=copy), \
-             patch.object(self.runner, "launch", return_value=server), \
-             patch.object(self.runner, "record_process"), \
-             patch.object(self.runner.socket, "create_connection"), \
-             patch.object(self.runner.subprocess, "run", return_value=client), \
+        with patch.object(self.web, "check_web_bind_restart"), \
+             patch.object(self.procs.shutil, "copy2", side_effect=copy), \
+             patch.object(self.web, "launch", return_value=server), \
+             patch.object(self.web, "record_process"), \
+             patch.object(self.web.socket, "create_connection"), \
+             patch.object(self.web.subprocess, "run", return_value=client), \
              contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaisesRegex(AssertionError, "original client failure"):
-                self.runner.run_web(self.args)
+                self.web.run_web(self.args)
         server.kill.assert_called_once_with()
         self.assertTrue((self.args.artifacts / "web/server.out").exists())
 
@@ -556,26 +569,26 @@ class RegressionCleanupTests(unittest.TestCase):
                 fixture.connections.extend(([object()] * 9) if reuse else [object() for _ in range(9)])
                 fixture.completed_reuse = True
             return client
-        with patch.object(self.runner, "check_web_bind_restart"), \
-             patch.object(self.runner.shutil, "copy2"), \
-             patch.object(self.runner, "launch", return_value=self.first), \
-             patch.object(self.runner, "record_process"), \
-             patch.object(self.runner.socket, "create_connection"), \
-             patch.object(self.runner, "IPv6HttpServer", return_value=fixture), \
-             patch.object(self.runner, "stream_response_fixture", return_value=contextlib.nullcontext(12345)), \
-             patch.object(self.runner, "check_http_pool"), \
-             patch.object(self.runner, "check_http_disconnect"), \
-             patch.object(self.runner, "check_url_client"), \
-             patch.object(self.runner, "check_https"), \
-             patch.object(self.runner, "check_web_transport"), \
-             patch.object(self.runner, "check_web_json"), \
-             patch.object(self.runner, "check_web_stream_length"), \
-             patch.object(self.runner.threading, "Thread") as thread, \
-             patch.object(self.runner.subprocess, "run", side_effect=run_client), \
+        with patch.object(self.web, "check_web_bind_restart"), \
+             patch.object(self.procs.shutil, "copy2"), \
+             patch.object(self.web, "launch", return_value=self.first), \
+             patch.object(self.web, "record_process"), \
+             patch.object(self.web.socket, "create_connection"), \
+             patch.object(self.web, "IPv6HttpServer", return_value=fixture), \
+             patch.object(self.web, "stream_response_fixture", return_value=contextlib.nullcontext(12345)), \
+             patch.object(self.web, "check_http_pool"), \
+             patch.object(self.web, "check_http_disconnect"), \
+             patch.object(self.web, "check_url_client"), \
+             patch.object(self.web, "check_https"), \
+             patch.object(self.web, "check_web_transport"), \
+             patch.object(self.web, "check_web_json"), \
+             patch.object(self.web, "check_web_stream_length"), \
+             patch.object(self.web.threading, "Thread") as thread, \
+             patch.object(self.web.subprocess, "run", side_effect=run_client), \
              contextlib.redirect_stdout(io.StringIO()):
             thread.return_value.is_alive.return_value = False
             with self.assertRaisesRegex(RuntimeError, "TimeoutExpired"):
-                self.runner.run_web(self.args)
+                self.web.run_web(self.args)
         self.first.kill.assert_called_once_with()
         self.first.wait.assert_called_once_with(timeout=3)
 
@@ -585,7 +598,8 @@ class RegressionCleanupTests(unittest.TestCase):
         tree = ast.parse(inspect.getsource(self.runner.run))
         handler = next(node for node in ast.walk(tree) if isinstance(node, ast.ExceptHandler) and
                        isinstance(node.type, ast.Name) and node.type.id == "BaseException")
-        scope = dict(self.runner.__dict__, root=self.root)
+        ctx = SimpleNamespace(root=self.root)
+        scope = dict(self.runner.__dict__, ctx=ctx)
         original = ValueError("original failure")
         with patch.object(Path, "read_text", side_effect=OSError("cannot read output")):
             with self.assertRaises(ValueError) as caught:
@@ -598,9 +612,9 @@ class RegressionCleanupTests(unittest.TestCase):
     def test_temporary_directory_failure_preserves_original(self):
         directory = Mock(name="directory")
         directory.cleanup.side_effect = OSError("directory busy")
-        with patch.object(self.runner.tempfile, "TemporaryDirectory", return_value=directory):
+        with patch.object(self.procs.tempfile, "TemporaryDirectory", return_value=directory):
             with self.assertRaisesRegex(ValueError, "test failure"):
-                with self.runner.regression_directory():
+                with self.procs.regression_directory():
                     raise ValueError("test failure")
         directory.cleanup.assert_called_once_with()
 

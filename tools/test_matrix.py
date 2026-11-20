@@ -182,6 +182,8 @@ def main():
             native += ["--build-dir", str(args.build_dir)]
         if args.vs_instance:
             native += ["--vs-instance", args.vs_instance]
+        for item in args.define:
+            native += ["--define", item]
         prefix = ["wsl", "-u", args.wsl_user, "--exec"]
         translate = lambda path: subprocess.check_output(prefix + ["wslpath", "-a", Path(path).as_posix()], text=True).strip()
         linux = prefix + ["python3", translate(Path(__file__).resolve()), "--build-dir", args.linux_build_dir,
