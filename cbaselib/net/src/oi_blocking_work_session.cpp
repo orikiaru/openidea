@@ -109,6 +109,7 @@ struct BlockingWorkSessionManager::Submission
 
 BlockingWorkSessionManager::BlockingWorkSessionManager()
 {
+	iSessionType = SESSION_TYPE_FIFO;
 	OI::Thread::InitializeBlockingPools();
 }
 

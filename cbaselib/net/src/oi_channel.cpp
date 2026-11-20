@@ -10,10 +10,7 @@ namespace Net
 
 Channel::~Channel()
 {
-	if (pPollToken)
-	{
-		Poll::GetInstance().IOEventUnRegister(this);
-	}
+	Poll::GetInstance().IOEventUnRegister(this);
 	NetOs_Close(stSocket.GetSocket());
 	stSocket.Detach();
 }
@@ -26,12 +23,10 @@ int32_t Channel::AllowSend()
 		return iThreadStatus;
 	}
 
-	::OI::Thread::MutexGuard stLock(stLocker);
 	// 关闭中的会话也要触发一次 IO，让 TryClose 回收空闲连接，不能等对端发数据。
-	if (pSession && (0 == (iEventMask & IO_EV_WRITE)))
+	if (pSession)
 	{
-		iEventMask |= IO_EV_WRITE;
-		Poll::GetInstance().IOEventMod(this, iEventMask);
+		Poll::GetInstance().ChangeEvents(this, IO_EV_WRITE, 0);
 	}
 	return OI_OK;
 }
@@ -44,11 +39,9 @@ int32_t Channel::ForbidSend()
 		return iThreadStatus;
 	}
 
-	::OI::Thread::MutexGuard stLock(stLocker);
-	if (pSession && !pSession->IsClosed() && (iEventMask & IO_EV_WRITE))
+	if (pSession && !pSession->IsClosed())
 	{
-		iEventMask &= ~IO_EV_WRITE;
-		Poll::GetInstance().IOEventMod(this, iEventMask);
+		Poll::GetInstance().ChangeEvents(this, 0, IO_EV_WRITE);
 	}
 	return OI_OK;
 }
@@ -61,11 +54,9 @@ int32_t Channel::AllowRead()
 		return iThreadStatus;
 	}
 
-	::OI::Thread::MutexGuard stLock(stLocker);
-	if (pSession && !pSession->IsClosed() && (0 == (iEventMask & IO_EV_READ)))
+	if (pSession && !pSession->IsClosed())
 	{
-		iEventMask |= IO_EV_READ;
-		Poll::GetInstance().IOEventMod(this, iEventMask);
+		Poll::GetInstance().ChangeEvents(this, IO_EV_READ, 0);
 	}
 	return OI_OK;
 }
@@ -78,11 +69,9 @@ int32_t Channel::ForbidRead()
 		return iThreadStatus;
 	}
 
-	::OI::Thread::MutexGuard stLock(stLocker);
-	if (pSession && !pSession->IsClosed() && (iEventMask & IO_EV_READ))
+	if (pSession && !pSession->IsClosed())
 	{
-		iEventMask &= ~IO_EV_READ;
-		Poll::GetInstance().IOEventMod(this, iEventMask);
+		Poll::GetInstance().ChangeEvents(this, 0, IO_EV_READ);
 	}
 	return OI_OK;
 }

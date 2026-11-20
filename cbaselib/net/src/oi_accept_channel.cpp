@@ -110,11 +110,11 @@ int32_t AcceptChannel::StartTcpAccept(SessionManager* pMgr, bool bAsync)
 	}
 
 	AcceptChannel* pChannelLocal = new AcceptChannel(stText, pMgr);
-	Poll::GetInstance().IOEventRegister(pChannelLocal, true, true);
-	if (!pChannelLocal->pPollToken)
+	const int32_t iRegisterStatus = Poll::GetInstance().IOEventRegister(pChannelLocal, true, true);
+	if (iRegisterStatus != OI_OK)
 	{
 		delete pChannelLocal;
-		return OI_ERR_SOCKET;
+		return iRegisterStatus;
 	}
 	return OI_OK;
 }

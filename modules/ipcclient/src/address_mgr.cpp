@@ -220,6 +220,7 @@ OI::Coro::TaskResult<int> AddressMgr::CheckAddressConnect()
 	{
 		++iStressBad;
 	}
+	bool bNamePreserved = stStress.GetStrIP() == "localhost" && stStress.GetStrPort() == sPort;
 	for (int iRound = 0; iRound < 20; ++iRound)
 	{
 		stStress.CloseAllSessions();
@@ -227,8 +228,14 @@ OI::Coro::TaskResult<int> AddressMgr::CheckAddressConnect()
 		{
 			++iStressBad;
 		}
+		bNamePreserved = bNamePreserved && stStress.GetStrIP() == "localhost" && stStress.GetStrPort() == sPort;
 	}
 	stStress.CloseAllSessions();
+	if (!bNamePreserved)
+	{
+		++iStressBad;
+	}
+	LOG_TRACE("hold address configured name preserved=%d bad=%d", bNamePreserved ? 1 : 0, bNamePreserved ? 0 : 1);
 	LOG_TRACE("hold address stress waiters=64 rounds=20 bad=%d", iStressBad);
 	co_return iBad + iStressBad;
 }

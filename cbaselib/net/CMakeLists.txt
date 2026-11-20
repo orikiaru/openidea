@@ -9,6 +9,7 @@ set(LIBSRC
 	src/oi_net_helper.cpp
 
 	src/oi_poll.cpp
+	src/oi_fifo_channel.cpp
 
 	src/oi_session_manager.cpp
 	src/oi_session.cpp 

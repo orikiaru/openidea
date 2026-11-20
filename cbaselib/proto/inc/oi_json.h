@@ -3,6 +3,7 @@
 #include "oi_json_wire.h"
 #include <stdexcept>
 #include <charconv>
+#include <cmath>
 #include <limits>
 #include <type_traits>
 #include <cstdint>

@@ -54,8 +54,11 @@ class ConnectMgr::ClientConnectProbe : public OI::Net::SessionManager
 		}
 	};
 	std::atomic<int> m_iConnections{0};
+	std::atomic<int> m_iFailures{0};
+	std::atomic<bool> m_bFailureEmpty{false};
+	std::optional<OI::Coro::TaskResult<int32_t>> m_stFailure;
 	bool m_bReconnectInCallback;
-	std::optional<ConnectAwaiter> m_stRetry;
+	std::optional<OI::Coro::TaskResult<int32_t>> m_stRetry;
 	OI::Net::Session* CloneSession() override
 	{
 		return new ProbeSession(this);
@@ -69,6 +72,10 @@ class ConnectMgr::ClientConnectProbe : public OI::Net::SessionManager
 			m_stRetry.emplace(StartClient());
 		}
 	}
+	void OnConnectFailed() override
+	{
+		++m_iFailures;
+	}
 	void OnDelSession(const OI::Net::Session*) override
 	{
 	}
@@ -79,7 +86,32 @@ class ConnectMgr::ClientConnectProbe : public OI::Net::SessionManager
 	{
 		DefaultInit("127.0.0.1", sPortLocal);
 	}
-	ConnectAwaiter& Retry()
+	int32_t InjectRegisterFailure()
+	{
+		return OI::Net::Poll::GetInstance().StartListener([](void* pArgument)
+		{
+			auto* pProbe = static_cast<ClientConnectProbe*>(pArgument);
+			pProbe->bConnectPending = true;
+			const uint64_t iGeneration = ++pProbe->iConnectGeneration;
+			pProbe->m_stFailure.emplace(pProbe->StartClient());
+			pProbe->CompleteConnect(INVALID_SOCKET_ID, iGeneration);
+			pProbe->m_bFailureEmpty.store(pProbe->mSessionMap.empty());
+			return int32_t{OI_OK};
+		}, this);
+	}
+	OI::Coro::TaskResult<int32_t>& Failure()
+	{
+		return m_stFailure.value();
+	}
+	int Failures() const
+	{
+		return m_iFailures.load();
+	}
+	bool FailureEmpty() const
+	{
+		return m_bFailureEmpty.load();
+	}
+	OI::Coro::TaskResult<int32_t>& Retry()
 	{
 		return m_stRetry.value();
 	}
@@ -96,8 +128,22 @@ OI::Coro::TaskResult<int32_t> ConnectMgr::AwaitClientConnect(ClientConnectProbe*
 
 OI::Coro::TaskResult<int> ConnectMgr::CheckClientConnect()
 {
-	static ClientConnectProbe stGood(HoldTest::IpcServerPort()), stRefused("0");
+	static ClientConnectProbe stGood(HoldTest::IpcServerPort()), stRefused("0"), stRegisterFailure("0");
 	int iBad = 0;
+	const int32_t iInject = stRegisterFailure.InjectRegisterFailure();
+	int32_t iFailure = OI_ERR_FAIL;
+	if (iInject == OI_OK)
+	{
+		iFailure = co_await stRegisterFailure.Failure();
+	}
+	const bool bRegisterFailure = iInject == OI_OK && iFailure == OI_ERR_SOCKET && stRegisterFailure.FailureEmpty() &&
+	                              stRegisterFailure.Connections() == 0 && stRegisterFailure.Failures() == 1;
+	LOG_TRACE("hold connect register failure code=%d empty=%d added=%d failed=%d bad=%d", iFailure,
+	    stRegisterFailure.FailureEmpty(), stRegisterFailure.Connections(), stRegisterFailure.Failures(), bRegisterFailure ? 0 : 1);
+	if (!bRegisterFailure)
+	{
+		++iBad;
+	}
 	static ClientConnectProbe stEager(HoldTest::IpcServerPort()), stDelayedAwait(HoldTest::IpcServerPort());
 	stEager.StartClient();
 	auto stConnecting = stDelayedAwait.StartClient();

@@ -290,6 +290,8 @@ void ThreadPool::SingleThreadStartWork()
 	{
 		PumpOnce();
 	}
+	// 排空通道回调后再退出主循环，避免静态析构期间回调已销毁的业务管理器。
+	::OI::Net::Poll::GetInstance().StopAndJoin();
 }
 
 void ThreadPool::MultiThreadStartWork()

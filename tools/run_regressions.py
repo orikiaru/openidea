@@ -216,7 +216,9 @@ def check_hold_blocking(text):
     for marker in ("hold blocking delay seed=20261110 min_ms=1 max_ms=20",
                    "hold blocking tasks=128 waiters=64 runs=1 bad=0",
                    "hold blocking read started=1 timer=1 rpc=1 early=0 content=1 bad=0",
-                   "hold blocking categories bad=0", "hold blocking access bad=0"):
+                   "hold blocking categories bad=0", "hold blocking access bad=0", "hold blocking fifo type bad=0", "hold blocking poll register bad=0",
+                   "hold poll unregister read=1 write_after=0 close_after=0 reused=1 bad=0",
+                   "hold poll worker wake worker=1 poll=1 done=1 bad=0"):
         assert marker in text, marker
 
 
@@ -914,7 +916,30 @@ def run(case, args):
                 assert "udp server idle client_open=1 sessions=2 bad=0" in text
                 assert "udp idle close reopen bad=0" in text
                 assert "udp notify rpc receipt=0 bad=0" in text
+                assert "udp peers parallel=1 source=1 remaining=1 reopen=1 bad=0" in text
+                assert "udp client bind before=-3 output=12345 start=0 sessions=0 bad=0" in text
+                assert "udp ipv6 oversized start=0 open=0 send=-6 bad=0" in text
+                assert re.search(r"udp reverse peers first=9 second=6 dup=0/0 old=-\d+ bad=0", text)
+                assert re.search(r"udp queue packets=1 reopen=1 concurrent=1 workers=(?:0|2) queued=0 requeue=0 old=-\d+ count=2/2 after=1 observe_ms=\d+ bad=0", text)
+                assert "udp queue budget first=0 busy=-5 after=0 packets=2 bad=0" in text
+                assert "udp merge frames=1 raw=1 peers=1 limit=1 bad=0" in text
                 assert "udp done bad=0" in text
+                close_probe = subprocess.run([str(work / ("ipcclient" + SUFFIX)), "--poll-udp-close"],
+                                             cwd=work, capture_output=True, text=True, timeout=15)
+                close_output = close_probe.stdout + close_probe.stderr
+                assert close_probe.returncode == 0 and "poll udp close bound=1 paused=1 loop=0" in close_output, (close_probe.returncode, close_output)
+                wrong_probe = subprocess.run([str(work / ("ipcclient" + SUFFIX)), "--poll-wrong-thread"],
+                                             cwd=work, capture_output=True, text=True, timeout=15)
+                wrong_output = wrong_probe.stdout + wrong_probe.stderr
+                if "poll wrong thread probe mt skipped=1" in wrong_output:
+                    assert wrong_probe.returncode == 0, (wrong_probe.returncode, wrong_output)
+                else:
+                    assert wrong_probe.returncode != 0 and "poll wrong thread probe registered=1" in wrong_output and \
+                           "single-thread registered channel unregister outside poll thread channel=" in wrong_output and \
+                           "unexpectedly survived" not in wrong_output, (wrong_probe.returncode, wrong_output)
+                print("poll udp close probe:", close_output.strip(), flush=True)
+                print("poll wrong thread probe exit=%d output=%s" % (wrong_probe.returncode, wrong_output.strip()), flush=True)
+                print("poll udp close and wrong-thread probe PASS", flush=True)
             elif case == "redis-shutdown":
                 assert shutdown_sent and "redis shutdown result=2 late=2 bad=0" in text
             elif case == "redis-queue-timeout":
@@ -1027,9 +1052,11 @@ def run(case, args):
                 assert "hold binary bool bad=0" in text
                 assert "hold binary container bad=0" in text
                 assert "hold connection isolation bad=0" in text
+                assert "hold connect register failure code=-14 empty=1 added=0 failed=1 bad=0" in text
                 assert "hold coroutine connect bad=0" in text
                 assert "hold address connect bad=0" in text
                 assert "hold address failure init=-6 bind=-15 bad=0" in text
+                assert "hold address configured name preserved=1 bad=0" in text
                 assert "hold address stress waiters=64 rounds=20 bad=0" in text
                 assert "hold reentrant connect first=1 retry=0 connections=1 bad=0" in text
                 assert "hold registry pairing bad=0" in text
@@ -1440,8 +1467,8 @@ def check_url_client(work, cfg):
         assert requests["/first"] is requests["/second?x=1"] is requests["/third"] is requests["/after"], plain.requests
         assert requests["/fresh"] is not requests["/first"]
         assert requests["/slow"] is not requests["/fast"]
-        responses = dict(plain.responses)
-        assert responses["/fast"] < responses["/slow"], plain.responses
+        response_order = [path for path, _ in plain.responses if path in ("/fast", "/slow")]
+        assert response_order == ["/fast", "/slow"], (plain.responses, client.stdout, client.stderr)
         assert [path for path, _ in secure.requests] == ["/tls"], secure.requests
         print("URL client PASS: shared reuse, fresh, concurrent requests, TLS trust isolation", flush=True)
     finally:
@@ -1668,7 +1695,8 @@ def check_http_pool(work, cfg):
         assert requests["/after-queue"][0] in (first, second)
         assert requests["/busy"][0] in (first, second)
         assert requests["/fresh-full"][0] not in (first, second)
-        assert dict(server.responses)["/fresh-full"] < dict(server.responses)["/busy"]
+        response_order = [path for path, _ in server.responses if path in ("/fresh-full", "/busy")]
+        assert response_order == ["/fresh-full", "/busy"], (server.responses, client.stdout, client.stderr)
         after = requests["/after-idle"]
         assert after[0] not in (first, second)
         assert all(any(conn is old and at <= after[1] - 1.0 for conn, at in server.closed) for old in (first, second)), server.closed

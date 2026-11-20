@@ -275,7 +275,7 @@ int32_t RpcNotify(::OI::Net::SessionManager& stManager, sid_t iSessionId, const 
 	{
 		return OI_ERR_ENCODE;
 	}
-	return stManager.SendBytesResult(iSessionId, stFrame.GetMutableBuff());
+	return stManager.SendFrame(iSessionId, stFrame.GetMutableBuff());
 }
 
 // 发出请求后挂起。回包或超时回调里 Schedule 回来。回包可能比挂起先到。
@@ -421,7 +421,7 @@ struct [[nodiscard]] RpcCallAwaiter
 			}
 			else
 			{
-				const int32_t iRet = pManager->SendBytesResult(iSessionId, stFrame.GetMutableBuff());
+				const int32_t iRet = pManager->SendFrame(iSessionId, stFrame.GetMutableBuff());
 				if (iRet != OI_OK)
 				{
 					RpcCallManager::GetInstance().Wake(iCallIdLocal, iRet, NULL);

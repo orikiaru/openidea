@@ -13,12 +13,17 @@ class IpcUdp : public ::OI::Rpc::ProtoSessionManager
 {
 	DECLARE_SINGLETON(IpcUdp)
 	std::atomic<bool> m_bAddPeerAddressOk{false};
+	std::atomic<int32_t> m_iAddSessionCount{0};
 	IpcUdp()
 	{
 	}
 
   public:
 	const std::string GetIDString() override;
+	int32_t AddSessionCount() const
+	{
+		return m_iAddSessionCount.load();
+	}
 	bool AddPeerAddressOk() const
 	{
 		return m_bAddPeerAddressOk.load();
@@ -44,6 +49,8 @@ class UdpMgr
 	std::atomic<sid_t> m_iClosedSessionId;
 	std::atomic<int32_t> m_iNoteReceived;
 	std::atomic<int32_t> m_iNoteDuplicate;
+	std::atomic<int32_t> m_iPeerNoteMask{0};
+	std::atomic<int32_t> m_iPeerNoteDuplicate{0};
 	std::unique_ptr<std::atomic<uint8_t>[]> m_pNoteSeen;
 
 	::OI::Rpc::RpcTask HandleNote(const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::UdpNoteReq& stRequest);

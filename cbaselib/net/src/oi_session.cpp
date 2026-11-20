@@ -9,6 +9,7 @@
 #include <arpa/inet.h>
 #include "oi_session_manager.h"
 #include "oi_channel.h"
+#include "oi_udp_channel.h"
 namespace OI
 {
 namespace Net
@@ -21,6 +22,11 @@ int32_t Session::Send(const ::OI::Base::Bytes& stBytes)
 
 int32_t Session::SendResult(const ::OI::Base::Bytes& stBytes)
 {
+	return SendBuffered(stBytes, false);
+}
+
+int32_t Session::SendBuffered(const ::OI::Base::Bytes& stBytes, bool bFramed)
+{
 	const int32_t iThreadStatus = Poll::GetInstance().CheckThreadAccess("Session::SendResult");
 	if (iThreadStatus != OI_OK)
 	{
@@ -28,7 +34,7 @@ int32_t Session::SendResult(const ::OI::Base::Bytes& stBytes)
 	}
 
 	::OI::Thread::MutexGuard stLock(stLocker);
-	if (IsClosed())
+	if (IsClosed() || (bFramed && !pChannel))
 	{
 		return OI_ERR_CONNECT;
 	}
@@ -39,7 +45,7 @@ int32_t Session::SendResult(const ::OI::Base::Bytes& stBytes)
 	stOutputBuffer.Append(stBytes);
 	iQueuedBytes += stBytes.Size();
 	const size_t iQueuedBeforeSend = stOutputBuffer.Size();
-	const int32_t iRet = AllowSend();
+	const int32_t iRet = bFramed ? static_cast<UDP_Channel*>(pChannel)->QueuePacket(true) : AllowSend();
 	// UDP 失败时包已从缓冲取走且没有写出。缓冲变短的部分不再排队，额度退回。成功由 OnBytesSend 扣。
 	if (iRet != OI_OK)
 	{

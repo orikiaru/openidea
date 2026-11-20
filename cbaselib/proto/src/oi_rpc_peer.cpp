@@ -142,9 +142,10 @@ sid_t ProtoSessionManager::AdoptPeer(net_socket_t iSocketLocal, const std::share
 	AddSession(pSession.get(), ::OI::Net::NetAddr::Endpoint(pConnection->sIp, pConnection->sPort),
 	    pConnection->stPolicy.iSendBytes, pConnection->stPolicy.iReceiveBytes);
 	const sid_t iSessionId = pSession->GetSessionID();
+	int32_t iRegisterStatus;
 	try
 	{
-		::OI::Net::Poll::GetInstance().IOEventRegister(pChannel.get(), true, false);
+		iRegisterStatus = ::OI::Net::Poll::GetInstance().IOEventRegister(pChannel.get(), true, false);
 	}
 	catch (...)
 	{
@@ -153,7 +154,7 @@ sid_t ProtoSessionManager::AdoptPeer(net_socket_t iSocketLocal, const std::share
 	}
 	auto* pPublished = pChannel.release();
 	pSession.release();
-	if (!pPublished->pPollToken)
+	if (iRegisterStatus != OI_OK)
 	{
 		CloseSession(iSessionId);
 		pPublished->TryClose();
@@ -246,7 +247,7 @@ void PeerConnection::Finish(sid_t iSessionIdLocal)
 		}
 		else if (RpcCallManager::GetInstance().ClaimSend(stCall.iCallId, iSessionIdLocal))
 		{
-			const int32_t iResult = pOwner->SendBytesResult(iSessionIdLocal, stCall.stData);
+			const int32_t iResult = pOwner->SendFrame(iSessionIdLocal, stCall.stData);
 			if (iResult != OI_OK)
 			{
 				RpcCallManager::GetInstance().Wake(stCall.iCallId, iResult, nullptr);
@@ -359,7 +360,7 @@ void PeerConnection::Submit(uint64_t iCallId, const ::OI::Base::Bytes& stData)
 	}
 	else if (iTarget != INVALID_SID)
 	{
-		const int32_t iResult = pOwner->SendBytesResult(iTarget, stData);
+		const int32_t iResult = pOwner->SendFrame(iTarget, stData);
 		if (iResult != OI_OK)
 		{
 			RpcCallManager::GetInstance().Wake(iCallId, iResult, nullptr);
@@ -469,9 +470,10 @@ void PeerConnection::Connect(::OI::Net::NetAddr stAddr)
 			NetOs_Close(stSocket.GetSocket());
 			throw;
 		}
+		int32_t iRegisterStatus;
 		try
 		{
-			::OI::Net::Poll::GetInstance().IOEventRegister(pConnector, false, true);
+			iRegisterStatus = ::OI::Net::Poll::GetInstance().IOEventRegister(pConnector, false, true);
 		}
 		catch (...)
 		{
@@ -479,7 +481,7 @@ void PeerConnection::Connect(::OI::Net::NetAddr stAddr)
 			pCancel->Cancel();
 			throw;
 		}
-		if (pConnector && !pConnector->pPollToken)
+		if (iRegisterStatus != OI_OK)
 		{
 			auto* pCancel = std::exchange(pConnector, nullptr);
 			pCancel->Cancel();

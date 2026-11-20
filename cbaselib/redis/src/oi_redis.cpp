@@ -180,7 +180,8 @@ int32_t RedisClient::Init()
 		stClient.FailAll();
 		if (g_bSweepInitialized)
 		{
-			uv_timer_stop(&g_stSweepTimer);
+			uv_close(reinterpret_cast<uv_handle_t*>(&g_stSweepTimer), nullptr);
+			g_bSweepInitialized = false;
 		}
 		stClient.m_iReaderSessionId = INVALID_SID;
 		stClient.CloseAllSessions();

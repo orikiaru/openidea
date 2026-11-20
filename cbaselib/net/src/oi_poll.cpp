@@ -11,6 +11,8 @@
 #include <stdlib.h>
 #include <atomic>
 #include <deque>
+#include <unordered_map>
+#include <memory>
 #include "oi_lock.h"
 #ifndef _WIN32
 #include <chrono>
@@ -19,6 +21,7 @@
 #include <uv.h>
 #include "oi_poll.h"
 #include "oi_channel.h"
+#include "oi_fifo_channel.h"
 #include "oi_thread.h"
 #include "oi_header.h"
 #include "oi_net_os.h"
@@ -28,19 +31,34 @@ namespace OI
 namespace Net
 {
 
-static const void* POLL_PENDING = (void*)1;
-static const void* POLL_DROPPED = (void*)2;
+namespace
+{
+struct EventChange
+{
+	int32_t iEnable;
+	int32_t iDisable;
+};
 
 struct IoWatch
 {
-	uv_poll_t stPoll;
-	net_socket_t iDescriptor;
-	int32_t iMask;
+	uv_poll_t stPoll{};
+	uv_timer_t* pTimer = nullptr;
+	uv_timer_t* pResumeTimer = nullptr;
+	int32_t iPausedMask = 0;
+	std::atomic<Channel*> pChannel{nullptr};
+	net_socket_t iDescriptor = INVALID_SOCKET_ID;
+	int32_t iMask = 0;
+	// libuv 借用内存到 close 回调。排队的请求也各持一份。
+	std::shared_ptr<IoWatch> pClosing;
+#ifndef _SINGLE_THREAD_
+	std::vector<EventChange> vRequests;
+	bool bCloseDescriptor = false;
+	bool bRemoved = false;
+#endif
 };
 
 enum IoOpType
 {
-	IO_OP_ADD,
 	IO_OP_MOD,
 	IO_OP_DEL,
 	IO_OP_TICK,
@@ -49,325 +67,436 @@ enum IoOpType
 
 struct IoOp
 {
-	IoOpType iType;
-	Channel* pChannel;
-	IoWatch* pWatch;
-	net_socket_t iDescriptor;
-	int32_t iMask;
-	void (*fnCall)(void*);
-	void* pArgument;
+	IoOpType iType{};
+	Channel* pChannel = nullptr;
+	std::shared_ptr<IoWatch> pWatch;
+	void (*fnCall)(void*) = nullptr;
+	void* pArgument = nullptr;
+	void (*fnTick)() = nullptr;
+	unsigned iTickMilliseconds = 0;
 };
 
-static uv_loop_t g_loop;
-static uv_async_t g_async;
-static uv_timer_t g_tick_timer;
-static ::OI::Thread::NativeMutex g_op_lock;
-static std::deque<IoOp> g_ops;
-static Poll::QueuedCall* g_pCallHead = nullptr;
-static Poll::QueuedCall* g_pCallTail = nullptr;
-static bool g_loop_ready = false;
-static std::atomic<bool> g_poll_stop(false);
-static bool g_tick_armed = false;
-static unsigned g_tick_ms = 50;
-static void (*g_tick_fn)() = NULL;
-
-static void OnUvTick(uv_timer_t*)
+int MaskToUv(int32_t iMask)
 {
-	if (g_tick_fn)
-	{
-		g_tick_fn();
-	}
+	return ((iMask & IO_EV_READ) ? UV_READABLE : 0) | ((iMask & IO_EV_WRITE) ? UV_WRITABLE : 0);
 }
 
-static void StartTickOnLoop()
+void OnPoll(uv_poll_t* pHandle, int iStatus, int iEvents)
 {
-	if (g_tick_armed || g_tick_fn == NULL || g_tick_ms == 0)
+	auto* pWatch = static_cast<IoWatch*>(pHandle->data);
+	if (iStatus < 0 || (iEvents & (UV_READABLE | UV_DISCONNECT)))
 	{
-		return;
-	}
-	uv_timer_init(&g_loop, &g_tick_timer);
-	uv_timer_start(&g_tick_timer, OnUvTick, g_tick_ms, g_tick_ms);
-	g_tick_armed = true;
-}
-
-static int MaskToUv(int iMask)
-{
-	int iEvents = 0;
-	if (iMask & IO_EV_READ)
-	{
-		iEvents |= UV_READABLE;
-	}
-	if (iMask & IO_EV_WRITE)
-	{
-		iEvents |= UV_WRITABLE;
-	}
-	if (iEvents == 0)
-	{
-		iEvents = UV_READABLE;
-	}
-	return iEvents;
-}
-
-static void OnPoll(uv_poll_t* pHandle, int iStatus, int iEvents)
-{
-	Channel* pChannelLocal = (Channel*)pHandle->data;
-	if (!pChannelLocal)
-	{
-		return;
-	}
-	if (iStatus < 0 || (iEvents & UV_READABLE) || (iEvents & UV_DISCONNECT))
-	{
-		pChannelLocal->DataIn();
+		if (auto* pChannel = pWatch->pChannel.load())
+		{
+			pChannel->DataIn();
+		}
 	}
 	if (iEvents & UV_WRITABLE)
 	{
-		pChannelLocal->DataOut();
+		if (auto* pChannel = pWatch->pChannel.load())
+		{
+			pChannel->DataOut();
+		}
 	}
-	pChannelLocal->TryClose();
+	if (auto* pChannel = pWatch->pChannel.load())
+	{
+		pChannel->TryClose();
+	}
 }
 
-static void CloseWatch(uv_handle_t* pHandle)
+void CloseWatchOnLoop(const std::shared_ptr<IoWatch>& pWatch, bool bCloseDescriptor)
 {
-	IoWatch* pWatchLocal = (IoWatch*)pHandle;
-	NetOs_Close(pWatchLocal->iDescriptor);
-	delete pWatchLocal;
-}
-
-static void ApplyOp(const IoOp& stOperation)
-{
-	if (stOperation.iType == IO_OP_ADD)
+	if (!bCloseDescriptor)
 	{
-		if (stOperation.pChannel->pPollToken == POLL_DROPPED)
-		{
-			NetOs_Close(stOperation.iDescriptor);
-			stOperation.pChannel->pPollToken = NULL;
-			return;
-		}
-		IoWatch* pWatchLocal = new IoWatch();
-		pWatchLocal->iDescriptor = stOperation.iDescriptor;
-		pWatchLocal->iMask = stOperation.pChannel->iEventMask;
-		int iInitReturnCode = uv_poll_init_socket(&g_loop, &pWatchLocal->stPoll, (uv_os_sock_t)stOperation.iDescriptor);
-		if (iInitReturnCode != 0)
-		{
-			fprintf(stderr, "poll register init failed: %s (%d)\n", uv_strerror(iInitReturnCode), iInitReturnCode);
-			// 套接字还在 channel 上。先摘掉再关，析构里就不会再关一次。
-			stOperation.pChannel->DetachSocket();
-			NetOs_Close(stOperation.iDescriptor);
-			delete pWatchLocal;
-			stOperation.pChannel->pPollToken = NULL;
-			return;
-		}
-		pWatchLocal->stPoll.data = stOperation.pChannel;
-		const int iStartStatus = uv_poll_start(&pWatchLocal->stPoll, MaskToUv(pWatchLocal->iMask), OnPoll);
-		if (iStartStatus != 0)
-		{
-			fprintf(stderr, "poll register start failed: %s (%d)\n", uv_strerror(iStartStatus), iStartStatus);
-			stOperation.pChannel->DetachSocket();
-			stOperation.pChannel->pPollToken = nullptr;
-			pWatchLocal->stPoll.data = nullptr;
-			NetOs_Close(pWatchLocal->iDescriptor);
-			pWatchLocal->iDescriptor = INVALID_SOCKET_ID;
-			uv_close(reinterpret_cast<uv_handle_t*>(&pWatchLocal->stPoll), CloseWatch);
-			return;
-		}
-		stOperation.pChannel->pPollToken = pWatchLocal;
-		return;
+		pWatch->iDescriptor = INVALID_SOCKET_ID;
 	}
-	if (stOperation.iType == IO_OP_TICK)
+	for (auto* pTimer : {pWatch->pTimer, pWatch->pResumeTimer})
 	{
-		StartTickOnLoop();
-		return;
-	}
-	if (stOperation.iType == IO_OP_CALL)
-	{
-		if (stOperation.fnCall)
+		if (pTimer)
 		{
-			stOperation.fnCall(stOperation.pArgument);
-		}
-		return;
-	}
-	if (!stOperation.pWatch)
-	{
-		return;
-	}
-	if (stOperation.iType == IO_OP_MOD)
-	{
-		Channel* pChannelLocal = (Channel*)stOperation.pWatch->stPoll.data;
-		if (pChannelLocal == NULL)
-		{
-			return;
-		}
-		// 排队期间 poll 线程可能已经直接改过。按 channel 当前的掩码来，旧操作不会盖掉新状态。
-		int iMaskLocal = pChannelLocal->iEventMask;
-		if (stOperation.pWatch->iMask != iMaskLocal)
-		{
-			stOperation.pWatch->iMask = iMaskLocal;
-			if (iMaskLocal == 0)
+			uv_close(reinterpret_cast<uv_handle_t*>(pTimer), [](uv_handle_t* pHandle)
 			{
-				uv_poll_stop(&stOperation.pWatch->stPoll);
+				delete reinterpret_cast<uv_timer_t*>(pHandle);
+			});
+		}
+	}
+	pWatch->pClosing = pWatch;
+	uv_close(reinterpret_cast<uv_handle_t*>(&pWatch->stPoll), [](uv_handle_t* pHandle)
+	{
+		auto* pWatchLocal = static_cast<IoWatch*>(pHandle->data);
+		NetOs_Close(pWatchLocal->iDescriptor);
+		pWatchLocal->pClosing.reset();
+	});
+}
+
+// 只在 IO 线程改当前 mask 和 libuv 监听。
+void SetEvents(IoWatch& stWatch, int32_t iMask)
+{
+	auto* pChannel = stWatch.pChannel.load();
+	if (!pChannel || iMask == stWatch.iMask)
+	{
+		return;
+	}
+	const int iStatus = iMask ? uv_poll_start(&stWatch.stPoll, MaskToUv(iMask), OnPoll) : uv_poll_stop(&stWatch.stPoll);
+	if (iStatus != 0)
+	{
+		fprintf(stderr, "poll modify failed mask=%d: %s (%d)\n", iMask, uv_strerror(iStatus), iStatus);
+		return;
+	}
+	stWatch.iMask = iMask;
+	pChannel->iEventMask = iMask;
+}
+}
+
+struct Poll::State
+{
+	uv_loop_t stLoop{};
+	class WakeupChannel final : public FifoChannel
+	{
+		State& m_stState;
+
+	  public:
+		explicit WakeupChannel(State& stState)
+		    : FifoChannel(nullptr), m_stState(stState)
+		{
+		}
+		using FifoChannel::OpenPair;
+		void DataIn() override
+		{
+			bool bHealthy;
+			{
+				::OI::Thread::NativeMutexGuard stGuard(m_stState.stQueueLock);
+				bHealthy = ReadWakeup();
 			}
-			else
+			m_stState.Drain();
+			if (!bHealthy)
 			{
-				uv_poll_start(&stOperation.pWatch->stPoll, MaskToUv(iMaskLocal), OnPoll);
+				::OI::Thread::ThreadPool::GetInstance().RequestStop(OI_ERR_SOCKET);
 			}
 		}
-		return;
-	}
-	uv_poll_stop(&stOperation.pWatch->stPoll);
-	uv_close((uv_handle_t*)&stOperation.pWatch->stPoll, CloseWatch);
-}
+	};
+	std::unique_ptr<WakeupChannel> pWakeup;
+	int32_t iCloseStatus = 0;
+#ifndef _SINGLE_THREAD_
+	::OI::Thread::NativeMutexCond stStarted;
+	bool bStartDone = false;
+	int32_t iStartStatus = OI_ERR_FAIL;
+#endif
+	uv_timer_t stTickTimer{};
+	static constexpr int vSignals[] = {
+	    SIGINT,
+	    SIGTERM,
+#ifdef SIGQUIT
+	    SIGQUIT,
+#endif
+	};
+	uv_signal_t vSignalHandles[sizeof(vSignals) / sizeof(vSignals[0])]{};
 
-static void DrainOps()
-{
-	size_t iRemaining;
-	Poll::QueuedCall* pCalls;
+	// 单线程构建也有后台完成通知投递到此队列。
+	::OI::Thread::NativeMutex stQueueLock;
+	std::deque<IoOp> vOperations;
+	QueuedCall* pCallHead = nullptr;
+	QueuedCall* pCallTail = nullptr;
+	bool bReady = false;
+	std::atomic<bool> bStop{false};
+	bool bTickArmed = false;
+	unsigned iTickMilliseconds = 50;
+	void (*fnTick)() = nullptr;
+	unsigned iPollDepth = 0;
+
+	// 只有 loop 增删。后台注销也须安全查表，单线程的掩码读写不取此锁。
+	::OI::Thread::NativeMutex stWatchLock;
+	std::unordered_map<Channel*, std::shared_ptr<IoWatch>> mWatches;
+#ifndef _SINGLE_THREAD_
+	::OI::Thread::NativeMutexCond stRemoved;
+#endif
+
+	void PostLocked(const IoOp& stOperation)
 	{
-		::OI::Thread::NativeMutexGuard stGuard(g_op_lock);
-		iRemaining = g_ops.size();
-		pCalls = g_pCallHead;
-		g_pCallHead = nullptr;
-		g_pCallTail = nullptr;
-	}
-	while (iRemaining-- > 0)
-	{
-		IoOp stOperation;
+		const bool bWake = vOperations.empty() && !pCallHead;
+		vOperations.push_back(stOperation);
+		if (bReady && bWake)
 		{
-			::OI::Thread::NativeMutexGuard stGuard(g_op_lock);
-			if (g_ops.empty())
+			pWakeup->Wakeup();
+		}
+	}
+
+	void Post(const IoOp& stOperation)
+	{
+		::OI::Thread::NativeMutexGuard stGuard(stQueueLock);
+		PostLocked(stOperation);
+	}
+
+	void StartTick()
+	{
+		if (bTickArmed || !fnTick || !iTickMilliseconds)
+		{
+			return;
+		}
+		uv_timer_init(&stLoop, &stTickTimer);
+		uv_timer_start(&stTickTimer, [](uv_timer_t* pTimer)
+		{
+			auto* pState = static_cast<State*>(pTimer->loop->data);
+			if (pState->fnTick)
 			{
+				pState->fnTick();
+			}
+		}, iTickMilliseconds, iTickMilliseconds);
+		bTickArmed = true;
+	}
+
+#ifndef _SINGLE_THREAD_
+	// 先取走已入队的开关请求，再在 IO 线程按提交顺序执行。loop 本轮的请求排在它们后面。
+	void ApplyPending(IoWatch& stWatch)
+	{
+		std::vector<EventChange> vRequests;
+		{
+			::OI::Thread::NativeMutexGuard stGuard(stWatchLock);
+			vRequests.swap(stWatch.vRequests);
+		}
+		int32_t iMask = stWatch.iMask;
+		for (const auto& stRequest : vRequests)
+		{
+			iMask = (iMask | stRequest.iEnable) & ~stRequest.iDisable;
+		}
+		SetEvents(stWatch, iMask);
+	}
+
+	void RemoveOnLoop(const IoOp& stOperation)
+	{
+		::OI::Thread::NativeMutexGuard stGuard(stWatchLock);
+		auto it = mWatches.find(stOperation.pChannel);
+		if (it != mWatches.end() && it->second == stOperation.pWatch)
+		{
+			mWatches.erase(it);
+			CloseWatchOnLoop(stOperation.pWatch, stOperation.pWatch->bCloseDescriptor);
+		}
+		stOperation.pWatch->bRemoved = true;
+		stRemoved.Broadcast();
+	}
+#endif
+
+	void Drain()
+	{
+		std::deque<IoOp> vBatch;
+		QueuedCall* pCalls;
+		{
+			::OI::Thread::NativeMutexGuard stGuard(stQueueLock);
+			vBatch.swap(vOperations);
+			pCalls = pCallHead;
+			pCallHead = nullptr;
+			pCallTail = nullptr;
+		}
+		for (const auto& stOperation : vBatch)
+		{
+			switch (stOperation.iType)
+			{
+			case IO_OP_TICK:
+				fnTick = stOperation.fnTick;
+				iTickMilliseconds = stOperation.iTickMilliseconds;
+				StartTick();
+				break;
+			case IO_OP_CALL:
+				if (stOperation.fnCall)
+				{
+					stOperation.fnCall(stOperation.pArgument);
+				}
+				break;
+#ifndef _SINGLE_THREAD_
+			case IO_OP_MOD:
+				ApplyPending(*stOperation.pWatch);
+				break;
+			case IO_OP_DEL:
+				RemoveOnLoop(stOperation);
+				break;
+#endif
+			default:
 				break;
 			}
-			stOperation = g_ops.front();
-			g_ops.pop_front();
 		}
-		ApplyOp(stOperation);
+		while (pCalls)
+		{
+			auto* pCall = pCalls;
+			pCalls = pCall->pNext;
+			pCall->pNext = nullptr;
+			pCall->fnCall(pCall->pArgument);
+		}
 	}
-	while (pCalls)
+
+	int32_t Prepare()
 	{
-		auto* pCall = pCalls;
-		pCalls = pCall->pNext;
-		pCall->pNext = nullptr;
-		// Callback may destroy the node. Never access it after invocation.
-		pCall->fnCall(pCall->pArgument);
+		const int iLoopStatus = uv_loop_init(&stLoop);
+		if (iLoopStatus != 0)
+		{
+			fprintf(stderr, "poll loop init failed: %s (%d)\n", uv_strerror(iLoopStatus), iLoopStatus);
+			return OI_ERR_FAIL;
+		}
+		stLoop.data = this;
+		pWakeup = std::make_unique<WakeupChannel>(*this);
+		int32_t iStatus = pWakeup->OpenPair();
+		if (iStatus == OI_OK)
+		{
+			iStatus = GetInstance().RegisterOnLoop(pWakeup.get(), IO_EV_READ);
+		}
+		if (iStatus != OI_OK)
+		{
+			pWakeup.reset();
+			uv_run(&stLoop, UV_RUN_NOWAIT);
+			iCloseStatus = uv_loop_close(&stLoop);
+			return iStatus;
+		}
+		for (size_t iIndex = 0; iIndex < sizeof(vSignals) / sizeof(vSignals[0]); ++iIndex)
+		{
+			uv_signal_init(&stLoop, &vSignalHandles[iIndex]);
+			uv_signal_start(&vSignalHandles[iIndex], [](uv_signal_t*, int)
+			{
+				::OI::Thread::ThreadPool::GetInstance().RequestStop(0);
+			}, vSignals[iIndex]);
+		}
+		{
+			::OI::Thread::NativeMutexGuard stGuard(stQueueLock);
+			bReady = true;
+		}
+		Drain();
+		return OI_OK;
 	}
+
+	// 停止后再无 IO 回调。仍登记的通道保留其 socket，已投递的注销按调用方指定的归属收尾。
+	void Finish()
+	{
+		{
+			::OI::Thread::NativeMutexGuard stGuard(stQueueLock);
+			bReady = false;
+		}
+		Drain();
+		pWakeup.reset();
+		{
+			::OI::Thread::NativeMutexGuard stGuard(stWatchLock);
+			for (auto& [pChannel, pWatch] : mWatches)
+			{
+				(void)pChannel;
+				pWatch->pChannel.store(nullptr);
+#ifdef _SINGLE_THREAD_
+				CloseWatchOnLoop(pWatch, false);
+#else
+				CloseWatchOnLoop(pWatch, pWatch->bCloseDescriptor);
+				pWatch->bRemoved = true;
+#endif
+			}
+			mWatches.clear();
+#ifndef _SINGLE_THREAD_
+			stRemoved.Broadcast();
+#endif
+		}
+		if (bTickArmed)
+		{
+			uv_close(reinterpret_cast<uv_handle_t*>(&stTickTimer), nullptr);
+		}
+		for (auto& stSignal : vSignalHandles)
+		{
+			uv_close(reinterpret_cast<uv_handle_t*>(&stSignal), nullptr);
+		}
+		// 执行本实例各句柄的 close 回调。
+		uv_run(&stLoop, UV_RUN_NOWAIT);
+		iCloseStatus = uv_loop_close(&stLoop);
+		if (iCloseStatus != 0)
+		{
+			fprintf(stderr, "poll loop close failed: %s (%d)\n", uv_strerror(iCloseStatus), iCloseStatus);
+		}
+	}
+};
+
+Poll::Poll()
+    : m_pState(std::make_unique<State>())
+{
 }
 
 void Poll::PostOnLoop(QueuedCall& stCall) noexcept
 {
-	::OI::Thread::NativeMutexGuard stGuard(g_op_lock);
+	auto& stState = *m_pState;
+	::OI::Thread::NativeMutexGuard stGuard(stState.stQueueLock);
+	const bool bWake = stState.vOperations.empty() && !stState.pCallHead;
 	stCall.pNext = nullptr;
-	if (g_pCallTail)
+	if (stState.pCallTail)
 	{
-		g_pCallTail->pNext = &stCall;
+		stState.pCallTail->pNext = &stCall;
 	}
 	else
 	{
-		g_pCallHead = &stCall;
+		stState.pCallHead = &stCall;
 	}
-	g_pCallTail = &stCall;
-	if (g_loop_ready)
+	stState.pCallTail = &stCall;
+	if (stState.bReady && bWake)
 	{
-		uv_async_send(&g_async);
+		stState.pWakeup->Wakeup();
 	}
-}
-
-static void OnAsync(uv_async_t*)
-{
-	DrainOps();
-}
-
-static const int g_quit_signums[] = {
-    SIGINT,
-    SIGTERM,
-#ifdef SIGQUIT
-    SIGQUIT,
-#endif
-};
-static uv_signal_t g_quit_signals[sizeof(g_quit_signums) / sizeof(g_quit_signums[0])];
-
-// libuv 在信号处理函数里只写管道，这里已经回到 loop，可以正常加锁、通知。
-static void OnQuitSignal(uv_signal_t*, int)
-{
-	::OI::Thread::ThreadPool::GetInstance().RequestStop(0);
-}
-
-static void StartQuitSignals()
-{
-	for (size_t iIndexLocal = 0; iIndexLocal < sizeof(g_quit_signums) / sizeof(g_quit_signums[0]); ++iIndexLocal)
-	{
-		uv_signal_init(&g_loop, &g_quit_signals[iIndexLocal]);
-		uv_signal_start(&g_quit_signals[iIndexLocal], OnQuitSignal, g_quit_signums[iIndexLocal]);
-	}
-}
-
-static void PostOp(const IoOp& stOperation)
-{
-	::OI::Thread::NativeMutexGuard stGuard(g_op_lock);
-	g_ops.push_back(stOperation);
-	if (g_loop_ready)
-	{
-		uv_async_send(&g_async);
-	}
-}
-
-static void PrepareLoop()
-{
-	uv_loop_init(&g_loop);
-	uv_async_init(&g_loop, &g_async, OnAsync);
-	StartQuitSignals();
-	{
-		::OI::Thread::NativeMutexGuard stGuard(g_op_lock);
-		g_loop_ready = true;
-	}
-	DrainOps();
-	StartTickOnLoop();
 }
 
 Poll::~Poll()
 {
-	// 启动失败提前 return 时，poll 线程还活着。析构不 join 会 std::terminate，把真正的错误盖掉。
 	StopAndJoin();
 }
 
-void* Poll::StartThreadPollWait(void*)
+void* Poll::StartThreadPollWait(void* pArgument)
 {
-	GetInstance().m_stLoopThread = std::this_thread::get_id();
+	auto* pPoll = static_cast<Poll*>(pArgument);
+	pPoll->m_stLoopThread = std::this_thread::get_id();
 	::OI::Thread::ThreadPool::InitIgnoreSig();
 	NetOs_Startup();
-	PrepareLoop();
-	while (!g_poll_stop.load())
+	auto& stState = *pPoll->m_pState;
+	const int32_t iStatus = stState.Prepare();
+#ifndef _SINGLE_THREAD_
 	{
-		uv_run(&g_loop, UV_RUN_ONCE);
+		::OI::Thread::NativeMutexGuard stGuard(stState.stQueueLock);
+		stState.iStartStatus = iStatus;
+		stState.bStartDone = true;
+		stState.stStarted.Signal();
 	}
-	// 停止标记与监听入队互斥，最后一轮通知先前已入队的启动方。
-	DrainOps();
-	return NULL;
+#endif
+	if (iStatus != OI_OK)
+	{
+		return nullptr;
+	}
+	while (!stState.bStop.load())
+	{
+		uv_run(&stState.stLoop, UV_RUN_ONCE);
+	}
+	stState.Finish();
+	return nullptr;
 }
 
-void Poll::StopAndJoin()
+int32_t Poll::StopAndJoin()
 {
-	if (g_loop_ready && !g_poll_stop.load())
+	bool bStopNeeded;
 	{
-		CallOnLoop([](void*)
+		::OI::Thread::NativeMutexGuard stGuard(m_pState->stQueueLock);
+		bStopNeeded = m_pState->bReady && !m_pState->bStop.load();
+	}
+	if (bStopNeeded)
+	{
+		CallOnLoop([](void* pArgument)
 		{
-			BlockingWorkSessionManager::GetInstance().Drain([](void*)
+			BlockingWorkSessionManager::GetInstance().Drain([](void* pData)
 			{
-				::OI::Thread::NativeMutexGuard stGuard(g_op_lock);
-				g_poll_stop.store(true);
-				uv_async_send(&g_async);
-			}, nullptr);
-		}, nullptr);
+				auto* pState = static_cast<State*>(pData);
+				::OI::Thread::NativeMutexGuard stGuard(pState->stQueueLock);
+				pState->bStop.store(true);
+				pState->pWakeup->Wakeup();
+			}, pArgument);
+		}, m_pState.get());
 #ifdef _SINGLE_THREAD_
-		while (!g_poll_stop.load())
+		while (!m_pState->bStop.load())
 		{
 			PollWait();
 		}
+		m_pState->Finish();
 #endif
 	}
 	if (m_stThread.joinable())
 	{
 		m_stThread.join();
 	}
+	return m_pState->iCloseStatus;
 }
 
 int32_t Poll::CheckThreadAccess(const char* pOperation) const
@@ -390,15 +519,14 @@ int32_t Poll::Init()
 	// 常驻管理器在 poll 之后构造，析构时先排空它的后台请求。
 	(void)BlockingWorkSessionManager::GetInstance();
 	NetOs_Startup();
-	g_loop_ready = false;
+	m_pState->bReady = false;
 #ifdef _SINGLE_THREAD_
 	m_stLoopThread = std::this_thread::get_id();
-	PrepareLoop();
-	return OI_OK;
+	return m_pState->Prepare();
 #else
 	try
 	{
-		m_stThread = std::thread(StartThreadPollWait, (void*)NULL);
+		m_stThread = std::thread(StartThreadPollWait, this);
 	}
 	catch (...)
 	{
@@ -406,26 +534,18 @@ int32_t Poll::Init()
 		fflush(stderr);
 		return OI_ERR_FAIL;
 	}
-	for (;;)
+	::OI::Thread::NativeMutexGuard stGuard(m_pState->stQueueLock);
+	while (!m_pState->bStartDone)
 	{
-		bool bReadyLocal = false;
-		{
-			::OI::Thread::NativeMutexGuard stGuard(g_op_lock);
-			bReadyLocal = g_loop_ready;
-		}
-		if (bReadyLocal)
-		{
-			break;
-		}
-		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		m_pState->stStarted.Wait(m_pState->stQueueLock);
 	}
-	return OI_OK;
+	return m_pState->iStartStatus;
 #endif
 }
 
 ::uv_loop_s* Poll::Loop()
 {
-	return &g_loop;
+	return &m_pState->stLoop;
 }
 
 void Poll::CallOnLoop(void (*fnFunction)(void*), void* pArgumentLocal)
@@ -445,7 +565,7 @@ int32_t Poll::StartListener(int32_t (*fnStart)(void*), void* pArgument)
 {
 	if (InLoopThread())
 	{
-		if (!g_loop_ready || g_poll_stop.load())
+		if (!m_pState->bReady || m_pState->bStop.load())
 		{
 			return OI_ERR_CANCELLED;
 		}
@@ -466,8 +586,8 @@ int32_t Poll::StartListener(int32_t (*fnStart)(void*), void* pArgument)
 	Start stStart{fnStart, pArgument, {}, {}};
 	::OI::Thread::MutexGuard stLock(stStart.stMutex);
 	{
-		::OI::Thread::NativeMutexGuard stGuard(g_op_lock);
-		if (!g_loop_ready || g_poll_stop.load())
+		::OI::Thread::NativeMutexGuard stGuard(m_pState->stQueueLock);
+		if (!m_pState->bReady || m_pState->bStop.load())
 		{
 			return OI_ERR_CANCELLED;
 		}
@@ -480,7 +600,7 @@ int32_t Poll::StartListener(int32_t (*fnStart)(void*), void* pArgument)
 			::OI::Thread::MutexGuard stGuardLocal(pStart->stMutex);
 			try
 			{
-				pStart->iStatus = g_poll_stop.load() ? OI_ERR_CANCELLED : pStart->fnStart(pStart->pArgument);
+				pStart->iStatus = GetInstance().m_pState->bStop.load() ? OI_ERR_CANCELLED : pStart->fnStart(pStart->pArgument);
 			}
 			catch (...)
 			{
@@ -489,8 +609,7 @@ int32_t Poll::StartListener(int32_t (*fnStart)(void*), void* pArgument)
 			pStart->bDone = true;
 			pStart->stDone.Signal();
 		};
-		g_ops.push_back(stOp);
-		uv_async_send(&g_async);
+		m_pState->PostLocked(stOp);
 	}
 	while (!stStart.bDone)
 	{
@@ -502,176 +621,216 @@ int32_t Poll::StartListener(int32_t (*fnStart)(void*), void* pArgument)
 
 void Poll::PostOnLoop(void (*fnFunction)(void*), void* pArgumentLocal)
 {
-	IoOp stOperation;
+	IoOp stOperation{};
 	stOperation.iType = IO_OP_CALL;
 	stOperation.pChannel = NULL;
 	stOperation.pWatch = NULL;
-	stOperation.iDescriptor = 0;
-	stOperation.iMask = 0;
 	stOperation.fnCall = fnFunction;
 	stOperation.pArgument = pArgumentLocal;
-	PostOp(stOperation);
+	m_pState->Post(stOperation);
 }
 
 void Poll::ArmTick(unsigned iRepeatMilliseconds, void (*fnFunction)())
 {
-	g_tick_ms = iRepeatMilliseconds ? iRepeatMilliseconds : 50;
-	g_tick_fn = fnFunction;
-	if (!g_loop_ready)
-	{
-		return;
-	}
-	IoOp stOperation;
+	IoOp stOperation{};
 	stOperation.iType = IO_OP_TICK;
-	stOperation.pChannel = NULL;
-	stOperation.pWatch = NULL;
-	stOperation.iDescriptor = 0;
-	stOperation.iMask = 0;
-	PostOp(stOperation);
+	stOperation.fnTick = fnFunction;
+	stOperation.iTickMilliseconds = iRepeatMilliseconds ? iRepeatMilliseconds : 50;
+	m_pState->Post(stOperation);
 }
 
-void Poll::IOEventMod(Channel* pPointer, int iNewMask)
-{
-	pPointer->iEventMask = iNewMask;
-	IoWatch* pWatchLocal = (IoWatch*)pPointer->pPollToken;
-	if (!pWatchLocal || pWatchLocal == POLL_PENDING || pWatchLocal == POLL_DROPPED)
-	{
-		return;
-	}
-	if (InLoopThread())
-	{
-		if (pWatchLocal->stPoll.data == NULL)
-		{
-			return;
-		}
-		pWatchLocal->iMask = iNewMask;
-		if (iNewMask == 0)
-		{
-			uv_poll_stop(&pWatchLocal->stPoll);
-			return;
-		}
-		uv_poll_start(&pWatchLocal->stPoll, MaskToUv(iNewMask), OnPoll);
-		return;
-	}
-	IoOp stOperation;
-	stOperation.iType = IO_OP_MOD;
-	stOperation.pChannel = pPointer;
-	stOperation.pWatch = pWatchLocal;
-	stOperation.iDescriptor = pWatchLocal->iDescriptor;
-	stOperation.iMask = iNewMask;
-	PostOp(stOperation);
-}
-
-struct PausedChannel
-{
-	uv_timer_t stTimer;
-	Channel* pChannel;
-	int32_t iMask;
-};
-
-static void FreePaused(uv_handle_t* pHandle)
-{
-	delete (PausedChannel*)pHandle->data;
-}
-
-static void OnPauseEnd(uv_timer_t* pTimer)
-{
-	PausedChannel* pPaused = (PausedChannel*)pTimer->data;
-	Poll::GetInstance().IOEventMod(pPaused->pChannel, pPaused->iMask);
-	uv_close((uv_handle_t*)pTimer, FreePaused);
-}
-
-void Poll::PauseEvents(Channel* pPointer, unsigned iMilliseconds)
+void Poll::IOEventMod(Channel* pChannel)
 {
 	assert(InLoopThread());
-	// 已经停着的不再叠一次，否则恢复时拿到的是 0。
-	if (pPointer->iEventMask == 0)
-	{
-		return;
-	}
-	PausedChannel* pPaused = new PausedChannel();
-	pPaused->pChannel = pPointer;
-	pPaused->iMask = pPointer->iEventMask;
-	pPaused->stTimer.data = pPaused;
-	IOEventMod(pPointer, 0);
-	uv_timer_init(&g_loop, &pPaused->stTimer);
-	uv_timer_start(&pPaused->stTimer, OnPauseEnd, iMilliseconds, 0);
+	ChangeEvents(pChannel, pChannel->iEventMask, IO_EV_REG & ~pChannel->iEventMask);
 }
 
-void Poll::IOEventRegister(Channel* pPointer, bool bAllowRead, bool bAllowWrite)
+void Poll::ChangeEvents(Channel* pChannel, int32_t iEnable, int32_t iDisable)
 {
-	int iNewMask = 0;
-	if (bAllowRead)
+#ifndef _SINGLE_THREAD_
+	if (!InLoopThread())
 	{
-		iNewMask |= IO_EV_READ;
-	}
-	if (bAllowWrite)
-	{
-		iNewMask |= IO_EV_WRITE;
-	}
-	pPointer->iEventMask = iNewMask;
-	IoOp stOperation;
-	stOperation.iType = IO_OP_ADD;
-	stOperation.pChannel = pPointer;
-	stOperation.pWatch = NULL;
-	stOperation.iDescriptor = pPointer->stSocket.GetSocket();
-	stOperation.iMask = iNewMask;
-	// 已经在 poll 线程就当场挂上。排队的话，同一次调用里接着改掩码会赶不上这次 ADD。
-	if (InLoopThread() && g_loop_ready)
-	{
-		pPointer->pPollToken = NULL;
-		ApplyOp(stOperation);
+		::OI::Thread::NativeMutexGuard stGuard(m_pState->stWatchLock);
+		auto it = m_pState->mWatches.find(pChannel);
+		if (it != m_pState->mWatches.end() && it->second->pChannel.load())
+		{
+			auto& vRequests = it->second->vRequests;
+			vRequests.push_back({iEnable, iDisable});
+			if (vRequests.size() == 1)
+			{
+				IoOp stOp{};
+				stOp.iType = IO_OP_MOD;
+				stOp.pWatch = it->second;
+				m_pState->Post(stOp);
+			}
+		}
 		return;
 	}
-	pPointer->pPollToken = (void*)POLL_PENDING;
-	PostOp(stOperation);
+#else
+	if (!InLoopThread())
+	{
+		return;
+	}
+#endif
+	auto it = m_pState->mWatches.find(pChannel);
+	if (it != m_pState->mWatches.end())
+	{
+		auto& stWatch = *it->second;
+#ifndef _SINGLE_THREAD_
+		m_pState->ApplyPending(stWatch);
+#endif
+		SetEvents(stWatch, (stWatch.iMask | iEnable) & ~iDisable);
+	}
 }
 
-void Poll::IOEventUnRegister(Channel* pPointer, bool bCloseDescriptor)
+void Poll::PauseEvents(Channel* pChannel, unsigned iMilliseconds)
 {
-	void* pToken = pPointer->pPollToken;
-	if (pToken == NULL || pToken == POLL_DROPPED)
+	assert(InLoopThread());
+	auto it = m_pState->mWatches.find(pChannel);
+	if (it == m_pState->mWatches.end() || !pChannel->iEventMask)
 	{
 		return;
 	}
-	if (pToken == POLL_PENDING)
+	auto& stWatch = *it->second;
+	if (!stWatch.pResumeTimer)
 	{
-		pPointer->pPollToken = (void*)POLL_DROPPED;
-		pPointer->stSocket.Detach();
+		auto pTimer = std::make_unique<uv_timer_t>();
+		if (uv_timer_init(&m_pState->stLoop, pTimer.get()) != 0)
+		{
+			return;
+		}
+		pTimer->data = &stWatch;
+		stWatch.pResumeTimer = pTimer.release();
+	}
+	stWatch.iPausedMask = pChannel->iEventMask;
+	if (uv_timer_start(stWatch.pResumeTimer, [](uv_timer_t* pHandle)
+	{
+		auto* pWatch = static_cast<IoWatch*>(pHandle->data);
+		if (auto* pLive = pWatch->pChannel.load())
+		{
+			GetInstance().ChangeEvents(pLive, pWatch->iPausedMask, IO_EV_REG & ~pWatch->iPausedMask);
+		}
+	}, iMilliseconds, 0) != 0)
+	{
 		return;
 	}
-	IoWatch* pWatchLocal = (IoWatch*)pToken;
-	pPointer->pPollToken = NULL;
-	pPointer->stSocket.Detach();
-	if (!bCloseDescriptor)
-	{
-		pWatchLocal->iDescriptor = INVALID_SOCKET_ID;
-	}
-	// 就在 poll 线程上。epoll 是水平触发，把 stop 推迟到下一轮的话，
-	// 回调返回后同一条连接还会再进一次，channel 已经 delete 了。
-	if (std::this_thread::get_id() == m_stLoopThread)
-	{
-		pWatchLocal->stPoll.data = NULL;
-		uv_poll_stop(&pWatchLocal->stPoll);
-	}
-	IoOp stOperation;
-	stOperation.iType = IO_OP_DEL;
-	stOperation.pChannel = pPointer;
-	stOperation.pWatch = pWatchLocal;
-	stOperation.iDescriptor = pWatchLocal->iDescriptor;
-	stOperation.iMask = 0;
-	PostOp(stOperation);
+	ChangeEvents(pChannel, 0, IO_EV_REG);
 }
 
-namespace
+void Poll::AdoptWatchTimer(Channel* pChannel, uv_timer_s* pTimer)
 {
-[[maybe_unused]] thread_local unsigned g_poll_depth = 0;
+	assert(InLoopThread());
+	auto& stWatch = *m_pState->mWatches.at(pChannel);
+	assert(!stWatch.pTimer);
+	stWatch.pTimer = pTimer;
+}
+
+int32_t Poll::IOEventRegister(Channel* pPointer, bool bAllowRead, bool bAllowWrite)
+{
+	struct Registration
+	{
+		Channel* pChannel;
+		int32_t iMask;
+	} stRegistration{pPointer, (bAllowRead ? IO_EV_READ : 0) | (bAllowWrite ? IO_EV_WRITE : 0)};
+	return StartListener([](void* pArgument) -> int32_t
+	{
+		auto& stRequest = *static_cast<Registration*>(pArgument);
+		return GetInstance().RegisterOnLoop(stRequest.pChannel, stRequest.iMask);
+	}, &stRegistration);
+}
+
+int32_t Poll::RegisterOnLoop(Channel* pChannel, int32_t iMask)
+{
+	assert(InLoopThread());
+	auto& stState = *m_pState;
+	::OI::Thread::NativeMutexGuard stGuard(stState.stWatchLock);
+	auto pWatch = std::make_shared<IoWatch>();
+	auto [it, bInserted] = stState.mWatches.try_emplace(pChannel, nullptr);
+	if (!bInserted)
+	{
+		return OI_ERR_EXIST;
+	}
+	pWatch->iDescriptor = pChannel->stSocket.GetSocket();
+	pWatch->iMask = iMask;
+	int iStatus = uv_poll_init_socket(&stState.stLoop, &pWatch->stPoll, (uv_os_sock_t)pWatch->iDescriptor);
+	const bool bInitialized = iStatus == 0;
+	if (bInitialized)
+	{
+		pWatch->stPoll.data = pWatch.get();
+		if (iMask)
+		{
+			iStatus = uv_poll_start(&pWatch->stPoll, MaskToUv(iMask), OnPoll);
+		}
+	}
+	if (iStatus != 0)
+	{
+		fprintf(stderr, "poll register %s failed: %s (%d)\n", bInitialized ? "start" : "init", uv_strerror(iStatus), iStatus);
+		stState.mWatches.erase(it);
+		pChannel->DetachSocket();
+		const auto iDescriptor = pWatch->iDescriptor;
+		if (bInitialized)
+		{
+			pWatch->iDescriptor = INVALID_SOCKET_ID;
+			CloseWatchOnLoop(pWatch, false);
+		}
+		NetOs_Close(iDescriptor);
+		return OI_ERR_SOCKET;
+	}
+	pChannel->iEventMask = iMask;
+	pWatch->pChannel.store(pChannel);
+	it->second = std::move(pWatch);
+	return OI_OK;
+}
+
+void Poll::IOEventUnRegister(Channel* pChannel, bool bCloseDescriptor)
+{
+	::OI::Thread::NativeMutexGuard stGuard(m_pState->stWatchLock);
+	auto it = m_pState->mWatches.find(pChannel);
+	if (it == m_pState->mWatches.end())
+	{
+		return;
+	}
+#ifdef _SINGLE_THREAD_
+	if (!InLoopThread())
+	{
+		fprintf(stderr, "single-thread registered channel unregister outside poll thread channel=%p\n", static_cast<void*>(pChannel));
+		fflush(stderr);
+		std::abort();
+	}
+#endif
+	auto pWatch = it->second;
+	pWatch->pChannel.store(nullptr);
+#ifndef _SINGLE_THREAD_
+	if (!InLoopThread())
+	{
+		pWatch->bCloseDescriptor = bCloseDescriptor;
+		IoOp stOp{};
+		stOp.iType = IO_OP_DEL;
+		stOp.pWatch = pWatch;
+		stOp.pChannel = pChannel;
+		m_pState->Post(stOp);
+		// loop 上已取走通道的回调先返回，调用方才可释放通道或复用 fd。
+		while (!pWatch->bRemoved)
+		{
+			m_pState->stRemoved.Wait(m_pState->stWatchLock);
+		}
+		pChannel->DetachSocket();
+		return;
+	}
+#endif
+	pChannel->DetachSocket();
+	m_pState->mWatches.erase(it);
+	CloseWatchOnLoop(pWatch, bCloseDescriptor);
+#ifndef _SINGLE_THREAD_
+	pWatch->bRemoved = true;
+	m_pState->stRemoved.Broadcast();
+#endif
 }
 
 bool Poll::InPollCallback() const
 {
 #ifdef _SINGLE_THREAD_
-	return g_poll_depth != 0;
+	return InLoopThread() && m_pState->iPollDepth != 0;
 #else
 	return InLoopThread();
 #endif
@@ -682,16 +841,18 @@ void Poll::PollWait(int iWaitMilliseconds)
 #ifdef _SINGLE_THREAD_
 	struct Guard
 	{
-		Guard()
+		unsigned& iDepth;
+		explicit Guard(unsigned& iDepth)
+		    : iDepth(iDepth)
 		{
-			++g_poll_depth;
+			++iDepth;
 		}
 		~Guard()
 		{
-			--g_poll_depth;
+			--iDepth;
 		}
-	} stGuard;
-	uv_run(&g_loop, iWaitMilliseconds == 0 ? UV_RUN_NOWAIT : UV_RUN_ONCE);
+	} stGuard(m_pState->iPollDepth);
+	uv_run(&m_pState->stLoop, iWaitMilliseconds == 0 ? UV_RUN_NOWAIT : UV_RUN_ONCE);
 #else
 	(void)iWaitMilliseconds;
 #endif

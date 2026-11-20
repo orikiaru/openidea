@@ -1,22 +1,17 @@
 #pragma once
 #include "oi_lock.h"
+#include "oi_coro.h"
 #include "oi_header.h"
 #include "oi_bytes.h"
 #include "oi_net_os.h"
 #include "oi_session.h"
 #include <map>
+#include <unordered_map>
 #include <string>
 #include <memory>
 #include <vector>
 #include <coroutine>
 #include <set>
-namespace OI
-{
-namespace Coro
-{
-void Schedule(std::coroutine_handle<> stHandle);
-}
-}
 namespace OI
 {
 namespace Base
@@ -31,13 +26,10 @@ enum SESSION_TYPE
 {
 	SESSION_TYPE_INVALID,
 	SESSION_TYPE_TCP,
-	// 一个绑好的口，按对端地址分会话。只有 StartServer，没有 StartClient，主动发用 OpenPeer。
+	// 一个绑好的口。套接字是 UDP_Channel，按对端地址分会话。服务端和客户端都绑定本地地址，主动发送先用 OpenPeer。
 	SESSION_TYPE_UDP,
-	//还没做
-	/*
+	// 进程内非阻塞通知通道。
 	SESSION_TYPE_FIFO,
-	SESSION_TYPE_UNIX,
-	*/
 };
 class SessionManager;
 class ConnectChannel;
@@ -47,15 +39,23 @@ class NetAddr;
 class SessionManager
 {
 	struct ConnectWait;
+	static OI::Coro::TaskResult<int32_t> WaitForConnect(std::shared_ptr<ConnectWait> pWait);
 	// 正在等这一代连接结果的协程。完成或失败时一次唤醒。
-	std::vector<std::weak_ptr<ConnectWait>> m_vConnectWaiters;
+	std::vector<std::shared_ptr<ConnectWait>> m_vConnectWaiters;
 	// 把这一代等待者全部唤醒。iResult 是本次连接的错误码。
 	void FinishConnectWaiters(int32_t iResult);
 	// 在 poll 线程上登记等待者并发起连接。已经连上就直接成功。
 	void StartConnect(const std::shared_ptr<ConnectWait>& pWait);
-	friend struct ConnectResolver;
 	// 切到 poll 线程再调用 StartConnect。停止中直接失败。
 	void BeginConnect(const std::shared_ptr<ConnectWait>& pWait);
+
+	// 按 UDP 来源去重。锁内可以登记 sid，发送和关闭会话不反向取得此锁。
+	::OI::Thread::Mutex m_stUdpPeerLock;
+	std::unordered_map<std::string, UDP_Channel*> m_mUdpPeers;
+	int32_t SendToSession(sid_t iSessionId, const ::OI::Base::Bytes& stData, bool bFramed);
+	Session* OpenUdpPeerLocked(const NetAddr& stAddr);
+	void RecycleUdpPeer(Session* pSession);
+	void CloseIdleUdpPeers();
 
   protected:
 	int32_t LoadSessionLimits();
@@ -76,13 +76,13 @@ class SessionManager
 	uint64_t iIncompleteFrameTimeoutMilliseconds = 10000;
 	// UDP 会话这么久没收没发就关掉。
 	uint64_t iIdleTimeoutMilliseconds = 60000;
-	// UDP 的本端口。StartServer 之后才有。
+	// UDP 的本端口。客户端或服务端绑定成功后可用。
 	UDP_Channel* pUdpChannel = NULL;
 	// 下一个要分配的会话号。
 	sid_t iCurrentSessionId;
 	// 保护会话表和连接状态。
 	::OI::Thread::Mutex stLocker;
-	// 监听或要连接的地址。客户端可以是域名，连上之前会换成解析出来的数字地址。
+	// 监听或要连接的地址。客户端保留配置域名，每次新拨号时解析。
 	std::string sIpAddress;
 	std::string sPort;
 	SESSION_TYPE iSessionType; // 管理的会话类型。TCP 或 UDP。
@@ -96,27 +96,6 @@ class SessionManager
 	bool bServiceSeen;
 
   public:
-	// 等待连接的 awaiter；只挂起调用协程，完成后进入框架调度队列。
-	class ConnectAwaiter
-	{
-		// 这一次等待的共享状态。连接完成时用它唤醒协程。
-		std::shared_ptr<ConnectWait> m_pWait;
-		bool Suspend(std::coroutine_handle<> stHandle, void (*fnSchedule)(std::coroutine_handle<>));
-
-	  public:
-		explicit ConnectAwaiter(SessionManager* pManager);
-		ConnectAwaiter(const ConnectAwaiter&) = delete;
-		ConnectAwaiter(ConnectAwaiter&&) = default;
-		bool await_ready() const noexcept
-		{
-			return false;
-		}
-		bool await_suspend(std::coroutine_handle<> stHandle)
-		{
-			return Suspend(stHandle, ::OI::Coro::Schedule);
-		}
-		int32_t await_resume() const noexcept;
-	};
 	SessionManager()
 	    : iCurrentSessionId(0), iSessionType(SESSION_TYPE_TCP), bServiceDown(false), bServiceSeen(false)
 	{
@@ -137,6 +116,7 @@ class SessionManager
 		sIpAddress = sSip;
 		sPort = sPortLocal;
 		iSessionType = iSessionTypeLocal;
+		sEndpoint = NetAddr::Endpoint(sSip, sPortLocal);
 	}
 	size_t MaxFrameBytes() const
 	{
@@ -150,7 +130,7 @@ class SessionManager
 	{
 		return iIdleTimeoutMilliseconds;
 	}
-	// UDP：实际绑上的本端端口。还没 StartServer 返回 0。
+	// UDP：实际绑上的本端端口。绑定前返回 0。
 	uint16_t LocalPort() const;
 	// UDP：找到或新建到这个字面地址的会话，成功写入会话号。不解析域名，失败返回具体错误码。
 	int32_t OpenPeer(const std::string& sIp, const std::string& sPortLocal, sid_t& iSessionId);
@@ -168,11 +148,8 @@ class SessionManager
 	{
 		return iSessionType;
 	}
-	// 调用即启动；忽略结果为异步启动，co_await 等待连接成功/失败。
-	ConnectAwaiter StartClient()
-	{
-		return ConnectAwaiter(this);
-	}
+	// 调用即启动；co_await 取得 TCP 连接或 UDP 本地绑定的结果。
+	OI::Coro::TaskResult<int32_t> StartClient();
 	int32_t StartServer(bool bAsync = true); //目前不支持同步操作
 	// 定期拉到的服务列表。online 为假表示这个名字已经从列表里消失。
 	void ApplyService(const std::string& sIp, const std::string& sPortLocal, bool bOnline);
@@ -191,6 +168,8 @@ class SessionManager
 	int32_t SendBytes(sid_t iSessionId, const ::OI::Base::Bytes& stData);
 	// 按会话号发送。会话不在或队列满时返回错误码。
 	int32_t SendBytesResult(sid_t iSessionId, const ::OI::Base::Bytes& stData);
+	// 协议层交付一条已编码的完整帧。UDP 可与同一对端相邻的完整帧合发。
+	int32_t SendFrame(sid_t iSessionId, const ::OI::Base::Bytes& stData);
 
 	// 把配置里的类型字符串换成枚举。认不出返回 SESSION_TYPE_INVALID。
 	static SESSION_TYPE GetSessionTypeByString(const std::string& sType);
@@ -207,8 +186,8 @@ class SessionManager
 	friend class UDP_Channel;
 	friend class NetHelper;
 	//AcceptSession调用,必然由IO线程触发
-	// poll 线程上用新套接字建一条会话并纳入表。
-	void AddSession(net_socket_t iNewDescriptor);
+	// poll 线程上用连上的 TCP 套接字建一条会话并纳入表。监听口不是会话。挂 poll 失败就关掉这条，不通知业务。
+	int32_t AddSession(net_socket_t iNewDescriptor);
 	// poll 线程上纳入一条已经建好的会话。
 	void AddSession(Session* pSession);
 	// 同上，并带上对端地址和这条会话自己的收发上限。

@@ -15,7 +15,7 @@ namespace Net
 ConnectChannel::ConnectChannel(NetSocket stText, SessionManager* pMgr, uint64_t iGeneration)
     : Channel(stText, 0), m_bClose(false), m_iGeneration(iGeneration), m_pSessionManager(pMgr)
 {
-	// StartConnect 已切到 poll；随后 IOEventRegister 同步完成，不留下 POLL_PENDING。
+	// StartConnect 在 poll 线程创建并注册连接通道。
 	assert(Poll::GetInstance().InLoopThread());
 }
 
@@ -91,49 +91,20 @@ bool ConnectChannel::CheckTcpConnect()
 	return true;
 }
 
-int32_t ConnectChannel::StartConnect(SessionManager* pMgr, bool bAsync)
+int32_t ConnectChannel::StartConnect(SessionManager* pMgr, const NetAddr& stAddr)
 {
-	const int32_t iThreadStatus = Poll::GetInstance().CheckThreadAccess("ConnectChannel::StartConnect");
-	if (iThreadStatus != OI_OK)
+	assert(Poll::GetInstance().InLoopThread());
+	const net_socket_t iDescriptor = stAddr.CreateTcp(true);
+	if (iDescriptor == INVALID_SOCKET_ID)
 	{
-		return iThreadStatus;
+		LOG_ERROR("ConnectChannel::StartConnect id=%s endpoint=%s err=%s", pMgr->GetIDString().c_str(), stAddr.Endpoint().c_str(), NetOs_StrError(errno));
+		return OI_ERR_SOCKET;
 	}
-	if (!pMgr)
-	{
-		return OI_ERR_INVALID_ARGUMENT;
-	}
-
-	SESSION_TYPE iTextType = pMgr->GetSessionType();
-	switch (iTextType)
-	{
-	case SESSION_TYPE_TCP:
-		return StartTcpConnect(pMgr, bAsync);
-	default:
-		printf("ConnectChannel::StartConnect not support session_type=%d\n", iTextType);
-	}
-	return OI_ERR_INVALID_ARGUMENT;
-}
-
-int32_t ConnectChannel::StartTcpConnect(SessionManager* pMgr, bool bAsync)
-{
-	const int32_t iThreadStatus = Poll::GetInstance().CheckThreadAccess("ConnectChannel::StartTcpConnect");
-	if (iThreadStatus != OI_OK)
-	{
-		return iThreadStatus;
-	}
-	if (!pMgr)
-	{
-		return OI_ERR_INVALID_ARGUMENT;
-	}
-
-	NetSocket stText;
-	int32_t iStatus = stText.CreateSocket(pMgr, bAsync);
-	if (iStatus != OI_OK)
-	{
-		return iStatus;
-	}
-
-	return stText.SocketConnect(pMgr);
+	NetSocket stSocketLocal;
+	stSocketLocal.GetAddr() = stAddr;
+	stSocketLocal.Attach(iDescriptor);
+	stSocketLocal.SetAsync(true);
+	return stSocketLocal.SocketConnect(pMgr);
 }
 }
 }

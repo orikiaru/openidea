@@ -1101,8 +1101,8 @@ void HttpSessionManager::Resolved(void* pArgument, bool bOk, Net::NetAddr stAddr
 		return;
 	}
 	pCall->pDial = new HttpDial(stSocket, pCall);
-	Net::Poll::GetInstance().IOEventRegister(pCall->pDial, false, true);
-	if (!pCall->pDial->pPollToken)
+	const int32_t iRegisterStatus = Net::Poll::GetInstance().IOEventRegister(pCall->pDial, false, true);
+	if (iRegisterStatus != OI_OK)
 	{
 		GetInstance().Finish(pCall, OI_ERR_CONNECT, "TCP connect registration failed");
 	}
@@ -1128,8 +1128,8 @@ void HttpSessionManager::Connected(const Pending& pCall, net_socket_t iSocket)
 	auto* pChannel = new Net::TCP_Channel(stSocket, pSession);
 	pSession->SetChannel(pChannel);
 	AddSession(pSession, Net::NetAddr::Endpoint(pCall->stOrigin.sHost, std::to_string(pCall->stOrigin.iPort)), iMaxSendQueueBytes, iMaxReceiveBufferBytes);
-	Net::Poll::GetInstance().IOEventRegister(pChannel, true, false);
-	if (!pChannel->pPollToken)
+	const int32_t iRegisterStatus = Net::Poll::GetInstance().IOEventRegister(pChannel, true, false);
+	if (iRegisterStatus != OI_OK)
 	{
 		CloseSession(pSession->GetSessionID());
 		pChannel->TryClose();

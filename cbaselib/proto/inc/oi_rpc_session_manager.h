@@ -325,7 +325,7 @@ class ProtoMultiClientManager : public ProtoSessionManager
 	// 对当前名单里的每台发起建连。之后新登记的实例自动连。
 	int32_t Start();
 	// 单地址建连不适用于这里。
-	ConnectAwaiter StartClient() = delete;
+	OI::Coro::TaskResult<int32_t> StartClient() = delete;
 	// 写死地址时换一台，Init 之后调用：旧连接退役，在途调用回 OI_ERR_CONNECT；实例号仍是 0，Start 过就马上连新地址。
 	// 配了 service 或地址为空返回 OI_ERR_INVALID_ARGUMENT。地址没变什么都不做。
 	int32_t UseAddress(const std::string& sIp, const std::string& sPortLocal);

@@ -20,6 +20,7 @@
 #include "rpc_ids.h"
 #include "oi_redis.h"
 #include "oi_poll.h"
+#include "oi_blocking_work_session.h"
 #include "oi_net_session.h"
 #include "oi_channel.h"
 #include "oi_timer_manager.h"
@@ -37,6 +38,34 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+struct PollWakeProbe
+{
+	std::atomic<bool> bWorker{false};
+	std::atomic<bool> bPoll{false};
+	std::atomic<bool> bDone{false};
+};
+
+static int32_t PostPollWake(std::shared_ptr<PollWakeProbe> pProbe)
+{
+	pProbe->bWorker.store(!OI::Net::Poll::GetInstance().InLoopThread());
+	auto* pOwned = new std::shared_ptr<PollWakeProbe>(std::move(pProbe));
+	try
+	{
+		OI::Net::Poll::GetInstance().PostOnLoop([](void* pArgument)
+		{
+			std::unique_ptr<std::shared_ptr<PollWakeProbe>> pHolder(static_cast<std::shared_ptr<PollWakeProbe>*>(pArgument));
+			(*pHolder)->bPoll.store(OI::Net::Poll::GetInstance().InLoopThread());
+			(*pHolder)->bDone.store(true);
+		}, pOwned);
+	}
+	catch (...)
+	{
+		delete pOwned;
+		throw;
+	}
+	return OI_OK;
+}
 
 static int32_t BlockingCopy(std::string sInput, std::string& sOutput)
 {
@@ -93,6 +122,14 @@ class BlockingAccessChannel : public OI::Net::Channel
 	    : Channel(OI::Net::NetSocket(), nullptr)
 	{
 	}
+	void Attach(net_socket_t iDescriptor)
+	{
+		stSocket.Attach(iDescriptor);
+	}
+	net_socket_t Descriptor() const
+	{
+		return stSocket.GetSocket();
+	}
 	void DataIn() override
 	{
 	}
@@ -101,6 +138,47 @@ class BlockingAccessChannel : public OI::Net::Channel
 	}
 	bool TryClose() override
 	{
+		return false;
+	}
+};
+
+class PollUnregisterProbe : public OI::Net::Channel
+{
+  public:
+	std::atomic<bool> bUnregistered{false};
+	std::atomic<int32_t> iRead{0};
+	std::atomic<int32_t> iWriteAfter{0};
+	std::atomic<int32_t> iCloseAfter{0};
+	explicit PollUnregisterProbe(net_socket_t iDescriptor)
+	    : Channel(OI::Net::NetSocket(), nullptr)
+	{
+		stSocket.Attach(iDescriptor);
+	}
+	void DataIn() override
+	{
+		char vBuffer[16];
+		sockaddr_storage stPeer{};
+		socklen_t iLength = sizeof(stPeer);
+		if (NetOs_RecvFrom(stSocket.GetSocket(), vBuffer, sizeof(vBuffer), (sockaddr*)&stPeer, &iLength) == 1 && vBuffer[0] == 'a')
+		{
+			iRead.fetch_add(1);
+		}
+		OI::Net::Poll::GetInstance().IOEventUnRegister(this, false);
+		bUnregistered.store(true);
+	}
+	void DataOut() override
+	{
+		if (bUnregistered.load())
+		{
+			iWriteAfter.fetch_add(1);
+		}
+	}
+	bool TryClose() override
+	{
+		if (bUnregistered.load())
+		{
+			iCloseAfter.fetch_add(1);
+		}
 		return false;
 	}
 };
@@ -118,6 +196,8 @@ class BlockingAccessClient : public OI::Rpc::ProtoClientManager
 
 struct BlockingAccessResult
 {
+	int32_t iRegisterValid = 0;
+	int32_t iRegisterInvalid = 0;
 	int32_t iManager = 0;
 	int32_t iSession = 0;
 	int32_t iAllow = 0;
@@ -137,7 +217,7 @@ struct BlockingAccessResult
 	int32_t iClose = 0;
 	int32_t iCloseAll = 0;
 #ifdef _SINGLE_THREAD_
-	int32_t iConnect = 0;
+	bool bConnectRejected = false;
 	int32_t iServer = 0;
 	int32_t iOpenPeer = 0;
 	sid_t iPeerOutput = INVALID_SID;
@@ -152,8 +232,10 @@ struct BlockingAccessResult
 #endif
 };
 
-static int32_t CheckBlockingAccess(BlockingAccessSession& stSession, BlockingAccessChannel& stChannel, BlockingAccessResult& stResult)
+static int32_t CheckBlockingAccess(BlockingAccessSession& stSession, BlockingAccessChannel& stChannel, BlockingAccessChannel& stValidChannel, BlockingAccessChannel& stInvalidChannel, BlockingAccessResult& stResult)
 {
+	stResult.iRegisterValid = OI::Net::Poll::GetInstance().IOEventRegister(&stValidChannel, true, false);
+	stResult.iRegisterInvalid = OI::Net::Poll::GetInstance().IOEventRegister(&stInvalidChannel, true, false);
 	const OI::Base::Bytes stBytes("probe", 5);
 	stResult.iManager = IpcClient::GetInstance().SendBytes(-1, stBytes);
 	stResult.iSession = stSession.Send(stBytes);
@@ -169,8 +251,14 @@ static int32_t CheckBlockingAccess(BlockingAccessSession& stSession, BlockingAcc
 	OI::Rpc::ProtoMultiClientManager stRoutes;
 #ifdef _SINGLE_THREAD_
 	stClient.DefaultInit("127.0.0.1", "0");
-	auto stConnect = stClient.StartClient();
-	stResult.iConnect = stConnect.await_resume();
+	try
+	{
+		(void)stClient.StartClient();
+	}
+	catch (const std::logic_error&)
+	{
+		stResult.bConnectRejected = true;
+	}
 	stResult.iServer = stClient.StartServer();
 	stResult.iPeerOutput = 12345;
 	stResult.iOpenPeer = stClient.OpenPeer("127.0.0.1", "9", stResult.iPeerOutput);
@@ -398,12 +486,107 @@ OI::Coro::TaskResult<int> BlockingMgr::CheckBlockingCategories()
 	co_return iBad;
 }
 
+static OI::Coro::TaskResult<int> CheckPollUnregister()
+{
+	OI::Net::NetAddr stAddress;
+	if (!stAddress.Init("127.0.0.1", "0"))
+	{
+		co_return 1;
+	}
+	const net_socket_t iDescriptor = stAddress.CreateUdp(true);
+	if (iDescriptor == INVALID_SOCKET_ID)
+	{
+		co_return 1;
+	}
+	PollUnregisterProbe stProbe(iDescriptor);
+	sockaddr_storage stBound{};
+	socklen_t iLength = sizeof(stBound);
+	if (NetOs_Bind(iDescriptor, stAddress.NetAttrPtr(), stAddress.NetAttrLen()) != 0 ||
+	    NetOs_GetSockName(iDescriptor, (sockaddr*)&stBound, &iLength) != 0 ||
+	    NetOs_SendTo(iDescriptor, "a", 1, (sockaddr*)&stBound, iLength) != 1)
+	{
+		std::fprintf(stderr, "poll unregister setup failed errno=%d\n", errno);
+		co_return 1;
+	}
+	const int32_t iRegister = OI::Net::Poll::GetInstance().IOEventRegister(&stProbe, true, true);
+	if (iRegister != OI_OK)
+	{
+		std::fprintf(stderr, "poll unregister registration failed=%d\n", iRegister);
+		co_return 1;
+	}
+	for (int32_t iWait = 0; iWait < 500 && !stProbe.bUnregistered.load(); ++iWait)
+	{
+		co_await OI::Coro::yield(1);
+	}
+	if (!stProbe.bUnregistered.load())
+	{
+		OI::Net::Poll::GetInstance().IOEventUnRegister(&stProbe, false);
+	}
+	co_await OI::Coro::yield(50);
+	const int32_t iSent = NetOs_SendTo(iDescriptor, "b", 1, (sockaddr*)&stBound, iLength);
+	char vBuffer[16]{};
+	sockaddr_storage stPeer{};
+	socklen_t iPeerLength = sizeof(stPeer);
+	const int32_t iReceived = NetOs_RecvFrom(iDescriptor, vBuffer, sizeof(vBuffer), (sockaddr*)&stPeer, &iPeerLength);
+	NetOs_Close(iDescriptor);
+	const bool bOk = stProbe.bUnregistered.load() && stProbe.iRead.load() == 1 && stProbe.iWriteAfter.load() == 0 &&
+	                 stProbe.iCloseAfter.load() == 0 && iSent == 1 && iReceived == 1 && vBuffer[0] == 'b';
+	if (!bOk)
+	{
+		std::fprintf(stderr, "poll unregister done=%d read=%d write_after=%d close_after=%d sent=%d received=%d byte=%d\n",
+		    stProbe.bUnregistered.load(), stProbe.iRead.load(), stProbe.iWriteAfter.load(), stProbe.iCloseAfter.load(), iSent, iReceived, (int)vBuffer[0]);
+	}
+	LOG_TRACE("hold poll unregister read=%d write_after=%d close_after=%d reused=%d bad=%d", stProbe.iRead.load(),
+	    stProbe.iWriteAfter.load(), stProbe.iCloseAfter.load(), iSent == 1 && iReceived == 1 && vBuffer[0] == 'b', bOk ? 0 : 1);
+	co_return bOk ? 0 : 1;
+}
+
 OI::Coro::TaskResult<int> BlockingMgr::CheckBlockingWork()
 {
 	int iBad = 0;
+	const bool bFifoType = OI::Net::BlockingWorkSessionManager::GetInstance().GetSessionType() == OI::Net::SESSION_TYPE_FIFO &&
+	                       OI::Net::SessionManager::GetSessionTypeByString("fifo") == OI::Net::SESSION_TYPE_FIFO;
+	if (!bFifoType)
+	{
+		++iBad;
+	}
+	LOG_TRACE("hold blocking fifo type bad=%d", bFifoType ? 0 : 1);
+	auto pWakeProbe = std::make_shared<PollWakeProbe>();
+	const int32_t iWakePost = co_await OI::Coro::RunBlocking(PostPollWake, std::shared_ptr<PollWakeProbe>(pWakeProbe));
+	for (int32_t iWait = 0; iWait < 300 && !pWakeProbe->bDone.load(); ++iWait)
+	{
+		co_await OI::Coro::yield(10);
+	}
+	const bool bWake = iWakePost == OI_OK && pWakeProbe->bWorker.load() && pWakeProbe->bPoll.load() && pWakeProbe->bDone.load();
+	if (!bWake)
+	{
+		++iBad;
+	}
+	LOG_TRACE("hold poll worker wake worker=%d poll=%d done=%d bad=%d", pWakeProbe->bWorker.load(),
+	    pWakeProbe->bPoll.load(), pWakeProbe->bDone.load(), bWake ? 0 : 1);
+	iBad += co_await CheckPollUnregister();
 	BlockingAccessSession stAccessSession;
 	BlockingAccessChannel stAccessChannel;
 	BlockingAccessResult stAccessResult;
+	BlockingAccessChannel stValidChannel;
+	BlockingAccessChannel stInvalidChannel;
+	OI::Net::NetAddr stAddress;
+	if (!stAddress.Init("127.0.0.1", "0"))
+	{
+		co_return 1;
+	}
+	const net_socket_t iDescriptor = stAddress.CreateUdp(true);
+	if (iDescriptor == INVALID_SOCKET_ID)
+	{
+		std::fprintf(stderr, "blocking poll socket creation failed\n");
+		co_return 1;
+	}
+	stValidChannel.Attach(iDescriptor);
+	if (NetOs_Bind(iDescriptor, stAddress.NetAttrPtr(), stAddress.NetAttrLen()) != 0)
+	{
+		std::fprintf(stderr, "blocking poll socket bind failed\n");
+		co_return 1;
+	}
 	BlockingAccessSession stLoopSession;
 	const OI::Base::Bytes stLoopBytes("loop", 4);
 	const int32_t iLoopSend = stLoopSession.Send(stLoopBytes);
@@ -414,8 +597,10 @@ OI::Coro::TaskResult<int> BlockingMgr::CheckBlockingWork()
 		std::fprintf(stderr, "blocking loop access send=%d allow=%d channel=%d\n", iLoopSend, iLoopAllow, iLoopChannel);
 		++iBad;
 	}
-	const int32_t iAccessTask = co_await OI::Coro::RunBlocking(CheckBlockingAccess, stAccessSession, stAccessChannel, stAccessResult);
+	const int32_t iAccessTask = co_await OI::Coro::RunBlocking(CheckBlockingAccess, stAccessSession, stAccessChannel, stValidChannel, stInvalidChannel, stAccessResult);
 #ifdef _SINGLE_THREAD_
+	const bool bPollOk = stAccessResult.iRegisterValid == OI_ERR_WRONG_THREAD && stAccessResult.iRegisterInvalid == OI_ERR_WRONG_THREAD &&
+	                     stValidChannel.Descriptor() == iDescriptor;
 	const bool bAccessOk = stAccessResult.iManager == OI_ERR_WRONG_THREAD && stAccessResult.iSession == OI_ERR_WRONG_THREAD &&
 	                       stAccessResult.iAllow == OI_ERR_WRONG_THREAD && stAccessResult.iChannel == OI_ERR_WRONG_THREAD && stAccessSession.PendingSendBytes() == 0 &&
 	                       stAccessResult.iRaw == OI_ERR_WRONG_THREAD && stAccessResult.iPending == OI_ERR_WRONG_THREAD && stAccessResult.iNotify == OI_ERR_WRONG_THREAD &&
@@ -424,13 +609,15 @@ OI::Coro::TaskResult<int> BlockingMgr::CheckBlockingWork()
 	                       stAccessResult.iSessionForbidRead == OI_ERR_WRONG_THREAD && stAccessResult.iChannelForbid == OI_ERR_WRONG_THREAD &&
 	                       stAccessResult.iChannelRead == OI_ERR_WRONG_THREAD && stAccessResult.iChannelForbidRead == OI_ERR_WRONG_THREAD &&
 	                       stAccessResult.iRouteStart == OI_ERR_WRONG_THREAD && stAccessResult.iRouteAddress == OI_ERR_WRONG_THREAD &&
-	                       stAccessResult.iConnect == OI_ERR_WRONG_THREAD && stAccessResult.iServer == OI_ERR_WRONG_THREAD &&
+	                       stAccessResult.bConnectRejected && stAccessResult.iServer == OI_ERR_WRONG_THREAD &&
 	                       stAccessResult.iOpenPeer == OI_ERR_WRONG_THREAD && stAccessResult.iPeerOutput == 12345 && stAccessResult.iReconnect == OI_ERR_WRONG_THREAD &&
 	                       stAccessResult.iClose == OI_ERR_WRONG_THREAD && stAccessResult.iCloseAll == OI_ERR_WRONG_THREAD &&
 	                       stAccessResult.iRegistrySync == OI_ERR_WRONG_THREAD && stAccessResult.iRegistryWatch == OI_ERR_WRONG_THREAD &&
 	                       stAccessResult.iRedis == OI_ERR_WRONG_THREAD && stAccessResult.iTimer == OI_ERR_WRONG_THREAD &&
 	                       stAccessResult.iClosureTimer == OI_ERR_WRONG_THREAD && stAccessResult.bClosureReleased;
 #else
+	const bool bPollOk = stAccessResult.iRegisterValid == OI_OK && stAccessResult.iRegisterInvalid == OI_ERR_SOCKET &&
+	                     stValidChannel.Descriptor() == iDescriptor && stInvalidChannel.Descriptor() == INVALID_SOCKET_ID;
 	const bool bAccessOk = stAccessResult.iManager == OI_ERR_CONNECT && stAccessResult.iSession == OI_OK &&
 	                       stAccessResult.iAllow == OI_OK && stAccessResult.iChannel == OI_OK && stAccessSession.PendingSendBytes() == 5 &&
 	                       stAccessResult.iRaw == OI_ERR_CONNECT && stAccessResult.iPending == OI_OK &&
@@ -439,11 +626,19 @@ OI::Coro::TaskResult<int> BlockingMgr::CheckBlockingWork()
 	                       stAccessResult.iChannelForbid == OI_OK && stAccessResult.iChannelRead == OI_OK && stAccessResult.iChannelForbidRead == OI_OK &&
 	                       stAccessResult.iClose == OI_ERR_NOT_FOUND && stAccessResult.iCloseAll == OI_OK;
 #endif
-	if (iAccessTask != OI_OK || !bAccessOk || stAccessChannel.iEventMask.load() != 0)
+	if (!bPollOk)
+	{
+		std::fprintf(stderr, "blocking poll register valid=%d invalid=%d valid_descriptor=%d invalid_descriptor=%d\n",
+		    stAccessResult.iRegisterValid, stAccessResult.iRegisterInvalid, stValidChannel.Descriptor() == iDescriptor,
+		    stInvalidChannel.Descriptor() == INVALID_SOCKET_ID);
+		++iBad;
+	}
+	LOG_TRACE("hold blocking poll register bad=%d", bPollOk ? 0 : 1);
+	if (iAccessTask != OI_OK || !bAccessOk || stAccessChannel.iEventMask != 0)
 	{
 		std::fprintf(stderr, "blocking access failed task=%d manager=%d session=%d allow=%d channel=%d pending=%zu mask=%d raw=%d pend=%d peer=%d any=%d close=%d all=%d\n",
 		    iAccessTask, stAccessResult.iManager, stAccessResult.iSession, stAccessResult.iAllow, stAccessResult.iChannel,
-		    stAccessSession.PendingSendBytes(), stAccessChannel.iEventMask.load(), stAccessResult.iRaw, stAccessResult.iPending,
+		    stAccessSession.PendingSendBytes(), stAccessChannel.iEventMask, stAccessResult.iRaw, stAccessResult.iPending,
 		    stAccessResult.iPeer, stAccessResult.iAny, stAccessResult.iClose, stAccessResult.iCloseAll);
 		++iBad;
 	}

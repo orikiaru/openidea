@@ -613,7 +613,7 @@ bool RpcCallManager::Deliver(proto_type_t iId, ::OI::Base::BytesStream& stBodyLo
 				::OI::Base::BytesStream stReply;
 				stReply << (iRaw & ~(uint64_t)RPC_REQ_MASK) << int32_t(OI_ERR_BUSY);
 				auto stFrame = EncodePbFrame(iId, stReply);
-				if (pManagerLocal->SendBytes(iSessionIdLocal, stFrame.GetMutableBuff()) != OI_OK)
+				if (pManagerLocal->SendFrame(iSessionIdLocal, stFrame.GetMutableBuff()) != OI_OK)
 				{
 					pManagerLocal->CloseSession(iSessionIdLocal);
 				}
@@ -675,7 +675,7 @@ void RpcCallManager::SendReply(OI::Coro::Token iToken, ::OI::Net::SessionManager
 {
 	try
 	{
-		if (pManager->SendBytes(iSessionId, stFrame) != OI_OK)
+		if (pManager->SendFrame(iSessionId, stFrame) != OI_OK)
 		{
 			pManager->CloseSession(iSessionId);
 		}

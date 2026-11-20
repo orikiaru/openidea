@@ -3,6 +3,7 @@
 #include <memory>
 #include "oi_lock.h"
 #include "oi_bytes.h"
+#include "oi_socket.h"
 #include <errno.h>
 #include <string>
 #include "oi_poll.h"
@@ -27,6 +28,8 @@ class Session
 	friend class Poll;
 	friend class NetChannel;
 	friend class UDP_Channel;
+	friend class SessionManager;
+	int32_t SendBuffered(const ::OI::Base::Bytes& stBytes, bool bFramed);
 	friend class TCP_Channel;
 
   protected:
@@ -58,6 +61,11 @@ class Session
 	SessionManager* pSessionManager;
 	// 对端地址文本，按地址关闭时用。
 	std::string sEndpoint;
+	// UDP 会话的对端地址，发布前写好，之后只读。
+	NetAddr stPeerAddr;
+	std::atomic<uint64_t> iPeerActive{0};
+	bool bPeerIdleExpired = false; // 会话锁
+	bool bPeerClosing = false;     // 会话锁
 	// 通道持有一份，SendBytes 在锁外发送时临时再持一份。最后一份释放时 delete。
 	std::atomic<int32_t> iReferences;
 

@@ -38,11 +38,8 @@ class ConnectChannel : public Channel
 	bool CheckTcpConnect();
 
   public:
-	// 发起非阻塞连接并挂上 poll。失败返回 false。
-	static int32_t StartConnect(SessionManager* pMgr, bool bAsync);
-
-  private:
-	static int32_t StartTcpConnect(SessionManager* pMgr, bool bAsync);
+	// 使用本次解析得到的地址发起非阻塞 TCP 连接。
+	static int32_t StartConnect(SessionManager* pMgr, const NetAddr& stAddr);
 };
 }
 }

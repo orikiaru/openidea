@@ -5,58 +5,16 @@
 #include "oi_poll.h"
 #include "oi_session.h"
 #include "oi_session_manager.h"
-#include <chrono>
+#include "oi_duration.h"
 #include <uv.h>
 namespace OI
 {
 namespace Net
 {
 
-static uint64_t UdpNowMilliseconds()
+UDP_Channel::UDP_Channel(NetSocket stSocketLocal, SessionManager* pMgr, uint16_t iLocalPort, Session* pPeer)
+    : Channel(stSocketLocal, pPeer), m_pSessionManager(pMgr), m_iLocalPort(iLocalPort)
 {
-	return (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
-}
-
-UDP_PeerChannel::UDP_PeerChannel(UDP_Channel* pOwner, const NetAddr& stAddr, Session* pSessionLocal)
-    : Channel(NetSocket(), pSessionLocal), m_pOwner(pOwner), m_stAddr(stAddr), m_iLastActive(UdpNowMilliseconds())
-{
-}
-
-int32_t UDP_PeerChannel::ForbidSend()
-{
-	return Poll::GetInstance().CheckThreadAccess("UDP_PeerChannel::ForbidSend");
-}
-
-int32_t UDP_PeerChannel::AllowRead()
-{
-	return Poll::GetInstance().CheckThreadAccess("UDP_PeerChannel::AllowRead");
-}
-
-int32_t UDP_PeerChannel::ForbidRead()
-{
-	return Poll::GetInstance().CheckThreadAccess("UDP_PeerChannel::ForbidRead");
-}
-
-int32_t UDP_PeerChannel::AllowSend()
-{
-	const int32_t iThreadStatus = Poll::GetInstance().CheckThreadAccess("UDP_PeerChannel::AllowSend");
-	if (iThreadStatus != OI_OK)
-	{
-		return iThreadStatus;
-	}
-
-	if (pSession->IsClosed())
-	{
-		m_pOwner->MarkClosing(this);
-		return OI_ERR_CONNECT;
-	}
-	return m_bIdleExpired ? OI_ERR_CONNECT : m_pOwner->Flush(this);
-}
-
-UDP_Channel::UDP_Channel(NetSocket stSocketLocal, SessionManager* pMgr, uint16_t iLocalPort)
-    : Channel(stSocketLocal, NULL), m_pSessionManager(pMgr), m_iLocalPort(iLocalPort)
-{
-	m_stInput.Reserve(64 * 1024);
 }
 
 int32_t UDP_Channel::StartBind(SessionManager* pMgr)
@@ -112,207 +70,165 @@ int32_t UDP_Channel::StartBind(SessionManager* pMgr)
 	}
 	NetSocket stSocketLocal;
 	stSocketLocal.Init(iDescriptor, pMgr);
-	UDP_Channel* pChannelLocal = new UDP_Channel(stSocketLocal, pMgr, stBound.Port());
-	Poll::GetInstance().IOEventRegister(pChannelLocal, true, false);
-	if (!pChannelLocal->pPollToken)
+	std::unique_ptr<UDP_Channel> pChannelLocal(new UDP_Channel(stSocketLocal, pMgr, stBound.Port(), nullptr));
+	auto& stPoll = Poll::GetInstance();
+	const int32_t iRegisterStatus = stPoll.IOEventRegister(pChannelLocal.get(), true, false);
+	if (iRegisterStatus != OI_OK)
 	{
-		delete pChannelLocal;
-		return OI_ERR_SOCKET;
+		return iRegisterStatus;
 	}
-	pMgr->pUdpChannel = pChannelLocal;
-	Poll::GetInstance().CallOnLoop(&UDP_Channel::OnStartIdle, pChannelLocal);
+	const uint64_t iIdle = pMgr->IdleTimeoutMilliseconds();
+	auto pTimer = std::make_unique<uv_timer_t>();
+	int iStatus = uv_timer_init(stPoll.Loop(), pTimer.get());
+	if (iStatus == 0)
+	{
+		uv_timer_t* pIdle = pTimer.release();
+		stPoll.AdoptWatchTimer(pChannelLocal.get(), pIdle);
+		pIdle->data = pMgr;
+		const uint64_t iRepeat = iIdle < 4000 ? (iIdle / 4 > 0 ? iIdle / 4 : 1) : 1000;
+		iStatus = uv_timer_start(pIdle, [](uv_timer_t* pHandle)
+		{
+			static_cast<SessionManager*>(pHandle->data)->CloseIdleUdpPeers();
+		}, iRepeat, iRepeat);
+	}
+	if (iStatus != 0)
+	{
+		LOG_ERROR("UDP_Channel::StartBind idle timer id=%s err=%s (%d)", pMgr->GetIDString().c_str(), uv_strerror(iStatus), iStatus);
+		return OI_ERR_FAIL;
+	}
+	pMgr->pUdpChannel = pChannelLocal.release();
 	return OI_OK;
 }
 
-UDP_PeerChannel* UDP_Channel::OpenLocked(const NetAddr& stAddr)
+int32_t UDP_Channel::AllowSend()
 {
-	const std::string sEndpoint = stAddr.Endpoint();
-	auto it = m_mPeers.find(sEndpoint);
-	if (it != m_mPeers.end() && !it->second->pSession->IsClosed())
+	if (!pSession)
 	{
-		return it->second;
+		return OI_ERR_INVALID_ARGUMENT;
 	}
-	// 旧会话关了还没回收时，新会话顶掉表项；回收只摘自己那一项。
-	Session* pSessionLocal = m_pSessionManager->CloneSession();
-	UDP_PeerChannel* pPeer = new UDP_PeerChannel(this, stAddr, pSessionLocal);
-	pSessionLocal->SetChannel(pPeer);
-	m_mPeers[sEndpoint] = pPeer;
-	m_pSessionManager->RegisterSession(pSessionLocal, sEndpoint, m_pSessionManager->MaxSendQueueBytes(), m_pSessionManager->MaxReceiveBufferBytes());
-	m_mSessions[pSessionLocal->GetSessionID()] = pPeer;
-	m_pSessionManager->OnAddSession(pSessionLocal);
-	return pPeer;
-}
-
-sid_t UDP_Channel::OpenPeer(const NetAddr& stAddr)
-{
-	::OI::Thread::MutexGuard stLock(m_stPeerLock);
-	return OpenLocked(stAddr)->pSession->GetSessionID();
-}
-
-int32_t UDP_Channel::GetPeerAddr(sid_t iSessionId, NetAddr& stAddr)
-{
-	::OI::Thread::MutexGuard stLock(m_stPeerLock);
-	auto it = m_mSessions.find(iSessionId);
-	if (it == m_mSessions.end())
+	if (pSession->IsClosed())
 	{
-		return OI_ERR_NOT_FOUND;
+		if (!pSession->bPeerClosing)
+		{
+			pSession->bPeerClosing = true;
+			for (const auto& stPacket : m_vPackets)
+			{
+				pSession->iQueuedBytes -= stPacket.Size();
+			}
+			m_vPackets.clear();
+			Poll::GetInstance().PostOnLoop([](void* pArgument)
+			{
+				auto* pChannel = static_cast<UDP_Channel*>(pArgument);
+				pChannel->m_pSessionManager->RecycleUdpPeer(pChannel->pSession);
+				delete pChannel;
+			}, this);
+		}
+		return OI_ERR_CONNECT;
 	}
-	stAddr = it->second->m_stAddr;
-	return OI_OK;
+	return QueuePacket(false);
 }
 
-int32_t UDP_Channel::Flush(UDP_PeerChannel* pPeer)
+int32_t UDP_Channel::QueuePacket(bool bFramed)
 {
 	::OI::Base::Bytes stOutput;
-	pPeer->pSession->SwapOutBuff(stOutput);
+	pSession->SwapOutBuff(stOutput);
 	if (stOutput.Size() == 0)
 	{
 		return OI_OK;
 	}
-	// 这一包已经离开会话缓冲。超限或 sendto 没收下整包就丢掉，不并进下一包，也不调用 OnBytesSend。
-	// 发送额度由 SendResult 按取走但未写出的字节退回。
-	const size_t iMaxDatagramBytes = pPeer->m_stAddr.Family() == AF_INET ? 65507 : 65527;
+	if (pSession->bPeerIdleExpired)
+	{
+		return OI_ERR_CONNECT;
+	}
+	// 入队前拒绝的整包由 SendResult 退还额度。
+	const size_t iMaxDatagramBytes = pSession->stPeerAddr.Family() == AF_INET ? 65507 : 65527;
 	if (stOutput.Size() > iMaxDatagramBytes)
 	{
 		return OI_ERR_INVALID_ARGUMENT;
 	}
-	int iSent = -1;
-	for (;;)
+	// 1200 字节仅限制合包。单条大帧仍可按数据报上限原样发送。
+	constexpr size_t iBatchBytes = 1200;
+	if (bFramed && m_bTailFramed && !m_vPackets.empty() && m_vPackets.back().Size() + stOutput.Size() <= iBatchBytes)
 	{
-		iSent = NetOs_SendTo(stSocket.GetSocket(), stOutput.Begin(), stOutput.Size(), pPeer->m_stAddr.NetAttrPtr(), pPeer->m_stAddr.NetAttrLen());
-		if (iSent < 0 && errno == EINTR)
-		{
-			continue;
-		}
-		break;
+		m_vPackets.back().Append(stOutput);
+		return OI_OK;
 	}
-	if (iSent < 0)
+	m_vPackets.emplace_back(std::move(stOutput));
+	m_bTailFramed = bFramed;
+	if (m_vPackets.size() == 1)
 	{
-		const int iError = errno;
-		LOG_TRACE("UDP_Channel::Flush drop sid=%d bytes=%zu errno=%d err=%s", pPeer->pSession->GetSessionID(), stOutput.Size(), iError, NetOs_StrError(iError));
-		return OI_ERR_FAIL;
+		Poll::GetInstance().ChangeEvents(m_pSessionManager->pUdpChannel, IO_EV_WRITE, 0);
 	}
-	if ((size_t)iSent != stOutput.Size())
-	{
-		LOG_TRACE("UDP_Channel::Flush drop sid=%d bytes=%zu sent=%d", pPeer->pSession->GetSessionID(), stOutput.Size(), iSent);
-		return OI_ERR_FAIL;
-	}
-	pPeer->pSession->OnBytesSend(stOutput.Size());
-	pPeer->m_iLastActive.store(UdpNowMilliseconds(), std::memory_order_relaxed);
 	return OI_OK;
 }
 
-void UDP_Channel::MarkClosing(UDP_PeerChannel* pPeer)
+// 队列非空即本通道有待发包。持会话锁，本轮只取这个对端的包。
+bool UDP_Channel::Flush()
 {
-	bool bPost = false;
+	::OI::Thread::MutexGuard stLock(pSession->stLocker);
+	if (pSession->IsClosed() || pSession->bPeerIdleExpired)
 	{
-		::OI::Thread::MutexGuard stLock(m_stClosingLock);
-		if (pPeer->m_bClosing)
+		return false;
+	}
+	for (int iRound = 0; iRound < 8 && !m_vPackets.empty(); ++iRound)
+	{
+		auto& stPacket = m_vPackets.front();
+		int iSent;
+		do
 		{
-			return;
+			iSent = NetOs_SendTo(stSocket.GetSocket(), stPacket.Begin(), stPacket.Size(), pSession->stPeerAddr.NetAttrPtr(), pSession->stPeerAddr.NetAttrLen());
+		} while (iSent < 0 && errno == EINTR);
+		if (iSent < 0 && errno == EAGAIN)
+		{
+			return true;
 		}
-		pPeer->m_bClosing = true;
-		m_vClosing.push_back(pPeer);
-		bPost = !m_bRecyclePosted;
-		m_bRecyclePosted = true;
-	}
-	if (bPost)
-	{
-		// 关闭可能发生在管理器锁里，回收要回调管理器，所以一律排到下一轮。
-		Poll::GetInstance().PostOnLoop(&UDP_Channel::OnRecycle, this);
-	}
-}
-
-void UDP_Channel::OnRecycle(void* pArgument)
-{
-	static_cast<UDP_Channel*>(pArgument)->Recycle();
-}
-
-void UDP_Channel::Recycle()
-{
-	std::vector<UDP_PeerChannel*> vClosing;
-	{
-		::OI::Thread::MutexGuard stLock(m_stClosingLock);
-		vClosing.swap(m_vClosing);
-		m_bRecyclePosted = false;
-	}
-	for (UDP_PeerChannel* pPeer : vClosing)
-	{
-		Session* pSessionLocal = pPeer->pSession;
+		if (iSent >= 0 && static_cast<size_t>(iSent) == stPacket.Size())
 		{
-			::OI::Thread::MutexGuard stLock(m_stPeerLock);
-			auto itPeer = m_mPeers.find(pSessionLocal->GetEndpoint());
-			if (itPeer != m_mPeers.end() && itPeer->second == pPeer)
-			{
-				m_mPeers.erase(itPeer);
-			}
-			auto itSession = m_mSessions.find(pSessionLocal->GetSessionID());
-			if (itSession != m_mSessions.end() && itSession->second == pPeer)
-			{
-				m_mSessions.erase(itSession);
-			}
+			pSession->OnBytesSend(stPacket.Size());
+			pSession->iPeerActive.store(::OI::Timer::SteadyMilliseconds(), std::memory_order_relaxed);
 		}
-		// 和 NetChannel::Destroy 一样：先断开会话到通道的指针，再通知管理器并释放。
-		pSessionLocal->DetachChannel();
-		pSessionLocal->OnClose();
-		pSessionLocal->Release();
-		delete pPeer;
-	}
-}
-
-void UDP_Channel::OnStartIdle(void* pArgument)
-{
-	UDP_Channel* pChannelLocal = static_cast<UDP_Channel*>(pArgument);
-	const uint64_t iIdle = pChannelLocal->m_pSessionManager->IdleTimeoutMilliseconds();
-	uv_timer_t* pTimer = new uv_timer_t();
-	pTimer->data = pChannelLocal;
-	uv_timer_init(Poll::GetInstance().Loop(), pTimer);
-	const uint64_t iRepeat = iIdle < 4000 ? (iIdle / 4 > 0 ? iIdle / 4 : 1) : 1000;
-	uv_timer_start(pTimer, &UDP_Channel::OnIdle, iRepeat, iRepeat);
-	pChannelLocal->m_pIdleTimer = pTimer;
-}
-
-void UDP_Channel::OnIdle(uv_timer_s* pTimer)
-{
-	static_cast<UDP_Channel*>(pTimer->data)->CloseIdle();
-}
-
-void UDP_Channel::CloseIdle()
-{
-	const uint64_t iNow = UdpNowMilliseconds();
-	const uint64_t iIdle = m_pSessionManager->IdleTimeoutMilliseconds();
-	std::vector<UDP_PeerChannel*> vIdle;
-	{
-		::OI::Thread::MutexGuard stLock(m_stPeerLock);
-		for (const auto& [sEndpoint, pPeer] : m_mPeers)
+		else
 		{
-			const uint64_t iLast = pPeer->m_iLastActive.load(std::memory_order_relaxed);
-			if (iNow > iLast && iNow - iLast >= iIdle && !pPeer->pSession->IsClosed())
-			{
-				vIdle.push_back(pPeer);
-			}
+			const int iError = iSent < 0 ? errno : 0;
+			LOG_ERROR("UDP sendto sid=%d bytes=%zu sent=%d errno=%d", pSession->GetSessionID(), stPacket.Size(), iSent, iError);
+			pSession->iQueuedBytes -= stPacket.Size();
+		}
+		m_vPackets.pop_front();
+	}
+	return !m_vPackets.empty();
+}
+
+void UDP_Channel::DataOut()
+{
+	// 先撤本次写关注。扫描中有新包入空队时，发送方会重新开启，避免覆盖唤醒。
+	Poll::GetInstance().ChangeEvents(this, 0, IO_EV_WRITE);
+	std::vector<UDP_Channel*> vPeers;
+	{
+		::OI::Thread::MutexGuard stLock(m_pSessionManager->m_stUdpPeerLock);
+		vPeers.reserve(m_pSessionManager->m_mUdpPeers.size());
+		for (const auto& [sEndpoint, pChannel] : m_pSessionManager->m_mUdpPeers)
+		{
+			vPeers.push_back(pChannel);
 		}
 	}
-	// 关闭会回调管理器，出锁再关。
-	// 通道只在 poll 回调里回收，本轮结束前候选指针有效。
-	for (UDP_PeerChannel* pPeer : vIdle)
+	// 只有 poll 回收通道，本轮内指针有效；发送时不持 peer 表锁。
+	bool bPending = false;
+	for (auto* pChannel : vPeers)
 	{
-		Session* pSessionLocal = pPeer->pSession;
+		if (pChannel->Flush())
 		{
-			::OI::Thread::MutexGuard stLock(pSessionLocal->stLocker);
-			const uint64_t iLast = pPeer->m_iLastActive.load(std::memory_order_relaxed);
-			if (iNow <= iLast || iNow - iLast < iIdle || pSessionLocal->IsClosed())
-			{
-				continue;
-			}
-			pPeer->m_bIdleExpired = true;
+			bPending = true;
 		}
-		pSessionLocal->PassiveClose(ETIMEDOUT);
+	}
+	if (bPending)
+	{
+		Poll::GetInstance().ChangeEvents(this, IO_EV_WRITE, 0);
 	}
 }
 
 void UDP_Channel::DataIn()
 {
+	m_stInput.Reserve(64 * 1024);
 	// 水平触发。一轮收够包数就先让出，剩下的下一轮再来。
 	for (int iRound = 0; iRound < 64; ++iRound)
 	{
@@ -340,12 +256,15 @@ void UDP_Channel::DataIn()
 		// 按包长拷一份交出去。收包缓冲留着下次用，不让每条会话各占一块 64K。
 		::OI::Base::Bytes stPacket;
 		stPacket.Append(m_stInput.Begin(), (size_t)iCount);
-		Session* pSessionLocal = NULL;
+		Session* pSessionLocal;
 		{
-			::OI::Thread::MutexGuard stLock(m_stPeerLock);
-			UDP_PeerChannel* pPeer = OpenLocked(stAddr);
-			pPeer->m_iLastActive.store(UdpNowMilliseconds(), std::memory_order_relaxed);
-			pSessionLocal = pPeer->pSession;
+			::OI::Thread::MutexGuard stLock(m_pSessionManager->m_stUdpPeerLock);
+			pSessionLocal = m_pSessionManager->OpenUdpPeerLocked(stAddr);
+			if (!pSessionLocal)
+			{
+				continue;
+			}
+			pSessionLocal->iPeerActive.store(::OI::Timer::SteadyMilliseconds(), std::memory_order_relaxed);
 		}
 		// 删除只在本线程，出锁后会话还在。
 		pSessionLocal->SwapInBuff(stPacket);

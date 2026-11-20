@@ -4,16 +4,16 @@
 
 ## 全量
 
-2026-11-20，基于提交 `e17e579` 之上的最终工作区，四组 `--case all` 均通过 22/22。覆盖 UDP 空闲回收、Hold 迟到回包、路由旧快照、logd 背压、监听及 Windows Winsock 错误文本相关改动。协程压力和序列化压力不计入全量。
+2026-11-21，基于提交 `cd33b7f8` 之上的冻结工作区，四组 `--case all` 均通过 22/22。覆盖 UDP 数据报排队与合包、FIFO 唤醒、通道注销和事件循环退出等改动。协程压力和序列化压力不计入全量。
 
-| 平台 | 线程 | CPU | 实测频率（MHz） | 通过 |
-| --- | --- | --- | --- | --- |
-| Windows MSVC x64 Release | 多线程 | Intel Core i9-11900K | 3504 | 22/22 |
-| Windows MSVC x64 Release | 单线程 | Intel Core i9-11900K | 3504 | 22/22 |
-| 远程 Linux Release，4 核 | 多线程 | Intel Xeon Platinum 8255C | 2494.140 | 22/22 |
-| 远程 Linux Release，2 核 | 单线程 | Intel Xeon Gold 6271C | 2593.904 | 22/22 |
+| 平台 | 线程 | CPU | 报告频率（MHz） | 通过 | 耗时 |
+| --- | --- | --- | --- | --- | --- |
+| Windows MSVC x64 Release | 多线程 | AMD Ryzen 7 9800X3D | 4700 | 22/22 | 388.7 秒 |
+| Windows MSVC x64 Release | 单线程 | AMD Ryzen 7 9800X3D | 4700 | 22/22 | 421.7 秒 |
+| 远程 Linux Release，4 核 KVM | 多线程 | Intel Xeon Platinum 8255C | 2494.140 | 22/22 | 00:53:46–01:04:26，含 clean-first 重编 |
+| 远程 Linux Release，2 核 KVM | 单线程 | Intel Xeon Gold 6271C | 2593.904 | 22/22 | clean-first 重编 |
 
-Windows 频率为性能计数器采样读数，不是运行期间连续采样。Linux 两路额外通过真实 MySQL 和 `registry-static`：MySQL 行映射、行操作及客户端检查均为 `bad=0`，包括非法 JSON 列拒写、仅更新合法列并读回。Windows 未运行 MySQL。
+Windows 频率为 CIM `CurrentClockSpeed` 报告值；Linux 频率为 KVM 来宾报告值，不视作物理核瞬时频率。四路对应定向用例均通过。
 
 ## 显式用例
 

@@ -383,7 +383,7 @@ void RegistryClient::CallRegistry(const Req& stRequest, int64_t iTimeoutMillisec
 		stBody << (iCallId | uint64_t(RPC_REQ_MASK));
 		stRequest.serialize(stBody);
 		auto stFrame = ::OI::Rpc::EncodePbFrame(::OI::Rpc::RpcProtoId<Req>::iValue, stBody);
-		const int32_t iStatus = SendBytesResult(iSessionIdLocal, stFrame.GetMutableBuff());
+		const int32_t iStatus = SendFrame(iSessionIdLocal, stFrame.GetMutableBuff());
 		if (iStatus != OI_OK)
 		{
 			::OI::Rpc::RpcCallManager::GetInstance().Wake(iCallId, iStatus, nullptr);

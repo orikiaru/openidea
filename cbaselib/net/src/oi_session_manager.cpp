@@ -97,7 +97,6 @@ int32_t SessionManager::Init()
 		return OI_ERR_INVALID_ARGUMENT;
 	}
 	DefaultInit(sIpLocal, sPortLocal, iConfiguredType);
-	sEndpoint = NetAddr::Endpoint(sIpLocal, sPortLocal);
 	if (!sServiceName.empty())
 	{
 		WatchService(sServiceName);
@@ -123,90 +122,65 @@ void SessionManager::WatchService(const std::string& sService)
 
 struct SessionManager::ConnectWait
 {
-	OI::Thread::Mutex stMutex;
-	bool bDone = false;
+	std::atomic<OI::Coro::Gate> iGate{OI::Coro::Gate::Idle};
+	std::coroutine_handle<> stHandle;
 	int32_t iResult = OI_ERR_CONNECT;
-	struct Waiter
+	void Finish(int32_t iCode)
 	{
-		std::coroutine_handle<> stHandle;
-		void (*fnSchedule)(std::coroutine_handle<>);
-	};
-	std::vector<Waiter> vWaiters;
-	void Finish(int32_t iResultLocal)
+		iResult = iCode;
+		if (iGate.exchange(OI::Coro::Gate::Ready) == OI::Coro::Gate::Waiting)
+		{
+			OI::Coro::Schedule(stHandle);
+		}
+	}
+	bool await_ready() const noexcept
 	{
-		std::vector<Waiter> vReady;
-		{
-			OI::Thread::MutexGuard stLock(stMutex);
-			if (bDone)
-			{
-				return;
-			}
-			iResult = iResultLocal;
-			bDone = true;
-			vReady.swap(vWaiters);
-		}
-		// 登记与完成共用锁；出锁后只访问局部列表，允许等待者立即恢复。
-		for (const auto& stWaiter : vReady)
-		{
-			stWaiter.fnSchedule(stWaiter.stHandle);
-		}
+		return iGate.load() == OI::Coro::Gate::Ready;
+	}
+	bool await_suspend(std::coroutine_handle<> stParent) noexcept
+	{
+		stHandle = stParent;
+		return iGate.exchange(OI::Coro::Gate::Waiting) != OI::Coro::Gate::Ready;
+	}
+	int32_t await_resume() const noexcept
+	{
+		return iResult;
 	}
 };
 
-SessionManager::ConnectAwaiter::ConnectAwaiter(SessionManager* pManager)
-    : m_pWait(std::make_shared<ConnectWait>())
+OI::Coro::TaskResult<int32_t> SessionManager::WaitForConnect(std::shared_ptr<ConnectWait> pWait)
 {
-	pManager->BeginConnect(m_pWait);
+	co_return co_await *pWait;
 }
 
-bool SessionManager::ConnectAwaiter::Suspend(std::coroutine_handle<> stHandle, void (*fnSchedule)(std::coroutine_handle<>))
+OI::Coro::TaskResult<int32_t> SessionManager::StartClient()
 {
-	// 局部引用保活，发布挂起后工人可以立即恢复并销毁 awaiter。
-	auto pWait = m_pWait;
-	if (!pWait)
-	{
-		throw std::logic_error("cannot await a moved-from connection");
-	}
-	OI::Thread::MutexGuard stLock(pWait->stMutex);
-	// 已完成对象可以再次 await；不能把完成门重新改成挂起状态。
-	if (pWait->bDone)
-	{
-		return false;
-	}
-	pWait->vWaiters.push_back({stHandle, fnSchedule});
-	return true;
-}
-
-int32_t SessionManager::ConnectAwaiter::await_resume() const noexcept
-{
-	return m_pWait->iResult;
+	auto pWait = std::make_shared<ConnectWait>();
+	auto stResult = WaitForConnect(pWait);
+	BeginConnect(pWait);
+	return stResult;
 }
 
 void SessionManager::FinishConnectWaiters(int32_t iResultLocal)
 {
 	auto vWaiters = std::move(m_vConnectWaiters);
 	m_vConnectWaiters.clear();
-	for (const auto& pWeak : vWaiters)
+	for (const auto& pWait : vWaiters)
 	{
-		if (auto pWait = pWeak.lock())
-		{
-			pWait->Finish(iResultLocal);
-		}
+		pWait->Finish(iResultLocal);
 	}
 }
 
 void SessionManager::BeginConnect(const std::shared_ptr<ConnectWait>& pWaitLocal)
 {
-	const int32_t iThreadStatus = Poll::GetInstance().CheckThreadAccess("SessionManager::StartClient");
-	if (iThreadStatus != OI_OK)
-	{
-		pWaitLocal->Finish(iThreadStatus);
-		return;
-	}
-
 	if (OI::Thread::ThreadPool::GetInstance().StopRequested())
 	{
 		pWaitLocal->Finish(OI_ERR_CONNECT);
+		return;
+	}
+	if (Poll::GetInstance().InLoopThread())
+	{
+		StartConnect(pWaitLocal);
 		return;
 	}
 	struct ConnectRequest
@@ -223,48 +197,6 @@ void SessionManager::BeginConnect(const std::shared_ptr<ConnectWait>& pWaitLocal
 	pRequest.release();
 }
 
-struct ConnectResolve
-{
-	SessionManager* pManager;
-	uint64_t iGeneration;
-};
-
-struct ConnectResolver
-{
-	static void OnResolved(void* pArgument, bool bOk, NetAddr stAddr)
-	{
-		std::unique_ptr<ConnectResolve> pJob(static_cast<ConnectResolve*>(pArgument));
-		if (!pJob || !pJob->pManager)
-		{
-			return;
-		}
-		SessionManager* pManager = pJob->pManager;
-		// 代次已经被换掉或收过口时，等待者由那边唤醒。这一代还挂着就必须走 AbortSession，co_await StartClient() 才能回来。
-		if (pJob->iGeneration != pManager->iConnectGeneration || !pManager->bConnectPending)
-		{
-			return;
-		}
-		if (pManager->bServiceDown || !bOk || stAddr.Host().empty())
-		{
-			pManager->AbortSession(pJob->iGeneration);
-			return;
-		}
-		pManager->DefaultInit(stAddr.Host(), pManager->sPort, pManager->iSessionType);
-		pManager->sEndpoint = stAddr.Endpoint();
-		if (pManager->HasEndpoint(pManager->sEndpoint))
-		{
-			pManager->bConnectPending = false;
-			pManager->FinishConnectWaiters(OI_OK);
-			return;
-		}
-		const int32_t iConnectStatus = ConnectChannel::StartConnect(pManager, true);
-		if (iConnectStatus != OI_OK)
-		{
-			pManager->AbortSession(pJob->iGeneration, iConnectStatus);
-		}
-	}
-};
-
 void SessionManager::StartConnect(const std::shared_ptr<ConnectWait>& pWaitLocal)
 {
 	assert(Poll::GetInstance().InLoopThread());
@@ -273,26 +205,61 @@ void SessionManager::StartConnect(const std::shared_ptr<ConnectWait>& pWaitLocal
 		pWaitLocal->Finish(OI_ERR_CONNECT);
 		return;
 	}
-	if (!bConnectPending && HasEndpoint(NetAddr::Endpoint(sIpAddress, sPort)))
+	if (GetSessionType() == SESSION_TYPE_UDP)
+	{
+		pWaitLocal->Finish(pUdpChannel ? OI_OK : UDP_Channel::StartBind(this));
+		return;
+	}
+	if (GetSessionType() != SESSION_TYPE_TCP)
+	{
+		pWaitLocal->Finish(OI_ERR_INVALID_ARGUMENT);
+		return;
+	}
+	if (!bConnectPending && HasEndpoint(sEndpoint))
 	{
 		pWaitLocal->Finish(OI_OK);
 		return;
 	}
 	// 当前列表只属于当前未完成的代次。必须先登记，再启动可能立即完成的 connect。
-	while (!m_vConnectWaiters.empty() && m_vConnectWaiters.back().expired())
-	{
-		m_vConnectWaiters.pop_back();
-	}
 	m_vConnectWaiters.push_back(pWaitLocal);
 	if (bConnectPending)
 	{
 		return;
 	}
 	bConnectPending = true;
-	ConnectResolve* pJob = new ConnectResolve();
-	pJob->pManager = this;
-	pJob->iGeneration = ++iConnectGeneration;
-	NetAddr::Resolve(sIpAddress, sPort, &ConnectResolver::OnResolved, pJob);
+	struct ConnectResolve
+	{
+		SessionManager* pManager;
+		uint64_t iGeneration;
+	};
+	auto* pJob = new ConnectResolve{this, ++iConnectGeneration};
+	NetAddr::Resolve(sIpAddress, sPort, [](void* pArgument, bool bOk, NetAddr stAddr)
+	{
+		std::unique_ptr<ConnectResolve> pResolved(static_cast<ConnectResolve*>(pArgument));
+		SessionManager* pManager = pResolved->pManager;
+		// 代次已经被换掉或收过口时，等待者由那边唤醒。这一代还挂着就必须走 AbortSession，co_await StartClient() 才能回来。
+		if (pResolved->iGeneration != pManager->iConnectGeneration || !pManager->bConnectPending)
+		{
+			return;
+		}
+		if (pManager->bServiceDown || !bOk || stAddr.Host().empty())
+		{
+			pManager->AbortSession(pResolved->iGeneration);
+			return;
+		}
+		pManager->sEndpoint = stAddr.Endpoint();
+		if (pManager->HasEndpoint(pManager->sEndpoint))
+		{
+			pManager->bConnectPending = false;
+			pManager->FinishConnectWaiters(OI_OK);
+			return;
+		}
+		const int32_t iConnectStatus = ConnectChannel::StartConnect(pManager, stAddr);
+		if (iConnectStatus != OI_OK)
+		{
+			pManager->AbortSession(pResolved->iGeneration, iConnectStatus);
+		}
+	}, pJob);
 }
 
 int32_t SessionManager::CloseEndpoint(const std::string& sEndpoint)
@@ -409,7 +376,7 @@ void SessionManager::ApplyService(const std::string& sIpLocal, const std::string
 	}
 	std::string sEndpointLocal = NetAddr::Endpoint(sIpLocal, sPortLocal);
 	bool bWasDown = bServiceDown;
-	bool bMoved = sEndpoint != sEndpointLocal;
+	bool bMoved = NetAddr::Endpoint(sIpAddress, sPort) != sEndpointLocal;
 	bServiceSeen = true;
 	if (!bWasDown && !bMoved)
 	{
@@ -420,7 +387,6 @@ void SessionManager::ApplyService(const std::string& sIpLocal, const std::string
 	bConnectPending = false;
 	std::string sPrevious = sEndpoint;
 	bServiceDown = false;
-	sEndpoint = sEndpointLocal;
 	DefaultInit(sIpLocal, sPortLocal, iSessionType);
 	LOG_TRACE("service switch %s %s -> %s", sServiceName.c_str(), sPrevious.c_str(), sEndpointLocal.c_str());
 	fflush(stdout);
@@ -468,12 +434,93 @@ SESSION_TYPE SessionManager::GetSessionTypeByString(const std::string& sType)
 	{
 		return SESSION_TYPE_UDP;
 	}
+	if (sType == "fifo")
+	{
+		return SESSION_TYPE_FIFO;
+	}
 	return SESSION_TYPE_INVALID;
 }
 
 uint16_t SessionManager::LocalPort() const
 {
 	return pUdpChannel ? pUdpChannel->LocalPort() : 0;
+}
+
+Session* SessionManager::OpenUdpPeerLocked(const NetAddr& stAddr)
+{
+	const std::string sEndpoint = stAddr.Endpoint();
+	auto it = m_mUdpPeers.find(sEndpoint);
+	if (it != m_mUdpPeers.end() && !it->second->pSession->IsClosed())
+	{
+		return it->second->pSession;
+	}
+	// 旧会话关了还没回收时，新会话顶掉表项；回收只摘自己那一项。
+	const net_socket_t iDescriptor = NetOs_Dup(pUdpChannel->stSocket.GetSocket());
+	if (iDescriptor == INVALID_SOCKET_ID)
+	{
+		LOG_ERROR("UDP dup peer=%s err=%s", sEndpoint.c_str(), NetOs_StrError(errno));
+		return nullptr;
+	}
+	NetSocket stSocketLocal;
+	stSocketLocal.Attach(iDescriptor);
+	Session* pSessionLocal = CloneSession();
+	pSessionLocal->stPeerAddr = stAddr;
+	pSessionLocal->iPeerActive.store(::OI::Timer::SteadyMilliseconds(), std::memory_order_relaxed);
+	auto* pChannel = new UDP_Channel(stSocketLocal, this, pUdpChannel->LocalPort(), pSessionLocal);
+	pSessionLocal->SetChannel(pChannel);
+	m_mUdpPeers[sEndpoint] = pChannel;
+	RegisterSession(pSessionLocal, sEndpoint, MaxSendQueueBytes(), MaxReceiveBufferBytes());
+	OnAddSession(pSessionLocal);
+	return pSessionLocal;
+}
+
+void SessionManager::RecycleUdpPeer(Session* pSessionLocal)
+{
+	{
+		::OI::Thread::MutexGuard stLock(m_stUdpPeerLock);
+		auto it = m_mUdpPeers.find(pSessionLocal->GetEndpoint());
+		if (it != m_mUdpPeers.end() && it->second->pSession == pSessionLocal)
+		{
+			m_mUdpPeers.erase(it);
+		}
+	}
+	pSessionLocal->DetachChannel();
+	pSessionLocal->OnClose();
+	pSessionLocal->Release();
+}
+
+void SessionManager::CloseIdleUdpPeers()
+{
+	const uint64_t iNow = ::OI::Timer::SteadyMilliseconds();
+	const uint64_t iIdle = IdleTimeoutMilliseconds();
+	std::vector<Session*> vIdle;
+	{
+		::OI::Thread::MutexGuard stLock(m_stUdpPeerLock);
+		for (const auto& [sEndpoint, pChannel] : m_mUdpPeers)
+		{
+			Session* pSessionLocal = pChannel->pSession;
+			const uint64_t iLast = pSessionLocal->iPeerActive.load(std::memory_order_relaxed);
+			if (iNow > iLast && iNow - iLast >= iIdle && !pSessionLocal->IsClosed())
+			{
+				vIdle.push_back(pSessionLocal);
+			}
+		}
+	}
+	// 关闭会回调管理器，出锁再关。
+	// 会话只在 poll 回调里回收，本轮结束前候选指针有效。
+	for (Session* pSessionLocal : vIdle)
+	{
+		{
+			::OI::Thread::MutexGuard stLock(pSessionLocal->stLocker);
+			const uint64_t iLast = pSessionLocal->iPeerActive.load(std::memory_order_relaxed);
+			if (iNow <= iLast || iNow - iLast < iIdle || pSessionLocal->IsClosed())
+			{
+				continue;
+			}
+			pSessionLocal->bPeerIdleExpired = true;
+		}
+		pSessionLocal->PassiveClose(ETIMEDOUT);
+	}
 }
 
 int32_t SessionManager::OpenPeer(const std::string& sIp, const std::string& sPortLocal, sid_t& iSessionId)
@@ -492,12 +539,13 @@ int32_t SessionManager::OpenPeer(const std::string& sIp, const std::string& sPor
 	{
 		return OI_ERR_INVALID_ARGUMENT;
 	}
-	const sid_t iOpenedId = pUdpChannel->OpenPeer(stAddr);
-	if (iOpenedId == INVALID_SID)
+	::OI::Thread::MutexGuard stLock(m_stUdpPeerLock);
+	Session* pPeer = OpenUdpPeerLocked(stAddr);
+	if (!pPeer)
 	{
-		return OI_ERR_CONNECT;
+		return OI_ERR_SOCKET;
 	}
-	iSessionId = iOpenedId;
+	iSessionId = pPeer->GetSessionID();
 	return OI_OK;
 }
 
@@ -512,7 +560,14 @@ int32_t SessionManager::GetPeerAddr(sid_t iSessionId, NetAddr& stAddr)
 	{
 		return OI_ERR_CONNECT;
 	}
-	return pUdpChannel->GetPeerAddr(iSessionId, stAddr);
+	::OI::Thread::MutexGuard stLock(stLocker);
+	auto it = mSessionMap.find(iSessionId);
+	if (it == mSessionMap.end())
+	{
+		return OI_ERR_NOT_FOUND;
+	}
+	stAddr = it->second->stPeerAddr;
+	return OI_OK;
 }
 
 SessionManager::~SessionManager()
@@ -550,6 +605,16 @@ int32_t SessionManager::SendBytes(sid_t iSessionId, const ::OI::Base::Bytes& stD
 
 int32_t SessionManager::SendBytesResult(sid_t iSessionId, const ::OI::Base::Bytes& stData)
 {
+	return SendToSession(iSessionId, stData, false);
+}
+
+int32_t SessionManager::SendFrame(sid_t iSessionId, const ::OI::Base::Bytes& stData)
+{
+	return SendToSession(iSessionId, stData, true);
+}
+
+int32_t SessionManager::SendToSession(sid_t iSessionId, const ::OI::Base::Bytes& stData, bool bFramed)
+{
 	const int32_t iThreadStatus = Poll::GetInstance().CheckThreadAccess("SessionManager::SendBytesResult");
 	if (iThreadStatus != OI_OK)
 	{
@@ -573,12 +638,16 @@ int32_t SessionManager::SendBytesResult(sid_t iSessionId, const ::OI::Base::Byte
 		pSession->Release();
 	};
 	std::unique_ptr<Session, decltype(fnRelease)> pHeld(pSessionLocal, fnRelease);
+	if (bFramed && pSessionLocal->stPeerAddr.IsValidAttr())
+	{
+		return pSessionLocal->SendBuffered(stData, true);
+	}
 	return pSessionLocal->SendResult(stData);
 }
 
 void SessionManager::AddSession(Session* pSession)
 {
-	AddSession(pSession, NetAddr::Endpoint(sIpAddress, sPort), iMaxSendQueueBytes, iMaxReceiveBufferBytes);
+	AddSession(pSession, sEndpoint, iMaxSendQueueBytes, iMaxReceiveBufferBytes);
 }
 
 void SessionManager::AddSession(Session* pSession, const std::string& sEndpoint, size_t iSendBytes, size_t iReceiveBytes)
@@ -598,27 +667,36 @@ void SessionManager::RegisterSession(Session* pSession, const std::string& sEndp
 	pSession->SetSessionID(iSessionIdLocal);
 }
 
-void SessionManager::AddSession(net_socket_t iNewDescriptor)
+int32_t SessionManager::AddSession(net_socket_t iNewDescriptor)
 {
 	Session* pSessionLocal = CloneSession();
 	Channel* pChannelLocal = NULL;
 	if (GetSessionType() == SESSION_TYPE_TCP)
 	{
 		NetSocket stText;
-		stText.Init(iNewDescriptor, this);
+		stText.Attach(iNewDescriptor);
 		pChannelLocal = new TCP_Channel(stText, pSessionLocal);
 	}
 
-	if (pChannelLocal)
-	{
-		pSessionLocal->SetChannel(pChannelLocal);
-		Poll::GetInstance().IOEventRegister(pChannelLocal, true, false);
-		AddSession(pSessionLocal);
-	}
-	else
+	if (!pChannelLocal)
 	{
 		assert(false && "不支持的会话类型");
+		NetOs_Close(iNewDescriptor);
+		pSessionLocal->Release();
+		return OI_ERR_INVALID_ARGUMENT;
 	}
+	pSessionLocal->SetChannel(pChannelLocal);
+	const int32_t iRegisterStatus = Poll::GetInstance().IOEventRegister(pChannelLocal, true, false);
+	if (iRegisterStatus != OI_OK)
+	{
+		LOG_ERROR("SessionManager::AddSession poll register failed id=%s", GetIDString().c_str());
+		pSessionLocal->DetachChannel();
+		delete pChannelLocal;
+		pSessionLocal->Release();
+		return iRegisterStatus;
+	}
+	AddSession(pSessionLocal);
+	return OI_OK;
 }
 
 void SessionManager::CompleteConnect(net_socket_t iDescriptor, uint64_t iGeneration)
@@ -632,13 +710,14 @@ void SessionManager::CompleteConnect(net_socket_t iDescriptor, uint64_t iGenerat
 	auto vWaiters = std::move(m_vConnectWaiters);
 	m_vConnectWaiters.clear();
 	bConnectPending = false;
-	AddSession(iDescriptor);
-	for (const auto& pWeak : vWaiters)
+	const int32_t iStatus = AddSession(iDescriptor);
+	for (const auto& pWait : vWaiters)
 	{
-		if (auto pWait = pWeak.lock())
-		{
-			pWait->Finish(OI_OK);
-		}
+		pWait->Finish(iStatus);
+	}
+	if (iStatus != OI_OK)
+	{
+		OnConnectFailed();
 	}
 }
 

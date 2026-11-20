@@ -1,6 +1,7 @@
 #pragma once
 #include "oi_blocking_pool.h"
-#include "oi_channel.h"
+#include "oi_fifo_channel.h"
+#include "oi_lock.h"
 #include <exception>
 #include <functional>
 
@@ -15,13 +16,20 @@ struct WorkCompletion
 	std::exception_ptr stError;
 };
 
-// 独立分类工作池的完成通知通道，唤醒通过 poll 的异步队列。
+// 一个本地 socketpair。后台只写非阻塞通知字节，读端由 IO 线程监听。
 // 后台线程不访问 Session；通知回到 poll 后统一经 DataIn -> Session::OnDataIn。
-class BlockingWorkChannel : public Channel
+class BlockingWorkChannel : public FifoChannel
 {
 	struct Request;
 	const WorkCompletion* m_pCompletion = nullptr;
-	OI::Base::Bytes* m_pPacket = nullptr;
+	::OI::Thread::NativeMutex m_stReadyLock;
+	std::shared_ptr<Request> m_pReadyHead;
+	Request* m_pReadyTail = nullptr;
+	size_t m_iInFlight = 0;
+	bool m_bAttached = false;
+
+	int32_t Open();
+	void Publish(const std::shared_ptr<Request>& pRequest);
 
   public:
 	explicit BlockingWorkChannel(Session* pSession);
@@ -30,9 +38,6 @@ class BlockingWorkChannel : public Channel
 	// 只在 Session::OnDataIn 调用期间有效，不转交给后台线程。
 	const WorkCompletion& Completion() const;
 	void DataIn() override;
-	void DataOut() override;
-	bool TryClose() override;
-	int32_t AllowSend() override;
 };
 }
 }

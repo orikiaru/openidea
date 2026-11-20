@@ -2,9 +2,9 @@
 #include "oi_session.h"
 #include "oi_poll.h"
 #include <memory>
-#include <stdexcept>
+#include <cstdio>
+#include "oi_net_os.h"
 #include <utility>
-#include <uv.h>
 
 namespace OI
 {
@@ -16,43 +16,50 @@ struct BlockingWorkChannel::Request
 	WorkCompletion stCompletion;
 	OI::Base::Bytes stPacket;
 	std::function<void()> fnWork;
+	std::shared_ptr<Request> pNext;
 };
 
 BlockingWorkChannel::BlockingWorkChannel(Session* pSessionLocal)
-    : Channel(NetSocket{}, pSessionLocal)
+    : FifoChannel(pSessionLocal)
 {
+}
+
+int32_t BlockingWorkChannel::Open()
+{
+	const int32_t iStatus = OpenPair();
+	if (iStatus != OI_OK)
+	{
+		return iStatus;
+	}
+	const int32_t iRegistered = Poll::GetInstance().IOEventRegister(this, true, false);
+	if (iRegistered != OI_OK)
+	{
+		NetOs_Close(stSocket.GetSocket());
+		DetachSocket();
+		CloseWriter();
+		return iRegistered;
+	}
+	m_bAttached = true;
+	return OI_OK;
 }
 
 int32_t BlockingWorkChannel::Submit(OI::Thread::BlockingType iType, uint64_t iOperation, std::function<void()> fnWork, OI::Base::Bytes stPacket)
 {
 	assert(Poll::GetInstance().InLoopThread());
+	if (!m_bAttached)
+	{
+		const int32_t iStatus = Open();
+		if (iStatus != OI_OK)
+		{
+			return iStatus;
+		}
+	}
 	auto pRequest = std::make_shared<Request>();
 	pRequest->pChannel = this;
 	pRequest->stCompletion.iOperation = iOperation;
 	pRequest->stPacket = std::move(stPacket);
 	pRequest->fnWork = std::move(fnWork);
-	// 提前分配通知保活对象，避免执行完之后分配失败丢失完成通知。
-	struct Notification
-	{
-		Poll::QueuedCall stCall;
-		std::shared_ptr<Request> pRequest;
-	};
-	auto pNotification = std::make_unique<Notification>();
-	pNotification->pRequest = pRequest;
-	pNotification->stCall.pArgument = pNotification.get();
-	pNotification->stCall.fnCall = [](void* pValue)
-	{
-		std::unique_ptr<Notification> pOwned(static_cast<Notification*>(pValue));
-		auto& pRequestLocal = pOwned->pRequest;
-		auto* pChannelLocal = pRequestLocal->pChannel;
-		const auto* pPrevious = std::exchange(pChannelLocal->m_pCompletion, &pRequestLocal->stCompletion);
-		auto* pPreviousPacket = std::exchange(pChannelLocal->m_pPacket, &pRequestLocal->stPacket);
-		pChannelLocal->DataIn();
-		pChannelLocal->m_pPacket = pPreviousPacket;
-		pChannelLocal->m_pCompletion = pPrevious;
-	};
-	auto* pArgument = pNotification.get();
-	const int32_t iStatus = OI::Thread::SubmitBlockingWork(iType, [pRequest, pArgument]()
+	const int32_t iStatus = OI::Thread::SubmitBlockingWork(iType, [pRequest]()
 	{
 		try
 		{
@@ -62,13 +69,27 @@ int32_t BlockingWorkChannel::Submit(OI::Thread::BlockingType iType, uint64_t iOp
 		{
 			pRequest->stCompletion.stError = std::current_exception();
 		}
-		Poll::GetInstance().PostOnLoop(pArgument->stCall);
+		pRequest->pChannel->Publish(pRequest);
 	});
 	if (iStatus == OI_OK)
 	{
-		pNotification.release();
+		++m_iInFlight;
 	}
 	return iStatus;
+}
+
+void BlockingWorkChannel::Publish(const std::shared_ptr<Request>& pRequest)
+{
+	::OI::Thread::NativeMutexGuard stGuard(m_stReadyLock);
+	if (m_pReadyTail)
+	{
+		m_pReadyTail->pNext = pRequest;
+		m_pReadyTail = pRequest.get();
+		return;
+	}
+	m_pReadyHead = pRequest;
+	m_pReadyTail = pRequest.get();
+	Wakeup();
 }
 
 const WorkCompletion& BlockingWorkChannel::Completion() const
@@ -79,22 +100,29 @@ const WorkCompletion& BlockingWorkChannel::Completion() const
 
 void BlockingWorkChannel::DataIn()
 {
-	pSession->SwapInBuff(*m_pPacket);
+	std::shared_ptr<Request> pReady;
+	bool bBroken = false;
+	{
+		::OI::Thread::NativeMutexGuard stGuard(m_stReadyLock);
+		bBroken = !ReadWakeup();
+		pReady = std::move(m_pReadyHead);
+		m_pReadyTail = nullptr;
+	}
+	while (pReady)
+	{
+		auto pRequest = std::move(pReady);
+		pReady = std::move(pRequest->pNext);
+		--m_iInFlight;
+		const auto* pPrevious = std::exchange(m_pCompletion, &pRequest->stCompletion);
+		pSession->SwapInBuff(pRequest->stPacket);
+		m_pCompletion = pPrevious;
+	}
+	if (bBroken && m_iInFlight == 0 && m_bAttached)
+	{
+		Poll::GetInstance().IOEventUnRegister(this);
+		m_bAttached = false;
+	}
 }
 
-void BlockingWorkChannel::DataOut()
-{
-}
-
-bool BlockingWorkChannel::TryClose()
-{
-	// 管理器排空全部请求后才销毁会话及通道。
-	return false;
-}
-
-int32_t BlockingWorkChannel::AllowSend()
-{
-	return OI_ERR_INVALID_ARGUMENT;
-}
 }
 }

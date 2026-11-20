@@ -291,7 +291,7 @@ void ProtoClientManager::SubmitCall(uint64_t iCallId, const ::OI::Base::Bytes& s
 	}
 	if (iSessionIdLocal != INVALID_SID)
 	{
-		iFailure = SendBytesResult(iSessionIdLocal, stData);
+		iFailure = SendFrame(iSessionIdLocal, stData);
 		if (iFailure == OI_OK)
 		{
 			return;
@@ -329,7 +329,7 @@ void ProtoClientManager::FlushHeldCalls(sid_t iSessionId)
 		{
 			continue;
 		}
-		const int32_t iRet = SendBytesResult(iSessionId, stCall.stData);
+		const int32_t iRet = SendFrame(iSessionId, stCall.stData);
 		if (iRet != OI_OK)
 		{
 			RpcCallManager::GetInstance().Wake(stCall.iCallId, iRet, NULL);

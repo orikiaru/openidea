@@ -144,7 +144,14 @@ int32_t NetHelper::SocketConnect(NetSocket& stSessionId, SessionManager* pMgr)
 	if (iReturnCodeLocal == -1 && errno == EINPROGRESS)
 	{
 		ConnectChannel* pChannelLocal = new ConnectChannel(stSessionId, pMgr, pMgr->iConnectGeneration);
-		Poll::GetInstance().IOEventRegister(pChannelLocal, false, true);
+		stSessionId.Detach();
+		const int32_t iStatus = Poll::GetInstance().IOEventRegister(pChannelLocal, false, true);
+		if (iStatus != OI_OK)
+		{
+			delete pChannelLocal;
+			pMgr->AbortSession(pMgr->iConnectGeneration, iStatus);
+			return iStatus;
+		}
 		bSucc = true;
 	}
 	else if (iReturnCodeLocal == 0)

@@ -3,6 +3,7 @@
 #include <cstdint>
 #include "oi_singleton.h"
 struct uv_loop_s;
+struct uv_timer_s;
 namespace OI
 {
 namespace Net
@@ -22,9 +23,13 @@ enum IO_EVENT_MASK
 class Poll
 {
 	DECLARE_SINGLETON(Poll)
-	Poll()
-	{
-	}
+	friend class UDP_Channel;
+	// loop 接管已初始化的计时器，和本通道的 watch 一起关闭。
+	void AdoptWatchTimer(Channel* pChannel, uv_timer_s* pTimer);
+	struct State;
+	std::unique_ptr<State> m_pState;
+	Poll();
+	int32_t RegisterOnLoop(Channel* pChannel, int32_t iMask);
 	// 跑 libuv 的线程。单线程就是调用 Init 的那条。
 	std::thread::id m_stLoopThread;
 	// 多线程下的 poll 线程。StopAndJoin 等它结束。
@@ -64,18 +69,20 @@ class Poll
 	// Preallocated completion path: no queue allocation after work has executed.
 	void PostOnLoop(QueuedCall& stCall) noexcept;
 
-	// 按读写开关把通道挂上 loop。真正改监视在 poll 线程完成。
-	void IOEventRegister(Channel* pChannel, bool bAllowRead = true, bool bAllowWrite = false);
-	// 改已挂通道的事件掩码。监视还没挂上时只更新期望值。
-	void IOEventMod(Channel* pChannel, int iNewMask);
-	// 只在 poll 线程调用。先摘掉事件，ms 毫秒后恢复成暂停前的掩码。通道在这段时间里不能删。
+	// 按读写开关把通道挂上 loop。返回实际注册结果。多线程调用者等 loop 完成；单线程错线程返回 OI_ERR_WRONG_THREAD。
+	int32_t IOEventRegister(Channel* pChannel, bool bAllowRead = true, bool bAllowWrite = false);
+	// loop 上用通道的完整掩码更新监听。
+	void IOEventMod(Channel* pChannel);
+	// 提交需要打开和关闭的事件位；工作线程只提交请求。
+	void ChangeEvents(Channel* pChannel, int32_t iEnable, int32_t iDisable);
+	// 只在 poll 线程调用。先摘掉事件，ms 毫秒后恢复成暂停前的掩码。通道注销后丢弃本次恢复。
 	void PauseEvents(Channel* pChannel, unsigned iMilliseconds);
-	// close_fd 为假时只摘掉监听，套接字留给调用方关。
+	// bCloseDescriptor 为假时把套接字交回调用方。跨线程销毁须在派生类析构开始前先注销并等返回。
 	void IOEventUnRegister(Channel* pChannel, bool bCloseDescriptor = true);
 	// poll 线程入口，跑到停止为止。
 	static void* StartThreadPollWait(void* pArgument);
 	// 通知 loop 退出，并等 poll 线程结束。
-	void StopAndJoin();
+	int32_t StopAndJoin();
 	// wait_ms 为 0 时只试一次已经就绪的事件，不睡。否则堵住等网络或定时器。
 	void PollWait(int iWaitMilliseconds = 1000);
 	// libuv 重复定时器。循环起来之前调用，到点在 poll 线程执行 fn。

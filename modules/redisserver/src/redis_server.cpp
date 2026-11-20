@@ -21,17 +21,15 @@ class RedisEv : public ::OI::Net::Channel
 {
 	redisAsyncContext* m_pAsyncContext;
 	int32_t m_iMask;
-	bool m_bInIo;
-	bool m_bDead;
+	bool m_bAttached = false;
 
   public:
 	RedisEv(::OI::Net::NetSocket stSock, redisAsyncContext* pAsyncContext)
-	    : ::OI::Net::Channel(stSock, NULL), m_pAsyncContext(pAsyncContext), m_iMask(0), m_bInIo(false), m_bDead(false)
+	    : ::OI::Net::Channel(stSock, NULL), m_pAsyncContext(pAsyncContext), m_iMask(0)
 	{
 	}
 	void DataIn() override
 	{
-		m_bInIo = true;
 		if (m_pAsyncContext)
 		{
 			redisAsyncHandleRead(m_pAsyncContext);
@@ -39,7 +37,6 @@ class RedisEv : public ::OI::Net::Channel
 	}
 	void DataOut() override
 	{
-		m_bInIo = true;
 		if (m_pAsyncContext)
 		{
 			redisAsyncHandleWrite(m_pAsyncContext);
@@ -47,52 +44,40 @@ class RedisEv : public ::OI::Net::Channel
 	}
 	bool TryClose() override
 	{
-		if (!m_bDead)
-		{
-			m_bInIo = false;
-			return false;
-		}
-		::OI::Net::Poll::GetInstance().IOEventUnRegister(this, false);
-		delete this;
-		return true;
+		return false;
 	}
-	void Add(int32_t iBit)
+	int32_t Add(int32_t iBit)
 	{
 		m_iMask |= iBit;
-		Touch();
+		return Touch();
 	}
 	void Del(int32_t iBit)
 	{
 		m_iMask &= ~iBit;
 		Touch();
 	}
-	void Touch()
+	int32_t Touch()
 	{
-		if (m_bDead)
-		{
-			return;
-		}
-		if (pPollToken == NULL)
+		if (!m_bAttached)
 		{
 			if (m_iMask == 0)
 			{
-				return;
+				return OI_OK;
 			}
-			::OI::Net::Poll::GetInstance().IOEventRegister(this,
+			const int32_t iStatus = ::OI::Net::Poll::GetInstance().IOEventRegister(this,
 			    (m_iMask & ::OI::Net::IO_EV_READ) != 0, (m_iMask & ::OI::Net::IO_EV_WRITE) != 0);
-			return;
+			m_bAttached = iStatus == OI_OK;
+			return iStatus;
 		}
-		::OI::Net::Poll::GetInstance().IOEventMod(this, m_iMask);
+		iEventMask = m_iMask;
+		::OI::Net::Poll::GetInstance().IOEventMod(this);
+		return OI_OK;
 	}
 	void Cleanup()
 	{
-		m_pAsyncContext = NULL;
-		m_bDead = true;
-		if (m_bInIo)
-		{
-			return;
-		}
+		// hiredis 接着关闭 fd；本轮读写回调返回后，poll 会重新检查 watch。
 		::OI::Net::Poll::GetInstance().IOEventUnRegister(this, false);
+		DetachSocket();
 		delete this;
 	}
 };
@@ -127,6 +112,17 @@ int AttachRedis(redisAsyncContext* pAsyncContext)
 	::OI::Net::NetSocket stSock;
 	stSock.Attach(pAsyncContext->c.fd);
 	RedisEv* pEv = new RedisEv(stSock, pAsyncContext);
+	const int32_t iStatus = pEv->Add(::OI::Net::IO_EV_WRITE);
+	if (iStatus != OI_OK)
+	{
+		if (iStatus == OI_ERR_SOCKET)
+		{
+			pAsyncContext->c.fd = REDIS_INVALID_FD;
+		}
+		pEv->DetachSocket();
+		delete pEv;
+		return REDIS_ERR;
+	}
 	pAsyncContext->ev.addRead = EvAddRead;
 	pAsyncContext->ev.delRead = EvDelRead;
 	pAsyncContext->ev.addWrite = EvAddWrite;
