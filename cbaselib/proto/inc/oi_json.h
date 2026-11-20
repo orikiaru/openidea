@@ -367,7 +367,7 @@ std::string ToJsonText(const T& stValue)
 {
 	Json::Value stJson;
 	ToJsonValue(stJson, stValue);
-	if (!JsonWire::ValidTree(stJson))
+	if (!ValidJsonTree(stJson))
 	{
 		throw std::invalid_argument("unrepresentable JSON field");
 	}

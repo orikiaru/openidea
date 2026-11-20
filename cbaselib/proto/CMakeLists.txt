@@ -11,6 +11,7 @@ set(LIBSRC
 	src/oi_rpc_peer.cpp
 	src/oi_rpc_route.cpp
 	src/oi_parser.cpp
+	src/oi_json_wire.cpp
 	src/oi_rpc_session.cpp
 	src/oi_rpc_session_manager.cpp
 	)
@@ -25,3 +26,6 @@ target_compile_options(${LIBRARY} PUBLIC ${_CXX_OPTION_})
 target_compile_options(${LIBRARY_M} PUBLIC ${_CXX_OPTION_})
 
 target_compile_definitions(${LIBRARY} PUBLIC _SINGLE_THREAD_)
+
+target_link_libraries(${LIBRARY} PRIVATE jsoncpp_static)
+target_link_libraries(${LIBRARY_M} PRIVATE jsoncpp_static)

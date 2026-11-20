@@ -25,7 +25,7 @@ void BenchReport(const char* pName, std::vector<int64_t> vSamples)
 	std::sort(vSamples.begin(), vSamples.end());
 	int64_t iSum = 0;
 	int32_t iSlow = 0;
-	for (const auto iValue : vSamples)
+	for (const auto& iValue : vSamples)
 	{
 		iSum += iValue;
 		if (iValue >= 1000000)

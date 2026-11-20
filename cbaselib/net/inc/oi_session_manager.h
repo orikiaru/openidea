@@ -213,10 +213,6 @@ class SessionManager
 	void AddSession(Session* pSession);
 	// 同上，并带上对端地址和这条会话自己的收发上限。
 	void AddSession(Session* pSession, const std::string& sEndpoint, size_t iSendBytes, size_t iReceiveBytes);
-	private:
-	void RegisterSession(Session* pSession, const std::string& sEndpoint, size_t iSendBytes, size_t iReceiveBytes);
-
-  protected:
 	// 这一代连接失败。代次对不上就忽略，避免旧连接改掉新连接。
 	void AbortSession(uint64_t iGeneration, int32_t iCode = OI_ERR_CONNECT);
 	// 放弃还没完成的这一代。晚到的解析或连接结果作废。
@@ -276,7 +272,8 @@ class SessionManager
 	{
 	}
 
-  protected:
+  private:
+	void RegisterSession(Session* pSession, const std::string& sEndpoint, size_t iSendBytes, size_t iReceiveBytes);
 };
 }
 }

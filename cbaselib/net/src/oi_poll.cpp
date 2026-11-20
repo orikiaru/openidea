@@ -445,7 +445,11 @@ int32_t Poll::StartListener(int32_t (*fnStart)(void*), void* pArgument)
 {
 	if (InLoopThread())
 	{
-		return g_loop_ready && !g_poll_stop.load() ? fnStart(pArgument) : OI_ERR_CANCELLED;
+		if (!g_loop_ready || g_poll_stop.load())
+		{
+			return OI_ERR_CANCELLED;
+		}
+		return fnStart(pArgument);
 	}
 #ifdef _SINGLE_THREAD_
 	return OI_ERR_WRONG_THREAD;
