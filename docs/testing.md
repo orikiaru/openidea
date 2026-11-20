@@ -8,7 +8,7 @@
 - ST/MT 只切换 ipcclient、ipcserver；logd 固定多线程，redisserver/registry 按各自配置单线程。
 - `all` 包含 22 项：echo、log、log-backpressure、redis、redis-limit、redis-shutdown、redis-queue-timeout、rpc-ingress、redis-backpressure-bytes、redis-backpressure-count、redis-fairness、hold、rpc-admission-count、rpc-admission-bytes、reset、disk-full、registry、udp、multi、local、web、web-coro。`local` 不起 registry，用 `[Registry] instances` 的两台地址，`CallAny` 两台都命中，`CallAll` 按实例号返回两份。`multi` 仍走动态配置，业务进程上报后登记，同样要求 `CallAny` 两台都命中。`--mysqld` 在数据库用例之后再跑 `registry-static`：registry 的 `config=static`，名单由表提供，业务进程不上报，`CallAny` 同样打到两台。
 - Linux 可额外运行 clock-forward、clock-back，以及纯协程 ASan。校时故障只影响测试子进程，绝不调整宿主机时钟。
-- 必须全部返回 0；不能用删除断言、扩大超时、提高容量或重试掩盖失败。偶发失败保留日志，记录复测结果及根因是否确认。
+- 必须全部返回 0；不能用删除断言、扩大超时、提高容量或重试掩盖失败。偶发失败保留日志，记录复测结果及根因是否确认。 Windows 单线程 admission 的一次旧产物崩溃及证据边界见 [故障记录](windows-st-admission-20261121.md)。
 - 本次源码正在变化时不要声称覆盖了最新版本；核对结果目录的 environment.json、Git HEAD、diff 摘要后再报告。
 
 审查和测试原则：
