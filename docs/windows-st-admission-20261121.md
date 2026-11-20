@@ -57,3 +57,18 @@ ntdll!RtlUserThreadStart+0x28
 - `20261121-fifo-final-windows-st/windows-st/st-tests.log` 和 `st/results.json`：最终单线程完整矩阵对照。
 
 旧完整矩阵的 `environment.json` 记录 HEAD `cd33b7f8eb8907d00377f7be8717c01227851597` 和 tracked diff SHA-256 `c963d955fe0cc74a40f64a878d29ff2c6c87cd296bf59b9bb96f6989aafee1a7`；最终矩阵的对应 tracked diff SHA-256 是 `4541d9db5bac78aa60913f74dce93a55b3693554bb6f9258566cf1adc65f576f`。这些摘要不等于二进制哈希，也不覆盖未跟踪文件内容。
+
+## 独立带符号重跑与取证工具验证
+
+之后在独立 Windows 单线程副本对 Release 构建加 `/Zi` 和 `/DEBUG:FULL`，保留 `/MD /O2 /Ob2 /DNDEBUG` 优化并启用测试钩子；使用已安装的 cdb 在客户端首条指令之前附加。`rpc-admission-count` 和 `rpc-admission-bytes` 各有 20 次有效运行通过，共 40 次；每次的三轮断言均为 2 次成功、4 次 BUSY、`bad=0`，合计 120 条轮次断言。40 次的目标退出码均为 0，取证元数据均为 `unhandled_exception=false`，未产生业务崩溃 dump。这些是带调试器的重跑结果，不能据此认定旧版异常已找到根因。
+
+有一次 `bytes` 的调试器启动失败：并发试验误写入 UTF-16 调试命令文件，cdb 报 `??s` 语法错误，目标客户端未执行；该次保留为工具失败，不计入 20 次。恢复 ASCII 命令文件后的同编号重试通过，也计入有效 20 次。
+
+以下路径均相对于本机 `%USERPROFILE%/openidea-test-results/`，是不同来源的证据，不能混作同一进程：
+
+- `windows-st-admission-symbol-20261121/repeat/`：40 次有效重跑的 `results/results.json`、`runner.log`、客户端输出和 `evidence/.../metadata.json`；`02-rpc-admission-bytes/` 为上述调试器启动失败，`02-retry-rpc-admission-bytes/` 为有效重试。
+- `windows-st-admission-symbol-20261121/src/deploy/bin/Release/ipcclient.exe` 和 `ipcclient.pdb`：该独立重跑使用的 EXE 和 PDB；目录下的 `windows-st-admission-symbol-20261121/sha256.txt`、`symbols.txt` 保存哈希与符号核对结果。EXE SHA-256 为 `111df2becebf9cf416fd626669d4a670c636ad772f076f07d3169d1a77e73783`，PDB 为 `29d0db4005900a7ae829afa698fcdc84e396a120fef3a01d073d8ec8a9ace013`；40 次元数据记录的 EXE/PDB GUID 与 age 匹配。成功轮次不重复保留 EXE/PDB 副本，原临时客户端路径已清理。
+- `20261121-admission-old-debug/rpc-admission-count/ipcclient.out`：旧业务进程的**原始**首次机会异常与无符号模块偏移；并非下面的受控故障，也没有对应的业务 dump 或匹配 PDB。
+- `windows-capture-oneshot/final-selftest-2/crash/crash-evidence/attempt-b4o38vu_/`：**受控测试进程**的二次机会访问异常；`debugger.log` 保存原始栈，`unhandled.dmp`、`probe.exe`、`probe.pdb` 和 `metadata.json` 同目录保留。该 EXE SHA-256 为 `08aae69db314242c379358faca72530d5732a83096041d05b78479bbe7de469c`，PDB 为 `f8af93e5632914cf373dc88692894ae27293e078fb1033cb1b3a3f72144f8adf`，dump 为 `870ef1419a5a976a201f816f39d20e0d63350dcce16d3aa044b0c49aa5556ac1`；元数据记录两者 GUID/age 匹配，栈解析到受控测试的 `CrashProbe`。这只证明工具能对受控未处理异常保存和符号化证据，不说明旧业务异常的函数或原因。
+
+本次 40 次对照及受控测试均未确定旧崩溃的根因；旧业务二进制没有匹配 PDB 和 dump 的限制仍然成立。
