@@ -125,8 +125,9 @@ UDP_PeerChannel* UDP_Channel::OpenLocked(const NetAddr& stAddr)
 	UDP_PeerChannel* pPeer = new UDP_PeerChannel(this, stAddr, pSessionLocal);
 	pSessionLocal->SetChannel(pPeer);
 	m_mPeers[sEndpoint] = pPeer;
-	m_pSessionManager->AddSession(pSessionLocal, sEndpoint, m_pSessionManager->MaxSendQueueBytes(), m_pSessionManager->MaxReceiveBufferBytes());
+	m_pSessionManager->RegisterSession(pSessionLocal, sEndpoint, m_pSessionManager->MaxSendQueueBytes(), m_pSessionManager->MaxReceiveBufferBytes());
 	m_mSessions[pSessionLocal->GetSessionID()] = pPeer;
+	m_pSessionManager->OnAddSession(pSessionLocal);
 	return pPeer;
 }
 

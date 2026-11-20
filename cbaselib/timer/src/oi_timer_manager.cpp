@@ -176,7 +176,7 @@ void BaseTimerManager::DispatchUpdates()
 	::OI::Base::SingletonUpdates::Instance().DispatchSecond(m_iCurrentTime);
 }
 
-int32_t BaseTimerManager::AddTimer(BaseTimer* pTimer, int iMillisecond)
+int32_t BaseTimerManager::RegisterTimer(BaseTimer* pTimer, int iMillisecond)
 {
 	const int32_t iThreadStatus = ::OI::Net::Poll::GetInstance().CheckThreadAccess("BaseTimerManager::AddTimer");
 	if (iThreadStatus != OI_OK)

@@ -17,7 +17,8 @@ const std::string IpcUdp::GetIDString()
 
 void IpcUdp::OnAddSession(::OI::Net::Session* pSession)
 {
-	(void)pSession;
+	::OI::Net::NetAddr stAddr;
+	m_bAddPeerAddressOk.store(GetPeerAddr(pSession->GetSessionID(), stAddr) == OI_OK && stAddr.Port() != 0);
 }
 
 void IpcUdp::OnDelSession(const ::OI::Net::Session* pSession)
@@ -156,6 +157,7 @@ OI::Coro::Task UdpMgr::Run()
 	const int32_t iAgain = stManager.OpenPeer(m_sServerIp, m_sServerPort, iAgainId);
 	fnReport("udp open dedup bad=%d\n", (iOpen != OI_OK || iAgain != OI_OK || iSessionId == INVALID_SID || iSessionId != iAgainId) ? 1 : 0);
 
+	fnReport("udp add peer addr bad=%d\n", stManager.AddPeerAddressOk() ? 0 : 1);
 	::OI::Net::NetAddr stAddr;
 	const bool bAddr = stManager.GetPeerAddr(iSessionId, stAddr) == OI_OK;
 	fnReport("udp peer addr bad=%d\n", (!bAddr || std::to_string(stAddr.Port()) != m_sServerPort) ? 1 : 0);

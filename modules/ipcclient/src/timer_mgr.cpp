@@ -99,6 +99,39 @@ void HoldSecondProbe::WatchUpdate(bool bWatch)
 	m_bWatchUpdate.store(bWatch, std::memory_order_relaxed);
 }
 
+template <typename T>
+concept TimerAccepts = requires(OI::Timer::BaseTimerManager& stTimers, T stValue) {
+	stTimers.AddTimer(std::move(stValue), 1);
+};
+static_assert(!TimerAccepts<int*>);
+
+struct TimerOnceState
+{
+	std::atomic<int32_t> iCalls{0};
+	std::atomic<int32_t> iDestroyed{0};
+};
+
+struct TimerRepeatState
+{
+	std::atomic<int32_t> iCalls{0};
+	std::atomic<int32_t> iThrows{0};
+	std::atomic<int32_t> iStopped{0};
+	std::atomic<int32_t> iExtended{0};
+	std::atomic<int32_t> iSetZero{0};
+	std::atomic<int32_t> iSetNegative{0};
+	std::atomic<int32_t> vRemaining[3]{};
+	std::atomic<int64_t> vTicks[3]{};
+};
+
+struct TimerOnceLifetime
+{
+	std::shared_ptr<TimerOnceState> pState;
+	~TimerOnceLifetime()
+	{
+		++pState->iDestroyed;
+	}
+};
+
 struct TimerExceptionProbe
 {
 	uv_timer_t stWatchdog{};
@@ -183,9 +216,9 @@ OI::Coro::TaskResult<int> TimerMgr::CheckTimerExceptions()
 				{
 					throw 73;
 				}
-			}, iIndex == 4 ? stTimers.GetTickOffsetMS() * 3 : 0);
+			}, iIndex == 4 ? stTimers.GetTickOffsetMS() * 3 : 1);
 		}
-	}, 0);
+	}, 1);
 	while (!pState->bClosed.load())
 	{
 		co_await OI::Coro::yield(0);
@@ -212,7 +245,91 @@ OI::Coro::TaskResult<int> TimerMgr::CheckTimerExceptions()
 	const int32_t iTickActive = TimerMgr::GetInstance().TickActive();
 	const int32_t iSecondActive = HoldSecondProbe::GetInstance().SecondActive();
 	const int iSkipped = static_cast<int>(iElapsedTicks - iTickUpdates);
-	int iBad = pState->bPassed ? 0 : 1;
+	auto pOnceState = std::make_shared<TimerOnceState>();
+	auto& stTimers = OI::Timer::BaseTimerManager::GetInstance();
+	auto pLifetime = std::make_unique<TimerOnceLifetime>();
+	pLifetime->pState = pOnceState;
+	const int32_t iFirst = stTimers.AddTimer([pOnceState, pLifetime = std::move(pLifetime)]()
+	{
+		if (pLifetime)
+		{
+			++pOnceState->iCalls;
+		}
+	}, 1);
+	const int32_t iSecond = stTimers.AddTimer([pOnceState]()
+	{
+		++pOnceState->iCalls;
+	}, 1);
+	co_await OI::Coro::yield(stTimers.GetTickOffsetMS() * 3);
+	const int32_t iOnceBad = (iFirst == OI_OK && iSecond == OI_OK && pOnceState->iCalls == 2 && pOnceState->iDestroyed == 1) ? 0 : 1;
+	LOG_TRACE("hold timer once calls=%d destroyed=%d bad=%d", pOnceState->iCalls.load(), pOnceState->iDestroyed.load(), iOnceBad);
+	auto pRepeat = std::make_shared<TimerRepeatState>();
+	const int32_t iInterval = stTimers.GetTickOffsetMS() * 2;
+	const int32_t iRepeat = stTimers.AddTimer([pRepeat]()
+	{
+		const int32_t iIndex = pRepeat->iCalls.fetch_add(1);
+		if (iIndex < 3)
+		{
+			pRepeat->vTicks[iIndex] = OI::Timer::BaseTimerManager::GetInstance().GetCurTick();
+		}
+	}, iInterval, 3);
+	auto pThrowState = std::make_shared<TimerOnceState>();
+	auto pThrowLifetime = std::make_unique<TimerOnceLifetime>();
+	pThrowLifetime->pState = pThrowState;
+	const int32_t iThrow = stTimers.AddTimer([pRepeat, pThrowLifetime = std::move(pThrowLifetime)]()
+	{
+		if (pThrowLifetime)
+		{
+			++pRepeat->iThrows;
+		}
+		throw std::runtime_error("hold repeat timer exception");
+	}, iInterval, 3);
+	const int32_t iStop = stTimers.AddTimer([pRepeat](OI::Timer::TimerContext& stContext)
+	{
+		++pRepeat->iStopped;
+		stContext.Stop();
+	}, iInterval, 3);
+	const int32_t iExtend = stTimers.AddTimer([pRepeat](OI::Timer::TimerContext& stContext)
+	{
+		const int32_t iIndex = pRepeat->iExtended.fetch_add(1);
+		if (iIndex < 3)
+		{
+			pRepeat->vRemaining[iIndex] = stContext.Remaining();
+		}
+		if (iIndex == 0)
+		{
+			stContext.SetRemaining(2);
+		}
+	}, iInterval, 1);
+	const int32_t iSetZero = stTimers.AddTimer([pRepeat](OI::Timer::TimerContext& stContext)
+	{
+		++pRepeat->iSetZero;
+		stContext.SetRemaining(0);
+	}, iInterval, 3);
+	const int32_t iSetNegative = stTimers.AddTimer([pRepeat](OI::Timer::TimerContext& stContext)
+	{
+		++pRepeat->iSetNegative;
+		stContext.SetRemaining(-1);
+	}, iInterval, 3);
+	const int32_t iZeroCount = stTimers.AddTimer([]()
+	{
+	}, iInterval, 0);
+	const int32_t iNegativeCount = stTimers.AddTimer([]()
+	{
+	}, iInterval, -1);
+	const int32_t iZeroInterval = stTimers.AddTimer([]()
+	{
+	}, 0, 1);
+	const int32_t iNegativeInterval = stTimers.AddTimer([]()
+	{
+	}, -1, 1);
+	co_await OI::Coro::yield(iInterval * 6);
+	const int32_t iRepeatBad = (iRepeat == OI_OK && iThrow == OI_OK && iZeroCount == OI_ERR_INVALID_ARGUMENT && iNegativeCount == OI_ERR_INVALID_ARGUMENT && iZeroInterval == OI_ERR_INVALID_ARGUMENT && iNegativeInterval == OI_ERR_INVALID_ARGUMENT && pRepeat->iCalls == 3 && pRepeat->iThrows == 1 && pThrowState->iDestroyed == 1 && pRepeat->vTicks[1] >= pRepeat->vTicks[0].load() + 2 && pRepeat->vTicks[2] >= pRepeat->vTicks[1].load() + 2) ? 0 : 1;
+	LOG_TRACE("hold timer repeat calls=%d throws=%d zero_count=%d negative_count=%d zero_interval=%d negative_interval=%d bad=%d", pRepeat->iCalls.load(), pRepeat->iThrows.load(), iZeroCount, iNegativeCount, iZeroInterval, iNegativeInterval, iRepeatBad);
+	const int32_t iContextBad = (iStop == OI_OK && iExtend == OI_OK && iSetZero == OI_OK && iSetNegative == OI_OK && pRepeat->iStopped == 1 && pRepeat->iExtended == 3 && pRepeat->iSetZero == 1 && pRepeat->iSetNegative == 1 && pRepeat->vRemaining[0] == 0 && pRepeat->vRemaining[1] == 1 && pRepeat->vRemaining[2] == 0) ? 0 : 1;
+	LOG_TRACE("hold timer context stopped=%d extended=%d remaining=%d/%d/%d zero=%d negative=%d bad=%d", pRepeat->iStopped.load(), pRepeat->iExtended.load(), pRepeat->vRemaining[0].load(), pRepeat->vRemaining[1].load(), pRepeat->vRemaining[2].load(), pRepeat->iSetZero.load(), pRepeat->iSetNegative.load(), iContextBad);
+	int iBad = (pState->bPassed ? 0 : 1) + iOnceBad;
+	iBad += iRepeatBad + iContextBad;
 	if (pState->vTicks[0] != pState->vTicks[1].load() || pState->vTicks[2] != pState->vTicks[3].load() || pState->vTicks[4] <= pState->vTicks[3].load())
 	{
 		++iBad;

@@ -1,6 +1,5 @@
 #include "oi_http_header_fields.h"
-#include "json/json.h"
-#include <cmath>
+#include "oi_json_wire.h"
 
 namespace OI::Http
 {
@@ -8,80 +7,9 @@ namespace
 {
 constexpr size_t kJsonLimit = 8 * 1024 * 1024;
 
-class JsonWire
+class JsonMediaType
 {
   public:
-	static bool ValidUtf8(std::string_view sText)
-	{
-		size_t iOffset = 0;
-		while (iOffset < sText.size())
-		{
-			const auto iLead = static_cast<unsigned char>(sText[iOffset++]);
-			if (iLead < 0x80)
-			{
-				continue;
-			}
-			if (iLead < 0xc2 || iLead > 0xf4)
-			{
-				return false;
-			}
-			const size_t iCount = iLead < 0xe0 ? 1 : (iLead < 0xf0 ? 2 : 3);
-			if (sText.size() - iOffset < iCount)
-			{
-				return false;
-			}
-			const auto iFirst = static_cast<unsigned char>(sText[iOffset]);
-			if ((iLead == 0xe0 && iFirst < 0xa0) || (iLead == 0xed && iFirst >= 0xa0) ||
-			    (iLead == 0xf0 && iFirst < 0x90) || (iLead == 0xf4 && iFirst >= 0x90))
-			{
-				return false;
-			}
-			for (size_t iIndex = 0; iIndex < iCount; ++iIndex)
-			{
-				if ((static_cast<unsigned char>(sText[iOffset++]) & 0xc0) != 0x80)
-				{
-					return false;
-				}
-			}
-		}
-		return true;
-	}
-
-	static bool ValidTree(const Json::Value& stValue, size_t iDepth = 1)
-	{
-		if (iDepth > 256)
-		{
-			return false;
-		}
-		if (stValue.isString())
-		{
-			const char* pBegin = nullptr;
-			const char* pEnd = nullptr;
-			return stValue.getString(&pBegin, &pEnd) && ValidUtf8({pBegin, static_cast<size_t>(pEnd - pBegin)});
-		}
-		if (stValue.type() == Json::realValue)
-		{
-			return std::isfinite(stValue.asDouble());
-		}
-		for (auto it = stValue.begin(); it != stValue.end(); ++it)
-		{
-			if (stValue.isObject())
-			{
-				const char* pEnd = nullptr;
-				const char* pBegin = it.memberName(&pEnd);
-				if (!ValidUtf8({pBegin, static_cast<size_t>(pEnd - pBegin)}))
-				{
-					return false;
-				}
-			}
-			if (!ValidTree(*it, iDepth + 1))
-			{
-				return false;
-			}
-		}
-		return true;
-	}
-
 	static bool Matches(std::string_view sType)
 	{
 		sType = sType.substr(0, sType.find(';'));
@@ -115,7 +43,7 @@ class JsonWire
 
 int32_t Message::SetJson(const Json::Value& stValue)
 {
-	if (!JsonWire::ValidTree(stValue))
+	if (!Rpc::JsonWire::ValidTree(stValue))
 	{
 		return OI_ERR_ENCODE;
 	}
@@ -134,11 +62,11 @@ int32_t Message::SetJson(const Json::Value& stValue)
 
 int32_t Message::GetJson(Json::Value& stValue) const
 {
-	if (!JsonWire::Matches(sContentType))
+	if (!JsonMediaType::Matches(sContentType))
 	{
 		return OI_ERR_PROTOCOL;
 	}
-	if (pBodySource || sBody.size() > kJsonLimit || sBody.find('\0') != sBody.npos || !JsonWire::ValidUtf8(sBody))
+	if (pBodySource || sBody.size() > kJsonLimit || sBody.find('\0') != sBody.npos || !Rpc::JsonWire::ValidUtf8(sBody))
 	{
 		return OI_ERR_DECODE;
 	}
@@ -150,7 +78,7 @@ int32_t Message::GetJson(Json::Value& stValue) const
 	Json::Value stJson;
 	try
 	{
-		if (!pReader->parse(sBody.data(), sBody.data() + sBody.size(), &stJson, nullptr) || !JsonWire::ValidTree(stJson))
+		if (!pReader->parse(sBody.data(), sBody.data() + sBody.size(), &stJson, nullptr) || !Rpc::JsonWire::ValidTree(stJson))
 		{
 			return OI_ERR_DECODE;
 		}

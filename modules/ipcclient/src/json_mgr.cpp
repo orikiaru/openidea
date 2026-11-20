@@ -2,6 +2,11 @@
 #include "hold_test.h"
 #include "oi_rpc_coro.h"
 #include "oi_http.h"
+#include "oi_http_json.h"
+#include "oi_db_json.h"
+#include "oi_db_table.h"
+#include "oi_rpcdata_dbsample.h"
+#include <stdexcept>
 #include "oi_log_client.h"
 #include "oi_log.h"
 #include "oi_registry.h"
@@ -110,6 +115,62 @@ int JsonMgr::CheckJsonDecoding()
 			++iBad;
 		}
 	}
+	stInput = Json::Value(Json::objectValue);
+	stInput["1"] = 1;
+	stInput["01"] = 2;
+	if (OI::Rpc::FromJsonValue(stInput, mSigned) || mSigned != std::map<int32_t, int32_t>{{1, 1}})
+	{
+		++iBad;
+	}
+	float fValue = 7.0f;
+	OI::Http::Message stMessage;
+	stMessage.sContentType = "application/json";
+	stMessage.sBody = "1e100";
+	if (stMessage.GetJson(fValue) != OI_ERR_DECODE || fValue != 7.0f)
+	{
+		++iBad;
+	}
+	const std::vector<std::string> vOriginal{std::string("hello\0world", 11), "\xe4\xb8\xad"};
+	const auto stParameter = OI::Db::EncodeDbJson(vOriginal);
+	const auto& sJson = std::get<std::string>(stParameter);
+	const OI::Db::Blob vBlob(sJson.begin(), sJson.end());
+	std::vector<std::string> vDecoded;
+	if (!OI::Db::DecodeDbJson(vBlob, vDecoded) || vDecoded != vOriginal)
+	{
+		++iBad;
+	}
+	OI::RpcData::DbSample stBadRow;
+	stBadRow.iId = 9;
+	stBadRow.sName = "valid";
+	stBadRow.stJsonChild.sText = std::string("\xff", 1);
+	OI::Db::Statement stStatement;
+	stStatement.sSql = "old";
+	stStatement.vParameters.emplace_back(int64_t(42));
+	if (OI::Db::BuildInsert("t_1", stBadRow, stStatement) != OI_ERR_INVALID_ARGUMENT || stStatement.sSql != "old" || stStatement.vParameters != std::vector<OI::Db::Parameter>{int64_t(42)})
+	{
+		++iBad;
+	}
+	if (OI::Db::BuildSelectByKey("t_1", stBadRow, stStatement) != OI_OK || stStatement.vParameters != std::vector<OI::Db::Parameter>{int64_t(9)})
+	{
+		++iBad;
+	}
+	if (OI::Db::BuildUpdateByKey("t_1", stBadRow, stStatement, &OI::RpcData::DbSample::sName) != OI_OK || stStatement.vParameters != std::vector<OI::Db::Parameter>{std::string("valid"), int64_t(9)})
+	{
+		++iBad;
+	}
+	bool bInvalidRejected = false;
+	try
+	{
+		(void)OI::Db::EncodeDbJson(std::vector<std::string>{std::string("\xff", 1)});
+	}
+	catch (const std::invalid_argument&)
+	{
+		bInvalidRejected = true;
+	}
+	if (!bInvalidRejected)
+	{
+		++iBad;
+	}
 	std::map<uint64_t, int32_t> mUnsigned{{3, 7}};
 	for (const auto& sKey : std::vector<std::string>{"-1", "18446744073709551616", "1x"})
 	{
@@ -119,6 +180,13 @@ int JsonMgr::CheckJsonDecoding()
 		{
 			++iBad;
 		}
+	}
+	stInput = Json::Value(Json::objectValue);
+	stInput["1"] = 1;
+	stInput["01"] = 2;
+	if (OI::Rpc::FromJsonValue(stInput, mUnsigned) || mUnsigned != std::map<uint64_t, int32_t>{{3, 7}})
+	{
+		++iBad;
 	}
 	stInput = Json::Value(Json::objectValue);
 	stInput["18446744073709551615"] = 2;

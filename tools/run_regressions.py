@@ -206,6 +206,9 @@ ALL_CASES = ("echo", "log", "log-backpressure", "redis", "redis-limit", "redis-s
 
 def check_hold_timer(text):
     assert "hold timer exceptions executed=5 destroyed=5 bad=0" in text
+    assert "hold timer once calls=2 destroyed=1 bad=0" in text
+    assert re.search(r"hold timer repeat calls=3 throws=1 .* bad=0", text)
+    assert "hold timer context stopped=1 extended=3 remaining=0/1/0 zero=1 negative=1 bad=0" in text
     assert re.search(r"hold timer update tick=[1-9][0-9]* second=[1-9][0-9]* overlap=0/0 skipped=[0-9]+ bad=0", text)
 
 
@@ -892,6 +895,7 @@ def run(case, args):
                 assert re.search(r"udp local port=[1-9]\d* bad=0", text)
                 assert "udp open dedup bad=0" in text
                 assert "udp peer addr bad=0" in text
+                assert "udp add peer addr bad=0" in text
                 assert "udp server sees client port bad=0" in text
                 assert "udp rpc calls=1000 bad=0" in text
                 assert "udp notify sent=1000 received=1000 duplicate=0 bad=0" in text

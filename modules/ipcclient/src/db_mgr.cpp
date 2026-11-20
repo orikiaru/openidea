@@ -578,6 +578,42 @@ OI::Coro::TaskResult<int32_t> DbMgr::CheckMysqlRows(OI::Db::Client& stMysql, con
 		Expect(iBad, iChangedLoad == OI_OK && iEdgeLoad == OI_OK && SameRow(stChangedLoaded, stChanged) && SameRow(stEdgeLoaded, vRows[1]),
 			"mysql pick update keeps other columns");
 
+		// 非法 JSON 不得生成写语句；未选中该列时，其他列仍可正常写入。
+		DbSample stInvalidJson = stChanged;
+		stInvalidJson.mJsonFlags = {{std::string("\xFF", 1), 1}};
+		stInvalidJson.sName = "valid-picked-update";
+		OI::Db::Statement stInvalidAll;
+		const int32_t iInvalidAll = ::OI::Db::BuildUpdateByKey(sTable, stInvalidJson, stInvalidAll);
+		OI::Db::Statement stInvalidPicked;
+		const int32_t iInvalidPicked = ::OI::Db::BuildUpdateByKey(sTable, stInvalidJson, stInvalidPicked, &DbSample::mJsonFlags);
+		OI::Db::Statement stInvalidInsert;
+		const int32_t iInvalidInsert = ::OI::Db::BuildInsert(sTable, stInvalidJson, stInvalidInsert);
+		OI::Db::Statement stInvalidUpsert;
+		const int32_t iInvalidUpsert = ::OI::Db::BuildUpsert(sTable, stInvalidJson, stInvalidUpsert);
+		DbSample stAfterRejected;
+		stAfterRejected.iId = stChanged.iId;
+		const int32_t iRejectedLoad = co_await LoadRow(stMysql, sTable, stAfterRejected);
+		Expect(iBad, iInvalidAll == OI_ERR_INVALID_ARGUMENT && iInvalidPicked == OI_ERR_INVALID_ARGUMENT
+				&& iInvalidInsert == OI_ERR_INVALID_ARGUMENT && iInvalidUpsert == OI_ERR_INVALID_ARGUMENT
+				&& iRejectedLoad == OI_OK && SameRow(stAfterRejected, stChanged), "mysql invalid json rejected keeps row");
+		OI::Db::Statement stValidPicked;
+		const int32_t iValidPicked = ::OI::Db::BuildUpdateByKey(sTable, stInvalidJson, stValidPicked, &DbSample::sName);
+		if (iValidPicked == OI_OK)
+		{
+			iStatus = co_await stMysql.Call(std::move(stValidPicked), stResult, stError);
+		}
+		else
+		{
+			iStatus = iValidPicked;
+		}
+		const uint64_t iPickedAffected = stResult.iAffected;
+		stChanged.sName = stInvalidJson.sName;
+		DbSample stAfterPicked;
+		stAfterPicked.iId = stChanged.iId;
+		const int32_t iPickedLoad = co_await LoadRow(stMysql, sTable, stAfterPicked);
+		Expect(iBad, iValidPicked == OI_OK && iStatus == OI_OK && iPickedAffected == 1
+				&& iPickedLoad == OI_OK && SameRow(stAfterPicked, stChanged), "mysql unpicked invalid json update roundtrip");
+
 		// 按成员指针只读几列，写回只改这几个字段。
 		OI::Db::Statement stPartial;
 		const int32_t iPartial = ::OI::Db::BuildSelectByKey(sTable, stChanged, stPartial, &DbSample::sName, &DbSample::mJsonFlags);

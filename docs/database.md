@@ -58,7 +58,7 @@ if (iRet != OI_OK)
 
 成员指针反射目前只给标了 `db` 的结构生成。
 
-头一层的整数、浮点、`bool`、`string`、`Bytes` 分别绑定成 `int64_t`、`uint64_t`、`double`、`string` 或 `Blob`。`bool` 写成 0 或 1。`vector`、`map` 和嵌套 `rpcdata` 默认不拆列，调用 `ToDbBlob` 收成一个 blob，读的时候用 `FromDbBlob`。blob 里是这条值自己的 PB，序号为 0。容器 blob 恰好包含一条字段（包括空容器），空 blob、多条字段和尾随字节都拒绝。旧容器 blob 与新格式不兼容，需要先用旧版本读取并迁移，相关读写端同步升级。字段写了 `[dbjson]` 才改成 `ToJsonText` / `FromJsonText` 的 JSON 文本。数据库不穿透，blob 里的结构不用标 `db`。
+头一层的整数、浮点、`bool`、`string`、`Bytes` 分别绑定成 `int64_t`、`uint64_t`、`double`、`string` 或 `Blob`。`bool` 写成 0 或 1。`vector`、`map` 和嵌套 `rpcdata` 默认不拆列，调用 `ToDbBlob` 收成一个 blob，读的时候用 `FromDbBlob`。blob 里是这条值自己的 PB，序号为 0。容器 blob 恰好包含一条字段（包括空容器），空 blob、多条字段和尾随字节都拒绝。旧容器 blob 与新格式不兼容，需要先用旧版本读取并迁移，相关读写端同步升级。字段写了 `[dbjson]` 才改成 `ToJsonText` / `FromJsonText` 的 JSON 文本。数据库不穿透，blob 里的结构不用标 `db`。 `[dbjson]` 编码拒绝无效 UTF-8 和非有限浮点数；直接调用 `EncodeDbJson` 时抛 `std::invalid_argument`。合法 UTF-8 和字符串内 NUL 可经 JSON 编解码往返。单表语句构建只编码所需字段：所需字段无法编码时返回 `OI_ERR_INVALID_ARGUMENT`，输出语句不变；按主键查询或只更新其他有效字段不受该值影响。
 
 ## 单表语句
 

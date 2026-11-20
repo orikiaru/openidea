@@ -1,3 +1,4 @@
+#include "oi_framework_timer.h"
 #include "registry_server.h"
 #include "oi_proto_id.h"
 #include "framework_protocol/oi_rpcdata_regregister.h"
@@ -277,13 +278,13 @@ OI::Coro::Task RegistryServer::Boot()
 		co_await OI::Coro::yield(50);
 	}
 	StartReload();
-	::OI::Timer::BaseTimerManager::GetInstance().AddTimer(new ReloadTimer(), m_iPullMilliseconds);
+	::OI::Timer::FrameworkTimer::AddTimer(new ReloadTimer(), m_iPullMilliseconds);
 }
 
 OI::Coro::Task RegistryServer::BootMysql()
 {
 	StartReload();
-	::OI::Timer::BaseTimerManager::GetInstance().AddTimer(new ReloadTimer(), m_iPullMilliseconds);
+	::OI::Timer::FrameworkTimer::AddTimer(new ReloadTimer(), m_iPullMilliseconds);
 	co_return;
 }
 

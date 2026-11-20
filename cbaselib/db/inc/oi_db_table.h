@@ -1,5 +1,6 @@
 #pragma once
 #include "oi_db_row.h"
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -17,17 +18,42 @@ struct ColumnSpec
 	Parameter stValue;
 };
 
+// 主键始终需要，部分更新只额外编码选中的列。
 template <typename C>
-std::vector<ColumnSpec> DescribeRow(const C& stRow)
+std::vector<ColumnSpec> DescribeRowValues(const C& stRow, bool bAllValues, const std::vector<std::string>& vPicked)
 {
 	std::vector<ColumnSpec> vColumns;
 	vColumns.reserve(C::DbFields().size());
 	for (const auto& stField : C::DbFields())
 	{
-		vColumns.push_back(ColumnSpec{stField.pColumn, stField.pSqlType,
-		    stField.bKey, stField.fnEncode(stRow)});
+		ColumnSpec stColumn{stField.pColumn, stField.pSqlType, stField.bKey, {}};
+		if (bAllValues || stField.bKey || std::find(vPicked.begin(), vPicked.end(), stColumn.sName) != vPicked.end())
+		{
+			stColumn.stValue = stField.fnEncode(stRow);
+		}
+		vColumns.push_back(std::move(stColumn));
 	}
 	return vColumns;
+}
+
+template <typename C>
+std::vector<ColumnSpec> DescribeRow(const C& stRow)
+{
+	return DescribeRowValues(stRow, true, {});
+}
+
+template <typename C>
+bool DescribeStatementRow(const C& stRow, std::vector<ColumnSpec>& vColumns, bool bAllValues, const std::vector<std::string>& vPicked = {})
+{
+	try
+	{
+		vColumns = DescribeRowValues(stRow, bAllValues, vPicked);
+	}
+	catch (const std::invalid_argument&)
+	{
+		return false;
+	}
+	return true;
 }
 
 // 表名由调用方给，拼进 SQL 前只认字母、数字、下划线，最长 64。
@@ -148,7 +174,11 @@ int32_t BuildInsert(const std::string& sTable, const C& stRow, Statement& stStat
 	{
 		return OI_ERR_INVALID_ARGUMENT;
 	}
-	std::vector<ColumnSpec> vColumns = DescribeRow(stRow);
+	std::vector<ColumnSpec> vColumns;
+	if (!DescribeStatementRow(stRow, vColumns, true))
+	{
+		return OI_ERR_INVALID_ARGUMENT;
+	}
 	std::string sNames;
 	std::string sMarks;
 	std::vector<Parameter> vParameters;
@@ -170,7 +200,11 @@ int32_t BuildUpsert(const std::string& sTable, const C& stRow, Statement& stStat
 	{
 		return OI_ERR_INVALID_ARGUMENT;
 	}
-	const std::vector<ColumnSpec> vColumns = DescribeRow(stRow);
+	std::vector<ColumnSpec> vColumns;
+	if (!DescribeStatementRow(stRow, vColumns, true))
+	{
+		return OI_ERR_INVALID_ARGUMENT;
+	}
 	std::string sNames;
 	std::string sMarks;
 	std::string sUpdates;
@@ -215,7 +249,11 @@ int32_t BuildSelectByKey(const std::string& sTable, const C& stRow, Statement& s
 	{
 		return OI_ERR_INVALID_ARGUMENT;
 	}
-	const std::vector<ColumnSpec> vColumns = DescribeRow(stRow);
+	std::vector<ColumnSpec> vColumns;
+	if (!DescribeStatementRow(stRow, vColumns, false))
+	{
+		return OI_ERR_INVALID_ARGUMENT;
+	}
 	std::string sCondition;
 	std::vector<Parameter> vParameters;
 	std::vector<std::string> vNames;
@@ -247,11 +285,11 @@ int32_t BuildUpdateByKey(const std::string& sTable, const C& stRow, Statement& s
 	{
 		return OI_ERR_INVALID_ARGUMENT;
 	}
-	const std::vector<ColumnSpec> vColumns = DescribeRow(stRow);
+	std::vector<std::string> vNames;
+	std::vector<ColumnSpec> vColumns;
 	std::string sCondition;
 	std::vector<Parameter> vKeys;
-	std::vector<std::string> vNames;
-	if (!KeyCondition(vColumns, sCondition, vKeys) || !PickedNames<C>(vNames, pMembers...))
+	if (!PickedNames<C>(vNames, pMembers...) || !DescribeStatementRow(stRow, vColumns, vNames.empty(), vNames) || !KeyCondition(vColumns, sCondition, vKeys))
 	{
 		return OI_ERR_INVALID_ARGUMENT;
 	}
@@ -294,7 +332,11 @@ int32_t BuildDeleteByKey(const std::string& sTable, const C& stRow, Statement& s
 	{
 		return OI_ERR_INVALID_ARGUMENT;
 	}
-	const std::vector<ColumnSpec> vColumns = DescribeRow(stRow);
+	std::vector<ColumnSpec> vColumns;
+	if (!DescribeStatementRow(stRow, vColumns, false))
+	{
+		return OI_ERR_INVALID_ARGUMENT;
+	}
 	std::string sCondition;
 	std::vector<Parameter> vParameters;
 	if (!KeyCondition(vColumns, sCondition, vParameters))

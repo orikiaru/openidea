@@ -11,6 +11,36 @@ namespace OI
 namespace Timer
 {
 
+// 只在本次回调中借用。次数表示当前回调返回后还要执行几次。
+class TimerContext
+{
+	template <typename F>
+	friend class FnTimer;
+	int32_t m_iRemaining;
+
+	explicit TimerContext(int32_t iRemaining)
+	    : m_iRemaining(iRemaining)
+	{
+	}
+
+  public:
+	TimerContext(const TimerContext&) = delete;
+	TimerContext& operator=(const TimerContext&) = delete;
+
+	int32_t Remaining() const
+	{
+		return m_iRemaining;
+	}
+	void SetRemaining(int32_t iRemaining)
+	{
+		m_iRemaining = iRemaining > 0 ? iRemaining : 0;
+	}
+	void Stop()
+	{
+		m_iRemaining = 0;
+	}
+};
+
 class BaseTimer;
 class BaseTimerManager;
 class TimerLevel;

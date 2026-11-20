@@ -4,16 +4,16 @@
 
 ## 全量
 
-2026-11-18，HTTP 表单与流式收发的最终测试快照，四组 `--case all` 均通过 22/22；不含之后新增的 JSON 改动，不代表 JSON 已通过全量。协程压力、序列化压力、MySQL 和 registry-static 不计入本次全量。
+2026-11-20，基于提交 `79381ef` 的未提交源码，头文件布局修正后，四组 `--case all` 均通过 22/22。协程压力和序列化压力不计入全量。
 
 | 平台 | 线程 | CPU | 实测频率（MHz） | 通过 |
 | --- | --- | --- | --- | --- |
-| Windows MSVC x64 Release | 多线程 | Intel Core i9-11900K，标称 3504 MHz | 约 4703 | 22/22 |
-| Windows MSVC x64 Release | 单线程 | Intel Core i9-11900K，标称 3504 MHz | 约 4703 | 22/22 |
+| Windows MSVC x64 Release | 多线程 | Intel Core i9-11900K | 3504 | 22/22 |
+| Windows MSVC x64 Release | 单线程 | Intel Core i9-11900K | 3504 | 22/22 |
 | 远程 Linux Release，4 核 | 多线程 | Intel Xeon Platinum 8255C | 2494.140 | 22/22 |
 | 远程 Linux Release，2 核 | 单线程 | Intel Xeon Gold 6271C | 2593.904 | 22/22 |
 
-Windows 频率按测试后 `% Processor Performance` 平均 134.22% 乘标称频率估算，不是运行期间连续采样。
+Windows 频率为测试结束时性能计数器读数，不是运行期间连续采样。Linux 两路额外通过真实 MySQL 和 `registry-static`：MySQL 行映射、行操作及客户端检查均为 `bad=0`，包括非法 JSON 列拒写、仅更新合法列并读回。Windows 未运行 MySQL。
 
 ## 显式用例
 

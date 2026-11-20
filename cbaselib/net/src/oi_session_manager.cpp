@@ -583,19 +583,19 @@ void SessionManager::AddSession(Session* pSession)
 
 void SessionManager::AddSession(Session* pSession, const std::string& sEndpoint, size_t iSendBytes, size_t iReceiveBytes)
 {
+	RegisterSession(pSession, sEndpoint, iSendBytes, iReceiveBytes);
+	OnAddSession(pSession);
+}
+
+void SessionManager::RegisterSession(Session* pSession, const std::string& sEndpoint, size_t iSendBytes, size_t iReceiveBytes)
+{
 	pSession->SetSendQueueLimit(iSendBytes);
 	pSession->SetReceiveQueueLimit(iReceiveBytes);
 	pSession->SetEndpoint(sEndpoint);
-	int iSessionIdLocal = 0;
-	{
-		{
-			::OI::Thread::MutexGuard stLock(stLocker);
-			iSessionIdLocal = ++iCurrentSessionId;
-			mSessionMap[iSessionIdLocal] = pSession;
-			pSession->SetSessionID(iSessionIdLocal);
-		}
-		OnAddSession(pSession);
-	}
+	::OI::Thread::MutexGuard stLock(stLocker);
+	const sid_t iSessionIdLocal = ++iCurrentSessionId;
+	mSessionMap[iSessionIdLocal] = pSession;
+	pSession->SetSessionID(iSessionIdLocal);
 }
 
 void SessionManager::AddSession(net_socket_t iNewDescriptor)

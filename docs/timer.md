@@ -25,15 +25,15 @@
 
 libuv 到点调用 `OnSignal`，`OnSignal` 在 poll 线程上直接执行 `Update`，不交给工人。单线程和多线程都一样，时间轮只在 poll 线程上转。
 
-`Update` 每一跳先在锁里把到期的定时器摘下来，放锁后再逐个调 `OnTimer`。`OnTimer` 里可以 `AddTimer`，不会挡住别的线程挂定时器。返回 true 的定时器再加锁挂回去。回调跑在 poll 线程上，耗时期间网络收发停住；不能调 `CallRedisSync`、`Lookup`、`PullSync`、`Publish`。`CallRedisSync` 在这里会抛 `logic_error`。注册表的 `Lookup`、`PullSync`、`Publish` 在需要真正等待时同样抛 `logic_error`。运行期读 `Snapshot`。连接、登记、心跳和整量拉取由 `RegistryClient` 的单例秒更新 `OnSecondUpdate` 协程做：每秒一次，上一次没结束就跳过；`Snapshot` 未命中不立刻拉取，由下一次秒更新拉。要等结果就 `StartTask` 拉一个协程去做。
+`Update` 每一跳先在锁里取出到期回调，放锁后逐个执行。回调里可以登记其他回调，不会挡住别的线程挂定时器。回调跑在 poll 线程上，耗时期间网络收发停住；不能调 `CallRedisSync`、`Lookup`、`PullSync`、`Publish`。`CallRedisSync` 在这里会抛 `logic_error`。注册表的 `Lookup`、`PullSync`、`Publish` 在需要真正等待时同样抛 `logic_error`。运行期读 `Snapshot`。连接、登记、心跳和整量拉取由 `RegistryClient` 的单例秒更新 `OnSecondUpdate` 协程做：每秒一次，上一次没结束就跳过；`Snapshot` 未命中不立刻拉取，由下一次秒更新拉。要等结果就 `StartTask` 拉一个协程去做。
 
-单个回调抛异常时记录到任务错误处理器，并继续执行本批其他回调；`OnSignal` 另外兜住 `Update` 自身的异常，不让它穿出 libuv 回调，不能因异常让整套时间轮停转。lambda 定时器仍自动释放自身。自定义 BaseTimer 的异常路径须由其实现管理对象寿命，管理器不会猜测回调是否已经自行销毁对象，也不会在异常后自动续期。
+单个回调抛异常时记录到任务错误处理器，并继续执行本批其他回调；`OnSignal` 另外兜住 `Update` 自身的异常，不让它穿出 libuv 回调，不能因异常让整套时间轮停转。多次回调抛异常后不再续期；捕获对象在最后一次执行结束或抛异常后释放。
 
 `Init` 会检查上面三项配置，不合法就往 stderr 打原因并返回错误码，进程退出。
 
-回调时间按 `offset_ms` 对齐，用 `steady_clock` 计时。系统校时不影响相对延时，日历时间单独从系统时钟更新。没走完的一跳留到下次；外部 `AddTimer` 向上取整到到期 tick，不会提前触发。线程调度和回调执行仍可能造成额外延迟。`OnTimer` 返回 true 再挂上的周期定时器按逻辑 tick 续，停顿之后错过的跳会补上。`AddTimer(lambda)` 的 lambda 在 `Update` 摘除定时器、释放轮锁后直接执行，不再二次入队；回调应保持短小，耗时工作交给协程。
+回调时间按 `offset_ms` 对齐，用 `steady_clock` 计时。系统校时不影响相对延时，日历时间单独从系统时钟更新。没走完的一跳留到下次；外部 `AddTimer` 向上取整到到期 tick，不会提前触发。线程调度和回调执行仍可能造成额外延迟。`AddTimer(lambda)` 的 lambda 在 `Update` 摘除定时器、释放轮锁后直接执行，不再二次入队；回调应保持短小，耗时工作交给协程。
 
-业务侧用 `AddTimer(fn, millisecond)`，或者传入一个 `BaseTimer`。
+业务侧用 `AddTimer(fn, interval_ms, count = 1)` 登记无参数回调，或接收 `OI::Timer::TimerContext&` 的回调。间隔毫秒数和执行次数均须为正，否则返回 `OI_ERR_INVALID_ARGUMENT`；成功后按原逻辑 tick 自动续期。默认执行一次，不支持登记或移除定时器对象。回调可移动捕获资源。上下文只在当前回调期间借用，不能保存引用或指针；`Remaining()` 返回本次执行之后剩余的次数，`SetRemaining(n)` 覆盖剩余次数（`n <= 0` 时不再触发），`Stop()` 停止后续触发。回调也可增加剩余次数。单例周期工作仍使用单例更新接口。
 
 单例跟着时间轮更新：在 `DECLARE_SINGLETON` 的类里写公有的 `OI::Coro::Task OnTickUpdate(uint64_t iNowMilliseconds)` 或 `OI::Coro::Task OnSecondUpdate(time_t iNow)`。两个只能写一个，都写会编译失败；返回类型不是 `OI::Coro::Task` 也会 `static_assert` 失败。不写就不注册，等于空 Update。毫秒参数是秒时间戳乘 1000 再加毫秒；秒参数是 `time_t`。推进了 tick 才启动 `OnTickUpdate`；日历秒变化才启动 `OnSecondUpdate`，错过的秒不补。时间戳只在 `Update` 里写。
 

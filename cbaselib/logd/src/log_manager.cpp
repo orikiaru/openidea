@@ -1,3 +1,4 @@
+#include "oi_framework_timer.h"
 #include "log_manager.h"
 #include <stdio.h>
 #include <string.h>
@@ -53,7 +54,7 @@ int32_t LogManager::Init()
 	}
 
 	//每秒触发一定定时器
-	iStatus = ::OI::Timer::BaseTimerManager::GetInstance().AddTimer(this, 1000);
+	iStatus = ::OI::Timer::FrameworkTimer::AddTimer(this, 1000);
 	if (iStatus != OI_OK)
 	{
 		Stop();

@@ -12,12 +12,17 @@
 class IpcUdp : public ::OI::Rpc::ProtoSessionManager
 {
 	DECLARE_SINGLETON(IpcUdp)
+	std::atomic<bool> m_bAddPeerAddressOk{false};
 	IpcUdp()
 	{
 	}
 
   public:
 	const std::string GetIDString() override;
+	bool AddPeerAddressOk() const
+	{
+		return m_bAddPeerAddressOk.load();
+	}
 
   private:
 	void OnAddSession(::OI::Net::Session* pSession) override;

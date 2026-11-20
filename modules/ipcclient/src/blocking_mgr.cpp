@@ -116,15 +116,6 @@ class BlockingAccessClient : public OI::Rpc::ProtoClientManager
 	}
 };
 
-class BlockingAccessTimer : public OI::Timer::BaseTimer
-{
-  public:
-	bool OnTimer() override
-	{
-		return OI::Timer::END_TIMER;
-	}
-};
-
 struct BlockingAccessResult
 {
 	int32_t iManager = 0;
@@ -153,17 +144,15 @@ struct BlockingAccessResult
 	int32_t iReconnect = 0;
 	int32_t iRegistrySync = 0;
 	int32_t iRegistryWatch = 0;
-	int32_t iRemoveTimer = 0;
 	int32_t iNotify = 0;
 	int32_t iRedis = 0;
 	int32_t iTimer = 0;
 	int32_t iClosureTimer = 0;
-	int32_t iRemoved = 0;
 	bool bClosureReleased = false;
 #endif
 };
 
-static int32_t CheckBlockingAccess(BlockingAccessSession& stSession, BlockingAccessChannel& stChannel, BlockingAccessTimer& stTimer, BlockingAccessTimer& stNewTimer, BlockingAccessResult& stResult)
+static int32_t CheckBlockingAccess(BlockingAccessSession& stSession, BlockingAccessChannel& stChannel, BlockingAccessResult& stResult)
 {
 	const OI::Base::Bytes stBytes("probe", 5);
 	stResult.iManager = IpcClient::GetInstance().SendBytes(-1, stBytes);
@@ -206,7 +195,9 @@ static int32_t CheckBlockingAccess(BlockingAccessSession& stSession, BlockingAcc
 	stResult.iRegistrySync = OI::Base::RegistryClient::GetInstance().PullSync("blocking-probe", vServices);
 	stResult.iRegistryWatch = OI::Base::RegistryClient::GetInstance().Watch(&stClient, "blocking-probe");
 	auto& stTimers = OI::Timer::BaseTimerManager::GetInstance();
-	stResult.iTimer = stTimers.AddTimer(&stNewTimer, 60000);
+	stResult.iTimer = stTimers.AddTimer([]()
+	{
+	}, 1);
 	auto pClosure = std::make_shared<int>(1);
 	std::weak_ptr<int> pWeak = pClosure;
 	stResult.iClosureTimer = stTimers.AddTimer([pClosure]()
@@ -214,11 +205,6 @@ static int32_t CheckBlockingAccess(BlockingAccessSession& stSession, BlockingAcc
 	}, 60000);
 	pClosure.reset();
 	stResult.bClosureReleased = pWeak.expired();
-	stResult.iRemoveTimer = stTimers.RemoveTimerResult(&stTimer);
-	stResult.iRemoved = stTimers.RemoveTimer(&stTimer);
-#else
-	(void)stTimer;
-	(void)stNewTimer;
 #endif
 	return OI_OK;
 }
@@ -418,27 +404,17 @@ OI::Coro::TaskResult<int> BlockingMgr::CheckBlockingWork()
 	BlockingAccessSession stAccessSession;
 	BlockingAccessChannel stAccessChannel;
 	BlockingAccessResult stAccessResult;
-	BlockingAccessTimer stAccessTimer;
-	BlockingAccessTimer stNewTimer;
 	BlockingAccessSession stLoopSession;
 	const OI::Base::Bytes stLoopBytes("loop", 4);
 	const int32_t iLoopSend = stLoopSession.Send(stLoopBytes);
 	const int32_t iLoopAllow = stLoopSession.CheckAllowSend();
 	const int32_t iLoopChannel = stAccessChannel.AllowSend();
-	const int32_t iLoopAdd = OI::Timer::BaseTimerManager::GetInstance().AddTimer(&stNewTimer, 60000);
-	const int32_t iLoopRemove = iLoopAdd == OI_OK ? OI::Timer::BaseTimerManager::GetInstance().RemoveTimer(&stNewTimer) : OI_ERR_FAIL;
-	const int32_t iLoopMissing = OI::Timer::BaseTimerManager::GetInstance().RemoveTimer(&stNewTimer);
-	if (iLoopSend != OI_OK || stLoopSession.PendingSendBytes() != 4 || iLoopAllow != OI_OK || iLoopChannel != OI_OK ||
-	    iLoopAdd != OI_OK || iLoopRemove != OI_OK || iLoopMissing != OI_ERR_NOT_FOUND)
+	if (iLoopSend != OI_OK || stLoopSession.PendingSendBytes() != 4 || iLoopAllow != OI_OK || iLoopChannel != OI_OK)
 	{
-		std::fprintf(stderr, "blocking loop access send=%d allow=%d channel=%d add=%d remove=%d missing=%d\n",
-		    iLoopSend, iLoopAllow, iLoopChannel, iLoopAdd, iLoopRemove, iLoopMissing);
+		std::fprintf(stderr, "blocking loop access send=%d allow=%d channel=%d\n", iLoopSend, iLoopAllow, iLoopChannel);
 		++iBad;
 	}
-#ifdef _SINGLE_THREAD_
-	const int32_t iTimerSetup = OI::Timer::BaseTimerManager::GetInstance().AddTimer(&stAccessTimer, 60000);
-#endif
-	const int32_t iAccessTask = co_await OI::Coro::RunBlocking(CheckBlockingAccess, stAccessSession, stAccessChannel, stAccessTimer, stNewTimer, stAccessResult);
+	const int32_t iAccessTask = co_await OI::Coro::RunBlocking(CheckBlockingAccess, stAccessSession, stAccessChannel, stAccessResult);
 #ifdef _SINGLE_THREAD_
 	const bool bAccessOk = stAccessResult.iManager == OI_ERR_WRONG_THREAD && stAccessResult.iSession == OI_ERR_WRONG_THREAD &&
 	                       stAccessResult.iAllow == OI_ERR_WRONG_THREAD && stAccessResult.iChannel == OI_ERR_WRONG_THREAD && stAccessSession.PendingSendBytes() == 0 &&
@@ -452,17 +428,8 @@ OI::Coro::TaskResult<int> BlockingMgr::CheckBlockingWork()
 	                       stAccessResult.iOpenPeer == OI_ERR_WRONG_THREAD && stAccessResult.iPeerOutput == 12345 && stAccessResult.iReconnect == OI_ERR_WRONG_THREAD &&
 	                       stAccessResult.iClose == OI_ERR_WRONG_THREAD && stAccessResult.iCloseAll == OI_ERR_WRONG_THREAD &&
 	                       stAccessResult.iRegistrySync == OI_ERR_WRONG_THREAD && stAccessResult.iRegistryWatch == OI_ERR_WRONG_THREAD &&
-	                       stAccessResult.iRemoveTimer == OI_ERR_WRONG_THREAD && stAccessResult.iRedis == OI_ERR_WRONG_THREAD && stAccessResult.iTimer == OI_ERR_WRONG_THREAD &&
-	                       stAccessResult.iClosureTimer == OI_ERR_WRONG_THREAD && stAccessResult.bClosureReleased && stAccessResult.iRemoved == OI_ERR_WRONG_THREAD && iTimerSetup == OI_OK;
-	if (stAccessResult.iTimer == OI_OK)
-	{
-		(void)OI::Timer::BaseTimerManager::GetInstance().RemoveTimer(&stNewTimer);
-	}
-	const bool bTimerStillRegistered = iTimerSetup == OI_OK && OI::Timer::BaseTimerManager::GetInstance().RemoveTimer(&stAccessTimer) == OI_OK;
-	if (!bTimerStillRegistered)
-	{
-		++iBad;
-	}
+	                       stAccessResult.iRedis == OI_ERR_WRONG_THREAD && stAccessResult.iTimer == OI_ERR_WRONG_THREAD &&
+	                       stAccessResult.iClosureTimer == OI_ERR_WRONG_THREAD && stAccessResult.bClosureReleased;
 #else
 	const bool bAccessOk = stAccessResult.iManager == OI_ERR_CONNECT && stAccessResult.iSession == OI_OK &&
 	                       stAccessResult.iAllow == OI_OK && stAccessResult.iChannel == OI_OK && stAccessSession.PendingSendBytes() == 5 &&

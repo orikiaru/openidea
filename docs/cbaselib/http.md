@@ -92,4 +92,4 @@ if (stResponse.iCode != OI_OK)
 
 ## JSON
 
-包含 `oi_http_json.h` 后，`Message::SetJson(value)` 将 rpcdata、标量或容器编码到正文并设置 `application/json`。`Message::GetJson(output)` 按内容类型和目标类型解码；支持 `application/json`（可带参数）及 `application/*+json`。媒体类型不符返回 `OI_ERR_PROTOCOL`，正文超限、语法或类型错误返回 `OI_ERR_DECODE`；失败时输出保持原值。编码时拒绝非有限浮点数和无效 UTF-8（包括不符合 UTF-8 的原始二进制字段），返回 `OI_ERR_ENCODE` 并保持原消息；解码时拒绝无效 UTF-8，返回 `OI_ERR_DECODE` 并保持输出。合法 UTF-8、Unicode 和字符串内 NUL 支持往返；任意二进制需由调用方先编码。调用方应先检查返回码再使用输出。
+包含 `oi_http_json.h` 后，`Message::SetJson(value)` 将 rpcdata、标量或容器编码到正文并设置 `application/json`。`Message::GetJson(output)` 按内容类型和目标类型解码；支持 `application/json`（可带参数）及 `application/*+json`。媒体类型不符返回 `OI_ERR_PROTOCOL`，正文超限、语法或类型错误返回 `OI_ERR_DECODE`；失败时输出保持原值。编码时拒绝非有限浮点数和无效 UTF-8（包括不符合 UTF-8 的原始二进制字段），返回 `OI_ERR_ENCODE` 并保持原消息；解码时拒绝无效 UTF-8，返回 `OI_ERR_DECODE` 并保持输出。合法 UTF-8、Unicode 和字符串内 NUL 支持往返；任意二进制需由调用方先编码。解码到 `float` 时超出其有限范围的数值会被拒绝；整数键 map 中不同文本键若转成相同整数，也会返回 `OI_ERR_DECODE`。调用方应先检查返回码再使用输出。

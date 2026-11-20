@@ -1,6 +1,7 @@
 #pragma once
 #include "oi_bytes.h"
-#include "json/json.h"
+#include "oi_json_wire.h"
+#include <stdexcept>
 #include <charconv>
 #include <limits>
 #include <type_traits>
@@ -133,7 +134,12 @@ inline bool FromJsonValue(const Json::Value& stInput, float& fOutput)
 	{
 		return false;
 	}
-	fOutput = static_cast<float>(stInput.asDouble());
+	const double dValue = stInput.asDouble();
+	if (!std::isfinite(dValue) || std::abs(dValue) > (std::numeric_limits<float>::max)())
+	{
+		return false;
+	}
+	fOutput = static_cast<float>(dValue);
 	return true;
 }
 inline bool FromJsonValue(const Json::Value& stInput, double& dOutput)
@@ -253,7 +259,10 @@ bool FromJsonValue(const Json::Value& stInput, std::map<int32_t, V>& stOutput)
 		{
 			return false;
 		}
-		mDecoded[iKey] = std::move(stVal);
+		if (!mDecoded.emplace(iKey, std::move(stVal)).second)
+		{
+			return false;
+		}
 	}
 	stOutput.swap(mDecoded);
 	return true;
@@ -291,7 +300,10 @@ bool FromJsonUnsignedKeyMap(const Json::Value& stInput, std::map<U, V>& stOutput
 		{
 			return false;
 		}
-		mDecoded[stKey] = std::move(stVal);
+		if (!mDecoded.emplace(stKey, std::move(stVal)).second)
+		{
+			return false;
+		}
 	}
 	stOutput.swap(mDecoded);
 	return true;
@@ -355,6 +367,10 @@ std::string ToJsonText(const T& stValue)
 {
 	Json::Value stJson;
 	ToJsonValue(stJson, stValue);
+	if (!JsonWire::ValidTree(stJson))
+	{
+		throw std::invalid_argument("unrepresentable JSON field");
+	}
 	Json::StreamWriterBuilder stBuilder;
 	stBuilder["indentation"] = "";
 	return Json::writeString(stBuilder, stJson);

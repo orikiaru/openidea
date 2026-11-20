@@ -44,8 +44,8 @@
 ## 异步 webserver / 其他语言接入的转发层（2026-11-14）
 
 - 需求：做一个异步的 webserver，或者等其他语言的对端按协议接入，由它做转发层：外部请求进来，转成框架内的 RPC 发给后端服务，回包再转回去。
-- 现状：`modules/webserver` 接不了协程，不能用于业务。它用 `cpp-httplib` 阻塞 listen，处理函数跑在 httplib 自己的线程上，不能 `co_await` 框架的 RPC、Redis 调用，见 `docs/module.md` 的 Web 段。框架里只有 HTTP 客户端（`cbaselib/http`，跑在 poll 上），没有服务端。其他语言的二进制序列化还没生成，见上面「其他语言的序列化」。
-- 方向：HTTP 服务端换成框架自己的实现：挂在 poll 上的 SessionManager 收发，处理函数是协程，里面直接 `co_await` 命名 RPC 转发，单线程、多线程都能跑；cpp-httplib 服务端不再作为范例。其他语言按 `protoconfig` 的二进制协议直接接入时，转发层只做协议转换和路由。先确认要接的对端和协议，再定。
+- 现状：`modules/webserver` 使用框架 HTTP 服务端，会话挂在 poll 上，处理函数可通过协程调用框架 RPC、Redis；详见 `docs/module.md` 的 Web 段。其他语言的二进制序列化还没生成，见上面「其他语言的序列化」。
+- 方向：按实际业务接入和路由需求完善转发层；其他语言按 `protoconfig` 的二进制协议直接接入时，再确定协议转换和路由方式。先确认要接的对端和协议。
 
 - 序列化格式变更要写明：`b269fb7` 起 vector/map 改为每字段一条、字段体为数量加元素，裸 `<<`/`>>` rpcdata 加长度前缀，`ReadFields` 对重复字段号抛 `ParserException`。旧版编出的报文和旧版存进 Redis / MySQL 的 PB blob 全部读不回来，`FromDbBlob` 显式拒绝多条目。项目尚无跨语言对端时可以接受，要在文档里记成不兼容变更，避免误以为平滑升级。
 - `db` 用例从 `all` 移除后连接池异常路径无覆盖：fake 驱动能注入的驱动抛异常→不健康连接剔除、失败调用不改输出、事务回滚语义，现在没有任何用例跑；Windows 端也没有任何 DB 行映射检查（`mysql` 只在 Linux 显式跑）。决定是补回一个轻量 fake 用例，还是在 `docs/testing.md` 记成有意取舍。PB 编码黄金字节已由 `hold binary container` 补进 `all`，DB 特有部分仍只在 mysql。

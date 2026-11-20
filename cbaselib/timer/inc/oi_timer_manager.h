@@ -31,18 +31,33 @@ template <typename F>
 class FnTimer : public BaseTimer
 {
 	F m_fnFunction;
+	int32_t m_iCount;
 
   public:
-	explicit FnTimer(F fnFunction)
-	    : m_fnFunction(std::move(fnFunction))
+	FnTimer(F fnFunction, int32_t iCount)
+	    : m_fnFunction(std::move(fnFunction)), m_iCount(iCount)
 	{
 	}
 	bool OnTimer() override
 	{
 		// Update 已释放时间轮锁，直接执行。
 		std::unique_ptr<FnTimer> pSelf(this);
-		m_fnFunction();
-		return END_TIMER;
+		TimerContext stContext(m_iCount - 1);
+		if constexpr (std::is_invocable_v<F&, TimerContext&>)
+		{
+			m_fnFunction(stContext);
+		}
+		else
+		{
+			m_fnFunction();
+		}
+		m_iCount = stContext.Remaining();
+		if (m_iCount == 0)
+		{
+			return END_TIMER;
+		}
+		pSelf.release();
+		return RESET_TIMER;
 	}
 };
 
@@ -97,15 +112,24 @@ class BaseTimerManager
 		return iOffset;
 	}
 
-	// 按毫秒挂上一个定时器。对象所有权仍在调用方，除非 OnTimer 里自己销毁。
-	int32_t AddTimer(BaseTimer* pTimer, int iMillisecond);
+	// 每次登记独立持有闭包。次数包括首次触发；上下文中的次数表示本次之后还剩几次。
 	template <typename F>
-	typename std::enable_if<!std::is_base_of<BaseTimer, typename std::remove_pointer<typename std::decay<F>::type>::type>::value, int32_t>::type
-	AddTimer(F fnFunction, int iMillisecond)
+	    requires (std::is_invocable_v<F&, TimerContext&> || std::is_invocable_v<F&>)
+	int32_t AddTimer(F fnHandler, int iIntervalMilliseconds, int32_t iCount = 1)
 	{
-		typedef typename std::decay<F>::type Fn;
-		auto pTimer = std::make_unique<FnTimer<Fn>>(std::move(fnFunction));
-		const int32_t iStatus = AddTimer(pTimer.get(), iMillisecond);
+		if (iIntervalMilliseconds <= 0 || iCount <= 0)
+		{
+			return OI_ERR_INVALID_ARGUMENT;
+		}
+		if constexpr (std::is_pointer_v<F>)
+		{
+			if (!fnHandler)
+			{
+				return OI_ERR_INVALID_ARGUMENT;
+			}
+		}
+		auto pTimer = std::make_unique<FnTimer<F>>(std::move(fnHandler), iCount);
+		const int32_t iStatus = RegisterTimer(pTimer.get(), iIntervalMilliseconds);
 		if (iStatus == OI_OK)
 		{
 			pTimer.release();
@@ -113,30 +137,12 @@ class BaseTimerManager
 		return iStatus;
 	}
 
-	// 从时间轮摘掉。正在触发或未登记时返回 OI_ERR_NOT_FOUND。
-	int32_t RemoveTimer(BaseTimer* pTimer)
-	{
-		return RemoveTimerResult(pTimer);
-	}
-	int32_t RemoveTimerResult(BaseTimer* pTimer)
-	{
-		const int32_t iThreadStatus = ::OI::Net::Poll::GetInstance().CheckThreadAccess("BaseTimerManager::RemoveTimer");
-		if (iThreadStatus != OI_OK)
-		{
-			return iThreadStatus;
-		}
-		::OI::Thread::MutexGuard stLock(m_stWheelMutex);
-		if (!pTimer || !pTimer->GetTimerLevel())
-		{
-			return OI_ERR_NOT_FOUND;
-		}
-		return pTimer->GetTimerLevel()->RemoveTimer(this, pTimer);
-	}
-
 	// 最近一次 Update 的单调时间和日历时间，给诊断用。
 	std::string GenTraceLog();
 
   private:
+	friend class FrameworkTimer;
+	int32_t RegisterTimer(BaseTimer* pTimer, int iMillisecond);
 	// 相对延时只用单调时钟；系统校时只影响日历快照。
 	// 把毫秒换成相对上次 tick 的跳数，用单调时钟，不受系统校时影响。
 	int64_t TicksFromNow(int iMillisecond) const;
