@@ -36,6 +36,7 @@ def quoted_path(path):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--case", choices=("mysql", "mysql-wake"), default="mysql")
     parser.add_argument("--mysqld", help="mysqld executable in a persistent installation")
     parser.add_argument("--mysql", help="mysql client executable; defaults to the mysqld directory, then PATH")
     parser.add_argument("--bin-dir", type=Path, default=REPO / "deploy" / "bin")
@@ -123,13 +124,15 @@ def main():
             env.update(OI_TEST_MYSQL_HOST="127.0.0.1", OI_TEST_MYSQL_PORT=str(port),
                        OI_TEST_MYSQL_USER="root", OI_TEST_MYSQL_PASSWORD="", OI_TEST_MYSQL_DATABASE="oi_regression")
             env["OI_TEST_MYSQL_CLIENT"] = str(mysql)
-            command = [sys.executable, str(REPO / "tools" / "run_regressions.py"), "--case", "mysql",
+            command = [sys.executable, str(REPO / "tools" / "run_regressions.py"), "--case", args.case,
                        "--bin-dir", str(args.bin_dir), "--port-offset", str(args.port_offset)]
             if args.artifacts:
                 command += ["--artifacts", str(args.artifacts)]
             code = subprocess.run(command, cwd=REPO, env=env, check=False).returncode
             if code != 0:
                 return code
+            if args.case == "mysql-wake":
+                return 0
             pool = [sys.executable, str(REPO / "tools" / "run_regressions.py"), "--case", "registry-static",
                     "--bin-dir", str(args.bin_dir), "--port-offset", str(args.port_offset)]
             if args.artifacts:

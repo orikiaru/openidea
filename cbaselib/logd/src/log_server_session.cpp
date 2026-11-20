@@ -28,35 +28,6 @@ void LogServerSession::OnDataIn()
 			break;
 		}
 		const size_t iFrameBytes = sizeof(uint32_t) * 2 + (size_t)iDeclared;
-		// 每轮最多约 1MiB/1024 帧；超过预算的大帧允许独占一轮，不能切开日志。
-		if (iUsed > 0 && (iUsed + iFrameBytes > 1024 * 1024 || iFrames >= 1024))
-		{
-			::OI::RpcData::LogRecord stPeekRecord;
-			try
-			{
-				{
-					stPacket.StartTransaction();
-					stPacket.AddCurPos(sizeof(uint32_t) * 2);
-					::OI::Base::BytesStream::ReadLimit stLimit(stPacket, iDeclared);
-					uint64_t iCallId = 0;
-					stPacket >> iCallId;
-					if (iCallId != 0)
-					{
-						PassiveClose(PARSER_ERR_OTHER);
-						return;
-					}
-					stPeekRecord.deserialize(stPacket);
-				}
-				stPacket.RollBack();
-			}
-			catch (...)
-			{
-				PassiveClose(PARSER_ERR_OTHER);
-				return;
-			}
-			LogManager::GetInstance().DeferWrite(this, stPeekRecord.sText.size());
-			break;
-		}
 		stPacket.StartTransaction();
 		uint32_t iProtocol = 0;
 		uint32_t iSize = 0;
@@ -88,6 +59,17 @@ void LogServerSession::OnDataIn()
 		{
 			PassiveClose(PARSER_ERR_PROTOCOL_SIZE);
 			return;
+		}
+		// 完整解析和长度检查通过后才能登记到等待队列。
+		if (iUsed > 0 && (iUsed + iFrameBytes > 1024 * 1024 || iFrames >= 1024))
+		{
+			stPacket.RollBack();
+			if (LogManager::GetInstance().DeferWrite(this, stRecord.sText.size()) != OI_OK)
+			{
+				PassiveClose(PARSER_ERR_PROTOCOL_SIZE);
+				return;
+			}
+			break;
 		}
 		if (stRecord.iLevel >= 0 && stRecord.iLevel < LOG_LEVEL::LOG_LEVEL_COUNT)
 		{

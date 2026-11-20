@@ -149,6 +149,7 @@ static void ApplyOp(const IoOp& stOperation)
 		int iInitReturnCode = uv_poll_init_socket(&g_loop, &pWatchLocal->stPoll, (uv_os_sock_t)stOperation.iDescriptor);
 		if (iInitReturnCode != 0)
 		{
+			fprintf(stderr, "poll register init failed: %s (%d)\n", uv_strerror(iInitReturnCode), iInitReturnCode);
 			// 套接字还在 channel 上。先摘掉再关，析构里就不会再关一次。
 			stOperation.pChannel->DetachSocket();
 			NetOs_Close(stOperation.iDescriptor);
@@ -157,7 +158,18 @@ static void ApplyOp(const IoOp& stOperation)
 			return;
 		}
 		pWatchLocal->stPoll.data = stOperation.pChannel;
-		uv_poll_start(&pWatchLocal->stPoll, MaskToUv(pWatchLocal->iMask), OnPoll);
+		const int iStartStatus = uv_poll_start(&pWatchLocal->stPoll, MaskToUv(pWatchLocal->iMask), OnPoll);
+		if (iStartStatus != 0)
+		{
+			fprintf(stderr, "poll register start failed: %s (%d)\n", uv_strerror(iStartStatus), iStartStatus);
+			stOperation.pChannel->DetachSocket();
+			stOperation.pChannel->pPollToken = nullptr;
+			pWatchLocal->stPoll.data = nullptr;
+			NetOs_Close(pWatchLocal->iDescriptor);
+			pWatchLocal->iDescriptor = INVALID_SOCKET_ID;
+			uv_close(reinterpret_cast<uv_handle_t*>(&pWatchLocal->stPoll), CloseWatch);
+			return;
+		}
 		stOperation.pChannel->pPollToken = pWatchLocal;
 		return;
 	}
@@ -327,6 +339,8 @@ void* Poll::StartThreadPollWait(void*)
 	{
 		uv_run(&g_loop, UV_RUN_ONCE);
 	}
+	// 停止标记与监听入队互斥，最后一轮通知先前已入队的启动方。
+	DrainOps();
 	return NULL;
 }
 
@@ -338,6 +352,7 @@ void Poll::StopAndJoin()
 		{
 			BlockingWorkSessionManager::GetInstance().Drain([](void*)
 			{
+				::OI::Thread::NativeMutexGuard stGuard(g_op_lock);
 				g_poll_stop.store(true);
 				uv_async_send(&g_async);
 			}, nullptr);
@@ -424,6 +439,61 @@ void Poll::CallOnLoop(void (*fnFunction)(void*), void* pArgumentLocal)
 		return;
 	}
 	PostOnLoop(fnFunction, pArgumentLocal);
+}
+
+int32_t Poll::StartListener(int32_t (*fnStart)(void*), void* pArgument)
+{
+	if (InLoopThread())
+	{
+		return g_loop_ready && !g_poll_stop.load() ? fnStart(pArgument) : OI_ERR_CANCELLED;
+	}
+#ifdef _SINGLE_THREAD_
+	return OI_ERR_WRONG_THREAD;
+#else
+	struct Start
+	{
+		int32_t (*fnStart)(void*);
+		void* pArgument;
+		::OI::Thread::Mutex stMutex;
+		::OI::Thread::MutexCond stDone;
+		int32_t iStatus = OI_ERR_FAIL;
+		bool bDone = false;
+	};
+	Start stStart{fnStart, pArgument, {}, {}};
+	::OI::Thread::MutexGuard stLock(stStart.stMutex);
+	{
+		::OI::Thread::NativeMutexGuard stGuard(g_op_lock);
+		if (!g_loop_ready || g_poll_stop.load())
+		{
+			return OI_ERR_CANCELLED;
+		}
+		IoOp stOp{};
+		stOp.iType = IO_OP_CALL;
+		stOp.pArgument = &stStart;
+		stOp.fnCall = [](void* pData)
+		{
+			auto* pStart = static_cast<Start*>(pData);
+			::OI::Thread::MutexGuard stGuardLocal(pStart->stMutex);
+			try
+			{
+				pStart->iStatus = g_poll_stop.load() ? OI_ERR_CANCELLED : pStart->fnStart(pStart->pArgument);
+			}
+			catch (...)
+			{
+				::OI::Thread::ReportTaskError(std::current_exception());
+			}
+			pStart->bDone = true;
+			pStart->stDone.Signal();
+		};
+		g_ops.push_back(stOp);
+		uv_async_send(&g_async);
+	}
+	while (!stStart.bDone)
+	{
+		stStart.stDone.Wait(stStart.stMutex);
+	}
+	return stStart.iStatus;
+#endif
 }
 
 void Poll::PostOnLoop(void (*fnFunction)(void*), void* pArgumentLocal)

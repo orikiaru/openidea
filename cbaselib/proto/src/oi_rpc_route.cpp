@@ -89,7 +89,8 @@ ServiceGroup* RouteManager::Group(const std::string& sName, const std::vector<::
 		}
 		pGroup = pSlot.get();
 	}
-	pGroup->Apply(vList, kRetryMilliseconds);
+	// 请求快照只用于首次建组。之后由周期刷新维护成员。
+	pGroup->Apply(vList, kRetryMilliseconds, true);
 	return pGroup;
 }
 

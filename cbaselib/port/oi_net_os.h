@@ -6,6 +6,8 @@
 #endif
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <windows.h>
+#include <stdio.h>
 #include <errno.h>
 #include <string.h>
 typedef intptr_t net_socket_t;
@@ -60,6 +62,20 @@ inline const char* NetOs_StrError(int iError)
 {
 	static thread_local char vBuffer[128];
 #ifdef _WIN32
+	if (iError >= WSABASEERR)
+	{
+		const DWORD iSize = FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, nullptr, static_cast<DWORD>(iError),
+		    MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US), vBuffer, sizeof(vBuffer), nullptr);
+		if (iSize == 0)
+		{
+			snprintf(vBuffer, sizeof(vBuffer), "Winsock error %d", iError);
+		}
+		else
+		{
+			vBuffer[strcspn(vBuffer, "\r\n")] = '\0';
+		}
+		return vBuffer;
+	}
 	if (strerror_s(vBuffer, sizeof(vBuffer), iError) != 0)
 	{
 		vBuffer[0] = '\0';

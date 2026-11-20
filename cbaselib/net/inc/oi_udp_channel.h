@@ -28,6 +28,8 @@ class UDP_PeerChannel : public Channel
 	std::atomic<uint64_t> m_iLastActive;
 	// 已经排进待回收表。只在 UDP_Channel 的回收锁里读写。
 	bool m_bClosing = false;
+	// 会话锁内认领空闲关闭；管理器回调在锁外执行。
+	bool m_bIdleExpired = false;
 
   public:
 	UDP_PeerChannel(UDP_Channel* pOwner, const NetAddr& stAddr, Session* pSessionLocal);

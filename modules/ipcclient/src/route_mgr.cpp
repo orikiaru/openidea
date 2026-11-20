@@ -2,6 +2,7 @@
 #include "oi_log.h"
 #include "oi_parser.h"
 #include "oi_rpc_session_manager.h"
+#include "oi_registry_client.h"
 #include "oi_rpcdata_allechoreq.h"
 #include "oi_rpcdata_allechores.h"
 #include "oi_rpcdata_holdreq.h"
@@ -186,6 +187,49 @@ OI::Coro::TaskResult<int> RouteMgr::CheckRouteTargetStability()
 	    stSingleAfter.vClients.size() != 1 || stSingleAfter.vClients[0] != pZone1001 ||
 	    OI::Rpc::RouteManager::GetInstance().ConnectionInfo(*pZone1001).iSessionId != iSid1001 ||
 	    OI::Rpc::RouteManager::GetInstance().ConnectionInfo(*pZone1002).iSessionId != iSid1002)
+	{
+		++iBad;
+	}
+	if (pZone1001 && pZone1002 && iSid1002 != INVALID_SID)
+	{
+		std::vector<OI::Base::ServiceInstance> vSnapshot;
+		const bool bSnapshot = OI::Base::RegistryClient::GetInstance().Snapshot("gameserver", vSnapshot);
+		std::vector<OI::Base::ServiceInstance> vOldSnapshot;
+		for (const auto& stInstance : vSnapshot)
+		{
+			if (stInstance.sZone == "1001")
+			{
+				vOldSnapshot.push_back(stInstance);
+			}
+		}
+		if (!bSnapshot || vOldSnapshot.size() != 1)
+		{
+			++iBad;
+		}
+		else
+		{
+			OI::RpcData::HoldReq stDelayedRequest;
+			OI::RpcData::HoldRes stDelayedResponse;
+			stDelayedRequest.iDelayMilliseconds = 1000;
+			stDelayedRequest.iMark = 1002;
+			auto stDelayed = OI::Rpc::RpcCall(*pZone1002, stDelayedRequest, stDelayedResponse, OI::Timer::Seconds(3));
+			co_await OI::Coro::yield(OI::Timer::Milliseconds(50));
+			auto stOldRoute = OI::Rpc::RouteManager::GetInstance().Resolve("gameserver", OI::Rpc::ServicePick::Zone, "1001", OI_OK, vOldSnapshot);
+			if (stOldRoute.iStatus != OI::Rpc::ServiceRouteStatus::Ok || stOldRoute.vClients.size() != 1 ||
+			    stOldRoute.vClients[0] != pZone1001 ||
+			    OI::Rpc::RouteManager::GetInstance().ConnectionInfo(*pZone1002).iSessionId != iSid1002)
+			{
+				++iBad;
+			}
+			const int32_t iDelayedRet = co_await stDelayed;
+			if (iDelayedRet != OI_OK || stDelayedResponse.iMark != 1002 ||
+			    OI::Rpc::RouteManager::GetInstance().ConnectionInfo(*pZone1002).iSessionId != iSid1002)
+			{
+				++iBad;
+			}
+		}
+	}
+	else
 	{
 		++iBad;
 	}

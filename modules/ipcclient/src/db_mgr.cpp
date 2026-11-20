@@ -19,6 +19,7 @@
 void DbMgr::Load()
 {
 	TryGetConfig("Test.db", m_bEnabled);
+	TryGetConfig("Test.wake_case", m_sWakeCase);
 }
 
 void DbMgr::Expect(int32_t& iBad, bool bOk, const char* pLabel)
@@ -728,7 +729,6 @@ OI::Coro::TaskResult<int32_t> DbMgr::CheckMysqlRows(OI::Db::Client& stMysql, con
 
 OI::Coro::Task DbMgr::Run()
 {
-	int32_t iBad = CheckRowMapping();
 	const int32_t iConfig = OI::Thread::ConfigureBlockingPool(OI::Thread::BlockingType::Mysql, 4, 64);
 	if (iConfig != OI_OK)
 	{
@@ -736,6 +736,13 @@ OI::Coro::Task DbMgr::Run()
 		TestBoard::GetInstance().Done(1);
 		co_return;
 	}
+	if (!m_sWakeCase.empty())
+	{
+		const int32_t iBenchmark = co_await RunWakeBenchmark(m_sWakeCase == "blocking");
+		TestBoard::GetInstance().Done(iBenchmark);
+		co_return;
+	}
+	int32_t iBad = CheckRowMapping();
 #ifdef OI_ENABLE_MYSQL
 	OI::Db::Result stResult;
 	OI::Db::Error stError;

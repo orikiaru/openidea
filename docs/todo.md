@@ -1,5 +1,9 @@
 # 待办
 
+## 唤醒路径延迟拆分
+
+分别实测 submit→worker、worker done→post、post→poll、poll→业务恢复，并与同机双线程竞争互斥锁交接的相同边界对照。空任务约 10.69 微秒是整链耗时，不能据此归因于 libuv 或断言已证明比锁慢。
+
 ## Redis 迟到回包偶发问题：等待复现
 
 现有 Hold 覆盖 BLPOP 超时、迟到回包、后续 PING 及超时边界竞争；偶发问题尚无确认根因，复测通过本身不能证明问题消失。
@@ -34,7 +38,7 @@ libhv 消息还提供文件、JSON、类型化值等便捷接口；是否引入�
 
 ## 2026-11-19 全仓审查：修复进度
 
-2026-11-19 对 HEAD `52dd507` 做了全仓只读审查（cbaselib、modules、tools 第一方代码；未编译、未跑回归；生成器异常输入在临时目录实测）。确认 0 个 P1、6 个 P2、12 个 P3，本轮先登记、不修改代码。P2 第 1、3、4、6 项已修，第 2 项的回归预检和生产监听已修，第 5 项待修；修复后的完整矩阵仍待验证。P3 随相关模块下次改动一并收口。
+2026-11-19 对 HEAD `52dd507` 做了全仓只读审查（cbaselib、modules、tools 第一方代码；未编译、未跑回归；生成器异常输入在临时目录实测）。确认 0 个 P1、6 个 P2、12 个 P3，本轮先登记、不修改代码。P2 六项均已修；修复后的完整矩阵仍待验证。P3 随相关模块下次改动一并收口。
 
 ### P2
 
@@ -42,7 +46,7 @@ libhv 消息还提供文件、JSON、类型化值等便捷接口；是否引入�
 - **已修：Windows 端口占用预检失效**。TCP 生产监听使用 `SO_EXCLUSIVEADDRUSE`；回归预检对 TCP 和 UDP 分别独占探测回环及通配地址，覆盖已有普通和复用绑定。Linux TCP 保留 `SO_REUSEADDR`。修复后的完整矩阵仍待验证。
 - **已修：注册中心同值重复登记后旧会话删除在线登记**。新登记接管旧绑定，Redis 租约使用独立 owner 令牌，撤销时仅删除自身租约；回归检查被接管连接的心跳和重复登记均返回占用，接管方心跳正常；旧连接关闭后地址、owner 和快照仍在，新连接关闭后清除，全新连接可以重新登记。
 - **已修：定时器时间快照跨线程读写竞争**。四个 getter 均在锁内读取，时间结构按值返回。
-- **logd 延后帧缺单帧限额，可永久卡住队列并让 Stop 退不掉**（`cbaselib/logd/src/log_manager.cpp` 的 `DeferWrite`/`QueueWaiter`/`ResumeWaiting`，`cbaselib/logd/src/log_server_session.cpp` 的延后分支）。触发：`Log.max_pending_bytes` 取最小值附近（回归配成 8MiB+8），客户端一次读里第二帧的 `sText` 超过 `max - 标题长度` 且仍在 `LOG_FRAME_MAX+64` 内。现状：该帧仍入队，但队首永远放不下；本地日志持续 BUSY，`Stop()` 等待一个不会再被 Signal 的条件。修复：入队前做与 `WriteLog` 相同的单帧检查（含 `sText < LOG_FRAME_MAX`），超限按协议错误关闭会话。
+- **已修：logd 延后帧缺单帧限额**。入队前检查帧及标题是否能放入待写预算，超限返回错误，不会让队首永久等待；现有回归覆盖合法帧背压与排空，超限帧边界尚未单独实测。
 - **已修：HTTP 连接池在 EOF 处理前复用会话**。读到 EOF 时先标记连接不可复用，再交付已收到的数据，避免排队请求使用即将关闭的连接。
 
 ### P3
@@ -56,10 +60,10 @@ libhv 消息还提供文件、JSON、类型化值等便捷接口；是否引入�
 - **客户端接受无冒号的响应头行**（`cbaselib/http/src/oi_http.cpp` 的 `ParseHeaders`）：没有冒号的行被跳过，函数仍可返回成功。服务端同一行回 400。畸形头可能被悄悄丢掉，其余头（含 `Content-Length`）继续生效。修复：遇到无冒号行直接失败。
 - **客户端接受数值相同的重复 Content-Length**（同函数）：已有长度且新值相同则继续，值不同才失败。服务端第二个 `Content-Length` 一律 400。HTTP 规范允许对相同长度列表拒绝或合并，本项目可选择更严格地拒绝重复字段。修复方向：只要已经有过 `Content-Length` 就失败。
 - **TLS `Flush` 把可重试的 BUSY 当永久错误**（`cbaselib/net/src/oi_tls_session.cpp`）：置 `m_sError` 后 `StartTransport` 一律返回 `OI_ERR_CONNECT`，SSL 已消费的明文留在 BIO 无重试路径。修复：只在不可恢复时置错误，BUSY 保留 BIO 并在可写时重试。
-- **`StartServer` 登记失败不回滚监听**（`cbaselib/net/src/oi_session_manager.cpp`、`cbaselib/net/src/oi_accept_channel.cpp`）：accept 通道创建后不保存也不返回，Publish 失败时监听仍在 accept，重试因端口占用失败。修复：管理器持有 accept 通道，失败/析构时关闭。
+- **`StartServer` 登记失败不回滚监听**（`cbaselib/net/src/oi_session_manager.cpp`、`cbaselib/net/src/oi_accept_channel.cpp`）：accept 通道创建后不保存也不返回，Publish 失败时监听仍在 accept，重试因端口占用失败。监听注册失败已返回错误并清理，但 Publish 失败后的监听回滚仍待修；需要管理器持有 accept 通道并在 Publish 失败时关闭。
 - **RPC 完成回调抛异常时槽已摘除、协程永久挂起**（`cbaselib/proto/src/oi_rpc_call.cpp` 的 `Sweep`/`Deliver`）：`Sweep` 的 `FinishSlot` 循环没有逐槽 `try/catch`，`FailSession` 已有。触发需完成回调抛异常（概率低），后果是等待方永久挂起、同批其余到期项不收尾。修复：对齐 `FailSession` 的逐槽保护。
-- **选路用旧名单回写 `ServiceGroup`**（`cbaselib/proto/src/oi_rpc_route.cpp`）：每次 `Group` 都 `Apply` 调用方缓存的名单，可能与秒更新下发的新名单竞争，短暂退役新实例或复活下线实例（≤1s）。修复：名单只由秒更新一个写者下发，或给快照加版本号拒绝旧版本。
-- **`IpcUdp` 会话计数只增不减**（`modules/ipcserver/src/ipcudp.cpp`）：`UDP_PROBE_SESSIONS` 返回历史累计值而非活跃会话数；当前回归查询顺序绕开。修复：删除时减一并按 sid 去重，或改活跃集合。
+- **已修：选路用旧名单回写 `ServiceGroup`**。请求快照仅用于首次建组，后续由周期刷新维护；回归检查旧快照不会退役实例 1002，并验证原在途 RPC。
+- **已核对：`IpcUdp` 会话计数为累计创建数**。该诊断值有意保留累计语义，不代表活跃数；回归用它检查活动期间不重复创建，以及服务端空闲回收后重新创建。
 - **测试工具与规则类**：
   - `tools/run_regressions.py` 清理阶段不校验服务退出码，最后一次窗口检查后崩溃的服务仍可能 PASS；建议对 `procs` 逐个校验 `returncode`。
   - `tools/build.py` 不传 `OI_WEBCLIENT_SINGLE_THREAD`，默认 MT 构建产出单线程 webclient，与矩阵 MT 不一致；按 mode 同步传该开关。
@@ -70,4 +74,4 @@ libhv 消息还提供文件、JSON、类型化值等便捷接口；是否引入�
 
 验证边界与关闭条件：本轮为静态审查，未编译、未跑回归；P2 修复后按 `docs/testing.md` 跑 Linux/Windows、单线程/多线程回归，P3 随相关模块改动验证。历史 2026-11-04 的三个 P2 已核对为已修（分区路由、清理循环、矩阵中断），不重复登记。
 
-2026-11-19 对 HEAD `7e1c9fe` 又沿调用链复核了已修的断连、注册租约和定时器快照，未改代码，未编译，未跑回归。这三项修复的调用链与上面的「已修」描述一致。logd 延后帧和 Windows 生产监听 `SO_REUSEADDR` 仍未修。其余 P3 没有逐条重走。客户端响应头两条是这次新登记的。
+2026-11-19 对 HEAD `7e1c9fe` 又沿调用链复核了已修的断连、注册租约和定时器快照，未改代码，未编译，未跑回归。这三项修复的调用链与上面的「已修」描述一致。当时 logd 延后帧和 Windows 生产监听仍未修；现已按上面的状态修复。其余 P3 没有逐条重走。客户端响应头两条是这次新登记的。

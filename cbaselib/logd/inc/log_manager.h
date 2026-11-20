@@ -59,7 +59,7 @@ class LogManager : public ::OI::Timer::BaseTimer
 	int32_t WriteLog(LOG_LEVEL iLevel, const char* pText, size_t iLength,
 	    LogServerSession* pSession = nullptr);
 	// poll 单次解析达到预算，保留下一帧并排到等待队列尾部。
-	void DeferWrite(LogServerSession* pSession, size_t iLength);
+	int32_t DeferWrite(LogServerSession* pSession, size_t iLength);
 
   private:
 	friend class LogFileInstance;

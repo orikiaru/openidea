@@ -115,6 +115,8 @@ class ServiceGroup
 	::OI::Thread::Mutex m_stMutex;
 	std::map<int32_t, Member> m_mMembers;
 	bool m_bStarted;
+	bool m_bApplied = false;
+	bool m_bRetired = false;
 	std::atomic<uint32_t> m_iCursor{0};
 	std::vector<std::shared_ptr<PeerConnection>> Connections();
 	static void Retire(const std::shared_ptr<PeerConnection>& pConnection);
@@ -125,7 +127,7 @@ class ServiceGroup
 	ServiceGroup(const ServiceGroup&) = delete;
 	ServiceGroup& operator=(const ServiceGroup&) = delete;
 	// 按实例号比对：多出的建连，消失的退役，地址或分区变了的先退役再新建。iRetryMilliseconds 只用于新建的连接。
-	void Apply(const std::vector<::OI::Base::ServiceInstance>& vList, int iRetryMilliseconds);
+	void Apply(const std::vector<::OI::Base::ServiceInstance>& vList, int iRetryMilliseconds, bool bInitialOnly = false);
 	void Start();
 	// 全部退役，在途调用回 OI_ERR_CONNECT。
 	void RetireAll();

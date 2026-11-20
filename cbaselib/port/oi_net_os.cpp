@@ -339,6 +339,10 @@ net_socket_t NetOs_Accept(net_socket_t iDescriptor)
 		{
 			errno = EINTR;
 		}
+		else if (iError == WSAECONNRESET || iError == WSAECONNABORTED)
+		{
+			errno = ECONNABORTED;
+		}
 		else
 		{
 			errno = iError;

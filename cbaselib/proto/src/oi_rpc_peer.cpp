@@ -589,18 +589,22 @@ void ServiceGroup::Retire(const std::shared_ptr<PeerConnection>& pConnection)
 	pRequest.release();
 }
 
-void ServiceGroup::Apply(const std::vector<::OI::Base::ServiceInstance>& vList, int iRetryMilliseconds)
+void ServiceGroup::Apply(const std::vector<::OI::Base::ServiceInstance>& vList, int iRetryMilliseconds, bool bInitialOnly)
 {
-	std::map<int32_t, const ::OI::Base::ServiceInstance*> mTargets;
-	for (const auto& stInstance : vList)
-	{
-		mTargets[stInstance.iId] = &stInstance;
-	}
 	std::vector<std::shared_ptr<PeerConnection>> vRetired;
 	std::vector<std::shared_ptr<PeerConnection>> vAdded;
 	bool bStarted = false;
 	{
 		::OI::Thread::MutexGuard stLock(m_stMutex);
+		if (m_bRetired || (bInitialOnly && m_bApplied))
+		{
+			return;
+		}
+		std::map<int32_t, const ::OI::Base::ServiceInstance*> mTargets;
+		for (const auto& stInstance : vList)
+		{
+			mTargets[stInstance.iId] = &stInstance;
+		}
 		bStarted = m_bStarted;
 		for (auto it = m_mMembers.begin(); it != m_mMembers.end();)
 		{
@@ -621,6 +625,7 @@ void ServiceGroup::Apply(const std::vector<::OI::Base::ServiceInstance>& vList, 
 			m_mMembers.emplace(iInstanceId, Member{pConnection, pInstance->sZone});
 			vAdded.push_back(std::move(pConnection));
 		}
+		m_bApplied = true;
 	}
 	// 不在表锁内结束等待：恢复的协程可能马上再次调用。
 	for (const auto& pConnection : vRetired)
@@ -654,6 +659,7 @@ void ServiceGroup::RetireAll()
 	std::map<int32_t, Member> mRetired;
 	{
 		::OI::Thread::MutexGuard stLock(m_stMutex);
+		m_bRetired = true;
 		mRetired.swap(m_mMembers);
 	}
 	for (const auto& [iInstanceId, stMember] : mRetired)

@@ -399,7 +399,7 @@ class RawHttpRegression(socketserver.BaseRequestHandler):
 def run(case, args):
     scene = case[len("hold-"):] if case in ("hold-blocking", "hold-timer", "hold-redis") else None
     mode = "hold" if scene or case.startswith(("clock-", "rpc-admission-")) else ("echo" if case in ("reset", "registry", "rpc-ingress") else case)
-    mode = "db" if case == "mysql" else mode
+    mode = "db" if case in ("mysql", "mysql-wake", "blocking-wake") else mode
     mode = "pool" if case in ("local", "registry-static") else mode
     mode = "log" if case in ("disk-full", "log-backpressure") else mode
     mode = "redis" if case.startswith("redis-") else mode
@@ -454,6 +454,8 @@ def run(case, args):
                 text = replace(text, "root_path", '"' + logs.as_posix() + '"')
                 if case == "log-backpressure":
                     text = replace(text, "max_pending_bytes", str(8 * 1024**2 + 8))
+            if name == "ipcserver" and case == "udp":
+                text = replace(text, "idle_timeout_ms", "1000")
             if name == "ipcserver" and case.startswith("rpc-admission-"):
                 # 只匹配真正的段头，配置注释也可能提到 [Rpc]。
                 text = re.sub(r"(?ms)^\[Rpc\]\s*\n.*?(?=^\[|\Z)", "", text)
@@ -484,8 +486,13 @@ def run(case, args):
                 text = replace(text, "max_pending_commands", str(maximum_count))
                 if fairness: text = replace(text, "offset_ms", "1000")
             if name == "ipcclient":
+                if case == "udp":
+                    text = replace(text, "idle_timeout_ms", "4000")
+                    text = text.replace("[TestUdp]", "[TestUdp]\ncheck_server_idle = true", 1)
                 if case in ("reset", "registry", "rpc-ingress"):
                     text = set_echo_total(text, 100)
+                if case in ("blocking-wake", "mysql-wake"):
+                    text = text.replace("[Test]", "[Test]\nwake_case = \"" + ("blocking" if case == "blocking-wake" else "mysql") + "\"", 1)
                 if mode == "echo":
                     expected_echo_total = echo_total(text)
                 if case in ("multi", "local"):
@@ -903,6 +910,8 @@ def run(case, args):
                 assert "udp large datagram bytes=60000 bad=0" in text
                 assert "udp oversized notify=-6 call=-6 immediate=1 recovered=1 bad=0" in text
                 assert "udp garbage keeps session sessions=1 bad=0" in text
+                assert "udp active sessions=1 bad=0" in text
+                assert "udp server idle client_open=1 sessions=2 bad=0" in text
                 assert "udp idle close reopen bad=0" in text
                 assert "udp notify rpc receipt=0 bad=0" in text
                 assert "udp done bad=0" in text
@@ -933,6 +942,19 @@ def run(case, args):
                 samples = re.findall(r"redis pressure pause link=\d+ pending=(\d+) bytes=(\d+)", rsp.read_text(encoding="utf-8", errors="replace"))
                 assert samples and all(int(count) <= maximum_count and int(size) <= maximum_bytes for count, size in samples)
                 if case.endswith("count"): assert any(int(count) == maximum_count for count, size in samples)
+            elif case in ("blocking-wake", "mysql-wake"):
+                assert "wake benchmark blocking_finish_to_resume n=1000" in text
+                if case == "blocking-wake":
+                    assert "wake benchmark default_empty_serial n=10000" in text
+                    assert "wake benchmark default_paired_serial n=10000" in text
+                    assert "wake benchmark default_paired_finish_to_resume n=10000" in text
+                if case == "mysql-wake":
+                    assert "wake benchmark mysql_direct_submit_to_worker_start n=1000" in text
+                    assert "wake benchmark mysql_direct_worker_start_to_finish n=1000" in text
+                    assert "wake benchmark mysql_direct_finish_to_resume n=1000" in text
+                    assert "wake benchmark mysql_execute_finish_to_resume_including_cleanup n=1000" in text
+                    assert "wake benchmark mysql_reset_finish_to_resume_including_cleanup n=1000" in text
+                    assert "wake benchmark mysql_call_total n=1000" in text
             elif case == "mysql":
                 assert "mysql row mapping bad=0" in text
                 assert "mysql rows bad=0" in text
@@ -1026,6 +1048,11 @@ def run(case, args):
                 assert re.search(r"hold client malformed response sid=[1-9]\d* bad=0", text)
                 assert "hold http framing bad=0" in text
                 assert "hold rpc standardized reply bad=0" in text
+                assert "hold rpc late overlap barrier=0/804 pending=1 follow=0/803 bad=0" in text
+                server_text = serverpath.read_text(encoding="utf-8", errors="replace")
+                assert "hold late event mark=802" in server_text
+                assert "hold late event mark=804" in server_text
+                assert server_text.index("hold late event mark=802") < server_text.index("hold late event mark=804")
                 assert "hold done bad=0" in text
             elif mode == "log":
                 # Stop drains accepted batches; inspect actual files and the final backlog accounting.
@@ -2137,7 +2164,7 @@ class EnvironmentBlocked(RuntimeError):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case", default="all", choices=("all", "mysql", "coro", "echo", "empty", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "hold-blocking", "hold-timer", "hold-redis", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "clock-forward", "clock-back", "registry", "udp", "multi", "local", "registry-static", "web", "web-coro"))
+    parser.add_argument("--case", default="all", choices=("all", "mysql", "mysql-wake", "blocking-wake", "coro", "echo", "empty", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "hold-blocking", "hold-timer", "hold-redis", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "clock-forward", "clock-back", "registry", "udp", "multi", "local", "registry-static", "web", "web-coro"))
     parser.add_argument("--bin-dir", type=Path, default=REPO / "deploy/bin")
     parser.add_argument("--redis-binary", type=Path, help="default: redis-server on PATH")
     parser.add_argument("--clock-fault-so", type=Path)
@@ -2165,7 +2192,7 @@ if __name__ == "__main__":
         started = time.monotonic()
         result = {"case": item, "platform": "windows" if WINDOWS else "linux"}
         try:
-            if item == "mysql":
+            if item in ("mysql", "mysql-wake"):
                 required = ("OI_TEST_MYSQL_HOST", "OI_TEST_MYSQL_PORT", "OI_TEST_MYSQL_USER", "OI_TEST_MYSQL_PASSWORD", "OI_TEST_MYSQL_DATABASE")
                 missing = [name for name in required if name not in os.environ or (name != "OI_TEST_MYSQL_PASSWORD" and not os.environ[name])]
                 if missing:

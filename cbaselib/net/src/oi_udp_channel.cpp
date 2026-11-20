@@ -50,7 +50,7 @@ int32_t UDP_PeerChannel::AllowSend()
 		m_pOwner->MarkClosing(this);
 		return OI_ERR_CONNECT;
 	}
-	return m_pOwner->Flush(this);
+	return m_bIdleExpired ? OI_ERR_CONNECT : m_pOwner->Flush(this);
 }
 
 UDP_Channel::UDP_Channel(NetSocket stSocketLocal, SessionManager* pMgr, uint16_t iLocalPort)
@@ -71,6 +71,13 @@ int32_t UDP_Channel::StartBind(SessionManager* pMgr)
 		return OI_ERR_INVALID_ARGUMENT;
 	}
 
+	if (!Poll::GetInstance().InLoopThread())
+	{
+		return Poll::GetInstance().StartListener([](void* pArgument)
+		{
+			return StartBind(static_cast<SessionManager*>(pArgument));
+		}, pMgr);
+	}
 	if (pMgr->pUdpChannel)
 	{
 		LOG_ERROR("UDP_Channel::StartBind already bound id=%s", pMgr->GetIDString().c_str());
@@ -106,8 +113,13 @@ int32_t UDP_Channel::StartBind(SessionManager* pMgr)
 	NetSocket stSocketLocal;
 	stSocketLocal.Init(iDescriptor, pMgr);
 	UDP_Channel* pChannelLocal = new UDP_Channel(stSocketLocal, pMgr, stBound.Port());
-	pMgr->pUdpChannel = pChannelLocal;
 	Poll::GetInstance().IOEventRegister(pChannelLocal, true, false);
+	if (!pChannelLocal->pPollToken)
+	{
+		delete pChannelLocal;
+		return OI_ERR_SOCKET;
+	}
+	pMgr->pUdpChannel = pChannelLocal;
 	Poll::GetInstance().CallOnLoop(&UDP_Channel::OnStartIdle, pChannelLocal);
 	return OI_OK;
 }
@@ -269,7 +281,7 @@ void UDP_Channel::CloseIdle()
 {
 	const uint64_t iNow = UdpNowMilliseconds();
 	const uint64_t iIdle = m_pSessionManager->IdleTimeoutMilliseconds();
-	std::vector<Session*> vIdle;
+	std::vector<UDP_PeerChannel*> vIdle;
 	{
 		::OI::Thread::MutexGuard stLock(m_stPeerLock);
 		for (const auto& [sEndpoint, pPeer] : m_mPeers)
@@ -277,16 +289,25 @@ void UDP_Channel::CloseIdle()
 			const uint64_t iLast = pPeer->m_iLastActive.load(std::memory_order_relaxed);
 			if (iNow > iLast && iNow - iLast >= iIdle && !pPeer->pSession->IsClosed())
 			{
-				pPeer->pSession->AddRef();
-				vIdle.push_back(pPeer->pSession);
+				vIdle.push_back(pPeer);
 			}
 		}
 	}
 	// 关闭会回调管理器，出锁再关。
-	for (Session* pSessionLocal : vIdle)
+	// 通道只在 poll 回调里回收，本轮结束前候选指针有效。
+	for (UDP_PeerChannel* pPeer : vIdle)
 	{
+		Session* pSessionLocal = pPeer->pSession;
+		{
+			::OI::Thread::MutexGuard stLock(pSessionLocal->stLocker);
+			const uint64_t iLast = pPeer->m_iLastActive.load(std::memory_order_relaxed);
+			if (iNow <= iLast || iNow - iLast < iIdle || pSessionLocal->IsClosed())
+			{
+				continue;
+			}
+			pPeer->m_bIdleExpired = true;
+		}
 		pSessionLocal->PassiveClose(ETIMEDOUT);
-		pSessionLocal->Release();
 	}
 }
 

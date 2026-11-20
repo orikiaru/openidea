@@ -7,6 +7,7 @@ set(MODULE_SRCS
         src/main.cpp
         src/ipcclient.cpp
         src/db_mgr.cpp
+        src/wake_bench.cpp
         src/test_board.cpp
         src/echo_mgr.cpp
         src/coro_mgr.cpp

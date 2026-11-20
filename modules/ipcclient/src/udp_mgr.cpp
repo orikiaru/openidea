@@ -236,6 +236,32 @@ OI::Coro::Task UdpMgr::Run()
 	const std::string sSessions = co_await Diagnose(iSessionId, ::OI::RpcData::UDP_PROBE_SESSIONS);
 	fnReport("udp garbage keeps session sessions=%s bad=%d\n", (bGarbageSent && bAfter && sSessions == "1") ? 0 : 1, sSessions.c_str());
 
+	bool bCheckServerIdle = false;
+	TryGetConfig("TestUdp.check_server_idle", bCheckServerIdle);
+	if (bCheckServerIdle)
+	{
+		// 持续收发超过服务端空闲时限，服务端不应重复创建会话。
+		bool bActive = true;
+		for (int32_t iRound = 0; iRound < 8; ++iRound)
+		{
+			co_await OI::Coro::yield(250);
+			if (!co_await EchoOnce(iSessionId, 1000100 + iRound, "active"))
+			{
+				bActive = false;
+			}
+		}
+		const std::string sActiveSessions = co_await Diagnose(iSessionId, ::OI::RpcData::UDP_PROBE_SESSIONS);
+		fnReport("udp active sessions=%s bad=%d\n", bActive && sActiveSessions == "1" ? 0 : 1, sActiveSessions.c_str());
+
+		// 保持客户端会话，等待服务端先回收，再由下一次收发触发服务端重建。
+		co_await OI::Coro::yield(2000);
+		::OI::Net::NetAddr stStillOpen;
+		const bool bClientOpen = stManager.GetPeerAddr(iSessionId, stStillOpen) == OI_OK;
+		const std::string sReopenedSessions = co_await Diagnose(iSessionId, ::OI::RpcData::UDP_PROBE_SESSIONS);
+		fnReport("udp server idle client_open=%d sessions=%s bad=%d\n",
+		    bClientOpen && sReopenedSessions == "2" ? 0 : 1, bClientOpen ? 1 : 0, sReopenedSessions.c_str());
+	}
+
 	const auto stIdleDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(stManager.IdleTimeoutMilliseconds() * 4LL);
 	while (m_iClosedSessionId.load() != iSessionId && std::chrono::steady_clock::now() < stIdleDeadline)
 	{

@@ -265,11 +265,17 @@ void LogManager::QueueWaiter(LogServerSession* pSession, size_t iBytes)
 	ScheduleResume();
 }
 
-void LogManager::DeferWrite(LogServerSession* pSession, size_t iLength)
+int32_t LogManager::DeferWrite(LogServerSession* pSession, size_t iLength)
 {
-	const size_t iBytes = iLength + GetLogTitle().size();
+	const size_t iTitleBytes = GetLogTitle().size();
+	if (iLength > m_iMaxPendingBytes - iTitleBytes)
+	{
+		return OI_ERR_INVALID_ARGUMENT;
+	}
+	const size_t iBytes = iLength + iTitleBytes;
 	::OI::Thread::MutexGuard stLock(m_stBacklogLocker);
 	QueueWaiter(pSession, iBytes);
+	return OI_OK;
 }
 
 void LogManager::CompleteWrite(size_t iBytes)

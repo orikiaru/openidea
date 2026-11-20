@@ -10,7 +10,9 @@ class DbMgr
 	DECLARE_SINGLETON(DbMgr)
 	DbMgr() = default;
 	bool m_bEnabled = false;
+	std::string m_sWakeCase;
 	OI::Coro::Task Run();
+	static OI::Coro::TaskResult<int32_t> RunWakeBenchmark(bool bBlockingOnly);
 	// 不连库：字段表、按成员指针取列、生成的建表和增删改查语句、PB 往返和固定小端字节、JSON。
 	int32_t CheckRowMapping();
 	// 真表：生成语句建表、写入、按主键读改删、upsert，NULL 和坏值不改对象。

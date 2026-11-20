@@ -229,7 +229,7 @@ OI::Coro::TaskResult<int> HoldMgr::CheckRpcLateReply()
 	std::clock_t iCpuBegin = std::clock();
 	int64_t iWallBegin = ::OI::Timer::SteadyMilliseconds();
 	stRequestLocal.iDelayMilliseconds = 1500;
-	stRequestLocal.iMark = 2;
+	stRequestLocal.iMark = 802;
 	stResponseLocal.iMark = 0;
 	auto stTimeout = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequestLocal, ::OI::Timer::Milliseconds(500));
 	iReturnCodeLocal = stTimeout.GetRet();
@@ -239,24 +239,29 @@ OI::Coro::TaskResult<int> HoldMgr::CheckRpcLateReply()
 	{
 		iBadLocal += 1;
 	}
-	// 回包还在路上。让这一下把迟到的包和已经武装的超时定时器都消化掉。
+	// 新调用保持在途，另发一个快速调用作为同连接上的收包屏障。
+	stRequestLocal.iDelayMilliseconds = 3000;
+	stRequestLocal.iMark = 803;
+	::OI::RpcData::HoldRes stPendingResponse;
+	auto stPending = ::OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequestLocal, stPendingResponse, ::OI::Timer::Seconds(10));
 	co_await OI::Coro::yield(1500);
+	::OI::RpcData::HoldReq stBarrierRequest;
+	::OI::RpcData::HoldRes stBarrierResponse;
+	stBarrierRequest.iMark = 804;
+	stBarrierRequest.iDelayMilliseconds = 0;
+	const int32_t iBarrierRet = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), stBarrierRequest, stBarrierResponse, ::OI::Timer::Seconds(10));
+	const size_t iPending = ::OI::Rpc::RpcCallManager::GetInstance().SessionCalls(&IpcClient::GetInstance(), m_iSessionId);
+	const int32_t iFollowRet = co_await stPending;
+	const bool bValid = iBarrierRet == OI_OK && stBarrierResponse.iMark == 804 && iPending == 1 &&
+	    iFollowRet == OI_OK && stPendingResponse.iMark == 803;
+	LOG_TRACE("hold rpc late overlap barrier=%d/%d pending=%zu follow=%d/%d bad=%d",
+	    iBarrierRet, stBarrierResponse.iMark, iPending, iFollowRet, stPendingResponse.iMark, bValid ? 0 : 1);
+	if (!bValid)
+	{
+		++iBadLocal;
+	}
 	LOG_TRACE("hold rpc late-reply cpu_ms=%lld wall_ms=%lld",
 	    HoldTest::CpuMs(iCpuBegin), HoldTest::WallMs(iWallBegin));
-	fflush(stdout);
-
-	stRequestLocal.iDelayMilliseconds = 0;
-	stRequestLocal.iMark = 3;
-	stResponseLocal.iMark = 0;
-	auto stFollow = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequestLocal, ::OI::Timer::Seconds(10));
-	iReturnCodeLocal = stFollow.GetRet();
-	stResponseLocal.iMark = iReturnCodeLocal == 0 ? stFollow.GetRes().iMark : 0;
-	LOG_TRACE("hold rpc follow ret=%d mark=%d", iReturnCodeLocal, stResponseLocal.iMark);
-	fflush(stdout);
-	if (iReturnCodeLocal != 0 || stResponseLocal.iMark != 3)
-	{
-		iBadLocal += 1;
-	}
 	co_return iBadLocal;
 }
 

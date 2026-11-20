@@ -52,6 +52,11 @@ static OI::Rpc::RpcTask HandleHold(const OI::RpcData::HoldReq& stRequest, OI::Rp
 		co_await OI::Coro::yield(stRequest.iDelayMilliseconds);
 	}
 	stResponse.iMark = stRequest.iMark;
+	if (stRequest.iMark == 802 || stRequest.iMark == 804)
+	{
+		std::printf("hold late event mark=%d\n", stRequest.iMark);
+		std::fflush(stdout);
+	}
 	co_return 0;
 }
 

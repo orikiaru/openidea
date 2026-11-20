@@ -57,18 +57,23 @@ int32_t AcceptChannel::StartAccept(SessionManager* pMgr, bool bAsync)
 		return OI_ERR_INVALID_ARGUMENT;
 	}
 
-	int iSessionTypeLocal = pMgr->GetSessionType();
-	switch (iSessionTypeLocal)
+	if (!bAsync)
 	{
-	case SESSION_TYPE_TCP:
-		return StartTcpAccept(pMgr, bAsync);
-	case SESSION_TYPE_UDP:
-		// UDP 没有 accept：绑上口，收到没见过的来源就新建会话。
-		return UDP_Channel::StartBind(pMgr);
-	default:
-		printf("SessionManager::StartServer not support session_type=%d\n", iSessionTypeLocal);
 		return OI_ERR_INVALID_ARGUMENT;
 	}
+	return Poll::GetInstance().StartListener([](void* pArgument)
+	{
+		auto* pManager = static_cast<SessionManager*>(pArgument);
+		switch (pManager->GetSessionType())
+		{
+		case SESSION_TYPE_TCP:
+			return StartTcpAccept(pManager, true);
+		case SESSION_TYPE_UDP:
+			return UDP_Channel::StartBind(pManager);
+		default:
+			return static_cast<int32_t>(OI_ERR_INVALID_ARGUMENT);
+		}
+	}, pMgr);
 }
 
 int32_t AcceptChannel::StartTcpAccept(SessionManager* pMgr, bool bAsync)
@@ -106,6 +111,11 @@ int32_t AcceptChannel::StartTcpAccept(SessionManager* pMgr, bool bAsync)
 
 	AcceptChannel* pChannelLocal = new AcceptChannel(stText, pMgr);
 	Poll::GetInstance().IOEventRegister(pChannelLocal, true, true);
+	if (!pChannelLocal->pPollToken)
+	{
+		delete pChannelLocal;
+		return OI_ERR_SOCKET;
+	}
 	return OI_OK;
 }
 }

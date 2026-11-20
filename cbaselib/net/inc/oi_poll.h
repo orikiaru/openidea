@@ -57,6 +57,8 @@ class Poll
 	::uv_loop_s* Loop();
 	// 已经在 poll 线程就直接执行，否则丢进 libuv 再执行。定时器轮子只能在这条线程上改。
 	void CallOnLoop(void (*fnFunction)(void*), void* pArgument);
+	// 启动监听时在 loop 上完成注册后再返回状态。
+	int32_t StartListener(int32_t (*fnStart)(void*), void* pArgument);
 	// 始终排队；本批回调中新投的调用留到下次唤醒，避免重入和饿死 IO。
 	void PostOnLoop(void (*fnFunction)(void*), void* pArgument);
 	// Preallocated completion path: no queue allocation after work has executed.

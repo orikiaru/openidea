@@ -11,13 +11,35 @@
 - 必须全部返回 0；不能用删除断言、扩大超时、提高容量或重试掩盖失败。偶发失败保留日志，记录复测结果及根因是否确认。
 - 本次源码正在变化时不要声称覆盖了最新版本；核对结果目录的 environment.json、Git HEAD、diff 摘要后再报告。
 
+审查和测试原则：
+
+- 提交说明只是寻找变更的线索；从实际代码出发，沿回调、挂起、复用或重连、清理的执行顺序追到业务调用方，核对事件交错、返回码和输出、资源归属与生命周期。旧会话迟到清理、最后数据与断连同时到达等边界要检查是否影响当前会话和原请求。
+- 平台错误域、监听和时序边界不能只凭静态推断；能复现时在对应真实系统上构造触发条件，记录输入、观察到的事件和调用方结果。结论区分代码依据、实测结果与尚未覆盖的条件。
+- 测量延迟时使用单调时钟，对同一次请求配对采样，分别统计排队、执行、完成到调用方恢复的时间，并说明样本量和尾延迟；不要用不同请求的时间相减，也不要把静态推断写成实测结果。
+
 协程压力和序列化压力不包含在 `all`。一个月测一次，同一台机器上一次只跑一个，不要并排，它们会占满 CPU。协程压力是 `python3 tools/run_regressions.py --case coro`，开关是 `ipcclient` 的 `[Test] coro`，量级在 `[TestCoro]`，默认 10 万条同时挂起、100 万条创建后立即结束。序列化压力是 `python3 tools/gen_dispatch_bench.py array` 或 `switch`，不进回归进程。结果写进 [lasttesting.md](lasttesting.md)，不要写进本文件。
 
-数据库只有 `mysql` 一个用例，显式运行，不包含在 `all`。标准入口是矩阵参数 `--mysqld <mysqld>`（`tools/test_matrix.py`，或 `tools/parallel_matrix.py` 的 Linux 路）：每种线程模式编译完成后先跑 `<mode>-mysql`，再跑全量，不额外编译。非标准安装用 `--define OI_MYSQL_INCLUDE_DIR=... --define OI_MYSQL_LIBRARY=...`。单独复现仍可直接用 `tools/run_mysql_regression.py`。WSL 的 MySQL 来自 apt 包 `mysql-server-core-8.0`、`mysql-client-core-8.0`、`libmysqlclient-dev`，不起系统服务，`mysqld` 用 `/usr/sbin/mysqld`。需提供可用的客户端库；缺少依赖或配置时记录环境阻塞，不能算通过。Linux 上 `mysqld` 缺 `libaio.so.1` 时，把已有兼容库目录放进 `LD_LIBRARY_PATH`。用例先不连库检查 `DbSample` 的行映射：字段表、按成员指针取列、按列名的参数和单元格、拒绝 NULL 和坏值、生成的建表和增删改查语句逐字比对、坏表名和主键列拒绝、PB 往返和固定小端字节、JSON，输出 `mysql row mapping bad=0`；再用生成的语句建真表，整行写入读回、主键重复拒绝、按成员指针部分更新和部分读取、upsert 已有行和新行、改全部非主键列、按主键删，并用手写 SQL 注入 NULL 和坏 blob 验证读回拒绝，输出 `mysql rows bad=0`；最后是客户端本身的参数、连接复用、会话清理、事务回滚和结果上限，三项都通过才输出 `mysql done bad=0`。
+数据库功能用例 `mysql` 显式运行，不包含在 `all`。标准入口是矩阵参数 `--mysqld <mysqld>`（`tools/test_matrix.py`，或 `tools/parallel_matrix.py` 的 Linux 路）：每种线程模式编译完成后先跑 `<mode>-mysql`，再跑全量，不额外编译。非标准安装用 `--define OI_MYSQL_INCLUDE_DIR=... --define OI_MYSQL_LIBRARY=...`。单独复现仍可直接用 `tools/run_mysql_regression.py`。WSL 的 MySQL 来自 apt 包 `mysql-server-core-8.0`、`mysql-client-core-8.0`、`libmysqlclient-dev`，不起系统服务，`mysqld` 用 `/usr/sbin/mysqld`。需提供可用的客户端库；缺少依赖或配置时记录环境阻塞，不能算通过。Linux 上 `mysqld` 缺 `libaio.so.1` 时，把已有兼容库目录放进 `LD_LIBRARY_PATH`。用例先不连库检查 `DbSample` 的行映射：字段表、按成员指针取列、按列名的参数和单元格、拒绝 NULL 和坏值、生成的建表和增删改查语句逐字比对、坏表名和主键列拒绝、PB 往返和固定小端字节、JSON，输出 `mysql row mapping bad=0`；再用生成的语句建真表，整行写入读回、主键重复拒绝、按成员指针部分更新和部分读取、upsert 已有行和新行、改全部非主键列、按主键删，并用手写 SQL 注入 NULL 和坏 blob 验证读回拒绝，输出 `mysql rows bad=0`；最后是客户端本身的参数、连接复用、会话清理、事务回滚和结果上限，三项都通过才输出 `mysql done bad=0`。
+
+唤醒延迟单独复跑，本次只记录单线程结果，三轮分别运行和报告，不合并成一轮。普通阻塞任务使用默认线程池，不需要数据库：先预热 100 次，由单个父协程顺序 `co_await` 10000 个真正的空回调，在整段前后取时，报告总耗时和平均耗时；另独立运行 10000 笔配对区间采样，报告总和、p50 等分位数。不能用另一轮链长的总耗时相减来推算延迟：
+
+```sh
+python3 tools/run_regressions.py --case blocking-wake
+```
+
+数据库唤醒用例每次一个在途请求、四个后台工人，预热 100 次后采样 1000 次；需要启用 `OI_ENABLE_MYSQL` 的 Release 产物和可用的 MySQL 服务端，路径按环境填写；普通 `mysql` 功能用例仍需独立运行：
+
+```sh
+python3 tools/run_mysql_regression.py --case mysql-wake --mysqld <mysqld> --bin-dir <bin目录> --artifacts <结果目录>
+```
+
+数据库测量以直接执行真实 SQL、完成 `Reset` 到协程恢复的时间为主要指标；实际 `Db::Client::Call` 的 Reset 后界到协程恢复时间作为上界，分别报告，不混作同一指标。
 
 阻塞函数回归由 `BlockingMgr` 覆盖：128 个后台工作及 64 个共享等待者，核对结果和单次执行。阻塞池按类型隔离，Default 默认 4 个线程、1024 个排队项，并保留 1024 个在途工作的兼容限制；其他类型须显式配置，各自的队列上限独立。容量检查应区分在途工作与排队项，并覆盖超限拒绝、启动后配置拒绝及停止时排空已接纳工作。新增检查以实际矩阵结果为准，不代表四种构建模式已经通过。
 
 输出引用 RPC 的日常压力由 EchoMgr 使用 `Call(req, res)` 覆盖。`RpcOutputMgr` 验证输出任务的请求保活、16 个等待者只提交一次、重复等待不重写响应、固定会话、业务错误保留原响应、超时后迟到回包不覆盖新响应。`RpcServiceMgr` 验证命名和分区调用。正常 Hold 必须输出 `hold output rpc shared waiters=16 submissions=1 bad=0`、`hold output rpc direct pinned error late bad=0`、`hold output rpc named any zone shared=8 bad=0`；它们已纳入脚本断言。底层单次等待器的重复等待和异常注入用例仍保留，与输出 Task 可重复等待的语义分开验证。
+
+Hold 的迟到回包检查先让标记 802 的调用超时，再保持标记 803 的调用在途，使用同连接的快速调用标记 804 作为收包屏障。屏障成功后检查仍有一个调用等待，并验证后续回包标记为 803；驱动要求 `hold rpc late overlap barrier=0/804 pending=1 follow=0/803 bad=0`。
 
 正常 Hold 的二进制容器检查覆盖空和非空容器、嵌套容器与 rpcdata、连续流式对象、后续字段、固定黄金字节，以及畸形数量、截断、尾随字节和重复 key 拒绝并保持输出；同时检查数据库 blob 的格式和严格解码。脚本要求 `hold binary container bad=0`。
 
@@ -156,7 +178,7 @@ Windows 的日志故障测试要求该产物以 `-DOI_ENABLE_TEST_HOOKS=ON` 构�
 - log：逐条核对实际磁盘记录、字节数和内容；端到端速度以落盘字节除以客户端开始到文件最后增长的时间，不能拿 enqueue_rate 代替。
 - redis：`redis integrity ok`、压力统计 `bad=0`；同时验证毫秒 TTL、单次请求等待、脚本隔离、断线、队列超时及限流。
 - hold：`hold done bad=0`；覆盖多等待者、异常、RPC 接纳上限、请求生命周期、服务名/分区路由及批量调用。测试脚本额外启动两个 gameserver 分区（1001/1002），不能只起默认 ipcserver 就冒充全量。路由通知和直连 `Notify` 都用 `PeerNote` 的标记让服务端计数，再用 `PeerProbe` 的 `iNoteCount` 查回来：任选、指定分区、负分区、全部、夹未登记分区 1003、不存在的服务名，以及路由断线后不让出立刻再发。直连没连上先发、已连上再发；断线后立刻再发只表示任务已启动，任务报 `code=-3` 且服务端计数不变，重连后再发才送到。
-- udp：ipcserver 的 `[IpcUdp]` 和 ipcclient 的 UdpMgr，`udp done bad=0`。覆盖系统分配端口、同地址 `OpenPeer` 去重、对端地址、1000 次 RPC、1000 条单向消息不丢不重、60000 字节单个数据报、坏包不断会话（服务端会话数仍为 1）、客户端 1.5 秒空闲关会话后重开新会话。gameserver 分区的 UDP 口改为 0，不和主服抢。
+- udp：ipcserver 的 `[IpcUdp]` 和 ipcclient 的 UdpMgr，`udp done bad=0`。覆盖系统分配端口、同地址 `OpenPeer` 去重、对端地址、1000 次 RPC、1000 条单向消息不丢不重、60000 字节单个数据报、坏包不断会话（服务端会话数仍为 1）及客户端空闲关闭后重开新会话。回归的临时配置启用 `TestUdp.check_server_idle`，服务端空闲时限设为 1 秒、客户端设为 4 秒：持续收发超过服务端时限检查会话不重复创建，再等待服务端先回收，确认客户端仍打开且下次收发重建服务端会话。标准配置手动运行不启用这项检查。gameserver 分区的 UDP 口改为 0，不和主服抢。
 - multi：ipcclient 的 MultiMgr，`multi done bad=0`。`[IpcMultiFixed]` 不配 service，写死地址只连一台，实例号 0，没连上就发的调用连上后补发。`[IpcMulti]` 配 service=peerserver，脚本用 17992、17993 起两台同名全局 ipcserver，实例号 1、2，客户端起来前都已登记。覆盖每台各一条连接和建连回调、按实例号调用打到对应服务端、名单外实例号回 CONNECT、CallAny 两台都命中、CallAll 两个结果按实例号排列、CallMany 夹一个不存在的实例号时那一格是 CONNECT、服务端顺着连接反推（请求和 NotifyPeer 各触发一次，核对推送进的是这台的会话）、写死地址 UseAddress 换到 2 号再换回（配了 service 的拒绝，地址没变不断开，IsConnect 为真）。随后脚本杀掉 2 号：断开回调触发，注册表撤掉后名单只剩 1，调 2 回 CONNECT，1 照常；再重启 2 号：名单恢复，自动重连，调 2 成功。`NotifyAll` 按名单每台各收 1 次，`NotifyMany` 跳过实例号 99；2 号回来后关掉会话并立刻再发，重连后送达。不起 redisserver。
 - 正常退出必须完成排空和 join。清理超过时限需要强杀，算失败。
 
