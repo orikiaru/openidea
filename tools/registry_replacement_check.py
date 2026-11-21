@@ -100,6 +100,15 @@ def check(registry_port, redis_port):
         assert snapshot(observer, b"replacement_absent") == [], "unexpected nonempty snapshot"
         rpc(old, -1004, request(name, 77), 1)
         rpc(old, -1004, request(sentinel, 78), 2)
+        # 分隔符不得进入地址字段：拒绝后已登记实例和 Redis 原值保持不变。
+        for index, (ip, port) in enumerate(((b"127.0.0.1 extra", b"43210"), (b"127.0.0.1", b"43210 extra"))):
+            invalid = b"".join((field(0, name), field(1, struct.pack("<i", 77)),
+                                field(2, ip), field(3, port), field(4, b"")))
+            rpc(old, -1004, invalid, 20 + index, expected_code=-1)
+            assert redis_get(redis_port, key) == value, "invalid address changed Redis lease"
+            assert any(item.get(0) == name and item.get(1) == struct.pack("<i", 77)
+                       and item.get(2) == b"127.0.0.1" and item.get(3) == b"43210"
+                       for item in snapshot(observer)), "invalid address changed snapshot"
         old_owner = redis_get(redis_port, owner_key)
         assert old_owner, "old registration missing owner"
         rpc(new, -1004, request(name, 77), 3)
@@ -146,3 +155,86 @@ def check(registry_port, redis_port):
             assert any(item.get(0) == name and item.get(1) == struct.pack("<i", 77)
                        and item.get(2) == b"127.0.0.1" and item.get(3) == b"43210"
                        for item in snapshot(observer)), "fresh session missing from snapshot"
+
+
+def redis_command(port, *args):
+    with socket.create_connection(("127.0.0.1", port), timeout=2) as stream:
+        wire = b"*%d\r\n" % len(args)
+        for arg in args:
+            wire += b"$%d\r\n%s\r\n" % (len(arg), arg)
+        stream.sendall(wire)
+        with stream.makefile("rb") as reply:
+            from registry_fault_proxy import read_resp
+            raw, _ = read_resp(reply)
+            assert not raw.startswith(b"-"), raw
+
+
+def check_reload_race(registry_port, redis_port, proxy):
+    """Hold one real Redis snapshot across disconnect, then fail that owner's withdrawal."""
+    name = b"reload_race_regression"
+    sentinel = b"reload_race_sentinel"
+    prefix = b"oi:{openidea.dev}:svc:"
+    key = prefix + name + b":91"
+    expected = b"127.0.0.1 43210"
+    external = b"reload_external_first"
+    external_next = b"reload_external_second"
+    base = b"oi:{openidea.dev}:"
+
+    def add_external(service, ident):
+        instance = service + b":" + str(ident).encode("ascii")
+        redis_command(redis_port, b"SET", base + b"svc:" + instance, b"127.0.0.2 43211")
+        redis_command(redis_port, b"SET", base + b"owner:" + instance, b"external-owner-" + service)
+        redis_command(redis_port, b"SADD", base + b"svc:" + service, str(ident).encode("ascii"))
+        redis_command(redis_port, b"SADD", base + b"svc", service)
+
+    def request(service, ident):
+        return b"".join((field(0, service), field(1, struct.pack("<i", ident)),
+                         field(2, b"127.0.0.1"), field(3, b"43210"), field(4, b"")))
+
+    def contains(stream, service, ident):
+        return any(item.get(0) == service and item.get(1) == struct.pack("<i", ident)
+                   for item in snapshot(stream))
+
+    with socket.create_connection(("127.0.0.1", registry_port), timeout=2) as old, \
+         socket.create_connection(("127.0.0.1", registry_port), timeout=2) as other, \
+         socket.create_connection(("127.0.0.1", registry_port), timeout=2) as observer:
+        rpc(old, -1004, request(name, 91), 31)
+        rpc(other, -1004, request(sentinel, 92), 32)
+        assert redis_get(redis_port, key) == expected and contains(observer, name, 91)
+        proxy.reload_target = external
+        proxy.withdraw_key = key
+        proxy.reload_forwarded.clear()
+        proxy.reload_armed.set()
+        add_external(external, 93)
+        try:
+            assert proxy.reload_captured.wait(5), "reload response was not captured"
+            proxy.withdraw_armed.set()
+            old.close()
+            deadline = time.monotonic() + 2
+            while contains(observer, name, 91):
+                assert time.monotonic() < deadline, "disconnect did not remove local snapshot"
+                time.sleep(0.02)
+            assert contains(observer, sentinel, 92), "disconnect removed unrelated instance"
+        finally:
+            proxy.reload_release.set()
+        assert proxy.withdraw_failed.wait(5), "withdraw failure was not injected"
+        assert redis_get(redis_port, key) == expected, "withdraw unexpectedly removed Redis lease"
+        deadline = time.monotonic() + 5
+        while not contains(observer, external, 93):
+            assert time.monotonic() < deadline, "held reload did not publish its external instance"
+            time.sleep(0.02)
+        assert not contains(observer, name, 91), "stale held reload restored disconnected instance"
+        assert contains(observer, sentinel, 92), "stale reload removed unrelated instance"
+        # 新外来行可见证明撤销失败后的下一轮 Redis 结果已真正发布。
+        add_external(external_next, 94)
+        deadline = time.monotonic() + 5
+        while not contains(observer, external_next, 94):
+            assert time.monotonic() < deadline, "post-withdraw reload did not publish external instance"
+            time.sleep(0.02)
+        assert not contains(observer, name, 91), "failed withdrawal allowed old owner back on reload"
+        assert contains(observer, sentinel, 92), "reload filtered unrelated owner"
+        with socket.create_connection(("127.0.0.1", registry_port), timeout=2) as replacement:
+            rpc(replacement, -1004, request(name, 91), 33)
+            assert contains(observer, name, 91), "same-address new owner was hidden"
+            assert contains(observer, sentinel, 92), "replacement hid unrelated owner"
+        print("registry reload stale and failed withdraw PASS", flush=True)

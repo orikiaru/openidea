@@ -1,5 +1,6 @@
 #pragma once
 #include "oi_http_message.h"
+#include "oi_duration.h"
 #include <algorithm>
 
 // Deterministic binary stream used only by the web regression routes.
@@ -33,8 +34,16 @@ class WebTestSource : public OI::Http::BodySource
 class WebTestSink : public OI::Http::BodySink
 {
   public:
+	explicit WebTestSink(bool bDelay = false)
+	    : m_iReadyMilliseconds(bDelay ? OI::Timer::SteadyMilliseconds() + 800 : 0)
+	{
+	}
 	int32_t Write(std::string_view sBytes) override
 	{
+		if (m_iReadyMilliseconds && OI::Timer::SteadyMilliseconds() < m_iReadyMilliseconds)
+		{
+			return OI_ERR_BUSY;
+		}
 		if (sBytes.size() > 64 * 1024)
 		{
 			return OI_ERR_INVALID_ARGUMENT;
@@ -74,6 +83,7 @@ class WebTestSink : public OI::Http::BodySink
 	bool m_bValid = true;
 	bool m_bRetry = false;
 	int32_t m_iFinalBusyCount = 0;
+	int64_t m_iReadyMilliseconds = 0;
 };
 
 class WebTestBlockedSource : public OI::Http::BodySource

@@ -295,6 +295,10 @@ OI::Coro::Task WebClient::RunDisconnectRegression(int32_t iPort, int32_t iContro
 	auto stLateSecond = co_await OI::Http::Client::GetUrl(sBase + "/late-second");
 	auto stPartialFin = co_await OI::Http::Client::GetUrl(sBase + "/partial-fin");
 	auto stInformationalFin = co_await OI::Http::Client::GetUrl(sBase + "/informational-fin");
+	auto stBadHeader = co_await OI::Http::Client::GetUrl(sBase + "/bad-header");
+	auto stTrailerLimit = co_await OI::Http::Client::GetUrl(sBase + "/trailer-limit");
+	auto stBigTrailer = co_await OI::Http::Client::GetUrl(sBase + "/big-trailer");
+	auto stAfterMalformed = co_await OI::Http::Client::GetUrl(sBase + "/clean");
 	int32_t iBad = 0;
 	if (stClean.iCode != OI_OK || stClean.sBody != "clean" || stReset.iCode != OI_ERR_CONNECT || pResetSink->Body() != "partial" || stResetSignal.iCode != OI_OK || stResetSignal.iStatus != 200 || stReady.iCode != OI_OK || stReady.iStatus != 200 || stProbe.iCode != OI_ERR_TIMEOUT || stRelease.iCode != OI_OK || stRelease.iStatus != 200 || stFinSignal.iCode != OI_OK || stFinSignal.iStatus != 200 || stFirst.iCode != OI_OK || pFinSink->Body() != "first" || stSecond.iCode != OI_OK || stSecond.sBody != "second")
 	{
@@ -304,6 +308,13 @@ OI::Coro::Task WebClient::RunDisconnectRegression(int32_t iPort, int32_t iContro
 	if (stPartialFin.iCode != OI_ERR_PROTOCOL || stInformationalFin.iCode != OI_ERR_PROTOCOL)
 	{
 		LOG_ERROR("truncated FIN regression failed partial=%d informational=%d", stPartialFin.iCode, stInformationalFin.iCode);
+		++iBad;
+	}
+	if (stBadHeader.iCode != OI_ERR_PROTOCOL || stBigTrailer.iCode != OI_ERR_PROTOCOL ||
+	    stTrailerLimit.iCode != OI_OK || stTrailerLimit.sBody != "ok" ||
+	    stAfterMalformed.iCode != OI_OK || stAfterMalformed.sBody != "clean")
+	{
+		LOG_ERROR("header trailer regression failed header=%d limit=%d large=%d after=%d", stBadHeader.iCode, stTrailerLimit.iCode, stBigTrailer.iCode, stAfterMalformed.iCode);
 		++iBad;
 	}
 	if (stLateFirst.iCode != OI_OK || stLateFirst.sBody != "first" || stLateSecond.iCode != OI_ERR_CONNECT || !stLateSecond.sBody.empty())
@@ -408,9 +419,10 @@ OI::Coro::Task WebClient::RunTlsRegression(const std::string& sHost, int32_t iPo
 		auto pStreamSink = std::make_shared<WebTestSink>();
 		stStreamRequest.pBodySink = pStreamSink;
 		auto stStream = co_await stClient.Send(stStreamRequest);
+		auto stAfterStream = co_await stClient.Get("/health");
 		auto stCleanEof = co_await stClient.Get("/clean-eof");
 		auto stBadEof = co_await stClient.Get("/bad-eof");
-		if (stFirst.iCode != OI_OK || stFirst.sBody != "ok" || stSecond.iCode != OI_OK || stSecond.sBody != "ok" || stTruncated.iCode == OI_OK || stAfter.iCode != OI_OK || stAfter.sBody != "ok" || stStream.iCode != OI_OK || pStreamSink->Size() != 65536 || !pStreamSink->Valid() || stCleanEof.iCode != OI_OK || stCleanEof.sBody != "clean" || stBadEof.iCode == OI_OK)
+		if (stFirst.iCode != OI_OK || stFirst.sBody != "ok" || stSecond.iCode != OI_OK || stSecond.sBody != "ok" || stTruncated.iCode == OI_OK || stAfter.iCode != OI_OK || stAfter.sBody != "ok" || stStream.iCode != OI_OK || pStreamSink->Size() != 65536 || !pStreamSink->Valid() || stAfterStream.iCode != OI_OK || stAfterStream.sBody != "ok" || stCleanEof.iCode != OI_OK || stCleanEof.sBody != "clean" || stBadEof.iCode == OI_OK)
 		{
 			LOG_ERROR("https roundtrip failed first=%d second=%d truncated=%d after=%d stream=%d clean=%d bad=%d", stFirst.iCode, stSecond.iCode, stTruncated.iCode, stAfter.iCode, stStream.iCode, stCleanEof.iCode, stBadEof.iCode);
 			++iBad;

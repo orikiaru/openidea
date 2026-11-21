@@ -326,6 +326,19 @@ class ProtocolGen:
                 return False
         return True
 
+    def TypeWireOk(self, parsed):
+        if parsed[0] == "name":
+            name = parsed[1]
+            if name in JSON_SCALARS:
+                return True
+            data = self.type_name_map.get(name)
+            return data is not None and data.GetType() == SerializeDataType.RPC_DATA
+        if parsed[0] == "vector":
+            return self.TypeWireOk(parsed[1])
+        if parsed[0] == "map":
+            return self.TypeWireOk(parsed[1]) and self.TypeWireOk(parsed[2])
+        return False
+
     def CheckKeyComparators(self)->bool:
         for data in self.serialize_datas:
             if data.GetType() != SerializeDataType.RPC_DATA:
@@ -335,6 +348,9 @@ class ProtocolGen:
                 return False
             for member in data.members:
                 parsed = ParseType(member.GetType())
+                if not self.TypeWireOk(parsed):
+                    loginfo("unsupported wire type owner=", data.GetName(), ",field=", member.GetName(), ",type=", member.GetType())
+                    return False
                 if HasVectorBool(parsed):
                     loginfo("vector<bool> is not supported, use vector<int32_t> owner=", data.GetName(), ",field=", member.GetName(), ",type=", member.GetType())
                     return False

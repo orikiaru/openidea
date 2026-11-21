@@ -117,6 +117,7 @@ struct RequestFrame
 	bool bClose = false;
 	bool bChunked = false;
 	bool bTrailer = false;
+	bool bChunkTerminator = false;
 
 	int ParseHeaders(View sText)
 	{
@@ -270,16 +271,27 @@ struct RequestFrame
 		}
 		if (!bChunked)
 		{
-			if (stBytes.Size() < iRemaining)
-			{
-				return 0;
-			}
-			stRequest.sBody.assign(stBytes.Begin(), iRemaining);
-			stBytes.Erase(0, iRemaining);
-			return 200;
+			const size_t iTake = std::min(stBytes.Size(), iRemaining);
+			stRequest.sBody.append(stBytes.Begin(), iTake);
+			stBytes.Erase(0, iTake);
+			iRemaining -= iTake;
+			return iRemaining ? 0 : 200;
 		}
 		while (!bTrailer)
 		{
+			if (bChunkTerminator)
+			{
+				if (stBytes.Size() < 2)
+				{
+					return 0;
+				}
+				if (fnView().substr(0, 2) != "\r\n")
+				{
+					return 400;
+				}
+				stBytes.Erase(0, 2);
+				bChunkTerminator = false;
+			}
 			if (iRemaining == 0)
 			{
 				const auto iEnd = fnView().find("\r\n");
@@ -303,17 +315,15 @@ struct RequestFrame
 					break;
 				}
 			}
-			if (stBytes.Size() < iRemaining + 2)
+			const size_t iTake = std::min(stBytes.Size(), iRemaining);
+			stRequest.sBody.append(stBytes.Begin(), iTake);
+			stBytes.Erase(0, iTake);
+			iRemaining -= iTake;
+			if (iRemaining)
 			{
 				return 0;
 			}
-			if (fnView().substr(iRemaining, 2) != "\r\n")
-			{
-				return 400;
-			}
-			stRequest.sBody.append(stBytes.Begin(), iRemaining);
-			stBytes.Erase(0, iRemaining + 2);
-			iRemaining = 0;
+			bChunkTerminator = true;
 		}
 		if (fnView().substr(0, 2) == "\r\n")
 		{
@@ -366,11 +376,14 @@ class ServerSession final : public Net::NetSession
 	uint64_t m_iFrameGeneration = 0;
 	bool m_bPartial = false;
 	Detail::StreamPump m_stPump;
+	Detail::StreamPump m_stIdlePump;
+	Detail::StreamBody m_stOutputBody;
 	std::shared_ptr<BodySource> m_pSource;
 	bool m_bStreamClose = false;
 	bool m_bStreamChunked = true;
 	bool m_bReadPaused = false;
 	uint64_t m_iProgress = 0;
+	uint64_t m_iIdleSince = 0;
 
 	bool StartPump()
 	{
@@ -383,7 +396,7 @@ class ServerSession final : public Net::NetSession
 	void PumpStream()
 	{
 		const auto iNow = uv_now(Net::Poll::GetInstance().Loop());
-		if (iNow - m_iProgress >= m_stServer.IncompleteFrameTimeoutMilliseconds())
+		if (iNow - m_iProgress >= m_stServer.IdleTimeoutMilliseconds())
 		{
 			m_stServer.CloseSession(GetSessionID());
 			return;
@@ -391,7 +404,7 @@ class ServerSession final : public Net::NetSession
 		if (m_pSource)
 		{
 			bool bDone = false, bProgress = false;
-			if (Detail::StreamBody::Produce(*this, *m_pSource, bDone, bProgress, m_bStreamChunked) != OI_OK)
+			if (m_stOutputBody.Produce(*this, *m_pSource, bDone, bProgress, m_bStreamChunked) != OI_OK)
 			{
 				m_stServer.CloseSession(GetSessionID());
 				return;
@@ -406,6 +419,7 @@ class ServerSession final : public Net::NetSession
 				m_stPump.Stop();
 				m_bCloseAfter = m_bStreamClose || (bReadEnded && stInputBuffer.Size() == 0);
 				m_bBusy = false;
+				m_iIdleSince = iNow;
 				if (m_bCloseAfter && PendingSendBytes() == 0)
 				{
 					m_stServer.CloseSession(GetSessionID());
@@ -505,6 +519,7 @@ class ServerSession final : public Net::NetSession
 			sWire += stReply.sBody;
 		}
 		m_pSource = bBody && bValid ? stReply.pBodySource : nullptr;
+		m_stOutputBody.ResetOutput();
 		m_bStreamClose = bClose;
 		m_bStreamChunked = !bHttp10;
 		m_bCloseAfter = bClose && !m_pSource;
@@ -523,6 +538,7 @@ class ServerSession final : public Net::NetSession
 			return;
 		}
 		m_bBusy = false;
+		m_iIdleSince = uv_now(Net::Poll::GetInstance().Loop());
 		if (!bClose)
 		{
 			OnDataIn();
@@ -535,6 +551,7 @@ class ServerSession final : public Net::NetSession
 		{
 			return;
 		}
+		m_iIdleSince = uv_now(Net::Poll::GetInstance().Loop());
 		const bool bHadSink = bool(m_stFrame.stRequest.pBodySink);
 		const int iCode = m_stFrame.Read(stInputBuffer, m_stServer);
 		if (m_stFrame.stRequest.pBodySink)
@@ -650,22 +667,23 @@ class ServerSession final : public Net::NetSession
 		if (m_bCloseAfter && !m_bClosePosted && iQueuedBytes == 0)
 		{
 			// OnDataOut 持会话锁，到下一轮再通过管理器摘表并关闭。
-			m_bClosePosted = true;
-			AddRef();
-			m_stCloseCall.fnCall = [](void* pArg)
-			{
-				auto* pSession = static_cast<ServerSession*>(pArg);
-				pSession->m_stServer.CloseSession(pSession->GetSessionID());
-				pSession->Release();
-			};
-			m_stCloseCall.pArgument = this;
-			Net::Poll::GetInstance().PostOnLoop(m_stCloseCall);
+			PostClose();
+		}
+	}
+
+	void OnBytesSend(size_t iBytes) override
+	{
+		NetSession::OnBytesSend(iBytes);
+		if (iBytes && m_pSource)
+		{
+			m_iProgress = uv_now(Net::Poll::GetInstance().Loop());
 		}
 	}
 
 	void OnClose() override
 	{
 		m_stPump.Stop();
+		m_stIdlePump.Stop();
 		if (m_pSource)
 		{
 			m_pSource->Cancel();
@@ -682,7 +700,55 @@ class ServerSession final : public Net::NetSession
 	    : NetSession(pManager), m_stServer(*pManager)
 	{
 	}
+	bool StartIdleTimer()
+	{
+		m_iIdleSince = uv_now(Net::Poll::GetInstance().Loop());
+		const uint64_t iIntervalMilliseconds = std::min<uint64_t>(m_stServer.IdleTimeoutMilliseconds(), 1000);
+		return m_stIdlePump.Start(this, [](uv_timer_t* pTimer)
+		{
+			auto* pSession = static_cast<ServerSession*>(pTimer->data);
+			const auto iNow = uv_now(Net::Poll::GetInstance().Loop());
+			if (pSession->PendingSendBytes() != 0)
+			{
+				pSession->m_iIdleSince = iNow;
+				return;
+			}
+			if (!pSession->m_bBusy && !pSession->m_bPartial && !pSession->m_bReadPaused &&
+			    iNow - pSession->m_iIdleSince >= pSession->m_stServer.IdleTimeoutMilliseconds())
+			{
+				pSession->m_stServer.CloseSession(pSession->GetSessionID());
+			}
+		}, iIntervalMilliseconds);
+	}
+	void PostClose()
+	{
+		m_bClosePosted = true;
+		AddRef();
+		m_stCloseCall.fnCall = [](void* pArg)
+		{
+			auto* pSession = static_cast<ServerSession*>(pArg);
+			struct ReleaseGuard
+			{
+				ServerSession* pSession;
+				~ReleaseGuard()
+				{
+					pSession->Release();
+				}
+			} stGuard{pSession};
+			pSession->m_stServer.CloseSession(pSession->GetSessionID());
+		};
+		m_stCloseCall.pArgument = this;
+		Net::Poll::GetInstance().PostOnLoop(m_stCloseCall);
+	}
 };
+}
+
+void ServerManager::OnAddSession(Net::Session* pSession)
+{
+	if (!static_cast<ServerSession*>(pSession)->StartIdleTimer())
+	{
+		static_cast<ServerSession*>(pSession)->PostClose();
+	}
 }
 
 void ServerManager::Register(std::string sMethod, std::string sPath, Handler fnHandler)

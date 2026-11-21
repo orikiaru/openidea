@@ -15,7 +15,7 @@ from proto_parse import ProtocolGen
 from proto_text import ParseProtoText
 from serialize_data_parse import SerializeData, SerializeDataType
 from serialize_data_file_gen import SerializeDataFileGen
-from module_data_parse import Module, Component
+from module_data_parse import Module, Component, ModuleGen
 from module_file_gen import ModuleFileGen
 
 
@@ -23,6 +23,47 @@ from check_field_names import class_key
 
 
 class FieldNamesTest(unittest.TestCase):
+    def test_fixed_width_and_bytes_types(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "types.proto"
+            path.write_text("rpcdata Bad { 0 long stValue; }", encoding="utf-8")
+            self.assertFalse(ProtocolGen(path).Gen())
+            path.write_text("rpcdata Bad { 0 vector<long> vValues; }", encoding="utf-8")
+            self.assertFalse(ProtocolGen(path).Gen())
+            for bad_type, field_name in (("size_t", "stValue"), ("Mystery", "stValue"), ("vector<Mystery>", "vValues")):
+                path.write_text("rpcdata Bad { 0 %s %s; }" % (bad_type, field_name), encoding="utf-8")
+                self.assertFalse(ProtocolGen(path).Gen(), bad_type)
+            path.write_text("rpcdata Good { 0 int64_t iValue; 1 Bytes stData; 2 OI::Base::Bytes stOther; 3 ::OI::Base::Bytes stThird; 4 std::uint32_t iCount; }", encoding="utf-8")
+            gen = ProtocolGen(path)
+            self.assertTrue(gen.Gen())
+            generated = SerializeDataFileGen(gen.serialize_datas[0]).GenDataFile()
+            self.assertNotIn("OI::Base::::OI::Base::Bytes", generated)
+            self.assertGreaterEqual(generated.count("::OI::Base::Bytes"), 3)
+            self.assertIn("uint32_t iCount", generated)
+
+    def test_component_declaration_and_reference(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "module.proto"
+            proto = Path(tmp) / "rpc.proto"
+            proto.write_text("rpcdata Req {} rpcdata Res {} rpc Echo { id 101; request Req; response Res; }", encoding="utf-8")
+            protocol = ProtocolGen(proto)
+            self.assertTrue(protocol.Gen())
+            path.write_text("module App { component Sample; } component Sample Server { rpc Echo; }", encoding="utf-8")
+            gen = ModuleGen(protocol, path)
+            self.assertTrue(gen.Gen())
+            self.assertIn("Sample", gen.modules["app"].components)
+            self.assertIn("Echo", gen.modules["app"].components["Sample"].protos)
+            self.assertIn("Echo", gen.modules["app"].protos)
+            path.write_text("component Sample Server { rpc Missing; } module App { component Sample; }", encoding="utf-8")
+            self.assertFalse(ModuleGen(ProtocolGen([]), path).Gen())
+            path.write_text("component Sample BadType { } module App { component Sample; }", encoding="utf-8")
+            self.assertFalse(ModuleGen(ProtocolGen([]), path).Gen())
+
+    def test_declaration_names_and_enum_bounds(self):
+        for text in ("rpcdata class {}", "enum class { ITEM = 1; }", "enum Good { ITEM = 9223372036854775808; }"):
+            self.assertIsNone(ParseProtoText(text), text)
+        self.assertIsNotNone(ParseProtoText("enum Good { ITEM = 2147483648; }"))
+
     def test_attributed_template_class(self):
         self.assertEqual(class_key("template < typename T > class [ [ nodiscard ] ] Result {".split()), "class")
         self.assertEqual(class_key("template < class T > struct [ [ nodiscard ] ] Result {".split()), "struct")

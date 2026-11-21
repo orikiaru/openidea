@@ -241,16 +241,32 @@ void PeerConnection::Finish(sid_t iSessionIdLocal)
 	}
 	for (const auto& stCall : vReady)
 	{
-		if (iSessionIdLocal == INVALID_SID)
+		int32_t iResult = OI_ERR_CONNECT;
+		try
 		{
-			RpcCallManager::GetInstance().Wake(stCall.iCallId, OI_ERR_CONNECT, nullptr);
+			if (iSessionIdLocal != INVALID_SID)
+			{
+				if (!RpcCallManager::GetInstance().ClaimSend(stCall.iCallId, iSessionIdLocal))
+				{
+					continue;
+				}
+				iResult = pOwner->SendFrame(iSessionIdLocal, stCall.stData);
+			}
 		}
-		else if (RpcCallManager::GetInstance().ClaimSend(stCall.iCallId, iSessionIdLocal))
+		catch (...)
 		{
-			const int32_t iResult = pOwner->SendFrame(iSessionIdLocal, stCall.stData);
-			if (iResult != OI_OK)
+			RpcCallManager::ReportError(0, stCall.iCallId, iSessionIdLocal, 0, "send_held_call", std::current_exception());
+			iResult = OI_ERR_FAIL;
+		}
+		if (iResult != OI_OK)
+		{
+			try
 			{
 				RpcCallManager::GetInstance().Wake(stCall.iCallId, iResult, nullptr);
+			}
+			catch (...)
+			{
+				RpcCallManager::ReportError(0, stCall.iCallId, iSessionIdLocal, 0, "finish_held_call", std::current_exception());
 			}
 		}
 	}

@@ -31,24 +31,10 @@ int32_t LogManager::Init()
 	TryGetConfig("Log.root_path", sLogRootPath);
 	m_sLogRootPath = sLogRootPath;
 
-	int32_t iStatus = CheckAndCreateRootPath();
+	UpdateLogPath();
+	int32_t iStatus = StartLogInstanceWork();
 	if (iStatus != OI_OK)
 	{
-		LOG_TRACE("LogManager::Init error CheckAndCreateRootPath=%s", m_sLogRootPath.c_str());
-		return iStatus;
-	}
-
-	iStatus = OpenAllLogFile();
-	if (iStatus != OI_OK)
-	{
-		LOG_TRACE("LogManager::Init error OpenAllLogFile=%s", m_sLogRootPath.c_str());
-		return iStatus;
-	}
-
-	iStatus = StartLogInstanceWork();
-	if (iStatus != OI_OK)
-	{
-		LOG_TRACE("LogManager::Init error StartLogInstanceWork");
 		Stop();
 		return iStatus;
 	}
@@ -99,36 +85,38 @@ bool LogManager::OnTimer()
 	m_stLastCalendarTime = stNowCalendarTime;
 	m_iLastTimestamp = iNowTimestamp;
 
-	if (bIsCrossDay)
-	{
-		OnCrossDay();
-	}
-
 	char vLogTitleText[LOG_TITLE_BUFF_SIZE];
-	//只需要时分秒.
 	size_t iLength = strftime(vLogTitleText, sizeof(vLogTitleText), "%T ", &stNowCalendarTime);
 	assert(iLength < sizeof(vLogTitleText));
-	vLogTitleText[iLength] = '\0'; //字符串结尾
 	{
-		::OI::Thread::MutexGuard stLock(m_stTitleLocker);
+		::OI::Thread::MutexGuard stLock(m_stBacklogLocker);
+		if (bIsCrossDay)
+		{
+			OnCrossDay();
+		}
+		::OI::Thread::MutexGuard stTitleLock(m_stTitleLocker);
 		m_sLogTitle.assign(vLogTitleText, iLength);
 	}
+
 	return true;
 }
 
+static std::string GetLogLvName(LOG_LEVEL iLevel);
+
 void LogManager::OnCrossDay()
 {
-	// 和写盘失败一样直接停。Release 下 assert 不在，不能接着往昨天的文件里写。
-	if (CheckAndCreateRootPath() != OI_OK)
+	// 与 WriteLog 的入队共用积压锁，轮转标记不会越过已接纳的日志。
+	try
 	{
-		fprintf(stderr, "logd cross day mkdir failed: %s\n", m_sCurrentLogPath.c_str());
-		fflush(stderr);
-		std::abort();
+		UpdateLogPath();
+		for (const auto& [iLevel, pLogFile] : m_mLogFileMap)
+		{
+			pLogFile->Rotate(m_sCurrentLogPath + "/" + GetLogLvName(iLevel));
+		}
 	}
-	if (OpenAllLogFile() != OI_OK)
+	catch (...)
 	{
-		fprintf(stderr, "logd cross day open failed: %s\n", m_sCurrentLogPath.c_str());
-		fflush(stderr);
+		fprintf(stderr, "logd failed to enqueue rotation\n");
 		std::abort();
 	}
 }
@@ -154,54 +142,14 @@ static std::string GetLogLvName(LOG_LEVEL iLevel)
 	return "unknow_lv";
 }
 
-int32_t LogManager::OpenLogFile(LOG_LEVEL iLevel)
-{
-	std::string sLogLevelName = GetLogLvName(iLevel);
-	std::string sLogLevelPath = m_sCurrentLogPath + "/" + sLogLevelName;
-	return m_mLogFileMap[iLevel]->CreateNewFile(sLogLevelPath.c_str());
-}
-
 int32_t LogManager::StartLogInstanceWork()
 {
-	for (const auto& [sName, pLogFile] : m_mLogFileMap)
+	for (int iLevel = 0; iLevel < LOG_LEVEL::LOG_LEVEL_COUNT; ++iLevel)
 	{
-		const int32_t iStatus = pLogFile->StartWriteThread();
-		if (iStatus != OI_OK)
-		{
-			return iStatus;
-		}
-	}
-
-	// 启动阶段，还没进 StartWork。等各级写线程跑起来就走。
-	for (;;)
-	{
-		bool bAllWorking = true;
-		for (const auto& [sName, pLogFile] : m_mLogFileMap)
-		{
-			if (!pLogFile->IsWorking())
-			{
-				bAllWorking = false;
-				break;
-			}
-		}
-		if (bAllWorking)
-		{
-			return OI_OK;
-		}
-		std::this_thread::yield();
-	}
-}
-
-int32_t LogManager::OpenAllLogFile()
-{
-	for (int iLevelLv = 0; iLevelLv < LOG_LEVEL::LOG_LEVEL_COUNT; ++iLevelLv)
-	{
-		LOG_LEVEL iLevelLevel = (LOG_LEVEL)iLevelLv;
-		if (m_mLogFileMap.find(iLevelLevel) == m_mLogFileMap.end())
-		{
-			m_mLogFileMap[iLevelLevel] = new LogFileInstance(this, iLevelLevel);
-		}
-		const int32_t iStatus = OpenLogFile((LOG_LEVEL)iLevelLv);
+		const LOG_LEVEL iLogLevel = static_cast<LOG_LEVEL>(iLevel);
+		LogFileInstance* pLogFile = new LogFileInstance(this);
+		m_mLogFileMap[iLogLevel] = pLogFile;
+		const int32_t iStatus = pLogFile->StartWriteThread(m_sCurrentLogPath + "/" + GetLogLvName(iLogLevel));
 		if (iStatus != OI_OK)
 		{
 			return iStatus;
@@ -210,21 +158,20 @@ int32_t LogManager::OpenAllLogFile()
 	return OI_OK;
 }
 
-int32_t LogManager::CheckAndCreateRootPath()
+void LogManager::UpdateLogPath()
 {
 	char vCurrentPath[64];
-	size_t iLength = strftime(vCurrentPath, sizeof(vCurrentPath) - 1, "%y_%m_%d", &m_stLastCalendarTime);
-	assert(iLength < sizeof(vCurrentPath) - 1);
+	const size_t iLength = strftime(vCurrentPath, sizeof(vCurrentPath), "%y_%m_%d", &m_stLastCalendarTime);
+	assert(iLength > 0 && iLength < sizeof(vCurrentPath));
 	(void)iLength;
 	m_sCurrentLogPath = m_sLogRootPath + "/" + vCurrentPath;
-	return ::OI::File::MakeDirs(m_sCurrentLogPath);
 }
 
 int32_t LogManager::WriteLog(LOG_LEVEL iLevel, const char* pText, size_t iLength,
     LogServerSession* pSession)
 {
-	const std::string sTitle = GetLogTitle();
 	::OI::Thread::MutexGuard stLock(m_stBacklogLocker);
+	const std::string sTitle = GetLogTitle();
 	if (iLevel < 0 || iLevel >= LOG_LEVEL_COUNT || (!pText && iLength > 0) ||
 	    iLength > m_iMaxPendingBytes - sTitle.size())
 	{

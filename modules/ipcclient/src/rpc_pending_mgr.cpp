@@ -1,6 +1,7 @@
 #include "rpc_pending_mgr.h"
 #include "hold_test.h"
 #include "oi_rpc_session_manager.h"
+#include "oi_rpc_peer.h"
 #include "oi_http.h"
 #include "oi_log_client.h"
 #include "oi_log.h"
@@ -40,6 +41,8 @@
 struct RpcPendingMgr::PendingClient : OI::Rpc::ProtoClientManager
 {
 	int iFailureMode = 0;
+	std::atomic<sid_t> iProbeSession{INVALID_SID};
+	std::atomic<int32_t> iProbeDisconnects{0};
 	void SetSendLimit(size_t iBytes)
 	{
 		iMaxSendQueueBytes = iBytes;
@@ -50,11 +53,13 @@ struct RpcPendingMgr::PendingClient : OI::Rpc::ProtoClientManager
 		AddSession(pSessionLocal);
 		return pSessionLocal;
 	}
-	void OnClientConnect(OI::Net::Session*) override
+	void OnClientConnect(OI::Net::Session* pSession) override
 	{
+		iProbeSession.store(pSession->GetSessionID());
 	}
 	void OnClientDisconnect(const OI::Net::Session*) override
 	{
+		iProbeDisconnects.fetch_add(1);
 	}
 	void SubmitCall(uint64_t iId, const OI::Base::Bytes& stData) override
 	{
@@ -264,6 +269,48 @@ int RpcPendingMgr::CheckRpcDisconnectDrain(PendingClient& stPending)
 			++iBad;
 		}
 	}
+	// 建连失败时同批唤醒：首个回调抛异常，后续已摘出的请求仍要完成。
+	auto pPeer = OI::Rpc::PeerConnection::Create(&stPending, 1, "127.0.0.1", "1", OI::Rpc::PeerPolicy(&stPending), false);
+	std::vector<int32_t> vPeerResults(8, -99);
+	auto pPeerCallbacks = std::make_shared<std::atomic<int32_t>>(0);
+	auto pPeerGuard = std::make_shared<std::atomic<int32_t>>(0);
+	std::vector<uint64_t> vPeerCalls;
+	for (auto& iResult : vPeerResults)
+	{
+		const auto iCall = OI::Rpc::RpcCallManager::GetInstance().Bind(&stPending, 123456, 0, {}, &iResult, 0, {}, [pPeerCallbacks]()
+		{
+			if (pPeerCallbacks->fetch_add(1) == 0)
+			{
+				throw std::runtime_error("injected peer wake failure");
+			}
+		}, pPeerGuard);
+		vPeerCalls.push_back(iCall);
+		pPeer->vHeld.push_back({iCall, {}});
+	}
+	int iPeerThrew = 0;
+	try
+	{
+		pPeer->Finish(INVALID_SID);
+	}
+	catch (...)
+	{
+		++iPeerThrew;
+	}
+	int iPeerBad = pPeerCallbacks->load() == 8 && pPeerGuard->load() == 0 && iPeerThrew == 0 && SameWaitStats(stBaseline) ? 0 : 1;
+	for (const auto iCall : vPeerCalls)
+	{
+		OI::Rpc::RpcCallManager::GetInstance().Abandon(iCall);
+	}
+	OI::Rpc::RpcCallManager::WaitGuard(pPeerGuard);
+	for (const auto iResult : vPeerResults)
+	{
+		if (iResult != OI_ERR_CONNECT)
+		{
+			++iPeerBad;
+		}
+	}
+	iBad += iPeerBad;
+	LOG_TRACE("hold peer finish exception callbacks=%d guard=%d bad=%d", pPeerCallbacks->load(), pPeerGuard->load(), iPeerBad);
 	LOG_TRACE("hold disconnect drain calls=4096 bad=%d", iBad);
 	return iBad;
 }
@@ -543,5 +590,69 @@ OI::Coro::TaskResult<int> RpcPendingMgr::Run(sid_t iSessionId)
 	iBad += CheckRpcExpiry(stPending);
 	iBad += co_await CheckDeadlineBuckets();
 	iBad += CheckRpcSource(iSessionId);
+	// 独立真实 TCP 连接：收到第一个回包时底层解码抛错，另一个尚在服务端等待。
+	static PendingClient stWireClient;
+	stWireClient.DefaultInit("127.0.0.1", HoldTest::IpcServerPort());
+	const int32_t iConnectResult = co_await stWireClient.StartClient();
+	struct WireProbe
+	{
+		int32_t vCode[2] = {-99, -99};
+		std::atomic<int32_t> vResumed[2]{};
+	};
+	auto pWire = std::make_shared<WireProbe>();
+	auto pWireGuard = std::make_shared<std::atomic<int32_t>>(0);
+	std::vector<uint64_t> vWireCalls;
+	const sid_t iWireSid = stWireClient.iProbeSession.load();
+	const int32_t iDisconnectBefore = stWireClient.iProbeDisconnects.load();
+	int iWireBad = iConnectResult == OI_OK && iWireSid != INVALID_SID ? 0 : 1;
+	if (iWireBad == 0)
+	{
+		OI::Base::Bytes stWireFrames;
+		for (int iIndex = 0; iIndex < 2; ++iIndex)
+		{
+			const uint64_t iCall = OI::Rpc::RpcCallManager::GetInstance().Bind(&stWireClient, iWireSid,
+			    OI::Rpc::RpcProtoId<OI::RpcData::HoldRes>::iValue, {}, &pWire->vCode[iIndex], 3000,
+			    [iIndex](OI::Base::BytesStream&, sid_t)
+			{
+				if (iIndex == 0)
+				{
+					throw std::runtime_error("injected response decode failure");
+				}
+				return true;
+			}, [pWire, iIndex]()
+			{
+				pWire->vResumed[iIndex].fetch_add(1);
+			}, pWireGuard);
+			vWireCalls.push_back(iCall);
+			OI::RpcData::HoldReq stRequest;
+			stRequest.iDelayMilliseconds = iIndex == 0 ? 0 : 1000;
+			OI::Base::BytesStream stBody;
+			stBody << (iCall | uint64_t(RPC_REQ_MASK));
+			stRequest.serialize(stBody);
+			auto stFrame = OI::Rpc::EncodePbFrame(OI::Rpc::RpcProtoId<OI::RpcData::HoldReq>::iValue, stBody);
+			stWireFrames.Append(stFrame.GetMutableBuff());
+		}
+		if (stWireClient.SendFrame(iWireSid, stWireFrames) != OI_OK)
+		{
+			++iWireBad;
+		}
+		const int64_t iUntil = OI::Timer::SteadyMilliseconds() + 4000;
+		while ((pWire->vResumed[0].load() != 1 || pWire->vResumed[1].load() != 1 || stWireClient.iProbeDisconnects.load() == iDisconnectBefore || pWireGuard->load() != 0) && OI::Timer::SteadyMilliseconds() < iUntil)
+		{
+			co_await OI::Coro::yield(20);
+		}
+	}
+	if (pWire->vResumed[0].load() != 1 || pWire->vCode[0] != OI_ERR_FAIL || pWire->vResumed[1].load() != 1 ||
+	    pWire->vCode[1] != OI_ERR_CONNECT || stWireClient.iProbeDisconnects.load() != iDisconnectBefore + 1 || pWireGuard->load() != 0)
+	{
+		++iWireBad;
+	}
+	for (const auto iCall : vWireCalls)
+	{
+		OI::Rpc::RpcCallManager::GetInstance().Abandon(iCall);
+	}
+	stWireClient.CloseSession(iWireSid);
+	LOG_TRACE("hold rpc receive exception first=%d/%d second=%d/%d close=%d guard=%d bad=%d", pWire->vResumed[0].load(), pWire->vCode[0], pWire->vResumed[1].load(), pWire->vCode[1], stWireClient.iProbeDisconnects.load() - iDisconnectBefore, pWireGuard->load(), iWireBad);
+	iBad += iWireBad;
 	co_return iBad;
 }

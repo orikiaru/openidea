@@ -97,7 +97,7 @@ std::shared_ptr<OI::Http::BodySink> MakeStreamSink(const Request& stRequest)
 		std::fflush(stdout);
 		return std::make_shared<DisconnectTestSink>();
 	}
-	return std::make_shared<WebTestSink>();
+	return std::make_shared<WebTestSink>(stRequest.GetHeader("x-busy-check") != nullptr);
 }
 
 OI::Coro::Task StreamEcho(const Request& stRequest, Response& stReply)

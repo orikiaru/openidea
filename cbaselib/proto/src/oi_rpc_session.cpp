@@ -118,9 +118,19 @@ void ProtoSession::OnDataIn()
 			break;
 		}
 		CancelIncompleteTimer();
+		try
 		{
 			::OI::Base::BytesStream::ReadLimit stLimit(stOutputStream, iSize, true);
 			RpcCallManager::GetInstance().Deliver((proto_type_t)iIdLocal, stOutputStream, pProtoManager, iSessionId);
+		}
+		catch (...)
+		{
+			RpcCallManager::ReportError(0, 0, iSessionId, iIdLocal, "deliver_frame", std::current_exception());
+			if (!m_bDatagram)
+			{
+				PassiveClose(PARSER_ERR_OTHER);
+			}
+			break;
 		}
 	}
 	stInputBuffer.Swap(stOutputStream);

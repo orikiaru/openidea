@@ -1,5 +1,6 @@
 #pragma once
 #include "oi_net_session.h"
+#include "oi_poll.h"
 #include <string_view>
 
 struct ssl_ctx_st;
@@ -37,6 +38,10 @@ class TlsSession : public NetSession
 	std::string m_sPending;
 	bool m_bStarted = false;
 	bool m_bEnded = false;
+	bool m_bFlushPosted = false;
+	Poll::QueuedCall m_stFlushCall;
+	size_t SendCapacity();
+	void OnBytesSend(size_t iBytes) override;
 	int32_t AdvanceHandshake();
 	void OnDataIn() final override;
 	void OnClose() override;

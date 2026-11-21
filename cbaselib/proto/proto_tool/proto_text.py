@@ -5,6 +5,13 @@ from serialize_data_parse import SerializeData
 from serialize_data_parse import SerializeDataType
 from serialize_data_parse import NormalizeDbType
 
+CPP_KEYWORDS = set("alignas alignof and and_eq asm auto bitand bitor bool break case catch char char8_t char16_t char32_t class compl concept const consteval constexpr constinit const_cast continue co_await co_return co_yield decltype default delete do double dynamic_cast else enum explicit export extern false float for friend goto if inline int long mutable namespace new noexcept not not_eq nullptr operator or or_eq private protected public register reinterpret_cast requires return short signed sizeof static static_assert static_cast struct switch template this thread_local throw true try typedef typeid typename union unsigned using virtual void volatile wchar_t while xor xor_eq".split())
+
+
+def ValidDeclName(name):
+    return re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) is not None and name not in CPP_KEYWORDS
+
+
 class ProtoLexer:
     def __init__(self, text):
         self.text = text
@@ -83,6 +90,10 @@ class ProtoLexer:
         return True
 
 def NormalizeTypeName(name):
+    if name == "OI::Base::Bytes":
+        return "Bytes"
+    if re.fullmatch(r"std::u?int(?:8|16|32|64)_t", name):
+        return name[5:]
     if name == "string" or name == "std::string":
         return "std::string"
     if name == "vector" or name == "std::vector":
@@ -92,6 +103,9 @@ def NormalizeTypeName(name):
     return name
 
 def ParseType(lex):
+    lex.skip()
+    if lex.text.startswith(("::OI::Base::Bytes", "::std::"), lex.i):
+        lex.i += 2
     name = lex.ident()
     if name is None:
         return None
@@ -210,6 +224,8 @@ def ParseFieldMarkers(lex, member):
 
 def ParseRpcData(lex):
     name = lex.ident()
+    if name is not None and not ValidDeclName(name):
+        return lex.fail("invalid C++ declaration name " + name)
     if name is None:
         return None
     flags = set()
@@ -255,6 +271,8 @@ def ParseRpcData(lex):
 
 def ParseRpc(lex):
     name = lex.ident()
+    if name is not None and not ValidDeclName(name):
+        return lex.fail("invalid C++ declaration name " + name)
     if name is None or not lex.punct("{"):
         return None
     fields = {}
@@ -307,6 +325,8 @@ ENUM_ITEM_NAME = re.compile(r"[A-Z][A-Z0-9_]*")
 # enum 和 errordef 都是 `名字 = 值;`，值必须手写。
 def ParseEnum(lex, data_type):
     name = lex.ident()
+    if name is not None and not ValidDeclName(name):
+        return lex.fail("invalid C++ declaration name " + name)
     if name is None or not lex.punct("{"):
         return None
     data = SerializeData(data_type, None)
@@ -321,6 +341,8 @@ def ParseEnum(lex, data_type):
             return None
         if not ENUM_ITEM_NAME.fullmatch(item):
             return lex.fail("enum item must be UPPER_SNAKE name=" + item)
+        if not -(1 << 63) <= value <= (1 << 63) - 1:
+            return lex.fail("enum value outside signed 64-bit range name=%s value=%d" % (item, value))
         if data_type == SerializeDataType.ERROR_DEF and not 1 <= value <= 2147483647:
             return lex.fail("errordef value must be in 1..2147483647 name=%s value=%d" % (item, value))
         if value in values:

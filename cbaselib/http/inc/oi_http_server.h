@@ -64,9 +64,7 @@ class ServerManager : public Net::SessionManager
 	std::map<sid_t, uint64_t> m_mIncomplete;
 	void OnSessionClosed(sid_t iSessionId) override;
 	Net::Session* CloneSession() override;
-	void OnAddSession(Net::Session*) override
-	{
-	}
+	void OnAddSession(Net::Session* pSession) override;
 	void OnDelSession(const Net::Session*) override
 	{
 	}

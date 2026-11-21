@@ -63,7 +63,7 @@ const char* kListAllLua =
     "  local alive = 0 "
     "  for _, id in ipairs(redis.call('SMEMBERS', set)) do "
     "    local v = redis.call('GET', set .. ':' .. id) "
-    "    if v then table.insert(out, n) table.insert(out, id) table.insert(out, v) alive = alive + 1 "
+    "    if v then table.insert(out, n) table.insert(out, id) table.insert(out, v) table.insert(out, redis.call('GET', ARGV[2] .. n .. ':' .. id) or '') alive = alive + 1 "
     "    else redis.call('SREM', set, id) end "
     "  end "
     "  if alive == 0 then redis.call('SREM', KEYS[1], n) end "
@@ -353,7 +353,7 @@ void RegistryServer::OnDelSession(const ::OI::Net::Session* pSession)
 			{
 				continue;
 			}
-			DropSnapshot(stSecond.sName, stSecond.iId);
+			HideWithdrawn(stSecond);
 			LOG_TRACE("registry offline %s id=%d (connection closed)", stSecond.sName.c_str(), stSecond.iId);
 			OI::Coro::StartTask([this, stSecond](OI::Coro::Token)
 			{
@@ -394,16 +394,26 @@ void RegistryServer::DropSnapshot(const std::string& sNameLocal, int32_t iIdLoca
 	}
 }
 
+void RegistryServer::HideWithdrawn(const Binding& stSecond)
+{
+	if (!m_vWithdrawnOwners.insert(stSecond.sOwner).second)
+	{
+		return;
+	}
+	std::erase_if(m_vSnapshot, [&stSecond](const Binding& stEntry)
+	{
+		return stEntry.sOwner == stSecond.sOwner;
+	});
+}
+
 void RegistryServer::PutSnapshot(const Binding& stSecond)
 {
 	DropSnapshot(stSecond.sName, stSecond.iId);
-	::OI::Base::ServiceInstance stInst;
-	stInst.sName = stSecond.sName;
-	stInst.iId = stSecond.iId;
-	stInst.sIp = stSecond.sIp;
-	stInst.sPort = stSecond.sPort;
-	stInst.sZone = stSecond.sZone;
-	m_vSnapshot.push_back(stInst);
+	m_vSnapshot.push_back(stSecond);
+	if (m_bReloading)
+	{
+		m_vRegisteredDuringReload.emplace(stSecond.sName, stSecond.iId);
+	}
 }
 
 void RegistryServer::StartReload()
@@ -429,7 +439,9 @@ void RegistryServer::StartReload()
 
 OI::Coro::Task RegistryServer::Reload()
 {
-	std::vector<std::string> vArgumentsLocal = {"EVAL", kListAllLua, "1", Key("svc"), Key("svc:")};
+	m_vRegisteredDuringReload.clear();
+	auto vAbsentOwners = m_vWithdrawnOwners;
+	std::vector<std::string> vArgumentsLocal = {"EVAL", kListAllLua, "1", Key("svc"), Key("svc:"), Key("owner:")};
 	::OI::Redis::RedisResult stR = co_await ::OI::Redis::CallRedis(std::move(vArgumentsLocal));
 	m_bReloading = false;
 	if (!stR || !stR.pReply || stR.pReply->type != REDIS_REPLY_ARRAY)
@@ -441,25 +453,45 @@ OI::Coro::Task RegistryServer::Reload()
 		}
 		co_return;
 	}
-	std::vector<::OI::Base::ServiceInstance> vList;
+	std::vector<Binding> vList;
 	const redisReply* pArr = stR.pReply.get();
-	for (size_t iIndexLocal = 0; iIndexLocal + 3 <= (size_t)pArr->elements; iIndexLocal += 3)
+	for (size_t iIndexLocal = 0; iIndexLocal + 4 <= (size_t)pArr->elements; iIndexLocal += 4)
 	{
 		const redisReply* pName = pArr->element[iIndexLocal];
 		const redisReply* pId = pArr->element[iIndexLocal + 1];
 		const redisReply* pValue = pArr->element[iIndexLocal + 2];
-		if (!pName || !pId || !pValue || pName->type != REDIS_REPLY_STRING || pId->type != REDIS_REPLY_STRING || pValue->type != REDIS_REPLY_STRING)
+		const redisReply* pOwner = pArr->element[iIndexLocal + 3];
+		if (!pOwner || pOwner->type != REDIS_REPLY_STRING || !pName || !pId || !pValue || pName->type != REDIS_REPLY_STRING || pId->type != REDIS_REPLY_STRING || pValue->type != REDIS_REPLY_STRING)
 		{
 			continue;
 		}
-		::OI::Base::ServiceInstance stInst;
+		Binding stInst;
+		stInst.sOwner = StrOf(pOwner);
+		if (m_vWithdrawnOwners.contains(stInst.sOwner))
+		{
+			vAbsentOwners.erase(stInst.sOwner);
+			continue;
+		}
 		stInst.sName = StrOf(pName);
 		stInst.iId = atoi(StrOf(pId).c_str());
-		if (ParseValue(StrOf(pValue), stInst.sIp, stInst.sPort, stInst.sZone))
+		if (!m_vRegisteredDuringReload.contains({stInst.sName, stInst.iId}) && ParseValue(StrOf(pValue), stInst.sIp, stInst.sPort, stInst.sZone))
 		{
 			vList.push_back(stInst);
 		}
 	}
+	// 等 Redis 期间登记的实例保留本地新值，同一批里的其他来源照常更新。
+	for (const auto& stEntry : m_vSnapshot)
+	{
+		if (m_vRegisteredDuringReload.contains({stEntry.sName, stEntry.iId}))
+		{
+			vList.push_back(stEntry);
+		}
+	}
+	for (const auto& sOwner : vAbsentOwners)
+	{
+		m_vWithdrawnOwners.erase(sOwner);
+	}
+	m_vRegisteredDuringReload.clear();
 	m_vSnapshot.swap(vList);
 	m_bSnapshotOk = true;
 }
@@ -503,7 +535,7 @@ OI::Coro::Task RegistryServer::ReloadMysql()
 		LOG_ERROR("registry static pull stage=%s native=%u message=%s", stError.sStage.c_str(), stError.iNativeCode, sMessage.c_str());
 		co_return;
 	}
-	std::vector<::OI::Base::ServiceInstance> vList;
+	std::vector<Binding> vList;
 	vList.reserve(stResult.vRows.size());
 	for (size_t iRow = 0; iRow < stResult.vRows.size(); ++iRow)
 	{
@@ -514,7 +546,7 @@ OI::Coro::Task RegistryServer::ReloadMysql()
 			LOG_ERROR("registry static pull bad row=%zu", iRow);
 			co_return;
 		}
-		::OI::Base::ServiceInstance stInst;
+		Binding stInst;
 		stInst.sName = stRow.sName;
 		stInst.iId = stRow.iId;
 		stInst.sIp = stRow.sIp;
@@ -535,7 +567,8 @@ OI::Coro::Task RegistryServer::ReloadMysql()
 		LOG_ERROR("registry does not accept register");
 		co_return OI_ERR_FAIL;
 	}
-	if (!ValidSpacePart(stRequest.sName) || stRequest.iId <= 0 || stRequest.sIp.empty() || stRequest.sPort.empty() || (!stRequest.sZone.empty() && !ValidSpacePart(stRequest.sZone)))
+	if (!ValidSpacePart(stRequest.sName) || stRequest.iId <= 0 || stRequest.sIp.empty() || stRequest.sPort.empty() ||
+	    stRequest.sIp.find_first_of(" \t\r\n") != std::string::npos || stRequest.sPort.find_first_of(" \t\r\n") != std::string::npos || (!stRequest.sZone.empty() && !ValidSpacePart(stRequest.sZone)))
 	{
 		co_return OI_ERR_FAIL;
 	}
@@ -685,16 +718,7 @@ OI::Coro::Task RegistryServer::ReloadMysql()
 	{
 		// Redis 可能先看到接管，登记协程稍后才发布快照。保留旧会话的失效记录直到断开。
 		pCurrent->bSuperseded = true;
-		// 新主人登记时已经换过快照。只摘还指着本连接地址的那份。
-		for (size_t iIndexLocal = 0; iIndexLocal < m_vSnapshot.size(); ++iIndexLocal)
-		{
-			const ::OI::Base::ServiceInstance& stInst = m_vSnapshot[iIndexLocal];
-			if (stInst.sName == stSecond.sName && stInst.iId == stSecond.iId && stInst.sIp == stSecond.sIp && stInst.sPort == stSecond.sPort)
-			{
-				m_vSnapshot.erase(m_vSnapshot.begin() + iIndexLocal);
-				break;
-			}
-		}
+		HideWithdrawn(stSecond);
 		LOG_TRACE("registry %s id=%d taken by another process", stSecond.sName.c_str(), stSecond.iId);
 		fflush(stdout);
 		co_return OI_ERR_EXIST;
@@ -704,25 +728,14 @@ OI::Coro::Task RegistryServer::ReloadMysql()
 
 OI::Coro::Task RegistryServer::Withdraw(Binding stSecond)
 {
+	HideWithdrawn(stSecond);
 	const std::string sInstance = stSecond.sName + ":" + std::to_string(stSecond.iId);
 	std::vector<std::string> vArgumentsLocal = {"EVAL", kWithdrawLua, "3", Key("svc:" + sInstance), Key("svc:" + stSecond.sName), Key("owner:" + sInstance), stSecond.sOwner, std::to_string(stSecond.iId), stSecond.sValue};
 	auto stResult = co_await ::OI::Redis::CallRedis(std::move(vArgumentsLocal));
-	if (ReplyInt(stResult) != REG_OK)
+	if (ReplyInt(stResult) == REG_FAIL)
 	{
-		co_return;
+		LOG_ERROR("registry withdraw failed name=%s id=%d status=%d", stSecond.sName.c_str(), stSecond.iId, (int)stResult.iStatus);
 	}
-	// 撤销之前发出的整量拉取可能又把它带回快照。这时还没人重新登记，就再摘一次。
-	for (const auto& [iSessionId, vBindings] : m_mBindings)
-	{
-		for (size_t iIndexLocal = 0; iIndexLocal < vBindings.size(); ++iIndexLocal)
-		{
-			if (!vBindings[iIndexLocal].bSuperseded && vBindings[iIndexLocal].sName == stSecond.sName && vBindings[iIndexLocal].iId == stSecond.iId)
-			{
-				co_return;
-			}
-		}
-	}
-	DropSnapshot(stSecond.sName, stSecond.iId);
 }
 
 int32_t RegistryServer::Pull(::OI::RpcData::RegPull& stRequest, ::OI::RpcData::RegPullRes& stResponse)

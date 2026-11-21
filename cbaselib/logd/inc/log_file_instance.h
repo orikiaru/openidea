@@ -2,7 +2,6 @@
 #include <stdio.h>
 #include <list>
 #include <map>
-#include <atomic>
 #include <thread>
 #include "oi_bytes.h"
 #include "oi_lock.h"
@@ -12,14 +11,13 @@ class LogFileInstance
 {
 	friend class LogManager;
 	LogManager* m_pManager;
-	LOG_LEVEL m_iLevel;
 
-	//文件锁
-	::OI::Thread::Mutex m_stFileLocker;
-	//日志文件handle
-	FILE* m_vFiles[2];
-
-	typedef std::list<::OI::Base::Bytes> LogCacheList;
+	struct LogEntry
+	{
+		::OI::Base::Bytes stData;
+		std::string sRotationPath;
+	};
+	typedef std::list<LogEntry> LogCacheList;
 	//缓存锁
 	::OI::Thread::Mutex m_stCacheLocker;
 	::OI::Thread::MutexCond m_stCacheCondition;
@@ -27,31 +25,26 @@ class LogFileInstance
 	//当前lv的日志缓存
 	LogCacheList m_vLogs;
 	std::thread m_stThread;
-	std::atomic<bool> m_bWorking;
 	// 由缓存锁保护。轮转也必须唤醒空队列上的写线程。
 	bool m_bQuit;
-	bool m_bRotationPending = false;
+	bool m_bStarted = false;
+	int32_t m_iStartStatus = OI_OK;
+	std::string m_sInitialPath;
 
   public:
-	LogFileInstance(LogManager* pManager, LOG_LEVEL iLevel);
+	explicit LogFileInstance(LogManager* pManager);
 	~LogFileInstance();
 	//跨天需要更换文件指针
-	int32_t CreateNewFile(const char* pPath);
-	void OnCreateNewFile(FILE* pNewFile);
-	int32_t StartWriteThread();
+	int32_t StartWriteThread(const std::string& sPath);
 	// 打退出标记并 join。返回时队列里的日志都已写盘并 fflush。
 	void StopWriteThread();
 	void WriteLog();
-	bool IsWorking()
-	{
-		return m_bWorking;
-	}
 
   private:
 	// 只能由管理器在预留全局额度后调用。
 	void AddLog(::OI::Base::Bytes& stLog);
 	//实际log_thread处理积压日志时,再做切换
-	FILE* GetActiveFile();
+	void Rotate(const std::string& sPath);
 	//激活当前日志文件对应线程
 	void Active();
 	void Passive();

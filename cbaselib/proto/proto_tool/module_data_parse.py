@@ -16,46 +16,31 @@ def ReadDeclName(lex):
     lex.i = match.end()
     return match.group(0)
 
-def ParseComponentText(text):
-    lex = ProtoLexer(text)
-    found = []
-    while not lex.eof():
-        kind = lex.ident()
-        if kind is None:
-            return None
-        if kind != "component":
-            loginfo("proto line", lex.line, "expect component")
-            return None
-        name = ReadDeclName(lex)
-        if name is None:
-            return None
-        type_name = lex.ident()
-        if type_name is None or not lex.punct("{"):
-            return None
-        rpc_names = []
-        while not lex.eof() and lex.peek_char() != "}":
-            word = lex.ident()
-            if word is None:
-                return None
-            if word != "rpc":
-                loginfo("proto line", lex.line, "expect rpc")
-                return None
-            rpc_name = lex.ident()
-            if rpc_name is None or not lex.punct(";"):
-                return None
-            rpc_names.append(rpc_name)
-        if not lex.punct("}"):
-            return None
-        found.append((name, type_name, rpc_names))
-    return found
-
 def ParseModuleText(text):
     lex = ProtoLexer(text)
-    found = []
+    components = []
+    modules = []
     while not lex.eof():
         kind = lex.ident()
         if kind is None:
             return None
+        if kind == "component":
+            name = ReadDeclName(lex)
+            type_name = lex.ident()
+            if name is None or type_name is None or not lex.punct("{"):
+                return None
+            rpc_names = []
+            while not lex.eof() and lex.peek_char() != "}":
+                if lex.ident() != "rpc":
+                    return lex.fail("expect rpc")
+                rpc_name = lex.ident()
+                if rpc_name is None or not lex.punct(";"):
+                    return None
+                rpc_names.append(rpc_name)
+            if not lex.punct("}"):
+                return None
+            components.append((name, type_name, rpc_names))
+            continue
         if kind != "module":
             loginfo("proto line", lex.line, "expect module")
             return None
@@ -76,8 +61,8 @@ def ParseModuleText(text):
             component_names.append(component_name)
         if not lex.punct("}"):
             return None
-        found.append((name, component_names))
-    return found
+        modules.append((name, component_names))
+    return components, modules
 
 class ComponentType(Enum):
     Server = 1
@@ -152,9 +137,13 @@ class ModuleGen:
         except OSError as exc:
             loginfo("ParseModule Error", exc)
             return False
-        modules = ParseModuleText(module_text)
-        if modules is None:
+        declarations = ParseModuleText(module_text)
+        if declarations is None:
             return False
+        components, modules = declarations
+        for name, type_name, rpc_names in components:
+            if not self.ParseComponent(name, type_name, rpc_names):
+                return False
         for name, component_names in modules:
             if(not self.ParseModule(name, component_names)):
                 return False

@@ -95,7 +95,17 @@ class RegressionChecksTest(unittest.TestCase):
         ok = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"
         binary = (b"HTTP/1.1 200 OK\r\nContent-Length: 524288\r\n"
                   b"Connection: close\r\n\r\n" + payload)
+        idle_first, idle_keep = MagicMock(), MagicMock()
+        fixed_large, chunk_large, fixed_over, chunk_over = (MagicMock() for _ in range(4))
         keep, half, chunk, multipart, abandoned = MagicMock(), MagicMock(), MagicMock(), MagicMock(), MagicMock()
+        for conn in (idle_first, idle_keep, fixed_large, chunk_large, fixed_over, chunk_over):
+            conn.__enter__.return_value = conn
+        idle_first.recv.return_value = b""
+        idle_keep.makefile.return_value = io.BytesIO(ok)
+        fixed_large.makefile.return_value = io.BytesIO(binary)
+        chunk_large.makefile.return_value = io.BytesIO(binary)
+        for conn in (fixed_over, chunk_over):
+            conn.makefile.return_value = io.BytesIO(b"HTTP/1.1 413 Content Too Large\r\nContent-Length: 0\r\n\r\n")
         keep.__enter__.return_value = keep
         half.__enter__.return_value = half
         chunk.__enter__.return_value = chunk
@@ -111,9 +121,12 @@ class RegressionChecksTest(unittest.TestCase):
         bad.getresponse.return_value.status = 400
         healthy.getresponse.return_value.status = 200
         healthy.getresponse.return_value.read.return_value = b"ok"
-        with patch.object(web.socket, "create_connection", side_effect=[keep, half, chunk, multipart, abandoned]), \
+        with patch.object(web.socket, "create_connection", side_effect=[idle_first, idle_keep, keep, half,
+                                                                          fixed_large, chunk_large, fixed_over,
+                                                                          chunk_over, chunk, multipart, abandoned]), \
              patch.object(web.http.client, "HTTPConnection", side_effect=[bad, healthy]), \
              patch.object(web.time, "sleep"), \
+             patch.object(web.time, "monotonic", side_effect=[0, 3, 0, 3]), \
              patch.object(web, "wait_web_marker") as wait_marker:
             web.check_web_transport(18080, Path("server.out"))
         self.assertEqual(keep.sendall.call_count, 3)

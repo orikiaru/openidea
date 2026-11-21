@@ -16,7 +16,8 @@ import time
 import traceback
 
 from regression_platform import WINDOWS, SUFFIX, pause, rss_kib
-from registry_replacement_check import check as check_registry_replacement
+from registry_replacement_check import check as check_registry_replacement, check_reload_race
+from registry_fault_proxy import RegistryRedisProxy
 
 from . import ports
 from .cases import ALL_CASES, get_case
@@ -34,6 +35,7 @@ def run_case(case, args):
     with regression_directory(prefix="oi-regression-p%d-" % ports.PORT_OFFSET) as tmp:
         root = Path(tmp)
         ctx = Context(args, entry, root)
+        ctx.registry_proxy = None
         ctx.claim()
         ctx.prepare_paths()
         names = ("logd", "ipcclient") + (("ipcserver",) if ctx.scene not in ("timer", "redis") else ())
@@ -111,11 +113,20 @@ def run_case(case, args):
 
                     ctx.timeline_thread = threading.Thread(target=collect_timeline)
                     ctx.timeline_thread.start()
+                if ctx.name == "registry":
+                    ctx.registry_proxy = RegistryRedisProxy(ports.REDIS_PORT)
+                    config_path = ctx.cfg / "registry.toml"
+                    config = config_path.read_text(encoding="utf-8")
+                    config = config.replace('port = "%d"' % ports.REDIS_PORT,
+                                            'port = "%d"' % ctx.registry_proxy.server_address[1])
+                    config = replace(config, "timeout_ms", "10000")
+                    config_path.write_text(config, encoding="utf-8")
                 if ctx.name == "registry" or (ctx.mode in ("hold", "multi") and not ctx.scene):
                     ctx.registry, ctx.registry_path = ctx.start("registry")
                     ctx.ready(ctx.registry, ctx.registry_path, "registry server listen")
                     if ctx.name == "registry":
                         check_registry_replacement(ports.REGISTRY_PORT, ports.REDIS_PORT)
+                        check_reload_race(ports.REGISTRY_PORT, ports.REDIS_PORT, ctx.registry_proxy)
                 if ctx.name not in ("registry", "multi", "local", "registry-static"):
                     ctx.rs, ctx.rsp = ctx.start("redisserver")
                     ctx.ready(ctx.rs, ctx.rsp, "redis server listen")
@@ -187,11 +198,15 @@ def run_case(case, args):
                     raise
                 print("Redis timeline capture failed:", repr(error), file=sys.stderr, flush=True)
             finally:
-                cleanup_owned(ctx.procs, ctx.handles, ctx.root, ctx.args, ctx.name,
-                              db=ctx.db, db_paused=ctx.db_paused,
-                              monitor=ctx.monitor, http_fixture=ctx.http_fixture, http_thread=ctx.http_thread,
-                              primary=sys.exc_info()[1] or primary,
-                              registry=ctx.registry, registry_paused=ctx.registry_paused)
+                try:
+                    cleanup_owned(ctx.procs, ctx.handles, ctx.root, ctx.args, ctx.name,
+                                  db=ctx.db, db_paused=ctx.db_paused,
+                                  monitor=ctx.monitor, http_fixture=ctx.http_fixture, http_thread=ctx.http_thread,
+                                  primary=sys.exc_info()[1] or primary,
+                                  registry=ctx.registry, registry_paused=ctx.registry_paused)
+                finally:
+                    if getattr(ctx, "registry_proxy", None) is not None:
+                        ctx.registry_proxy.close()
 
 
 def main(doc=None):

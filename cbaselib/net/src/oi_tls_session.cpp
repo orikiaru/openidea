@@ -1,6 +1,7 @@
 #include "oi_tls_session.h"
 #include "oi_session.h"
 #include "oi_net_os.h"
+#include <algorithm>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 #include <openssl/x509v3.h>
@@ -25,7 +26,6 @@ class TlsSession::Connection
 {
 	SSL* m_pSsl = nullptr;
 	std::string m_sError;
-	int32_t Flush(Session& stSession);
 	int32_t Failed(const char* pStage);
 
   public:
@@ -35,12 +35,14 @@ class TlsSession::Connection
 	Connection& operator=(const Connection&) = delete;
 	int32_t Init(const TlsClientContext& stContext, std::string sHost);
 	int32_t Feed(std::string_view sWire);
-	int32_t Handshake(Session& stSession);
+	int32_t Handshake(TlsSession& stSession);
 	bool Ready() const;
 	bool ReceivedClose() const;
-	int32_t Read(Session& stSession, std::string& sPlain, size_t iLimit);
-	int32_t Write(Session& stSession, std::string_view sPlain);
-	void Shutdown(Session& stSession);
+	bool HasPending() const;
+	int32_t Flush(TlsSession& stSession);
+	int32_t Read(TlsSession& stSession, std::string& sPlain, size_t iLimit);
+	int32_t Write(TlsSession& stSession, std::string_view sPlain);
+	void Shutdown(TlsSession& stSession);
 	const std::string& Error() const
 	{
 		return m_sError;
@@ -171,28 +173,43 @@ int32_t TlsSession::Connection::Feed(std::string_view sWire)
 	return OI_OK;
 }
 
-int32_t TlsSession::Connection::Flush(Session& stSession)
+bool TlsSession::Connection::HasPending() const
 {
-	auto pBio = SSL_get_wbio(m_pSsl);
-	char* pData = nullptr;
-	const long iSize = BIO_get_mem_data(pBio, &pData);
-	if (iSize <= 0)
-	{
-		return OI_OK;
-	}
-	const auto iCode = stSession.Session::SendResult(Base::Bytes(pData, static_cast<size_t>(iSize)));
-	if (iCode == OI_OK)
-	{
-		BIO_reset(pBio);
-	}
-	else
-	{
-		m_sError = "TLS transport send";
-	}
-	return iCode;
+	return m_pSsl && BIO_ctrl_pending(SSL_get_wbio(m_pSsl)) != 0;
 }
 
-int32_t TlsSession::Connection::Handshake(Session& stSession)
+int32_t TlsSession::Connection::Flush(TlsSession& stSession)
+{
+	auto pBio = SSL_get_wbio(m_pSsl);
+	while (HasPending())
+	{
+		char* pData = nullptr;
+		const long iSize = BIO_get_mem_data(pBio, &pData);
+		const size_t iTake = std::min({static_cast<size_t>(iSize), stSession.SendCapacity(), size_t{16384}});
+		if (!iTake)
+		{
+			return OI_OK;
+		}
+		const auto iCode = stSession.Session::SendResult(Base::Bytes(pData, iTake));
+		if (iCode == OI_ERR_BUSY)
+		{
+			return OI_OK;
+		}
+		if (iCode != OI_OK)
+		{
+			m_sError = "TLS transport send";
+			return iCode;
+		}
+		char vDiscard[16384];
+		if (BIO_read(pBio, vDiscard, static_cast<int>(iTake)) != static_cast<int>(iTake))
+		{
+			return Failed("TLS output buffer");
+		}
+	}
+	return OI_OK;
+}
+
+int32_t TlsSession::Connection::Handshake(TlsSession& stSession)
 {
 	ERR_clear_error();
 	const int iResult = SSL_do_handshake(m_pSsl);
@@ -203,7 +220,7 @@ int32_t TlsSession::Connection::Handshake(Session& stSession)
 	return Flush(stSession);
 }
 
-int32_t TlsSession::Connection::Write(Session& stSession, std::string_view sPlain)
+int32_t TlsSession::Connection::Write(TlsSession& stSession, std::string_view sPlain)
 {
 	ERR_clear_error();
 	size_t iWritten = 0;
@@ -214,7 +231,7 @@ int32_t TlsSession::Connection::Write(Session& stSession, std::string_view sPlai
 	return Flush(stSession);
 }
 
-int32_t TlsSession::Connection::Read(Session& stSession, std::string& sPlain, size_t iLimit)
+int32_t TlsSession::Connection::Read(TlsSession& stSession, std::string& sPlain, size_t iLimit)
 {
 	char vData[16384];
 	for (;;)
@@ -240,7 +257,7 @@ int32_t TlsSession::Connection::Read(Session& stSession, std::string& sPlain, si
 	}
 }
 
-void TlsSession::Connection::Shutdown(Session& stSession)
+void TlsSession::Connection::Shutdown(TlsSession& stSession)
 {
 	if (Ready() && !(SSL_get_shutdown(m_pSsl) & SSL_SENT_SHUTDOWN))
 	{
@@ -261,6 +278,47 @@ TlsSession::TlsSession(SessionManager* pManager, const TlsClientContext* pContex
 }
 
 TlsSession::~TlsSession() = default;
+
+size_t TlsSession::SendCapacity()
+{
+	OI::Thread::MutexGuard stGuard(stLocker);
+	return iQueuedBytes < iMaxSendQueueBytes ? iMaxSendQueueBytes - iQueuedBytes : 0;
+}
+
+void TlsSession::OnBytesSend(size_t iBytes)
+{
+	Session::OnBytesSend(iBytes);
+	if (!m_pTls || !m_pTls->HasPending() || m_bFlushPosted)
+	{
+		return;
+	}
+	m_bFlushPosted = true;
+	AddRef();
+	m_stFlushCall.fnCall = [](void* pArgument)
+	{
+		auto* pSession = static_cast<TlsSession*>(pArgument);
+		struct ReleaseGuard
+		{
+			TlsSession* pSession;
+			~ReleaseGuard()
+			{
+				pSession->Release();
+			}
+		} stGuard{pSession};
+		pSession->m_bFlushPosted = false;
+		if (!pSession->IsClosed() && !pSession->m_bEnded)
+		{
+			const int32_t iCode = pSession->m_pTls->Flush(*pSession);
+			if (iCode != OI_OK)
+			{
+				pSession->m_bEnded = true;
+				pSession->OnTransportEnd(iCode, pSession->TransportError());
+			}
+		}
+	};
+	m_stFlushCall.pArgument = this;
+	Poll::GetInstance().PostOnLoop(m_stFlushCall);
+}
 
 bool TlsSession::TransportReady() const
 {
@@ -333,6 +391,10 @@ int32_t TlsSession::SendResult(const Base::Bytes& stBytes)
 	{
 		m_sPending.append(stBytes.Data(), stBytes.Size());
 		return OI_OK;
+	}
+	if (m_pTls->HasPending())
+	{
+		return OI_ERR_BUSY;
 	}
 	return m_pTls->Write(*this, {stBytes.Data(), stBytes.Size()});
 }

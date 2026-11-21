@@ -6,6 +6,30 @@
 
 namespace OI::Http::Detail
 {
+inline bool ValidFieldLine(std::string_view sLine)
+{
+	const auto iColon = sLine.find(':');
+	if (iColon == sLine.npos || iColon == 0)
+	{
+		return false;
+	}
+	for (const unsigned char iByte : sLine.substr(0, iColon))
+	{
+		if (!((iByte >= 'A' && iByte <= 'Z') || (iByte >= 'a' && iByte <= 'z') ||
+		      (iByte >= '0' && iByte <= '9') || std::string_view("!#$%&'*+-.^_`|~").find(iByte) != sLine.npos))
+		{
+			return false;
+		}
+	}
+	for (const unsigned char iByte : sLine.substr(iColon + 1))
+	{
+		if ((iByte < 32 && iByte != 9) || iByte == 127)
+		{
+			return false;
+		}
+	}
+	return true;
+}
 // Only the poll thread touches the timer or its owner. A callback can stop its own timer.
 class StreamPump
 {
@@ -19,7 +43,7 @@ class StreamPump
 	{
 		Stop();
 	}
-	bool Start(void* pOwner, uv_timer_cb fnTick)
+	bool Start(void* pOwner, uv_timer_cb fnTick, uint64_t iIntervalMilliseconds = 2)
 	{
 		if (m_pTimer)
 		{
@@ -32,7 +56,7 @@ class StreamPump
 		}
 		m_pTimer = pTimer.release();
 		m_pTimer->data = pOwner;
-		if (uv_timer_start(m_pTimer, fnTick, 1, 2) != 0)
+		if (uv_timer_start(m_pTimer, fnTick, iIntervalMilliseconds, iIntervalMilliseconds) != 0)
 		{
 			Stop();
 			return false;
@@ -69,6 +93,8 @@ class StreamBody
 	uint64_t m_iRemaining = 0;
 	size_t m_iTrailerBytes = 0;
 	size_t m_iRetrySize = 0;
+	std::string m_sPendingWire;
+	bool m_bPendingFinal = false;
 
   public:
 	static constexpr size_t Block = 64 * 1024;
@@ -121,6 +147,10 @@ class StreamBody
 				iConsumed += iEnd + 2;
 				if (m_iPhase == Phase::Trailers)
 				{
+					if (iEnd && !ValidFieldLine(sRest.substr(0, iEnd)))
+					{
+						return OI_ERR_PROTOCOL;
+					}
 					m_iTrailerBytes += iEnd + 2;
 					if (!iEnd)
 					{
@@ -189,7 +219,12 @@ class StreamBody
 		return OI_OK;
 	}
 
-	static int32_t Produce(Net::Session& stSession, BodySource& stSource, bool& bFinished, bool& bProgress, bool bChunked = true)
+	void ResetOutput()
+	{
+		m_sPendingWire.clear();
+		m_bPendingFinal = false;
+	}
+	int32_t Produce(Net::Session& stSession, BodySource& stSource, bool& bFinished, bool& bProgress, bool bChunked = true)
 	{
 		bProgress = false;
 		for (int i = 0; i < 4; ++i)
@@ -197,6 +232,26 @@ class StreamBody
 			if (stSource.IsCancelled())
 			{
 				return OI_ERR_CANCELLED;
+			}
+			if (!m_sPendingWire.empty())
+			{
+				const int32_t iCode = stSession.SendResult(Base::Bytes(m_sPendingWire.data(), m_sPendingWire.size()));
+				if (iCode == OI_ERR_BUSY)
+				{
+					break;
+				}
+				if (iCode != OI_OK)
+				{
+					return iCode;
+				}
+				m_sPendingWire.clear();
+				bProgress = true;
+				if (m_bPendingFinal)
+				{
+					m_bPendingFinal = false;
+					bFinished = true;
+					break;
+				}
 			}
 			if (stSession.PendingSendBytes() >= Block)
 			{
@@ -221,31 +276,24 @@ class StreamBody
 			{
 				return iCode != OI_OK ? iCode : OI_ERR_INVALID_ARGUMENT;
 			}
-			std::string sWire;
 			if (bChunked)
 			{
 				char vHex[32];
 				auto stRet = std::to_chars(vHex, vHex + sizeof(vHex), iSize, 16);
-				sWire.assign(vHex, stRet.ptr);
-				sWire += "\r\n";
+				m_sPendingWire.assign(vHex, stRet.ptr);
+				m_sPendingWire += "\r\n";
 			}
-			sWire.append(vData, iSize);
+			m_sPendingWire.append(vData, iSize);
 			if (bChunked)
 			{
-				sWire += "\r\n";
+				m_sPendingWire += "\r\n";
 			}
-			if (!sWire.empty())
+			m_bPendingFinal = !iSize;
+			if (m_sPendingWire.empty())
 			{
-				iCode = stSession.SendResult(Base::Bytes(sWire.data(), sWire.size()));
-				if (iCode != OI_OK)
-				{
-					return iCode;
-				}
-			}
-			bProgress = true;
-			if (!iSize)
-			{
+				m_bPendingFinal = false;
 				bFinished = true;
+				bProgress = true;
 				break;
 			}
 		}

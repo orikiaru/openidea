@@ -150,7 +150,7 @@ class Session
 	// 还没写出去的字节数。
 	size_t PendingSendBytes();
 	// 通道写出这么多字节后扣掉排队计数。
-	void OnBytesSend(size_t iBytes);
+	virtual void OnBytesSend(size_t iBytes);
 	virtual void ActiveClose() = 0; //外部Mgr主动关闭调用,有锁,不会回调Mgr->CloseSession
 
   protected:

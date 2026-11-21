@@ -212,11 +212,23 @@ void RpcCallManager::FinishSlot(Slot& stSlot, int32_t iCode, ::OI::Base::BytesSt
 			stSlot.pManager->DropPendingCall(stSlot.iCallId);
 		}
 	}
+	std::exception_ptr stDecodeError;
 	if (pBody)
 	{
 		if (stSlot.fnDecode)
 		{
-			stSlot.fnDecode(*pBody, stSlot.iSessionId);
+			try
+			{
+				stSlot.fnDecode(*pBody, stSlot.iSessionId);
+			}
+			catch (...)
+			{
+				stDecodeError = std::current_exception();
+				if (stSlot.pResult)
+				{
+					*stSlot.pResult = OI_ERR_FAIL;
+				}
+			}
 		}
 	}
 	else if (stSlot.pResult)
@@ -230,6 +242,10 @@ void RpcCallManager::FinishSlot(Slot& stSlot, int32_t iCode, ::OI::Base::BytesSt
 	else if (stSlot.stHandle)
 	{
 		OI::Coro::Schedule(stSlot.stHandle);
+	}
+	if (stDecodeError)
+	{
+		std::rethrow_exception(stDecodeError);
 	}
 }
 

@@ -3,7 +3,7 @@ from serialize_data_parse import SerializeDataType
 import re
 
 def QualType(t):
-    return re.sub(r'\bBytes\b', '::OI::Base::Bytes', t)
+    return re.sub(r'(?<![A-Za-z0-9_:])Bytes\b', '::OI::Base::Bytes', t)
 
 class SerializeDataFileGen:
     def __init__(self, data: SerializeData, pb_dispatch="macro"):

@@ -67,12 +67,15 @@ class RegistryServer : public ::OI::Rpc::ProtoSessionManager
 	std::string Key(const std::string& sTail) const;
 	std::vector<std::string> EvalArgs(const char* pLua, const Binding& stSecond) const;
 	Binding* FindBinding(sid_t iSessionId, const std::string& sName, int32_t iId);
+	void HideWithdrawn(const Binding& stSecond);
 	void PutSnapshot(const Binding& stSecond);
 	void DropSnapshot(const std::string& sName, int32_t iId);
 
 	std::set<sid_t> m_vAlive;
 	std::map<sid_t, std::vector<Binding>> m_mBindings;
-	std::vector<::OI::Base::ServiceInstance> m_vSnapshot;
+	std::vector<Binding> m_vSnapshot;
+	std::set<std::string> m_vWithdrawnOwners;
+	std::set<std::pair<std::string, int32_t>> m_vRegisteredDuringReload;
 	bool m_bSnapshotOk;
 	bool m_bReloading;
 	int32_t m_iPullMilliseconds;

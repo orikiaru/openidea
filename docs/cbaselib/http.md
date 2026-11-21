@@ -68,6 +68,12 @@ if (stResponse.iCode != OI_OK)
 
 绑定客户端和 URL 请求共用进程级 HTTP 会话管理器，并发请求使用独立会话；HTTP、HTTPS 及不同 CA 配置不混用连接；限额按 scheme、规范化 host 和 port 统计，同一目标的不同 CA 配置共享该限额。需要本次请求使用新连接时，设置 `Request::bFreshConnection`。`[HttpClientPool] max_connections_per_server` 默认 4，限制每个目标的连接数；达到上限时排队，请求超时也覆盖排队时间。`idle_timeout_ms` 默认 60000，空闲连接由秒级周期清理。新连接也计入上限，达到上限时需先回收空闲连接才能创建。
 
+## 服务端连接与请求时限
+
+服务端组件的 `idle_timeout_ms` 默认 60000 毫秒：连接后一直没有首字节，以及完整请求和响应后的 keep-alive 空闲连接，达到该时限后回收；处理中的 handler、半帧、暂停读取或仍有待发送数据的连接不按普通空闲连接回收。
+
+普通请求从检测到未完成帧起使用 `incomplete_frame_timeout_ms`（默认 10000 毫秒），到期仍未完成则关闭连接。流式 source/sink 使用独立的无进度计时：连续 `idle_timeout_ms` 没有产出或消费进度则关闭，慢但持续取得进度会刷新时限；回调返回 `OI_ERR_BUSY` 不等于消费当前片。
+
 ## Cookie
 
 `Request::AddCookie(name, value)` 和 `Request::GetCookies(output)` 处理请求 Cookie；`Response::AddCookie(cookie)` 和 `Response::GetCookies(output)` 处理响应 Set-Cookie。均返回 `int32_t`，失败时保持输出不变。重复项保留顺序和同名值，Cookie 名区分大小写；属性名解析不区分大小写。`Cookie` 包含 domain、path、expires、可选 max-age、secure、httponly 和 SameSite，`iMaxAge` 区分未指定与 0。

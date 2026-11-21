@@ -69,9 +69,7 @@ class LogManager : public ::OI::Timer::BaseTimer
 	static void ResumeOnLoop(void* pArgument);
 	void ResumeWaiting(bool bShutdown);
 	int32_t StartLogInstanceWork();
-	int32_t OpenAllLogFile();
-	int32_t CheckAndCreateRootPath();
-	int32_t OpenLogFile(LOG_LEVEL iLevel);
+	void UpdateLogPath();
 	void OnCrossDay();
 	bool OnTimer() override;
 	std::string GetLogTitle();

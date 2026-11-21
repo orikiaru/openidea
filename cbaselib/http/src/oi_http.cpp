@@ -430,6 +430,7 @@ bool HttpSession::BeginResponse(const Call::Request& stCall)
 	ReleaseIncoming();
 	m_pSource = stCall.pSource;
 	m_pSink = stCall.pSink;
+	m_stStreamBody.ResetOutput();
 	return (!m_pSource && !m_pSink) || m_stStreamPump.Start(this, [](uv_timer_t* pTimer)
 	{
 		static_cast<HttpSession*>(pTimer->data)->PumpStream();
@@ -470,7 +471,7 @@ void HttpSession::PumpStream()
 	if (m_pSource)
 	{
 		bool bDone = false, bProgress = false;
-		const int32_t iCode = Detail::StreamBody::Produce(*this, *m_pSource, bDone, bProgress);
+		const int32_t iCode = m_stStreamBody.Produce(*this, *m_pSource, bDone, bProgress);
 		if (iCode != OI_OK)
 		{
 			Fail("request body", iCode);
@@ -581,6 +582,11 @@ bool HttpSession::ParseHeaders(size_t iHeaderEnd)
 			break;
 		}
 		size_t iColon = m_sIncoming.find(':', iPosition);
+		if (iColon == std::string::npos || iColon >= iEnd ||
+		    !Detail::ValidFieldLine(std::string_view(m_sIncoming).substr(iPosition, iEnd - iPosition)))
+		{
+			return false;
+		}
 		if (iColon != std::string::npos && iColon < iEnd)
 		{
 			size_t iValue = iColon + 1;
@@ -664,7 +670,18 @@ bool HttpSession::ConsumeChunks()
 				size_t iEnd = m_sIncoming.find("\r\n", iPosition);
 				if (iEnd == std::string::npos)
 				{
+					if (m_sIncoming.size() - iDataAt > kMaxHeader)
+					{
+						Fail("trailer");
+						return true;
+					}
 					return false;
+				}
+				if (iEnd + 2 - iDataAt > kMaxHeader ||
+				    (iEnd != iPosition && !Detail::ValidFieldLine(std::string_view(m_sIncoming).substr(iPosition, iEnd - iPosition))))
+				{
+					Fail("trailer");
+					return true;
 				}
 				if (iEnd == iPosition)
 				{
@@ -889,6 +906,7 @@ void HttpSession::OnDataOut()
 {
 }
 
+
 void HttpSessionManager::Publish(const std::shared_ptr<Call::Request>& pRequestLocal, int32_t iCode, const char* pWhy)
 {
 	if (!pRequestLocal)
@@ -970,11 +988,13 @@ class HttpDial final : public Net::Channel
 
 HttpSessionManager::HttpSessionManager()
 {
-	int64_t iLimit = 4, iIdle = 60000;
+	int64_t iLimit = 4, iIdle = 60000, iSendLimit = 64 * 1024 * 1024;
 	TryGetConfig("HttpClientPool.max_connections_per_server", iLimit);
 	TryGetConfig("HttpClientPool.idle_timeout_ms", iIdle);
+	TryGetConfig("HttpClientPool.max_send_queue_bytes", iSendLimit);
 	m_iLimit = iLimit > 0 ? static_cast<size_t>(iLimit) : 4;
 	m_iIdleMilliseconds = iIdle > 0 ? static_cast<uint64_t>(iIdle) : 60000;
+	iMaxSendQueueBytes = iSendLimit > 0 && static_cast<uint64_t>(iSendLimit) <= SIZE_MAX ? static_cast<size_t>(iSendLimit) : 64 * 1024 * 1024;
 	iMaxReceiveBufferBytes = kMaxHeader + kMaxBody;
 }
 

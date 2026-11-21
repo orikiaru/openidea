@@ -10,69 +10,71 @@
 #include "oi_log.h"
 #include "oi_net_os.h"
 #include "log_manager.h"
+#include "oi_file.h"
 
 #ifdef _SINGLE_THREAD_
 #error LOG_SERVER MUST BE MULTI THREAD
 #endif
 
-LogFileInstance::LogFileInstance(LogManager* pManager, LOG_LEVEL iLevel)
-    : m_pManager(pManager), m_iLevel(iLevel), m_bWorking(false), m_bQuit(false)
+LogFileInstance::LogFileInstance(LogManager* pManager)
+    : m_pManager(pManager), m_bQuit(false)
 {
-	memset(m_vFiles, 0, sizeof(m_vFiles));
 }
 
 LogFileInstance::~LogFileInstance()
 {
-	FILE* pFile = GetActiveFile(); //顺带把跨天换下来的旧文件关掉
-	if (pFile)
-	{
-		fflush(pFile);
-		fclose(pFile);
-	}
 }
 
-int32_t LogFileInstance::CreateNewFile(const char* pPath)
+static FILE* OpenLogFile(const std::string& sPath)
 {
+	const size_t iSeparator = sPath.find_last_of("/");
+	if (iSeparator == std::string::npos)
+	{
+		errno = EINVAL;
+		fprintf(stderr, "logd invalid path: %s\n", sPath.c_str());
+		return nullptr;
+	}
+	const int32_t iStatus = ::OI::File::MakeDirs(sPath.substr(0, iSeparator));
+	if (iStatus != OI_OK)
+	{
+		errno = iStatus > 0 ? iStatus : EIO;
+		fprintf(stderr, "logd mkdir failed: %s code=%d\n", sPath.c_str(), iStatus);
+		return nullptr;
+	}
 #ifdef _WIN32
-	FILE* pFile = NULL;
-	const int iError = fopen_s(&pFile, pPath, "ab+");
+	FILE* pFile = nullptr;
+	const int iError = fopen_s(&pFile, sPath.c_str(), "ab+");
 	if (iError != 0 || !pFile)
 	{
-		fprintf(stderr, "logd open %s failed: %s\n", pPath, NetOs_StrError(iError ? iError : EIO));
-		return iError ? iError : EIO;
+		fprintf(stderr, "logd open %s failed: %s\n", sPath.c_str(), NetOs_StrError(iError ? iError : EIO));
+		return nullptr;
 	}
 #else
-	FILE* pFile = fopen(pPath, "ab+");
+	FILE* pFile = fopen(sPath.c_str(), "ab+");
 	if (!pFile)
 	{
-		const int iError = errno ? errno : EIO;
-		fprintf(stderr, "logd open %s failed: %s\n", pPath, NetOs_StrError(iError));
-		return iError;
+		fprintf(stderr, "logd open %s failed: %s\n", sPath.c_str(), NetOs_StrError(errno));
+		return nullptr;
 	}
 #endif
-	// 交给写线程按块刷。这里只把 stdio 缓冲放大，避免每条日志一次系统调用。
-	setvbuf(pFile, NULL, _IOFBF, 1024 * 1024);
-	OnCreateNewFile(pFile);
-	return OI_OK;
+	setvbuf(pFile, nullptr, _IOFBF, 1024 * 1024);
+	return pFile;
 }
 
-void LogFileInstance::OnCreateNewFile(FILE* pNewFile)
+int32_t LogFileInstance::StartWriteThread(const std::string& sPath)
 {
+	m_sInitialPath = sPath;
+	const int32_t iStatus = ::OI::Thread::ThreadPool::CreateSpecThread(m_stThread, LogFileInstance::WriteLogThreadHandle, this);
+	if (iStatus != OI_OK)
 	{
-		::OI::Thread::MutexGuard stIndexLockState(m_stFileLocker);
-		assert(m_vFiles[1] == NULL);
-		m_vFiles[1] = pNewFile;
+		return iStatus;
 	}
+	::OI::Thread::MutexGuard stLock(m_stCacheLocker);
+	while (!m_bStarted)
 	{
-		::OI::Thread::MutexGuard stLock(m_stCacheLocker);
-		m_bRotationPending = true;
-		Active();
+		m_stCacheCondition.Wait(m_stCacheLocker);
 	}
-}
-
-int32_t LogFileInstance::StartWriteThread()
-{
-	return ::OI::Thread::ThreadPool::CreateSpecThread(m_stThread, LogFileInstance::WriteLogThreadHandle, this);
+	return m_iStartStatus;
 }
 
 void LogFileInstance::StopWriteThread()
@@ -88,19 +90,12 @@ void LogFileInstance::StopWriteThread()
 	}
 }
 
-FILE* LogFileInstance::GetActiveFile()
+void LogFileInstance::Rotate(const std::string& sPath)
 {
-	::OI::Thread::MutexGuard stIndexLockState(m_stFileLocker);
-	if (m_vFiles[1])
-	{
-		if (m_vFiles[0])
-		{
-			fclose(m_vFiles[0]);
-		}
-		m_vFiles[0] = m_vFiles[1];
-		m_vFiles[1] = NULL;
-	}
-	return m_vFiles[0];
+	::OI::Thread::MutexGuard stLock(m_stCacheLocker);
+	m_vLogs.emplace_back();
+	m_vLogs.back().sRotationPath = sPath;
+	Active();
 }
 
 void LogFileInstance::Active()
@@ -123,7 +118,8 @@ void LogFileInstance::AddLog(::OI::Base::Bytes& stLog)
 		{
 			bNotify = true;
 		}
-		m_vLogs.push_back(std::move(stLog));
+		m_vLogs.emplace_back();
+		m_vLogs.back().stData = std::move(stLog);
 		if (bNotify)
 		{
 			Active();
@@ -188,47 +184,61 @@ static bool WriteAll(FILE* pFile, const char* pData, size_t iSize)
 
 void LogFileInstance::WriteLog()
 {
-	assert(std::this_thread::get_id() == m_stThread.get_id());
-	m_bWorking = true;
+	FILE* pFile = OpenLogFile(m_sInitialPath);
+	{
+		::OI::Thread::MutexGuard stLock(m_stCacheLocker);
+		m_iStartStatus = pFile ? OI_OK : OI_ERR_FAIL;
+		m_bStarted = true;
+		m_stCacheCondition.Signal();
+	}
+	if (!pFile)
+	{
+		return;
+	}
 	for (;;)
 	{
 		LogCacheList vWriting;
 		bool bStop = false;
 		{
 			::OI::Thread::MutexGuard stLock(m_stCacheLocker);
-			while (m_vLogs.empty() && !m_bQuit && !m_bRotationPending)
+			while (m_vLogs.empty() && !m_bQuit)
 			{
 				Passive();
 			}
 			bStop = m_vLogs.empty() && m_bQuit;
-			m_bRotationPending = false;
 			vWriting.swap(m_vLogs);
-		}
-		FILE* pFile = GetActiveFile();
-		if (!pFile)
-		{
-			errno = EBADF;
-			DiskFailure("missing active file");
 		}
 		if (bStop)
 		{
+			if (fclose(pFile) != 0)
+			{
+				DiskFailure("fclose");
+			}
 			return;
 		}
-		if (vWriting.empty())
-		{
-			continue;
-		}
 		size_t iWrittenBytes = 0;
-		for (const auto& stLog : vWriting)
+		for (const auto& stEntry : vWriting)
 		{
-			WriteAll(pFile, stLog.Data(), stLog.Size());
-			iWrittenBytes += stLog.Size();
+			if (!stEntry.sRotationPath.empty())
+			{
+				if (fflush(pFile) != 0 || fclose(pFile) != 0)
+				{
+					DiskFailure("rotate close");
+				}
+				pFile = OpenLogFile(stEntry.sRotationPath);
+				if (!pFile)
+				{
+					DiskFailure("rotate open");
+				}
+				continue;
+			}
+			WriteAll(pFile, stEntry.stData.Data(), stEntry.stData.Size());
+			iWrittenBytes += stEntry.stData.Size();
 		}
 		if (fflush(pFile) != 0)
 		{
 			DiskFailure("fflush");
 		}
-		// 移到写线程不释放额度；成功 fflush 且释放批次内存后才允许重新入队。
 		vWriting.clear();
 		m_pManager->CompleteWrite(iWrittenBytes);
 	}

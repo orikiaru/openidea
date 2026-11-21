@@ -121,6 +121,22 @@ def check_web_transport(port, output_path):
         return status, headers, body
 
     with socket.create_connection(("127.0.0.1", port), timeout=10) as conn:
+        conn.settimeout(8)
+        started = time.monotonic()
+        assert conn.recv(1) == b"", "first-byte idle connection stayed open"
+        assert time.monotonic() - started >= 2.0, "first-byte idle connection closed early"
+    with socket.create_connection(("127.0.0.1", port), timeout=10) as conn:
+        conn.settimeout(8)
+        with conn.makefile("rb") as reader:
+            conn.sendall(b"GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            status, _, body = read_response(reader)
+            assert status.startswith("HTTP/1.1 200 ") and body == b"ok", (status, body)
+            started = time.monotonic()
+            assert reader.read(1) == b"", "keep-alive idle connection stayed open"
+            assert time.monotonic() - started >= 2.0, "keep-alive idle connection closed early"
+    print("web idle PASS: first byte and keep-alive", flush=True)
+
+    with socket.create_connection(("127.0.0.1", port), timeout=10) as conn:
         with conn.makefile("rb") as reader:
             conn.sendall(b"GET /health HTTP/1.1\r\nHo")
             time.sleep(0.05)
@@ -140,6 +156,26 @@ def check_web_transport(port, output_path):
             assert reader.read(1) == b"", "half-closed connection did not reach EOF"
 
     payload = bytes(range(256)) * 2048
+    for chunked in (False, True):
+        with socket.create_connection(("127.0.0.1", port), timeout=10) as conn:
+            with conn.makefile("rb") as reader:
+                framing = b"Transfer-Encoding: chunked\r\n" if chunked else ("Content-Length: %d\r\n" % len(payload)).encode()
+                conn.sendall(b"POST /bin HTTP/1.1\r\nHost: localhost\r\n" + framing + b"Connection: close\r\n\r\n")
+                if chunked:
+                    conn.sendall(("%x\r\n" % len(payload)).encode())
+                conn.sendall(payload)
+                if chunked:
+                    conn.sendall(b"\r\n0\r\n\r\n")
+                status, _, body = read_response(reader)
+                assert status.startswith("HTTP/1.1 200 ") and body == payload, (chunked, status, len(body))
+    for framing in (b"Content-Length: 8388609\r\n", b"Transfer-Encoding: chunked\r\n"):
+        with socket.create_connection(("127.0.0.1", port), timeout=10) as conn:
+            with conn.makefile("rb") as reader:
+                conn.sendall(b"POST /bin HTTP/1.1\r\nHost: localhost\r\n" + framing + b"\r\n" +
+                             (b"800001\r\n" if framing.startswith(b"Transfer") else b""))
+                status, _, _ = read_response(reader)
+                assert status.startswith("HTTP/1.1 413 "), (framing, status)
+    print("web body receive limit PASS: fixed, single chunk and oversize 413", flush=True)
     with socket.create_connection(("127.0.0.1", port), timeout=10) as conn:
         with conn.makefile("rb") as reader:
             conn.sendall(b"POST /bin HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n")
@@ -250,7 +286,8 @@ def check_web_stream_length(port):
     block = bytes(range(251))
     payload = (block * (size // len(block) + 1))[:size]
     with socket.create_connection(("127.0.0.1", port), timeout=180) as conn:
-        conn.sendall(("POST /test-stream HTTP/1.0\r\nHost: localhost\r\nContent-Length: %d\r\n\r\n" % size).encode())
+        started = time.monotonic()
+        conn.sendall(("POST /test-stream HTTP/1.0\r\nHost: localhost\r\nX-Busy-Check: 1\r\nContent-Length: %d\r\n\r\n" % size).encode())
         conn.sendall(payload)
         conn.shutdown(socket.SHUT_WR)
         response = http.client.HTTPResponse(conn)
@@ -258,7 +295,7 @@ def check_web_stream_length(port):
         body = response.read()
         assert (response.version == 10 and response.status == 200 and not response.chunked and
                 response.getheader("Transfer-Encoding") is None and response.getheader("Content-Length") is None and
-                response.getheader("Connection", "").lower() == "close" and body == payload), (
+                response.getheader("Connection", "").lower() == "close" and body == payload and time.monotonic() - started >= 0.7), (
                     response.version, response.status, response.getheaders(), len(body))
     print("web stream Content-Length upload HTTP/1.0 EOF response PASS", flush=True)
 
@@ -391,6 +428,11 @@ class DisconnectRegressionHandler(socketserver.BaseRequestHandler):
         elif path == b"/informational-fin":
             self.request.sendall(b"HTTP/1.1 100 Continue\r\n\r\n")
             self.request.shutdown(socket.SHUT_WR)
+        elif path == b"/bad-header":
+            self.request.sendall(b"HTTP/1.1 200 OK\r\nnot-a-header\r\nContent-Length: 2\r\n\r\nok")
+        elif path in (b"/trailer-limit", b"/big-trailer"):
+            size = 65529 if path == b"/trailer-limit" else 65530
+            self.request.sendall(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nok\r\n0\r\nX: " + b"a" * size + b"\r\n\r\n")
         elif path == b"/late-first":
             self.request.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nfirst")
             data = b""
@@ -426,7 +468,7 @@ def check_http_disconnect(work, cfg):
         client = subprocess.run([str(work / ("webclient" + SUFFIX))], cwd=work, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
         assert client.returncode == 0 and "disconnect regression bad=0" in client.stdout, (client.returncode, client.stdout, client.stderr)
         requests = server.requests
-        assert [item[0] for item in requests] == [b"/clean", b"/reset", b"/fin", b"/queued", b"/late-first", b"/late-second", b"/partial-fin", b"/informational-fin"], requests
+        assert [item[0] for item in requests] == [b"/clean", b"/reset", b"/fin", b"/queued", b"/late-first", b"/late-second", b"/partial-fin", b"/informational-fin", b"/bad-header", b"/trailer-limit", b"/big-trailer", b"/clean"], requests
         assert requests[2][1] is not requests[3][1] and requests[3][2] >= server.fin_sent, requests
         assert requests[4][1] is requests[5][1], requests
         print("HTTP disconnect PASS: close-delimited RST and queued request after FIN", flush=True)
@@ -676,6 +718,8 @@ def check_https(work, cfg):
             config = config.replace('https = false', 'https = true')
             config = config.replace('ca_file = ""', 'ca_file = ' + json.dumps(ca_file))
             config += '\ntls_case = %s\nstall_port = %d\n' % (json.dumps(case), stall.getsockname()[1])
+            if case == "success":
+                config += '\n[HttpClientPool]\nmax_send_queue_bytes = 65546\n'
             (cfg / "webclient.toml").write_text(config, encoding="utf-8")
             client = subprocess.run([str(work / ("webclient" + SUFFIX))], cwd=work, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
             assert client.returncode == 0 and "https regression case=%s bad=0" % case in client.stdout, (case, client.returncode, client.stdout, client.stderr)
@@ -702,7 +746,7 @@ def check_https(work, cfg):
             assert not normal_thread.is_alive()
         names.clear()
         run("localhost", ca, "success")
-        assert [item[0] for item in server.requests] == ["/health", "/health", "/truncated", "/health", "/stream", "/clean-eof", "/bad-eof"], server.requests
+        assert [item[0] for item in server.requests] == ["/health", "/health", "/truncated", "/health", "/stream", "/health", "/clean-eof", "/bad-eof"], server.requests
         assert server.requests[0][1] is server.requests[1][1] is server.requests[2][1]
         assert server.requests[3][1] is not server.requests[2][1]
         assert names and all(name == "localhost" for name in names), names
@@ -858,7 +902,7 @@ def run_web(args):
             text = shift_ports((REPO / "deploy/config" / (name + ".toml")).read_text(encoding="utf-8-sig"))
             text = text.replace("port = 18080", "port = " + str(port))
             if name == "webserver":
-                text += "\necho_cookies = true\nform_regression = true\nmax_receive_buffer_bytes = 131072\nmax_frame_bytes = 131064\n"
+                text += "\necho_cookies = true\nform_regression = true\nmax_receive_buffer_bytes = 131072\nmax_frame_bytes = 131064\nincomplete_frame_timeout_ms = 500\nidle_timeout_ms = 2500\n"
             if name == "webclient":
                 text = replace(text, "timeout_ms", "120000")
                 text += "\ncheck_echo_header = true\n"
