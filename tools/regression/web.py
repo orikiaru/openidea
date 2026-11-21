@@ -321,7 +321,7 @@ def check_url_client(work, cfg):
         config = config.replace('ca_file = ""', 'ca_file = ' + json.dumps(str(fixture_dir / "ca.pem")))
         config += '\nurl_case = true\nurl_tls_port = %d\n' % secure.server_address[1]
         (cfg / "webclient.toml").write_text(config, encoding="utf-8")
-        client = subprocess.run([str(work / ("webclient" + SUFFIX))], cwd=work, capture_output=True, text=True, timeout=20)
+        client = subprocess.run([str(work / ("webclient" + SUFFIX))], cwd=work, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20)
         assert client.returncode == 0 and "url regression bad=0" in client.stdout, (client.returncode, client.stdout, client.stderr)
         requests = dict(plain.requests)
         assert len(plain.requests) == 9 and set(requests) == {"/first", "/second?x=1", "/third", "/fresh", "/after", "/slow", "/fast", "/temporary", "/post"}, plain.requests
@@ -423,7 +423,7 @@ def check_http_disconnect(work, cfg):
         config = config.replace('port = 18080', 'port = %d' % server.server_address[1])
         config += '\ndisconnect_case = true\npool_control_port = %d\n[HttpClientPool]\nmax_connections_per_server = 1\n' % control.server_address[1]
         (cfg / "webclient.toml").write_text(config, encoding="utf-8")
-        client = subprocess.run([str(work / ("webclient" + SUFFIX))], cwd=work, capture_output=True, text=True, timeout=15)
+        client = subprocess.run([str(work / ("webclient" + SUFFIX))], cwd=work, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
         assert client.returncode == 0 and "disconnect regression bad=0" in client.stdout, (client.returncode, client.stdout, client.stderr)
         requests = server.requests
         assert [item[0] for item in requests] == [b"/clean", b"/reset", b"/fin", b"/queued", b"/late-first", b"/late-second", b"/partial-fin", b"/informational-fin"], requests
@@ -544,7 +544,7 @@ def check_http_pool(work, cfg):
         config = config.replace('port = 18080', 'port = %d' % server.server_address[1])
         config += '\npool_case = true\npool_control_port = %d\n[HttpClientPool]\nmax_connections_per_server = 2\nidle_timeout_ms = 500\n' % control.server_address[1]
         (cfg / "webclient.toml").write_text(config, encoding="utf-8")
-        client = subprocess.run([str(work / ("webclient" + SUFFIX))], cwd=work, capture_output=True, text=True, timeout=20)
+        client = subprocess.run([str(work / ("webclient" + SUFFIX))], cwd=work, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20)
         assert client.returncode == 0 and "pool regression bad=0" in client.stdout, (client.returncode, client.stdout, client.stderr)
         requests = {path: (conn, at) for path, conn, at in server.requests}
         assert len(server.requests) == 7 and set(requests) == {"/hold-one", "/hold-two", "/queued-success", "/after-queue", "/busy", "/fresh-full", "/after-idle"}, server.requests
@@ -677,7 +677,7 @@ def check_https(work, cfg):
             config = config.replace('ca_file = ""', 'ca_file = ' + json.dumps(ca_file))
             config += '\ntls_case = %s\nstall_port = %d\n' % (json.dumps(case), stall.getsockname()[1])
             (cfg / "webclient.toml").write_text(config, encoding="utf-8")
-            client = subprocess.run([str(work / ("webclient" + SUFFIX))], cwd=work, capture_output=True, text=True, timeout=15)
+            client = subprocess.run([str(work / ("webclient" + SUFFIX))], cwd=work, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
             assert client.returncode == 0 and "https regression case=%s bad=0" % case in client.stdout, (case, client.returncode, client.stdout, client.stderr)
         ca = str(fixture_dir / "ca.pem")
         normal = http.server.ThreadingHTTPServer(("127.0.0.1", 0), HostHttpRegression)
@@ -692,7 +692,7 @@ def check_https(work, cfg):
             config = config.replace('https = false', 'https = true')
             config = config.replace('ca_file = ""', 'ca_file = ' + json.dumps(ca))
             (cfg / "webclient.toml").write_text(config, encoding="utf-8")
-            client = subprocess.run([str(work / ("webclient" + SUFFIX))], cwd=work, capture_output=True, text=True, timeout=30)
+            client = subprocess.run([str(work / ("webclient" + SUFFIX))], cwd=work, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
             assert client.returncode == 0 and "rpc=1 bin=1 bad=0" in client.stdout, (client.stdout, client.stderr)
             assert len(normal.hosts) == 9 and len({id(conn) for conn in normal.connections}) == 1
         finally:
@@ -758,7 +758,7 @@ def check_web_bind_restart(args):
                     config = config.replace("port = 18080", "port = " + str(port))
                     (cfg / "webserver.toml").write_text(config, encoding="utf-8")
                     path = root / (str(index) + name + ".out")
-                    output = path.open("w")
+                    output = path.open("w", encoding="utf-8")
                     handles.append(output)
                     return work, path, output
 
@@ -863,7 +863,7 @@ def run_web(args):
                 text = replace(text, "timeout_ms", "120000")
                 text += "\ncheck_echo_header = true\n"
             (cfg / (name + ".toml")).write_text(text, encoding="utf-8")
-        with (root / "server.out").open("w") as output:
+        with (root / "server.out").open("w", encoding="utf-8") as output:
             server = launch([str(work / ("webserver" + SUFFIX))], cwd=work, stdout=output, stderr=subprocess.STDOUT)
             try:
                 record_process(root, server)
@@ -878,7 +878,7 @@ def run_web(args):
                 with stream_response_fixture() as fixture_port:
                     with (cfg / "webclient.toml").open("a", encoding="utf-8") as config:
                         config.write("stream_fixture_port = %d\n" % fixture_port)
-                    client = subprocess.run([str(work / ("webclient" + SUFFIX))], cwd=work, capture_output=True, text=True, timeout=180)
+                    client = subprocess.run([str(work / ("webclient" + SUFFIX))], cwd=work, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180)
                 print(client.stdout, flush=True)
                 assert client.returncode == 0 and "rpc=1 bin=1 bad=0" in client.stdout, client.stderr
                 with IPv6HttpServer(("::1", 0), HostHttpRegression) as fixture:
@@ -898,7 +898,7 @@ def run_web(args):
                             fixture.hosts.clear()
                             fixture.connections.clear()
                             fixture.connection_headers.clear()
-                            client = subprocess.run([str(work / ("webclient" + SUFFIX))], cwd=work, capture_output=True, text=True, timeout=30)
+                            client = subprocess.run([str(work / ("webclient" + SUFFIX))], cwd=work, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
                             assert client.returncode == 0 and "rpc=1 bin=1 bad=0" in client.stdout, (host, client.stdout, client.stderr)
                             assert fixture.hosts == ["[::1]:%d" % fixture_port] * 9, (host, fixture.hosts)
                             assert fixture.connection_headers == [("keep-alive" if reuse else "close")] * 9, (host, fixture.connection_headers)

@@ -24,9 +24,9 @@ class AdmissionCase(Case):
         if hold_environment(ctx):
             prepare_hold_environment(ctx)
         if ctx.name.startswith("rpc-admission-"):
-            with (ctx.cfg / "ipcclient.toml").open("a") as config:
+            with (ctx.cfg / "ipcclient.toml").open("a", encoding="utf-8") as config:
                 config.write("rpc_admission = true\nrpc_admission_bytes = %s\n" % ("true" if ctx.name.endswith("bytes") else "false"))
-            with (ctx.cfg / "ipcserver.toml").open("a") as config:
+            with (ctx.cfg / "ipcserver.toml").open("a", encoding="utf-8") as config:
                 config.write("\n[Rpc]\nmax_inflight_count = %d\nsession_max_inflight_count = %d\nmax_inflight_bytes = %d\nsession_max_inflight_bytes = %d\n" % ((100, 100, 64, 32) if ctx.name.endswith("bytes") else (2, 1, 1048576, 1048576)))
 
     def scenario(self, ctx):

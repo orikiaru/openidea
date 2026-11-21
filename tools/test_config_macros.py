@@ -48,7 +48,7 @@ def main():
             subprocess.run([str(executable), str(temp / "config.toml"), str(temp / "invalid.toml")], check=True)
             print(mode, "config macros PASS", flush=True)
         result = subprocess.run([cmake, "--build", str(build), "--target", "invalid", "--config", "Release"],
-                                capture_output=True, text=True, errors="replace")
+                                capture_output=True, text=True, encoding="utf-8", errors="replace")
         if result.returncode == 0 or not any(word in result.stdout + result.stderr for word in ("deleted", "C2280")):
             raise RuntimeError("invalid return did not fail as expected:\n" + result.stdout + result.stderr)
         print("int return rejected PASS", flush=True)

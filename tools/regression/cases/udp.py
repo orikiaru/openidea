@@ -50,11 +50,11 @@ class UdpCase(Case):
             assert "udp datagram max=0 over=-6 received=65507 bad=0" in text
             assert "udp done bad=0" in text
             close_probe = subprocess.run([str(work / ("ipcclient" + SUFFIX)), "--poll-udp-close"],
-                                         cwd=work, capture_output=True, text=True, timeout=15)
+                                         cwd=work, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
             close_output = close_probe.stdout + close_probe.stderr
             assert close_probe.returncode == 0 and "poll udp close bound=1 paused=1 loop=0" in close_output, (close_probe.returncode, close_output)
             wrong_probe = subprocess.run([str(work / ("ipcclient" + SUFFIX)), "--poll-wrong-thread"],
-                                         cwd=work, capture_output=True, text=True, timeout=15)
+                                         cwd=work, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
             wrong_output = wrong_probe.stdout + wrong_probe.stderr
             if "poll wrong thread probe mt skipped=1" in wrong_output:
                 assert wrong_probe.returncode == 0, (wrong_probe.returncode, wrong_output)
@@ -65,7 +65,7 @@ class UdpCase(Case):
             print("poll udp close probe:", close_output.strip(), flush=True)
             print("poll wrong thread probe exit=%d output=%s" % (wrong_probe.returncode, wrong_output.strip()), flush=True)
             busy_probe = subprocess.run([str(work / ("ipcclient" + SUFFIX)), "--poll-loop-busy"],
-                                        cwd=work, capture_output=True, text=True, timeout=15)
+                                        cwd=work, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
             busy_output = busy_probe.stdout + busy_probe.stderr
             assert busy_probe.returncode == 0 and re.search(r"poll loop busy code=-\d+ bad=0", busy_output), (busy_probe.returncode, busy_output)
             assert "poll loop close failed" in busy_output, busy_output

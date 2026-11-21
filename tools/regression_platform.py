@@ -85,7 +85,8 @@ class WslRedis:
     def __init__(self, binary, config, user, **kwargs):
         self.prefix = ["wsl", "-u", user, "--exec"]
         def linux_path(path):
-            return subprocess.check_output(self.prefix + ["wslpath", "-a", Path(path).as_posix()], text=True).strip()
+            return subprocess.check_output(self.prefix + ["wslpath", "-a", Path(path).as_posix()], text=True,
+                                       encoding="utf-8", errors="replace").strip()
         self.pidfile = Path(str(config) + ".pid")
         command = self.prefix + ["python3", linux_path(Path(__file__).with_name("redis_fixture.py")),
                                  Path(binary).as_posix(), linux_path(config)]

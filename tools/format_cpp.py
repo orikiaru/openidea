@@ -19,7 +19,7 @@ def main():
     binary = shutil.which(args.clang_format)
     if not binary:
         parser.error("clang-format 18.1.8 required; install clang-format==18.1.8 or specify --clang-format")
-    version = subprocess.check_output([binary, "--version"], text=True)
+    version = subprocess.check_output([binary, "--version"], text=True, encoding="utf-8", errors="replace")
     if "version 18.1.8" not in version:
         parser.error("use clang-format 18.1.8 for reproducible output: " + version.strip())
     names = subprocess.check_output(["git", "ls-files", "-z"], cwd=ROOT).decode("utf-8").split("\0")

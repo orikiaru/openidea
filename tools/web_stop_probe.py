@@ -28,7 +28,7 @@ def run(binary, owner_repo, lane, mode, index):
         text = text.replace('port = 18080', 'port = %d' % port)
         text += '\nform_regression = true\nmax_receive_buffer_bytes = 131072\nmax_frame_bytes = 131064\n'
         (config / 'webserver.toml').write_text(text, encoding='utf-8')
-        with (root / 'server.out').open('w') as output:
+        with (root / 'server.out').open('w', encoding='utf-8') as output:
             proc = launch([str(binary)], cwd=work, stdout=output, stderr=subprocess.STDOUT)
             record_process(root, proc)
             conn = None

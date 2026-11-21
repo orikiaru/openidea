@@ -1,6 +1,9 @@
 """Protocol field naming and stable JSON/wire-number regressions."""
 import sys
 import subprocess
+
+from textio import use_utf8_children
+use_utf8_children()
 import tempfile
 import unittest
 from pathlib import Path
@@ -376,21 +379,21 @@ class ModuleGeneratorTest(unittest.TestCase):
                                 str(temp / "deploy"), str(temp / "manifest.cmake")]
                         args = [str(proto), flag] + tail if form == "module-old" else tail + [flag, "--", str(proto)]
                     result = subprocess.run([sys.executable, str(main)] + args,
-                                            cwd=root, capture_output=True, text=True, errors="replace")
+                                            cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace")
                     self.assertEqual(result.returncode, 0, (mode, form, result.stdout, result.stderr))
                     generated = (output / "oi_rpcdata_example.h").read_text(encoding="utf-8")
                     self.assertEqual("switch (field_seq)" in generated, mode == "switch")
                     self.assertEqual("OI_PB_FIELD(Example, 7, iCount)" in generated, mode == "macro")
             invalid = subprocess.run([sys.executable, str(main), "--pb-dispatch=invalid",
                                       "--data-only", str(proto), str(temp / "invalid")],
-                                     cwd=root, capture_output=True, text=True, errors="replace")
+                                     cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace")
             self.assertEqual(invalid.returncode, 1)
             self.assertIn("invalid --pb-dispatch:", invalid.stdout)
             after_delimiter = temp / "--pb-dispatch=switch"
             after_delimiter.write_text(proto.read_text(encoding="utf-8"), encoding="utf-8")
             result = subprocess.run([sys.executable, str(main), "--data-only", str(temp / "boundary"),
                                      "--", after_delimiter.name],
-                                    cwd=temp, capture_output=True, text=True, errors="replace")
+                                    cwd=temp, capture_output=True, text=True, encoding="utf-8", errors="replace")
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             generated = (temp / "boundary/oi_rpcdata_example.h").read_text(encoding="utf-8")
             self.assertIn("OI_PB_FIELD(Example, 7, iCount)", generated)
@@ -411,10 +414,10 @@ class ModuleGeneratorTest(unittest.TestCase):
                 command.extend(tail + ["--"] + proto_files)
             else:
                 command.extend([proto_files[-1]] + tail)
-            result = subprocess.run(command, cwd=root, capture_output=True, text=True, errors="replace")
+            result = subprocess.run(command, cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace")
             output = manifest.read_text(encoding="utf-8") if manifest.exists() else None
             if result.returncode == 0:
-                repeated = subprocess.run(command, cwd=root, capture_output=True, text=True, errors="replace")
+                repeated = subprocess.run(command, cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace")
                 self.assertEqual(repeated.returncode, 0, repeated.stdout + repeated.stderr)
                 self.assertEqual(manifest.read_text(encoding="utf-8"), output)
             return result, output
@@ -425,7 +428,7 @@ class ModuleGeneratorTest(unittest.TestCase):
             output = Path(temp) / "generated"
             command = [sys.executable, str(root / "cbaselib/proto/proto_tool/main.py"),
                        "--data-only", str(root / "cbaselib/proto/protocol/framework.proto"), str(output)]
-            result = subprocess.run(command, cwd=root, capture_output=True, text=True, errors="replace")
+            result = subprocess.run(command, cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace")
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             generated = output / "oi_rpcdata_workcompleted.h"
             enums = output / "rpc_enums.h"
@@ -434,12 +437,12 @@ class ModuleGeneratorTest(unittest.TestCase):
             self.assertIn("iOperation", generated.read_text(encoding="utf-8"))
             self.assertIn("WORK_PROTOCOL_COMPLETED", enums.read_text(encoding="utf-8"))
             before = {path.name: path.read_bytes() for path in output.iterdir() if path.is_file()}
-            repeated = subprocess.run(command, cwd=root, capture_output=True, text=True, errors="replace")
+            repeated = subprocess.run(command, cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace")
             self.assertEqual(repeated.returncode, 0, repeated.stdout + repeated.stderr)
             self.assertEqual(before, {path.name: path.read_bytes() for path in output.iterdir() if path.is_file()})
             bad = subprocess.run([sys.executable, str(root / "cbaselib/proto/proto_tool/main.py"),
                                   "--data-only", str(Path(temp) / "missing.xml"), str(output)],
-                                 cwd=root, capture_output=True, text=True, errors="replace")
+                                 cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace")
             self.assertNotEqual(bad.returncode, 0)
             left = Path(temp) / "left.proto"
             right = Path(temp) / "right.proto"
@@ -447,7 +450,7 @@ class ModuleGeneratorTest(unittest.TestCase):
             right.write_text("rpcdata Row { 0 Child stChild; }\nrpcdata Req { 0 int32_t iNumber; }\nrpcdata Res { 0 int32_t iNumber; }\nrpc Echo { id 9; request Req; response Res; }\n", encoding="utf-8")
             multi = subprocess.run([sys.executable, str(root / "cbaselib/proto/proto_tool/main.py"),
                                     "--data-only", str(output), "--", str(left), str(right)],
-                                   cwd=root, capture_output=True, text=True, errors="replace")
+                                   cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace")
             self.assertEqual(multi.returncode, 0, multi.stdout + multi.stderr)
             self.assertIn('#include "oi_rpcdata_child.h"', (output / "oi_rpcdata_row.h").read_text(encoding="utf-8"))
             self.assertIn("::OI::RpcData::Req", (output / "rpc_ids.h").read_text(encoding="utf-8"))
@@ -460,7 +463,7 @@ class ModuleGeneratorTest(unittest.TestCase):
             command = [sys.executable, str(root / "cbaselib/proto/proto_tool/main.py"),
                        "--data-only", str(output), "--",
                        str(proto_dir / "db.proto"), str(proto_dir / "json.proto"), str(proto_dir / "rpc.proto")]
-            result = subprocess.run(command, cwd=root, capture_output=True, text=True, errors="replace")
+            result = subprocess.run(command, cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace")
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             header = (output / "oi_rpcdata_jsonall.h").read_text(encoding="utf-8")
             plain = (output / "oi_rpcdata_jsonplain.h").read_text(encoding="utf-8")

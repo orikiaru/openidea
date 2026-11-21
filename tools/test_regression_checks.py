@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import run_regressions as regression
 from regression import cases, ports, probes, web
+from textio import TEXT, child_env
 
 
 MULTIPART_BODY = (b"--fixture\r\nContent-Disposition: form-data; name=\"field\"\r\n\r\nvalue\r\n"
@@ -144,7 +145,8 @@ class RegressionChecksTest(unittest.TestCase):
 
     def test_hold_scenes_are_accepted_and_all_retains_hold(self):
         script = Path(regression.__file__)
-        result = subprocess.run([sys.executable, str(script), "--help"], capture_output=True, text=True, check=True)
+        result = subprocess.run([sys.executable, str(script), "--help"], capture_output=True, text=True,
+                                check=True, env=child_env(), **TEXT)
         for case in ("hold-blocking", "hold-timer", "hold-redis"):
             self.assertIn(case, result.stdout)
         self.assertEqual(cases.ALL_CASES.count("web"), 1)
@@ -155,7 +157,8 @@ class RegressionChecksTest(unittest.TestCase):
 
     def test_optimized_python_is_rejected(self):
         script = Path(regression.__file__)
-        result = subprocess.run([sys.executable, "-O", str(script), "--help"], capture_output=True, text=True)
+        result = subprocess.run([sys.executable, "-O", str(script), "--help"], capture_output=True, text=True,
+                                env=child_env(), **TEXT)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("requires assertions", result.stderr)
 

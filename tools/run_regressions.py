@@ -4,6 +4,10 @@
 先编出待测版本，单、多线程分别运行一次。Redis 默认使用已有的源码编译产物。
 """
 import sys
+
+from textio import use_utf8_children
+use_utf8_children()
+
 if not __debug__:
     raise SystemExit("run_regressions.py requires assertions; do not use Python -O")
 

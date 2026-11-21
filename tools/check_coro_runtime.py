@@ -467,7 +467,7 @@ def main():
             if args.asan:
                 env["ASAN_OPTIONS"] = "detect_leaks=0:abort_on_error=1"
             result = subprocess.run([str(binary), str(config), "normal"], capture_output=True, text=True,
-                                    timeout=15, env=env)
+                                    encoding="utf-8", errors="replace", timeout=15, env=env)
             print(mode, result.stdout, result.stderr, flush=True)
             result.check_returncode()
             assert "pure coroutine ret=0 released=1" in result.stdout
@@ -481,7 +481,7 @@ def main():
             assert "work protocol extension unknown id ok" in result.stdout
             assert "queued calls completed=4096 batch=3 bad=0" in result.stdout
             shutdown = subprocess.run([str(binary), str(config), "shutdown"], capture_output=True, text=True,
-                                      timeout=15, env=env)
+                                      encoding="utf-8", errors="replace", timeout=15, env=env)
             print(mode, shutdown.stdout, shutdown.stderr, flush=True)
             shutdown.check_returncode()
             assert "blocking shutdown ret=0 finished=1 rejected=1 drained=2" in shutdown.stdout

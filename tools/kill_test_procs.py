@@ -87,7 +87,7 @@ def wsl_cleanup(lane, offset, user, linux_root, dry_run):
     prefix = ["wsl", "-u", user, "--exec"]
     def translate(path):
         return subprocess.check_output(prefix + ["wslpath", "-a", Path(path).as_posix()],
-                                       text=True, encoding="utf-8").strip()
+                                       text=True, encoding="utf-8", errors="replace").strip()
     command = prefix + ["python3", translate(ROOT / "tools/cleanup_linux_tests.py")]
     roots = [translate(ROOT), linux_root] if lane == "all" else [linux_root.rstrip("/") + "/" + lane]
     for root in roots:

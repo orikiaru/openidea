@@ -10,6 +10,8 @@ import sys
 import time
 from pathlib import Path
 
+from textio import use_utf8_children
+
 ROOT = Path(__file__).resolve().parents[1]
 # 互不重叠：基准端口 16379-19995，每份平移 1000。
 LANES = (("windows", "mt", 0), ("windows", "st", 1000), ("linux", "mt", 2000), ("linux", "st", 3000))
@@ -60,6 +62,7 @@ def sync_linux(user, destination):
 
 
 def main():
+    use_utf8_children()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--windows-root", type=Path, default=Path("F:/oi-par"))
     parser.add_argument("--linux-root", default="/root/oi-par")

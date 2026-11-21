@@ -10,6 +10,8 @@ import shutil
 import subprocess
 import sys
 
+from textio import TEXT, use_utf8_children
+
 ROOT = Path(__file__).resolve().parents[1]
 WINDOWS = os.name == "nt"
 
@@ -130,6 +132,7 @@ def find_redis(explicit):
 
 
 def main():
+    use_utf8_children()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--platform", choices=("native", "both"), default="native")
     parser.add_argument("--build-dir", type=Path)
@@ -185,7 +188,7 @@ def main():
         for item in args.define:
             native += ["--define", item]
         prefix = ["wsl", "-u", args.wsl_user, "--exec"]
-        translate = lambda path: subprocess.check_output(prefix + ["wslpath", "-a", Path(path).as_posix()], text=True).strip()
+        translate = lambda path: subprocess.check_output(prefix + ["wslpath", "-a", Path(path).as_posix()], text=True, **TEXT).strip()
         linux = prefix + ["python3", translate(Path(__file__).resolve()), "--build-dir", args.linux_build_dir,
                           "--artifacts", translate(output / "linux"), "--case", args.case, "--mode", args.mode,
                           "--jobs", str(args.jobs), "--port-offset", str(args.port_offset)]
@@ -209,6 +212,7 @@ def main():
     records = []
     def run(name, command):
         print("START", name, flush=True)
+        use_utf8_children()
         env = os.environ.copy()
         if name == "test-safety" and not args.redis_wsl:
             # 不解符号链接：发行版的 redis-server 指向 redis-check-rdb，按调用名决定身份。
@@ -231,10 +235,10 @@ def main():
     metadata = {"platform": platform.platform(), "python": sys.version, "root": str(ROOT)}
     # 拷到 /root 下的树所有权对不上时，git 会拒绝读。只对这一次命令放行，不写 git 配置。
     safe = ["-c", "safe.directory=" + str(ROOT)]
-    metadata["head"] = subprocess.check_output(["git", *safe, "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    metadata["head"] = subprocess.check_output(["git", *safe, "rev-parse", "HEAD"], cwd=ROOT, text=True, **TEXT).strip()
     diff = subprocess.check_output(["git", *safe, "-c", "core.safecrlf=false", "diff", "HEAD"], cwd=ROOT)
     metadata["diff_sha256"] = hashlib.sha256(diff).hexdigest()
-    metadata["status"] = subprocess.check_output(["git", *safe, "status", "--short"], cwd=ROOT, text=True)
+    metadata["status"] = subprocess.check_output(["git", *safe, "status", "--short"], cwd=ROOT, text=True, **TEXT)
     (output / "environment.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     failed = False
     completed = False

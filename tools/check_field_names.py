@@ -75,7 +75,8 @@ def inspect(command):
             continue
         filtered.append(arg)
     # libclang pip wheels have no GCC standard-library search configuration.
-    probe = subprocess.run([compiler, "-E", "-x", "c++", "-", "-v"], input="", text=True, capture_output=True, check=True)
+    probe = subprocess.run([compiler, "-E", "-x", "c++", "-", "-v"], input="", text=True, encoding="utf-8",
+                           errors="replace", capture_output=True, check=True)
     active = False
     for line in probe.stderr.splitlines():
         if "search starts here:" in line: active = True

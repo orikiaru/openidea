@@ -11,6 +11,7 @@ import tempfile
 import time
 
 from test_process_owner import write_owner, record_process, windows_birth, terminate_verified
+from textio import use_utf8_children
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -35,6 +36,7 @@ def quoted_path(path):
 
 
 def main():
+    use_utf8_children()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", choices=("mysql", "mysql-wake"), default="mysql")
     parser.add_argument("--mysqld", help="mysqld executable in a persistent installation")
