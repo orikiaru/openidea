@@ -314,7 +314,14 @@ void RpcCallManager::Sweep()
 	{
 		// 还没连上就到期，按连接失败返回，不占超时码。
 		const int32_t iCodeLocal = stSlot.bAwaitingConnect ? OI_ERR_CONNECT : OI_ERR_TIMEOUT;
-		FinishSlot(stSlot, iCodeLocal, NULL);
+		try
+		{
+			FinishSlot(stSlot, iCodeLocal, nullptr);
+		}
+		catch (...)
+		{
+			::OI::Thread::ReportTaskError(std::current_exception());
+		}
 	}
 }
 

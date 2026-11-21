@@ -211,6 +211,7 @@ class HoldCase(Case):
             assert "hold disconnect drain calls=4096 bad=0" in text
             assert "hold batch failure slots bad=0" in text
             assert re.search(r"hold absolute deadline buckets calls=4096 buckets=\d+ fired=32 bad=0", text)
+            assert "hold sweep exception callbacks=128 same_batch=1 guard=0 bad=0" in text
             assert "hold registry pause cached many=3/3 call=0 mark=831 bad=0" in text
             paused_missing = re.search(r"hold registry pause missing snapshot=0 code=-2 elapsed_ms=(\d+) mark=-731 bad=0", text)
             assert paused_missing and int(paused_missing.group(1)) < 450, paused_missing.group(0) if paused_missing else "missing pause-missing marker"

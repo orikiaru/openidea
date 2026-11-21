@@ -4,16 +4,16 @@
 
 ## 全量
 
-2026-11-21，基于提交 `9fcc4f6` 之上、含本轮回归拆分与边界补齐的工作区，四组 `--case all` 均通过 22/22。覆盖回归驱动拆分、IPv4 数据报上限、FIFO 万次唤醒、`StopAndJoin` 忙碌退出、反向 Hold、监听登记回滚和清理退出码校验。协程压力和序列化压力不计入全量。
+2026-11-21，包含 RPC 超时扫描逐项异常隔离及故障注入回归的工作区，四组 `--case all` 均通过 22/22。协程压力和序列化压力不计入全量。
 
 | 平台 | 线程 | CPU | 报告频率（MHz） | 通过 | 耗时 |
 | --- | --- | --- | --- | --- | --- |
-| Windows MSVC x64 Release | 多线程 | AMD Ryzen 7 9800X3D | 4700 | 22/22 | 401.6 秒 |
-| Windows MSVC x64 Release | 单线程 | AMD Ryzen 7 9800X3D | 4700 | 22/22 | 436.7 秒 |
-| WSL2 Linux Release，16 逻辑核 | 多线程 | AMD Ryzen 7 9800X3D | 4699.916 | 22/22 | 248.5 秒 |
-| WSL2 Linux Release，16 逻辑核 | 单线程 | AMD Ryzen 7 9800X3D | 4699.916 | 22/22 | 289.9 秒 |
+| Windows MSVC x64 Release | 多线程 | AMD Ryzen 7 9800X3D | 4700 | 22/22 | 383.3 秒 |
+| Windows MSVC x64 Release | 单线程 | AMD Ryzen 7 9800X3D | 4700 | 22/22 | 412.2 秒 |
+| WSL2 Linux Release，16 逻辑核 | 多线程 | AMD Ryzen 7 9800X3D | 4699.901 | 22/22 | 239.5 秒 |
+| WSL2 Linux Release，16 逻辑核 | 单线程 | AMD Ryzen 7 9800X3D | 4699.901 | 22/22 | 272.4 秒 |
 
-Windows 频率为 CIM `CurrentClockSpeed` 报告值；WSL 频率为 `/proc/cpuinfo` 报告值，均不是运行期连续采样。两路 Linux 另跑 `mysql` 与 `registry-static`，`mysql row mapping`、`mysql rows`、`mysql done` 均为 `bad=0`。
+Windows 频率为 CIM `CurrentClockSpeed` 报告值；WSL 频率为 `/proc/cpuinfo` 报告值，均不是运行期连续采样。两路 Linux 的 MySQL 回归也通过。
 
 ## 显式用例
 

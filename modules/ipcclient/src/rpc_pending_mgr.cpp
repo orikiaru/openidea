@@ -434,6 +434,49 @@ OI::Coro::TaskResult<int> RpcPendingMgr::CheckDeadlineBuckets()
 	{
 		++iBad;
 	}
+	// 所有到期项先由同一次 Sweep 摘下；首个回调抛出后其余项仍须完成。
+	struct SweepProbe
+	{
+		std::atomic<int32_t> iCallbacks{0};
+		std::atomic<int32_t> iFirstBatch{0};
+		std::vector<int32_t> vCodes = std::vector<int32_t>(128, -99);
+	};
+	auto pSweepProbe = std::make_shared<SweepProbe>();
+	auto pSweepGuard = std::make_shared<std::atomic<int32_t>>(0);
+	vCalls.clear();
+	const int64_t iSweepDeadline = OI::Timer::SteadyMilliseconds() + 500;
+	for (size_t iIndex = 0; iIndex < pSweepProbe->vCodes.size(); ++iIndex)
+	{
+		const int64_t iRemaining = iSweepDeadline - OI::Timer::SteadyMilliseconds();
+		vCalls.push_back(OI::Rpc::RpcCallManager::GetInstance().Bind(&stManager, 123456, 0, {}, &pSweepProbe->vCodes[iIndex], iRemaining, {},
+		    [pSweepProbe, pSweepGuard]()
+		{
+			if (pSweepProbe->iCallbacks.fetch_add(1) == 0)
+			{
+				pSweepProbe->iFirstBatch = pSweepGuard->load() >= 2 ? 1 : -1;
+				throw std::runtime_error("injected sweep callback failure");
+			}
+		}, pSweepGuard));
+	}
+	const int64_t iSweepLimit = OI::Timer::SteadyMilliseconds() + 4000;
+	while ((pSweepProbe->iCallbacks.load() != 128 || pSweepGuard->load() != 0) && OI::Timer::SteadyMilliseconds() < iSweepLimit)
+	{
+		co_await OI::Coro::yield(20);
+	}
+	for (const auto iCall : vCalls)
+	{
+		OI::Rpc::RpcCallManager::GetInstance().Abandon(iCall);
+	}
+	int iSweepBad = pSweepProbe->iCallbacks.load() == 128 && pSweepProbe->iFirstBatch.load() == 1 && pSweepGuard->load() == 0 && SameWaitStats(stBefore) ? 0 : 1;
+	for (const auto iCode : pSweepProbe->vCodes)
+	{
+		if (iCode != OI_ERR_TIMEOUT)
+		{
+			++iSweepBad;
+		}
+	}
+	iBad += iSweepBad;
+	LOG_TRACE("hold sweep exception callbacks=%d same_batch=%d guard=%d bad=%d", pSweepProbe->iCallbacks.load(), pSweepProbe->iFirstBatch.load(), pSweepGuard->load(), iSweepBad);
 	LOG_TRACE("hold absolute deadline buckets calls=4096 buckets=%zu fired=%d bad=%d", stDuring.iBuckets - stBefore.iBuckets, pProbe->iCompleted.load(), iBad);
 	fflush(stdout);
 	co_return iBad;
