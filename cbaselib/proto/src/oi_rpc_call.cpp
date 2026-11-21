@@ -25,6 +25,17 @@ namespace OI
 namespace Rpc
 {
 
+int64_t NormalizeRpcTimeoutMilliseconds(int64_t iTimeoutMilliseconds)
+{
+	if (iTimeoutMilliseconds > 0)
+	{
+		return iTimeoutMilliseconds;
+	}
+	LOG_ERROR("invalid rpc timeout milliseconds=%lld force=%lld",
+	    static_cast<long long>(iTimeoutMilliseconds), static_cast<long long>(kFallbackRpcTimeoutMilliseconds));
+	return kFallbackRpcTimeoutMilliseconds;
+}
+
 RpcAdmissionLease::~RpcAdmissionLease()
 {
 	if (!bAcquired)
@@ -450,6 +461,7 @@ uint64_t RpcCallManager::Bind(::OI::Net::SessionManager* pManagerLocal,
 	{
 		stInserted->second.stSessionIndex = AddSessionIndex(stShard, stInserted->second, iSessionIdLocal);
 		stInserted->second.bIndexed = true;
+		// 非正时长不进超时桶。生产调用在进这里之前已经换成 30 秒；测试自己结束的槽可以传 0。
 		if (iTimeoutMilliseconds > 0)
 		{
 			const int64_t iNow = ::OI::Timer::SteadyMilliseconds();

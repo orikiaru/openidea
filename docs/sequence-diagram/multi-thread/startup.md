@@ -4,6 +4,8 @@
 
 条数读 `ThreadPool.threadcount`，必须配，并且大于 0。旧键 `normal` 仍会作为兼容读一次：读不到 `threadcount` 时会再读 `normal`，读到了就在 stderr 打一行提示改名。缺了或不是正数，`ThreadPool::Init` 返回 `OI_ERR_INVALID_ARGUMENT`，进程起不来。旧配置里的 `urgent`、`queue`、`max_task_count` 不再读取，留着不报错。时间轮的 `Update` 在 poll 线程上跑。
 
+`Poll::Init` 在主线程上先 `BlockingWorkSessionManager::GetInstance()`，构造阻塞会话管理器，并 `InitializeBlockingPools`，然后才另起 poll 线程。工作线程和本地会话都不在这一步创建。
+
 ```mermaid
 sequenceDiagram
     autonumber
@@ -20,7 +22,8 @@ sequenceDiagram
     Main->>Pool: Init
     Main->>Timer: Init
     Note over Timer: 循环还没准备好，ArmTick 只记下 offset_ms 和 OnLoopTick
-    Main->>Poll: Init 另起线程
+    Main->>Main: Init 先 GetInstance，构造 BlockingWorkSessionManager
+    Main->>Poll: 再另起 poll 线程
     Poll->>Poll: PrepareLoop
     Poll->>Poll: StartTickOnLoop
     Poll->>Poll: uv_run 开始转

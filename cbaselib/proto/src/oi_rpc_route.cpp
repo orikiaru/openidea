@@ -305,11 +305,9 @@ bool RouteAwaiter::Prepare()
 
 RpcDeadline::RpcDeadline(::OI::Timer::MS stTimeout)
 {
-	if (stTimeout.iMilliseconds > 0)
-	{
-		const int64_t iNow = ::OI::Timer::SteadyMilliseconds();
-		iDeadlineMilliseconds = stTimeout.iMilliseconds > INT64_MAX - iNow ? INT64_MAX : iNow + stTimeout.iMilliseconds;
-	}
+	const int64_t iTimeoutMilliseconds = NormalizeRpcTimeoutMilliseconds(stTimeout.iMilliseconds);
+	const int64_t iNow = ::OI::Timer::SteadyMilliseconds();
+	iDeadlineMilliseconds = iTimeoutMilliseconds > INT64_MAX - iNow ? INT64_MAX : iNow + iTimeoutMilliseconds;
 }
 
 bool RpcDeadline::Expired() const

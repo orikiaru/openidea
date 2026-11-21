@@ -4,16 +4,16 @@
 
 ## 全量
 
-2026-11-21，同一工作区再跑四组 `--case all`，覆盖 TLS 明文暂存、logd 跨日打开失败仍保持进程，以及监听后登记失败的注入。四组均通过 22/22。协程压力和序列化压力不计入全量。Linux 用记录中的远程机器，不是 WSL。本轮没有跑 MySQL。
+2026-11-22，同一工作区跑四组 `--case all`。四组均通过 22/22。协程压力和序列化压力不计入全量。Linux 在本机 WSL，不是远程机器。本轮没有跑 MySQL。WSL 第一次指定了不存在的 `/usr/local/bin/redis-server`，改用 `/usr/bin/redis-server` 后重跑通过；下面耗时是通过的那一轮。
 
 | 平台 | 线程 | CPU | 报告频率（MHz） | 通过 | 耗时 |
 | --- | --- | --- | --- | --- | --- |
-| Windows MSVC x64 Release | 多线程 | AMD Ryzen 7 9800X3D，8 核 16 线程 | 4700 | 22/22 | 372.7 秒 |
-| Windows MSVC x64 Release | 单线程 | AMD Ryzen 7 9800X3D，8 核 16 线程 | 4700 | 22/22 | 393.2 秒 |
-| 远程 Linux Release，4 逻辑核 | 多线程 | Intel Xeon Platinum 8255C | 2494.140 | 22/22 | 446 秒 |
-| 远程 Linux Release，2 逻辑核 | 单线程 | Intel Xeon Gold 6271C | 2593.904 | 22/22 | 793 秒 |
+| Windows MSVC x64 Release | 多线程 | AMD Ryzen 7 9800X3D，8 核 16 线程 | 4700 | 22/22 | 431.4 秒 |
+| Windows MSVC x64 Release | 单线程 | AMD Ryzen 7 9800X3D，8 核 16 线程 | 4700 | 22/22 | 450.6 秒 |
+| 本机 WSL GCC Release，16 逻辑核 | 多线程 | AMD Ryzen 7 9800X3D，8 核 16 线程 | 4699.901 | 22/22 | 225.0 秒 |
+| 本机 WSL GCC Release，16 逻辑核 | 单线程 | AMD Ryzen 7 9800X3D，8 核 16 线程 | 4699.901 | 22/22 | 261.7 秒 |
 
-Windows 频率为 CIM `CurrentClockSpeed` 报告值；Linux 频率为 `/proc/cpuinfo` 的 `cpu MHz`，均不是运行期连续采样。耗时含配置和编译：Windows 取并行矩阵打印的秒数，Linux 取 `test_matrix` 启动到 `summary.json` 写完。四路测试前后按各自归属清理。跨日时钟、建目录失败及慢打开注入仅在 Linux 执行；两路日志里都有 `log rotation mkdir failure kept process PASS`。两路 `rpc-ingress` 都有 `registry publish failure released listen PASS`。
+Windows 频率为 CIM `CurrentClockSpeed` 报告值；WSL 频率为 `/proc/cpuinfo` 的 `cpu MHz`，均不是运行期连续采样。耗时含配置和编译，取并行矩阵打印的秒数。四路测试前后按各自归属清理。
 
 ## 显式用例
 

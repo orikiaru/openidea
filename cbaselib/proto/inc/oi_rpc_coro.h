@@ -382,6 +382,7 @@ struct [[nodiscard]] RpcCallAwaiter
 			return;
 		}
 		bDispatched = true;
+		iTimeoutMilliseconds = NormalizeRpcTimeoutMilliseconds(iTimeoutMilliseconds);
 		iResult = ::OI::Net::Poll::GetInstance().CheckThreadAccess("RpcCall::Dispatch");
 		if (iResult != OI_OK)
 		{
@@ -649,7 +650,7 @@ auto RpcCall(RpcSender& stManager, Req stRequest,
 {
 	return {stManager.Manager(), INVALID_SID, std::move(stRequest), stTimeout, &stManager};
 }
-// 同一调用的查询、建连和回包共享单调时钟预算。非正值保持无限 RPC 等待语义。
+// 同一调用的查询、建连和回包共享单调时钟预算。非正值打错误日志并按 30 秒计。
 struct RpcDeadline
 {
 	int64_t iDeadlineMilliseconds = 0;

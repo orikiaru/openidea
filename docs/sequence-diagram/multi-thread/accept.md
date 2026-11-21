@@ -1,6 +1,10 @@
 # 接入一条连接
 
-可读发生在 poll 线程。新连接的读事件在这次回调里当场挂上。`OnAddSession` 里的 `StartTask` 把句柄放进工人队列，工人可以在这次回调返回前就开始 `resume`。
+可读或可写发生在 poll 线程。可写的 `DataOut` 直接转 `DataIn`。新连接只注册读，也在这次回调里当场 `uv_poll_start`。`OnAddSession` 里的 `StartTask` 放进工人队列。有空闲工人时，可以在这次回调返回前就 resume。
+
+`EAGAIN` 和 `EINPROGRESS` 让 `SocketAcceptOne` 返回 0，外层循环结束。`EINTR`、`ECONNABORTED`、`EPROTO` 在 `SocketAcceptOne` 内部继续，不回到外层。返回 -1 时 `PauseEvents(this, 100)`，停 100 毫秒再恢复，避免描述符用尽时空转。意料外的 errno 会先打日志；还没 listen 这类检查失败也是 -1，不打这行日志。
+
+注册新连接失败时关掉这个 fd 并释放会话，`SocketAcceptOne` 仍返回 1，外层继续收。
 
 ```mermaid
 sequenceDiagram
@@ -16,28 +20,25 @@ sequenceDiagram
 
     Poll->>Uv: uv_run
     Uv->>Acc: DataIn
-    loop 直到 SocketAcceptOne 返回 0
+    loop 直到返回 0 或 -1
         Acc->>Help: SocketAcceptOne
         alt accept 拿到 fd
             Help->>Mgr: AddSession 新 fd
             Mgr->>Sess: CloneSession
             Mgr->>Tcp: new TCP_Channel
-            Mgr->>Poll: 只注册读，回调里当场 uv_poll_start
+            Mgr->>Poll: 只注册读，当场 uv_poll_start
             Mgr->>Mgr: 分配 sid 放进表
             Mgr->>Mgr: OnAddSession
             opt OnAddSession 里 StartTask
                 Mgr->>Worker: PostCoroutine
-                Worker->>Worker: resume
+                Note over Worker: 有空闲工人时，回调返回前就可能 resume
             end
             Help-->>Acc: 1 接着取
-        else EAGAIN
-            Help-->>Acc: 0 退出循环
-        else 其他错误
-            Help-->>Acc: -1 打日志后 assert
+        else EAGAIN 或 EINPROGRESS
+            Help-->>Acc: 0 结束循环
+        else 返回 -1
+            Help-->>Acc: -1
+            Acc->>Poll: PauseEvents(this, 100) 然后跳出
         end
     end
 ```
-
-`EINTR` 在 `SocketAcceptOne` 里面重试，不回到这层循环。
-
-对端关掉或读出错时，先把已经读到的字节交给 `OnDataIn`，再 `PassiveClose`。

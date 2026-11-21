@@ -2,6 +2,8 @@
 
 单线程没有第二条线程。`Poll::Init` 在主线程上准备循环并挂上 tick。`StartWork` 进入主循环之后不再返回。
 
+`Poll::Init` 一进来就 `BlockingWorkSessionManager::GetInstance()`，构造阻塞会话管理器，并 `InitializeBlockingPools`。工作线程和本地会话都不在这一步创建。
+
 ```mermaid
 sequenceDiagram
     autonumber
@@ -18,6 +20,7 @@ sequenceDiagram
     Main->>Timer: Init
     Note over Timer: 循环还没准备好，ArmTick 只记下 offset_ms 和 OnLoopTick
     Main->>Poll: Init
+    Poll->>Poll: GetInstance 构造 BlockingWorkSessionManager
     Poll->>Poll: 记下主线程为 poll 线程
     Poll->>Poll: PrepareLoop
     Poll->>Poll: StartTickOnLoop

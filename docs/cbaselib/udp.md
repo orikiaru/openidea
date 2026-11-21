@@ -1,6 +1,6 @@
 # UDP
 
-组件配置 `type = "udp"`。绑定通道是唯一调用 `recvfrom` 的通道，绑定后还没有会话。每个对端地址出现时才建一条会话及其发送通道；每条发送通道持有由绑定套接字复制的独立描述符，因此源端口一致。业务发送时通过会话号（sid）选择对端。业务仍走 `Session` 和 RPC，不自己 `recvfrom` / `sendto`。标准例子是 [`IpcUdp`](../../modules/ipcserver/inc/ipcudp.h#L11)。
+组件配置 `type = "udp"`。绑定通道是唯一调用 `recvfrom` 的通道，绑定后还没有会话。每个对端地址出现时才建一条会话及其发送通道；每条发送通道持有由绑定套接字复制的独立描述符，因此源端口一致。业务发送时通过会话号（sid）选择对端。业务仍走 `Session` 和 RPC，不自己 `recvfrom` / `sendto`。标准例子是 [`IpcUdp`](../../modules/ipcserver/inc/ipcudp.h#L11)。时序见 [单线程](../sequence-diagram/single-thread/udp.md) 和 [多线程](../sequence-diagram/multi-thread/udp.md)。
 
 ## 接口
 

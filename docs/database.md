@@ -1,6 +1,6 @@
 # 数据库客户端
 
-数据库接口位于 `OI::Db`，MySQL 驱动位于 `OI::Mysql`。`Client::Call` 和 `Client::Transaction` 返回 `OI::Coro::TaskResult<int32_t>`；在协程中逐条 `co_await` 并检查返回码。底层同步 SDK 在分类阻塞池中执行，等待期间 poll 可继续处理事件。
+数据库接口位于 `OI::Db`，MySQL 驱动位于 `OI::Mysql`。`Client::Call` 和 `Client::Transaction` 返回 `OI::Coro::TaskResult<int32_t>`；在协程中逐条 `co_await` 并检查返回码。底层同步 SDK 在分类阻塞池中执行，等待期间 poll 可继续处理事件。时序见 [单线程](sequence-diagram/single-thread/database.md) 和 [多线程](sequence-diagram/multi-thread/database.md)。
 
 ## 构建与初始化
 

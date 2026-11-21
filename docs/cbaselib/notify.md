@@ -6,6 +6,8 @@
 
 `ProtoMultiClientManager::NotifyAll` 按这一刻的名单给每台各启动一条，`NotifyMany` 只发指定实例，名单里没有的跳过；两者返回启动了几条。`RouteManager` 的四个 `Notify` 返回 `OI_OK`。`Notify(名字, 分区号, msg)` 在分区号为负时同步返回 `OI_ERR_FAIL`，不启动任务。不存在的服务或分区由协程任务错误处理器报告，路由失败映射为 `OI_ERR_CONNECT`（`RouteCall::Error` 的 default）。
 
+时序见 [单线程](../sequence-diagram/single-thread/notify.md) 和 [多线程](../sequence-diagram/multi-thread/notify.md)。
+
 ## 接口
 
 | 用途 | 声明 |

@@ -302,6 +302,7 @@ void RegistryClient::CallRegistry(const Req& stRequest, int64_t iTimeoutMillisec
 {
 	using Res = typename ::OI::Rpc::RpcProtoId<Req>::Response;
 	static_assert(::OI::Rpc::RpcProtoId<Req>::iValue == ::OI::Rpc::RpcProtoId<Res>::iValue);
+	iTimeoutMilliseconds = ::OI::Rpc::NormalizeRpcTimeoutMilliseconds(iTimeoutMilliseconds);
 	struct State
 	{
 		int32_t iCode = OI_ERR_FAIL;

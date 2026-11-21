@@ -71,6 +71,10 @@ struct RpcDelivery
 };
 using RpcHandleFn = std::function<void(::OI::Base::BytesStream&, RpcDelivery&&)>;
 
+// 调用方给出的超时不是正数时，打错误日志并改用 30 秒。省略参数仍走各接口自己的默认 180 秒。
+constexpr int64_t kFallbackRpcTimeoutMilliseconds = 30000;
+int64_t NormalizeRpcTimeoutMilliseconds(int64_t iTimeoutMilliseconds);
+
 // 分片逐个取快照，用于诊断；有并发请求时不保证全局同一时刻的一致性。
 struct RpcWaitStats
 {

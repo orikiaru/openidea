@@ -4,6 +4,8 @@
 
 ## 1. 分层
 
+类怎么继承、谁持有谁，见 [框架类图](class-diagram.md)。
+
 - Channel 是读写层：tcp、udp、unix、fifo 只管收发字节。Session 是协议层：拆包、反序列化、序列化。业务代码不碰裸包，不自己拆包头，不自己 `recvfrom` / `sendto`。
 - 会话管理器（`ProtoSessionManager`、`ProtoClientManager` 组件）只管会话和协议转发。流程是：协议进来，转给逻辑 mgr，mgr 处理，填回包并返回错误码。
 - 逻辑 mgr 管一类实体的集合：加载、缓存、保存、读配置。实体自己的操作写在实体类里。例：`RoomServer` 把协议转给 `RoomMgr`，`RoomMgr` 取出 `Room`，具体操作在 `Room` 里。
