@@ -60,6 +60,21 @@ class EchoCase(Case):
         assert "pure virtual" not in output and "terminate called" not in output, output
         assert "ipc server listen" not in output, output
         print("rpc init error startup failure PASS", flush=True)
+        publish_config = ctx.cfg / "ipcserver-publish-fail.toml"
+        publish_text = (ctx.cfg / "ipcserver.toml").read_text(encoding="utf-8")
+        publish_text = publish_text.replace('name = "ipcserver"', 'name = "ipc.server"', 1)
+        publish_config.write_text(publish_text, encoding="utf-8")
+        publish, publish_path = ctx.start("ipcserver-publish-fail", [str(ctx.work / ("ipcserver" + SUFFIX)), str(publish_config)])
+        publish.wait(timeout=15)
+        ctx.procs.remove(publish)
+        output = publish_path.read_text(encoding="utf-8", errors="replace")
+        # 监听成功后登记名字非法。退出码是 OI_ERR_INVALID_ARGUMENT。随后的正式 ipcserver 还要绑上同一端口。
+        expected_publish = (0x100000000 - 6) & 0xFFFFFFFF if WINDOWS else (256 - 6)
+        assert publish.returncode == expected_publish, "publish failure exit code=%s\n%s" % (publish.returncode, output)
+        assert "IpcServer StartServer failed: code=-6" in output, output
+        assert 'registry publish name="ipc.server"' in output, output
+        assert "ipc server listen" not in output, output
+        print("registry publish failure released listen PASS", flush=True)
 
     def scenario(self, ctx):
         case = ctx.name

@@ -31,15 +31,20 @@ sequenceDiagram
             alt 是登记过的回包号
                 Rpc->>Rpc: 读出调用号
                 alt 等待表里还有这一号且协议号相符
-                    Rpc->>Wait: 取走槽位并留下包体
+                    Rpc->>Wait: FinishSlot 在 poll 线程解开回包
                     Wait->>Queue: Schedule
-                    Note over Queue: 下一轮主循环才 resume，解包仍在主线程
+                    Note over Queue: 解包在这一轮 Deliver 里完成，下一轮才 resume
                 else 已经取走或协议号不符
                     Rpc->>Rpc: 丢掉，或按 OI_ERR_FAIL 放回队列
                 end
             else 是请求且注册了处理函数
-                Rpc->>Queue: StartTask 只入队
-                Note over Queue: 下一轮才跑处理协程
+                Note over Rpc: Deliver 的处理函数在 poll 线程解开请求
+                alt 解开
+                    Rpc->>Queue: StartTask 只入队
+                    Note over Queue: 下一轮才跑处理协程
+                else 解不开
+                    Rpc->>Rpc: 调用号非 0 失败回执，调用号 0 不回包，不启动协程
+                end
             else 没有等待者也没有处理函数
                 Rpc->>Rpc: 丢掉这一包
             end

@@ -285,10 +285,13 @@ size_t TlsSession::SendCapacity()
 	return iQueuedBytes < iMaxSendQueueBytes ? iMaxSendQueueBytes - iQueuedBytes : 0;
 }
 
-void TlsSession::OnBytesSend(size_t iBytes)
+void TlsSession::PostDrain()
 {
-	Session::OnBytesSend(iBytes);
-	if (!m_pTls || !m_pTls->HasPending() || m_bFlushPosted)
+	if (m_bFlushPosted || m_bEnded || IsClosed() || !m_pTls)
+	{
+		return;
+	}
+	if (!m_pTls->HasPending() && m_sPending.empty())
 	{
 		return;
 	}
@@ -306,18 +309,43 @@ void TlsSession::OnBytesSend(size_t iBytes)
 			}
 		} stGuard{pSession};
 		pSession->m_bFlushPosted = false;
-		if (!pSession->IsClosed() && !pSession->m_bEnded)
-		{
-			const int32_t iCode = pSession->m_pTls->Flush(*pSession);
-			if (iCode != OI_OK)
-			{
-				pSession->m_bEnded = true;
-				pSession->OnTransportEnd(iCode, pSession->TransportError());
-			}
-		}
+		pSession->DrainOutbound();
 	};
 	m_stFlushCall.pArgument = this;
 	Poll::GetInstance().PostOnLoop(m_stFlushCall);
+}
+
+void TlsSession::DrainOutbound()
+{
+	if (IsClosed() || m_bEnded || !m_pTls || !m_pTls->Error().empty())
+	{
+		return;
+	}
+	int32_t iCode = m_pTls->Flush(*this);
+	if (iCode != OI_OK)
+	{
+		m_bEnded = true;
+		OnTransportEnd(iCode, TransportError());
+		return;
+	}
+	// 密文还占着 BIO 时不能再塞明文，等下一次写出后续上。
+	if (m_pTls->HasPending() || !TransportReady() || m_sPending.empty())
+	{
+		return;
+	}
+	std::string sPending = std::move(m_sPending);
+	iCode = m_pTls->Write(*this, sPending);
+	if (iCode != OI_OK)
+	{
+		m_bEnded = true;
+		OnTransportEnd(iCode, TransportError());
+	}
+}
+
+void TlsSession::OnBytesSend(size_t iBytes)
+{
+	Session::OnBytesSend(iBytes);
+	PostDrain();
 }
 
 bool TlsSession::TransportReady() const
@@ -387,14 +415,15 @@ int32_t TlsSession::SendResult(const Base::Bytes& stBytes)
 			return OI_ERR_BUSY;
 		}
 	}
-	if (!TransportReady())
+	if (!TransportReady() || m_pTls->HasPending())
 	{
+		// 明文已计入额度。握手未完成，或上一程密文还没入队时，先收下，避免调用方把 BUSY 当成失败拆连接。
 		m_sPending.append(stBytes.Data(), stBytes.Size());
+		if (m_pTls->HasPending())
+		{
+			PostDrain();
+		}
 		return OI_OK;
-	}
-	if (m_pTls->HasPending())
-	{
-		return OI_ERR_BUSY;
 	}
 	return m_pTls->Write(*this, {stBytes.Data(), stBytes.Size()});
 }

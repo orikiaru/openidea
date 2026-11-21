@@ -72,7 +72,7 @@ Redis 连不上或卡住时，登记和续期回失败，客户端下一次心�
 
 不能从框架里删。一个监听进程上同时有多条连接，回包、断连、Redis 把命令转回哪个客户端，都靠 `SessionManager::SendBytes(sid)` 这张表区分。
 
-客户端本来就是一条连接一个 `iSessionId`。业务里的 `RpcCall(mgr, sid, ...)` 可以收成按服务名调用，sid 留在管理器内部。服务端处理函数如果只填回包，签名里也可以不再出现 sid；`RunHandledRpc` 发回包时自己还拿着它。`redisserver` 的 `Issue` / `OnReply` 把 sid 当成「这条客户端连接」用，这块拿不掉。
+客户端本来就是一条连接一个 `iSessionId`。业务里的 `RpcCall(mgr, sid, ...)` 可以收成按服务名调用，sid 留在管理器内部。服务端处理函数如果只填回包，签名里也可以不再出现 sid；`RpcHandlerBuilder::Run` 回包时仍拿着这次的 sid。`redisserver` 的 `Issue` / `OnReply` 把 sid 当成「这条客户端连接」用，这块拿不掉。
 
 同一服务名有多份实例时，靠下面的全局服和分区服区分，不是把 sid 删掉。
 
@@ -88,6 +88,8 @@ Redis 连不上或卡住时，登记和续期回失败，客户端下一次心�
 | `Call(名字, 分区号, req, res)` | 打这个分区里实例号最小的一台。全局服不接受分区号。分区号为负返回 `OI_ERR_FAIL`，不发请求。 |
 | `CallAll<Res>(名字, req)` | 协程挂起读本地缓存，没拉到过就等下一次秒更新，再同时发给每一份。等待不占线程，上限 min(剩余预算, 3000ms)。结果按实例号升序；选路失败时只有一格。 |
 | `CallMany<Res>(名字, 分区号列表, req)` | 只打 `vector<int32_t>` 里的这些分区，结果数量、顺序始终和列表一致，重复分区也保留。没登记的那一格是 `OI_ERR_CONNECT`。选路超时等整体错误填入每一格；负数分区号、全局服带分区号每格为 `OI_ERR_FAIL`。空列表返回空结果。 |
+
+路由上的单向消息和上面四个调用对应，默认超时 180 秒：`Notify(名字, msg)` 任选一台，`Notify(名字, 分区号, msg)` 指定分区，`NotifyAll(名字, msg)` 发给这一刻名单里的每一台，`NotifyMany(名字, 分区号列表, msg)` 只发这些分区。返回 `OI_OK` 只表示任务已启动。分区号为负同步返回 `OI_ERR_FAIL`，不启动任务。选路、发送或回执失败由协程任务错误处理器报告（`OI::Coro::ReportTaskError` / `OI::Coro::SetTaskErrorHandler`）。不存在的服务或分区走这条路径，路由失败映射为 `OI_ERR_CONNECT`。这些连接是 `PeerConnection`，断线后还没发出的通知先暂存，重连成功再补发。
 
 登记时标明自己是全局还是分区。全局服拒绝带分区号的调用，避免把一封信送到另一类进程上。
 
@@ -117,8 +119,10 @@ Redis 连不上或卡住时，登记和续期回失败，客户端下一次心�
 | `CallAll<Res>(req)` | 按发送这一刻的名单每台一份，先全部发出再等。结果按实例号升序，每格带 `iInstanceId`。 |
 | `NotifyPeer(实例号, msg)` | 向指定实例启动异步通知，名单里没有返回 `OI_ERR_CONNECT`，未连接时暂存并重连。 |
 | `NotifyAny(msg)` | 选路同 `CallAny`，名单为空返回 `OI_ERR_CONNECT`。 |
+| `NotifyAll(msg)` | 按这一刻的名单给每台各启动一条，返回启动了几条。线程不对返回错误码。未连接时暂存并重连。 |
+| `NotifyMany(实例号列表, msg)` | 只发这些实例，名单里没有的跳过，返回启动了几条。线程不对返回错误码。未连接时暂存并重连。 |
 
-通知复制消息并启动任务，通过现有 RPC 路径发送，默认超时 180 秒。返回 `OI_OK` 仅表示任务已启动，不代表对端收到；发送、回执或超时失败由任务错误处理器报告。
+通知复制消息并启动任务，通过现有 RPC 路径发送，默认超时 180 秒。`NotifyPeer`、`NotifyAny` 返回 `OI_OK`，`NotifyAll`、`NotifyMany` 返回启动了几条；这些返回值只表示任务已启动，不代表对端收到。发送、回执或超时失败由 `OI::Coro::ReportTaskError` 交给 `OI::Coro::SetTaskErrorHandler`。
 
 服务端推下来的消息登记在接收它的管理器上：自己的 `Init` 里写 `RegisterNotifyHandler(&类::成员)`，别处写 `管理器.RegisterNotifyHandler(&类::成员)`。成员函数里的 `this` 就是这个管理器。`InstanceIds()` 给当前名单，`ConnectedSid(实例号)` 给这台当前的会话，`IsConnect()` 表示至少有一台连着。
 

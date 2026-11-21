@@ -185,12 +185,22 @@ int gettimeofday(struct timeval *tv, void *tz)
                     config.write_text(replace(config.read_text(encoding="utf-8"), "root_path",
                                               '"' + failure_root.as_posix() + '"'), encoding="utf-8")
                     failed_logd, failed_path = ctx.start("logd", env=ctx.log_env)
+                    deadline = time.monotonic() + 10
+                    failure = ""
+                    while time.monotonic() < deadline:
+                        failure = failed_path.read_text(encoding="utf-8", errors="replace")
+                        if "logd mkdir failed:" in failure and "logd rotate open failed:" in failure:
+                            break
+                        if failed_logd.poll() is not None:
+                            break
+                        time.sleep(0.05)
+                    assert failed_logd.poll() is None, failure
+                    assert "logd mkdir failed:" in failure and "logd rotate open failed:" in failure, failure
+                    ctx.stop(failed_logd)
                     failed_logd.wait(timeout=10)
                     ctx.procs.remove(failed_logd)
-                    failure = failed_path.read_text(encoding="utf-8", errors="replace")
-                    assert failed_logd.returncode != 0, failure
-                    assert "logd mkdir failed:" in failure and "logd rotate open failed:" in failure, failure
-                    print("log rotation mkdir failure detected PASS", flush=True)
+                    assert failed_logd.returncode == 0, failure
+                    print("log rotation mkdir failure kept process PASS", flush=True)
 
                     # Pause only the writer's new-day fopen, then make the
                     # log server accept and reject a malformed frame.

@@ -71,9 +71,9 @@ RPC 帧在 IO 线程按读取上限原地解码；嵌套结构和容器复用同
 
 在 `rpc.proto` 增加请求和回复两个 `rpcdata`，字段号自己写上。`rpc` 放在文件最后，一行一条，请求和回复共用一个协议号。调用号最高位是 1 表示请求，回包清掉这一位。数据库行写进 `db.proto`，JSON 样例写进 `json.proto`。
 
-服务端在组件 `Init` 里 `RegisterRpcHandler`，客户端在连上之后 `co_await RpcCall`。写法见 [协程](coroutine.md)。
+服务端在组件 `Init` 里 `RegisterRpcHandler`。平时客户端 `co_await RouteManager::Call`，见 [服务注册](registry.md) 和 [协程](coroutine.md)。
 
-现成例子是 `AllEcho`：`ipcserver` 的同步处理函数 `HandleAllEcho` 把 `stData` 抄进回复并写 `iCode = 1`，`ipcclient` 连上后用 `Call` 按条发出去并核对回复。`Hold` 用来看超时和回包同时到：服务端 `co_await OI::Coro::yield(stRequest.iDelayMilliseconds)` 再回，客户端按调用号认这一次。按服务名打一台或一批见 [服务注册](registry.md)。
+现成的服务端是 `AllEcho`：`ipcserver` 的同步处理函数 `HandleAllEcho` 把 `stData` 抄进回复并写 `iCode = 1`。`ipcclient` 的回声用 `IpcClient::Call` 打固定连接，那是回归里的直连，业务调用不要照抄。`Hold` 用来看超时和回包同时到：服务端 `co_await OI::Coro::yield(stRequest.iDelayMilliseconds)` 再回，客户端按调用号认这一次。
 
 ## ipcclient 的测试开关
 

@@ -7,8 +7,8 @@ alwaysApply: false
 
 先读 `docs/coroutine.md` 的服务端、客户端。请求和回包体都以 8 字节调用号开头。回包、超时、发送失败只有一个会把协程 `Schedule` 回来。调用号已经取走的回包丢掉，不配给下一次。
 
-时长参数是 `OI::Timer::MS`，默认 `Seconds(180)`。超时统一使用带单位的时长类型，不接受裸整数秒。200 毫秒扫一次队头，按毫秒分桶，不走时间轮。`GetRet() == 0` 是成功回包，`OI_ERR_TIMEOUT` 是已经发出之后超时，`OI_ERR_CONNECT` 是没连上或断连，`OI_ERR_FAIL` 是发送或解包失败。
+时长参数是 `OI::Timer::MS`，默认 `Seconds(180)`。超时统一使用带单位的时长类型，不接受裸整数秒。超时由 `RpcCallManager::OnTickUpdate` 每跳扫描，按 200 毫秒刻度分桶，桶内用精确截止时间；精度取决于时间轮一跳（`offset_ms`），不另挂定时器扫队头。`GetRet() == 0` 是成功回包，`OI_ERR_TIMEOUT` 是已经发出之后超时，`OI_ERR_CONNECT` 是没连上或断连，`OI_ERR_FAIL` 是发送或解包失败。请求在 poll 线程解开后再进处理协程，回包在 poll 线程解开后再唤醒等待方。
 
-按服务名用 `RouteManager::GetInstance()` 的 `Call`、`CallAll`、`CallMany`，见 `docs/registry.md`。同名多台直连才用 `ProtoMultiClientManager` 的 `CallAny`。`CallAll` 和 `CallMany` 先 `Submit` 再等。
+平时按服务名调用：`RouteManager::GetInstance().Call(服务名, 请求, 回复, 时长)`，指定分区再传分区号，见 `docs/registry.md`。`CallAll` 和 `CallMany` 先全部发出再等。直连 `ProtoClientManager::Call`、`RpcCall(管理器, sid, ...)` 只用于有状态的对端，例如玩家连接；回归里的 `IpcClient` 不要当业务范例。同名多台要自己握着每条连接时用 `ProtoMultiClientManager`。单向消息平时用 `RouteManager::Notify`，见 `docs/cbaselib/notify.md`。
 
 服务端注册用 `RegisterRpcHandler(处理函数)`，类型从形参推出，见 `modules/ipcserver/src/ipcserver.cpp` 的 `AllEcho`。要推迟回包用同文件的 `Hold`：`co_await OI::Coro::yield(stRequest.iDelayMilliseconds)` 再写 `stResponse`。

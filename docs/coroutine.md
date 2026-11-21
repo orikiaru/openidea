@@ -91,7 +91,7 @@ RegisterRpcHandler([](const ::OI::RpcData::AllEchoReq& stRequest, ::OI::RpcData:
 
 ## 客户端
 
-连接建立后用 `StartTask` 拉起任务，任务里 `co_await RpcCall`。等待键是每次调用新分配的调用号。等待表、调用号和在途额度都在单例 `RpcCallManager` 里，按调用号分片加锁。回包、超时或发送失败只有一个会把这条协程 `Schedule` 回来。迟到的回包发现调用号已经取走，就丢掉，不会配给下一次调用。
+平时在任务里 `co_await RouteManager::Call(服务名, 请求, 回复, 时长)`，不传会话号。直连 `RpcCall(管理器, sid, ...)` 只用于有状态的对端，例如玩家连接。等待键是每次调用新分配的调用号。等待表、调用号和在途额度都在单例 `RpcCallManager` 里，按调用号分片加锁。回包、超时或发送失败只有一个会把这条协程 `Schedule` 回来。迟到的回包发现调用号已经取走，就丢掉，不会配给下一次调用。
 
 回包在 IO 线程按帧边界解到等待器私有对象，协程恢复后成功才交给调用方的输出；解包失败返回 `OI_ERR_FAIL`，不覆盖输出。
 
@@ -104,12 +104,14 @@ OI::Coro::StartTask([n](OI::Coro::Token) {
     return RunOne(n);
 });
 
-int ret = co_await RpcCall(mgr, sid, req, res);
+int ret = co_await OI::Rpc::RouteManager::GetInstance().Call("gameserver", req, res, OI::Timer::Seconds(3));
 ```
 
-`ret == OI_OK` 是服务端返回成功且响应已解出，`OI_ERR_TIMEOUT` 是超时，`OI_ERR_CONNECT` 是连接失败或连接断开，`OI_ERR_FAIL` 是发送失败或解包失败。这条会话还没建立过时，调用先挂起，后面的调用按顺序堆着；连上后补发。连接失败，或在连上之前超时，直接返回 `OI_ERR_CONNECT`。已经连上之后的超时仍是 `OI_ERR_TIMEOUT`。等待绑定管理器、会话和回复协议号；其他连接的回包不会消费等待项。断连时框架自动结束该连接的 RPC，不需要业务额外清理。
+`ret == OI_OK` 是服务端返回成功且响应已解出，`OI_ERR_TIMEOUT` 是已经发出之后超时，`OI_ERR_CONNECT` 是没连上或断连，`OI_ERR_FAIL` 是发送失败或解包失败。
 
-新代码可直接取得结果，请求由等待对象按值持有：
+直连和显式会话才有下面这套排队。这条会话还没建立过时，调用先挂起，后面的调用按顺序堆着；连上后补发。连接失败，或在连上之前超时，直接返回 `OI_ERR_CONNECT`。已经连上之后的超时仍是 `OI_ERR_TIMEOUT`。等待绑定管理器、会话和回复协议号；其他连接的回包不会消费等待项。断连时框架自动结束该连接的 RPC，不需要业务额外清理。已经连过再断线，这次调用直接失败，不暂存。
+
+不带输出、得到 `RpcResult` 的重载先留着，平时不用。下面是显式会话上的这种写法，请求由等待对象按值持有：
 
 ```cpp
 auto result = co_await RpcCall<AllEchoRes>(mgr, sid, req, OI::Timer::Seconds(10));
@@ -182,7 +184,7 @@ RPC 超时由 `RpcCallManager::OnTickUpdate` 每跳扫描，计时用 `OI::Timer
 
 ```cpp
 OI::RpcData::HoldRes stResponse;
-const int32_t iRet = co_await stClient.Call(stRequest, stResponse, OI::Timer::Seconds(3));
+const int32_t iRet = co_await OI::Rpc::RouteManager::GetInstance().Call("gameserver", stRequest, stResponse, OI::Timer::Seconds(3));
 if (iRet != 0)
 {
     co_return iRet;
@@ -190,7 +192,7 @@ if (iRet != 0)
 // 此处直接使用 stResponse。
 ```
 
-`ProtoClientManager::Call(req, res, duration)` 使用这个客户端自己的连接。按服务名走 `RouteManager::Call(sName, req, res, duration)`，指定分区走 `RouteManager::Call(sName, iZoneId, req, res, duration)`。自由函数 `RpcCall(client, req, res, duration)` 打这台客户端的连接；显式会话用 `RpcCall(manager, sid, req, res, duration)`。这些单次接口都不需要显式响应模板参数。同名多台直连用 `ProtoMultiClientManager`：`Call(实例号, req, res)`、`CallAny(req, res)`、`CallMany<Res>(实例号列表, req)`、`CallAll<Res>(req)`。命名接口从入口保存单调时钟截止时间，读本地缓存、连接前排队和回包共用剩余预算；预算用尽后不再发送请求。还没拉到过时，最多再等 min(剩余预算, 3000ms)，等下一次 `OnSecondUpdate` 把名单写入缓存；非正 RPC 时长不限制回包等待，但这段缓存等待仍按最多 3000ms 封顶。实际唤醒仍受时间轮/调度粒度影响。
+上面是平时的写法。`ProtoClientManager::Call(req, res, duration)` 使用这个客户端自己的连接，只用于有状态的对端，例如玩家连接。按服务名走 `RouteManager::Call(sName, req, res, duration)`，指定分区走 `RouteManager::Call(sName, iZoneId, req, res, duration)`。自由函数 `RpcCall(client, req, res, duration)` 打这台客户端的连接；显式会话用 `RpcCall(manager, sid, req, res, duration)`。这些单次接口都不需要显式响应模板参数。同名多台直连用 `ProtoMultiClientManager`：`Call(实例号, req, res)`、`CallAny(req, res)`、`CallMany<Res>(实例号列表, req)`、`CallAll<Res>(req)`。命名接口从入口保存单调时钟截止时间，读本地缓存、连接前排队和回包共用剩余预算；预算用尽后不再发送请求。还没拉到过时，最多再等 min(剩余预算, 3000ms)，等下一次 `OnSecondUpdate` 把名单写入缓存；非正 RPC 时长不限制回包等待，但这段缓存等待仍按最多 3000ms 封顶。实际唤醒仍受时间轮/调度粒度影响。
 
 可以先保存任务、后等待，也可以将任务按值交给多个协程等待：请求只发一次、响应只写一次，重复等待返回保存的状态码，不会再次修改响应。协程内跨挂起点使用的局部响应在协程帧中存活。响应和管理器必须覆盖任务的执行期，**丢弃任务对象不会取消请求**，因此输出引用版必须等待完成再离开响应作用域；不能把同一响应交给多个独立请求并发写。请求创建后可修改或销毁原值；大请求可以 `std::move` 移交。
 
@@ -299,6 +301,10 @@ int32_t IpcUdp::Init()
 单向消息处理函数返回 `OI::Rpc::RpcTask`。自由函数或 lambda 在接收该连接的管理器上写 `RegisterNotifyHandler(fn)`，成员函数写 `RegisterNotifyHandler(&IpcUdp::HandleNote)`。形参是 `(stMessage)` 或 `(const RpcContext&, stMessage)`。成员函数的类检查、重复登记与 `RegisterRpcHandler` 相同。带 `auto` 形参写 `RegisterNotifyHandler<Msg>(fn)`。生成器要求每条 rpc 都写 response。调用号为 0 时处理返回码不发回对端，服务端执行额度满时直接丢弃，不回 `OI_ERR_BUSY`。
 
 `ProtoMultiClientManager` 的 `NotifyPeer` 和 `NotifyAny` 复制消息并启动异步 RPC 任务，复用协议号和连接的暂存、重连路径，默认超时 180 秒。返回 `OI_OK` 只表示任务已启动，发送、回执或超时失败由任务错误处理器报告。接收端需使用带 RPC 适配的新版 `RegisterNotifyHandler`：对非零调用号回传处理返回码，成功时附带默认构造的关联 response；执行额度满时返回 `OI_ERR_BUSY`。旧版只处理调用号 0 的接收端不会为包装通知回包，发送任务会等待到超时。
+
+`NotifyAll` 按这一刻的名单给每台各启动一条，`NotifyMany` 只发指定实例，名单里没有的跳过。两者返回启动了几条，线程不对返回错误码。这个条数只表示任务已启动。断线后走 `PeerConnection` 暂存，重连成功再补发。失败由 `OI::Coro::ReportTaskError` 交给 `OI::Coro::SetTaskErrorHandler`。
+
+`RouteManager::Notify(名字, msg)` 任选一台，`Notify(名字, 分区号, msg)` 指定分区，`NotifyAll(名字, msg)` 发给这一刻名单里的每一台，`NotifyMany(名字, 分区号列表, msg)` 只发这些分区。返回 `OI_OK` 只表示任务已启动。分区号为负同步返回 `OI_ERR_FAIL`，不启动任务。不存在的服务或分区由协程任务错误处理器报告，路由失败映射为 `OI_ERR_CONNECT`。路由连接断线后同样先暂存，重连成功再补发。
 
 定时器回调和停止回调抛异常时，交给 `OI::Thread::SetTaskErrorHandler`，默认输出 stderr。处理器自身抛异常也不会穿透调用方。服务端响应编码失败会丢弃半包，重新发送 `OI_ERR_FAIL` 的无响应体回执；无法编码或发送失败回执时关闭连接，避免调用方只靠超时发现错误。
 

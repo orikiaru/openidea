@@ -1,18 +1,31 @@
 # 单向消息
 
-普通 `Notify` 使用调用号 0，不登记等待，不回包。`ProtoMultiClientManager` 的 `NotifyPeer` 和 `NotifyAny` 则复用相同协议号，启动异步 RPC 任务并等待回执，默认超时 180 秒。任务持有消息副本；返回 `OI_OK` 只表示任务已启动，不代表对端收到，发送、回执或超时失败由任务错误处理器报告。
+普通 `Notify` 使用调用号 0，不登记等待，不回包。`ProtoClientManager::Notify`、`ProtoMultiClientManager` 的 `NotifyPeer` / `NotifyAny` / `NotifyAll` / `NotifyMany`，以及 `RouteManager` 的四个 `Notify`，复用同一协议号，复制消息并启动异步 RPC 任务，等待回执，默认超时 180 秒。返回 `OI_OK` 或启动条数只表示任务已启动，不代表对端收到。发送、回执或超时失败由 `OI::Coro::ReportTaskError` 交给 `OI::Coro::SetTaskErrorHandler`。线程不对时这些接口同步返回错误码，不启动任务。
+
+`ProtoClientManager::Notify` 只在第一次连上前暂存。已经连过再断线，`SubmitCall` 得到 `OI_ERR_CONNECT` 后直接失败，不暂存、不补发。`ProtoMultiClientManager` 和 `RouteManager` 走 `PeerConnection`：当前没连上，包括断线之后，还没发出的通知先暂存，重连成功再补发。
+
+`ProtoMultiClientManager::NotifyAll` 按这一刻的名单给每台各启动一条，`NotifyMany` 只发指定实例，名单里没有的跳过；两者返回启动了几条。`RouteManager` 的四个 `Notify` 返回 `OI_OK`。`Notify(名字, 分区号, msg)` 在分区号为负时同步返回 `OI_ERR_FAIL`，不启动任务。不存在的服务或分区由协程任务错误处理器报告，路由失败映射为 `OI_ERR_CONNECT`（`RouteCall::Error` 的 default）。
 
 ## 接口
 
 | 用途 | 声明 |
 | --- | --- |
-| 管理器按 sid 发送 | [`ProtoSessionManager::Notify`](../../cbaselib/proto/inc/oi_rpc_session_manager.h#L76) |
-| 发回这次请求的会话 | [`RpcContext::Notify`](../../cbaselib/proto/inc/oi_rpc_coro.h#L52) |
-| 用这次请求的管理器发给另一条会话 | [`RpcContext::Notify`](../../cbaselib/proto/inc/oi_rpc_coro.h#L58) |
-| UDP 地址换成 sid | [`OpenPeer`](../../cbaselib/net/inc/oi_session_manager.h#L155) |
-| 客户端当前会话 | [`ConnectedSid`](../../cbaselib/proto/inc/oi_rpc_session_manager.h#L140) |
-| 从形参推出，含成员函数 | [`RegisterNotifyHandler`](../../cbaselib/proto/inc/oi_rpc_coro.h#L368) |
-| 显式消息类型 | [`RegisterNotifyHandler`](../../cbaselib/proto/inc/oi_rpc_coro.h#L350) |
+| 管理器按 sid 发送 | [`ProtoSessionManager::Notify`](../../cbaselib/proto/inc/oi_rpc_session_manager.h#L164) |
+| 直连这一条连接 | [`ProtoClientManager::Notify`](../../cbaselib/proto/inc/oi_rpc_session_manager.h#L259) |
+| 多连接指定实例 | [`ProtoMultiClientManager::NotifyPeer`](../../cbaselib/proto/inc/oi_rpc_session_manager.h#L356) |
+| 多连接任选一台 | [`ProtoMultiClientManager::NotifyAny`](../../cbaselib/proto/inc/oi_rpc_session_manager.h#L367) |
+| 多连接每一台 | [`ProtoMultiClientManager::NotifyAll`](../../cbaselib/proto/inc/oi_rpc_session_manager.h#L378) |
+| 多连接指定若干实例 | [`ProtoMultiClientManager::NotifyMany`](../../cbaselib/proto/inc/oi_rpc_session_manager.h#L392) |
+| 按服务名任选 | [`RouteManager::Notify`](../../cbaselib/proto/inc/oi_rpc_session_manager.h#L511) |
+| 按服务名和分区 | [`RouteManager::Notify`](../../cbaselib/proto/inc/oi_rpc_session_manager.h#L517) |
+| 按服务名每一台 | [`RouteManager::NotifyAll`](../../cbaselib/proto/inc/oi_rpc_session_manager.h#L526) |
+| 按服务名若干分区 | [`RouteManager::NotifyMany`](../../cbaselib/proto/inc/oi_rpc_session_manager.h#L532) |
+| 发回这次请求的会话 | [`RpcContext::Notify`](../../cbaselib/proto/inc/oi_rpc_coro.h#L55) |
+| 用这次请求的管理器发给另一条会话 | [`RpcContext::Notify`](../../cbaselib/proto/inc/oi_rpc_coro.h#L61) |
+| UDP 地址换成 sid | [`OpenPeer`](../../cbaselib/net/inc/oi_session_manager.h#L139) |
+| 客户端当前会话 | [`ConnectedSid`](../../cbaselib/proto/inc/oi_rpc_session_manager.h#L229) |
+| 从形参推出，含成员函数 | [`RegisterNotifyHandler`](../../cbaselib/proto/inc/oi_rpc_session_manager.h#L101) |
+| 显式消息类型 | [`RegisterNotifyHandler`](../../cbaselib/proto/inc/oi_rpc_session_manager.h#L138) |
 ```cpp
 stContext.Notify(stReply);
 
@@ -25,7 +38,7 @@ if (iUdp == OI_OK)
 }
 ```
 
-返回 [`SendBytes`](../../cbaselib/net/inc/oi_session_manager.h#L190) 的错误码。编码失败是 `OI_ERR_ENCODE`。会话不在是 `OI_ERR_CONNECT`。
+按 sid 的 `Notify` 和 `RpcContext::Notify` 返回 [`SendBytes`](../../cbaselib/net/inc/oi_session_manager.h#L171) 的错误码。编码失败是 `OI_ERR_ENCODE`。会话不在是 `OI_ERR_CONNECT`。
 
 在接收这条连接的管理器上登记。自己的 `Init` 里写 `RegisterNotifyHandler(fn)` 或 `RegisterNotifyHandler(&类::成员)`；在别处写 `管理器.RegisterNotifyHandler(fn)`，例如 `IpcUdp::GetInstance().RegisterNotifyHandler(...)`。`RegisterNotifyHandler(fn)` 从形参推出消息类型，显式写 `RegisterNotifyHandler<Msg>(fn)`。成员函数的类检查与 `RegisterRpcHandler` 相同：当前管理器必须是该类或其派生，否则抛 `std::logic_error`。
 

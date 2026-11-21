@@ -6,27 +6,27 @@ C++20 网络进程框架。业务写协议和协程，收发、回包配对、�
 
 | 功能 | 调用 |
 | --- | --- |
-| 请求回包 | `co_await RpcCall`，处理函数 `co_return` 错误码 |
-| 单向消息 | `Notify` |
+| 请求回包 | `RouteManager::Call`，处理函数 `co_return` 错误码 |
+| 单向消息 | `RouteManager::Notify`；有状态连接才 `Notify(sid)` |
 | UDP | `OpenPeer`，业务仍走会话和 RPC |
 | Redis | `co_await RedisGet` / `RedisSet`，一个 key 一次 |
-| HTTP | `co_await Client::Get` |
+| HTTP | `co_await Client::Get` / `Post`，客户端可走 HTTPS |
 | 数据库 | 连接池、参数绑定、事务 |
-| 定时 | `AddTimer`，空等 `co_await yield` |
-| 服务名 | 配置里写 `service`，按名连上每一台 |
+| 定时 | 周期任务 `OnSecondUpdate`，空等 `co_await yield` |
+| 服务名 | `RouteManager::Call` 按名选一台；每台一条用 `ProtoMultiClientManager` |
 | 日志 | `SendLog`，日志服没连上时先攒着 |
 
 接口和注意点见 [基础库接入表](docs/cbaselib.md#接入)。
 
 ## 一条调用链
 
-回声走的就是这条。服务端在 `modules/ipcserver/src/ipcserver.cpp`，客户端在 `modules/ipcclient/src/echo_mgr.cpp`。
+平时按服务名调用，不拿着某条连接。服务端登记看 `modules/ipcserver/src/ipcserver.cpp` 的 `AllEcho`。`modules/ipcclient/src/echo_mgr.cpp` 里的 `IpcClient::Call` 是回归用的固定直连，业务不要照抄。直连只用于有状态的对端，例如玩家连接。
 
 1. `rpc.proto` 写请求、回复和一条 `rpc`。字段号手写，生成器不补号。
 2. 进程 `StartFramework` 读 toml，拉起 poll、定时器和协程。
 3. 收这条连接的会话管理器在自己的 `Init` 里 `RegisterRpcHandler(fn)` 或 `RegisterRpcHandler(&类::成员)` 注册。处理表按管理器各存一份。
 4. 请求进来，框架按协议号交给处理函数。函数填回复，返回 `0`。失败只回错误码，不带回复体。
-5. 客户端把回复对象传进 `RpcCall` 或 `Call`，`co_await` 得到错误码。返回码是 `0` 再读回复。非 `0` 时回复保持调用前的值。按服务名用 `RouteManager::Call`。
+5. 客户端 `co_await RouteManager::Call(服务名, 请求, 回复, 时长)`，得到错误码。返回码是 `0` 再读回复。非 `0` 时回复保持调用前的值。要打某个分区再传分区号。
 6. 这一次调用按调用号认回包。超时、断线、对端忙都是明确的错误码，框架不自动重放。
 
 ```cpp
@@ -44,8 +44,8 @@ RegisterRpcHandler(HandleAllEcho);
 ```cpp
 ::OI::RpcData::AllEchoReq stRequest;
 ::OI::RpcData::AllEchoRes stResponse;
-const int32_t iRet = co_await IpcClient::GetInstance().Call(
-    stRequest, stResponse, ::OI::Timer::Seconds(3));
+auto& stRoute = OI::Rpc::RouteManager::GetInstance();
+const int32_t iRet = co_await stRoute.Call("gameserver", stRequest, stResponse, ::OI::Timer::Seconds(3));
 if (iRet != OI_OK)
 {
     co_return iRet;

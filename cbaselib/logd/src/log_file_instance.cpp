@@ -221,15 +221,20 @@ void LogFileInstance::WriteLog()
 		{
 			if (!stEntry.sRotationPath.empty())
 			{
+				// 先打开新文件。失败就留下原因，继续写当前文件，不终止其他级别。
+				FILE* pNext = OpenLogFile(stEntry.sRotationPath);
+				if (!pNext)
+				{
+					fprintf(stderr, "logd rotate open failed: %s\n", stEntry.sRotationPath.c_str());
+					fflush(stderr);
+					continue;
+				}
 				if (fflush(pFile) != 0 || fclose(pFile) != 0)
 				{
+					fclose(pNext);
 					DiskFailure("rotate close");
 				}
-				pFile = OpenLogFile(stEntry.sRotationPath);
-				if (!pFile)
-				{
-					DiskFailure("rotate open");
-				}
+				pFile = pNext;
 				continue;
 			}
 			WriteAll(pFile, stEntry.stData.Data(), stEntry.stData.Size());

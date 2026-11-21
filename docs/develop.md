@@ -10,7 +10,7 @@
 - 读改存写成 Load、Handle、Save 三步，不拆成一堆在外面填结构的辅助函数。输出参数直接传进去让被调方填。
 - 配置在 mgr 的 `Init` 里读一次，存成成员。实体处理时由 mgr 按参数传进去，实体不自己读配置。
 - 要换会话类型就重写 `CloneSession`，不在通道外面挂一层自己的解析。
-- 框架缺能力就在 cbaselib 里补，补齐回归、跑全量，不在业务里绕。例：UDP 用 `type = "udp"` 的 `UDP_Channel`，见 [基础库](cbaselib.md) 的 net 段；单向消息用 `RpcNotify` 和 `RegisterNotifyHandler`，见 [协程](coroutine.md) 的单向消息。处理函数登记在接收该连接的管理器上：自己的 `Init` 里 `RegisterRpcHandler(&类::成员)`，别处写 `管理器.RegisterRpcHandler(&类::成员)`。
+- 框架缺能力就在 cbaselib 里补，补齐回归、跑全量，不在业务里绕。例：UDP 用 `type = "udp"` 的 `UDP_Channel`，见 [基础库](cbaselib.md) 的 net 段；会话上的单向发送用 `Notify(sid)` 或 `RpcContext::Notify`，按服务名和多连接用 `RouteManager`、`ProtoMultiClientManager` 的 `Notify`，见 [协程](coroutine.md) 的单向消息。`RpcNotify` 是按 sid 发送的底层函数。处理函数登记在接收该连接的管理器上：自己的 `Init` 里 `RegisterRpcHandler(&类::成员)`，别处写 `管理器.RegisterRpcHandler(&类::成员)`。
 
 ## 2. 模块和代码组织
 

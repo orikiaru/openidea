@@ -41,6 +41,8 @@ class TlsSession : public NetSession
 	bool m_bFlushPosted = false;
 	Poll::QueuedCall m_stFlushCall;
 	size_t SendCapacity();
+	void PostDrain();
+	void DrainOutbound();
 	void OnBytesSend(size_t iBytes) override;
 	int32_t AdvanceHandshake();
 	void OnDataIn() final override;

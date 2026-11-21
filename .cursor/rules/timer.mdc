@@ -9,6 +9,6 @@ alwaysApply: false
 
 时间轮只能在 poll 线程上改。`OI::Coro::yield` 接受毫秒整数或 `OI::Timer::MS`。大于 0 时经 `Poll::CallOnLoop` 再 `AddTimer`；小于等于 0 不进时间轮。
 
-RPC 和 Redis 的超时不走这条轮。它们各用一个 200 毫秒的周期定时器扫等待队列。RPC 时长是 `OI::Timer::MS`，按毫秒分桶；超时统一使用带单位的时长类型，不接受裸整数秒。
+Redis 超时不走这条轮，另有一个 200 毫秒的周期定时器，时限来自 `RedisClient.timeout_ms`。RPC 超时由 `RpcCallManager::OnTickUpdate` 挂在时间轮的每一跳上扫描，按 200 毫秒刻度分桶，桶内用精确截止时间；精度仍是 `offset_ms`。RPC 时长是 `OI::Timer::MS`，不接受裸整数秒。
 
 标准用例是 `modules/ipcserver/src/ipcserver.cpp` 里 `Hold` 的 `co_await OI::Coro::yield(stRequest.iDelayMilliseconds)`。

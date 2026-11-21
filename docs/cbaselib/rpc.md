@@ -29,12 +29,15 @@ int32_t RoomServer::Init()
 ```
 
 ```cpp
-const int32_t iRet = co_await ::OI::Rpc::RpcCall(RoomClient::GetInstance(), stRequest, stResponse, ::OI::Timer::Seconds(3));
+auto& stRoute = OI::Rpc::RouteManager::GetInstance();
+const int32_t iRet = co_await stRoute.Call("gameserver", stRequest, stResponse, ::OI::Timer::Seconds(3));
 if (iRet != OI_OK)
 {
 	co_return iRet;
 }
 ```
+
+> **注意：** 平时按服务名调用，见 [服务注册](../registry.md)。`ProtoClientManager::Call` 和 `RpcCall(管理器, sid, ...)` 只用于有状态的对端，例如玩家连接。回归里的 `IpcClient` 是固定测试连接，业务不要照抄。
 
 > **注意：** 处理函数 `co_return` 错误码。回包不再另带一个 `iCode`。失败时框架不序列化回复体。
 
@@ -47,3 +50,7 @@ if (iRet != OI_OK)
 > **注意：** 不带输出的直连等待对象只能 `co_await` 一次。再次等待或等待已经移走的对象会抛 `std::logic_error`。
 
 > **注意：** 服务端额度满返回 `OI_ERR_BUSY`，不创建业务协程。框架不自动重放。`Rpc.max_inflight_count` 等仍在第一次用到时读取，非法配置让 `ProtoSessionManager::Init` 返回 `OI_ERR_INVALID_ARGUMENT`。
+
+> **注意：** 请求在 poll 线程的 `Deliver` 里解开，解不开直接回失败，不进处理函数。回包在 `RpcCallManager::FinishSlot` 里解开，然后再把等待协程排回队列。
+
+> **注意：** 超时由 `RpcCallManager::OnTickUpdate` 每跳扫描，按 200 毫秒刻度分桶，桶内用精确截止时间。精度取决于时间轮一跳（`offset_ms`），不另挂定时器扫队头。单向消息见 [单向消息](notify.md)。

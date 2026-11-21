@@ -8,7 +8,7 @@
 sequenceDiagram
     autonumber
     participant Worker as 工人
-    participant Run as RunHandledRpc
+    participant Run as RpcHandlerBuilder::Run
     participant Biz as 业务任务
     participant Sess as ProtoSession
     participant Poll as poll 线程
@@ -16,7 +16,6 @@ sequenceDiagram
     participant Os as NetOs
 
     Worker->>Run: resume
-    Run->>Run: 读出调用号并反序列化 Req
     Run->>Biz: co_await
     alt 业务当场结束
         Biz-->>Run: 回到这里，调用方不挂起
@@ -24,8 +23,9 @@ sequenceDiagram
         Biz-->>Run: 把调用方记到 continuation
         Note over Worker: 业务结束时 PostCoroutine，工人再回到 Run
     end
-    Run->>Run: 包体 = 同一调用号 + Res
+    Run->>Run: 包体 = 调用号 + int32 状态码，只有 0 才跟 Res
     Run->>Run: EncodePbFrame 回包协议号
+    Note over Run: 编码失败走 SendFailureReply
     Run->>Sess: SendBytes
     Sess->>Poll: AllowSend 变成 PostOp MOD
     Run-->>Worker: co_return

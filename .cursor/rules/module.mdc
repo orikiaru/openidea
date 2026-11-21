@@ -1,5 +1,5 @@
 ---
-description: 协议、proto.xml、.proto、rpcdata、模块、RegisterRpcHandler、生成代码。加协议或模块前先读 docs/module.md，对照 AllEcho 和 Hold。
+description: 协议、proto.xml、.proto、rpcdata、模块、RegisterRpcHandler、生成代码。加协议或模块前先读 docs/module.md，对照 AllEcho 和 Hold。Web 对照 webserver 的五个路径。
 alwaysApply: false
 ---
 

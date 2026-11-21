@@ -1,19 +1,16 @@
 ---
-description: Web、HTTP、webserver、webclient、JSON、urlencode、二进制 body。改 HTTP 前先读 docs/module.md 的 Web 段，对照 webserver 的四个路径和 webclient 的 Run。
+description: Web、HTTP、webserver、webclient、JSON、urlencode、二进制 body。改 HTTP 前先读 docs/module.md 的 Web 段，对照 webserver 的五个路径和 webclient 的 Run。
 alwaysApply: false
 ---
 
 # Web
 
-先读 `docs/module.md` 的 Web 段。`webserver` 和 `webclient` 是两个进程，只走 HTTP，不开 HTTPS。
+先读 `docs/module.md` 的 Web 段。`webserver` 和 `webclient` 是两个进程。服务端是框架 HTTP 会话，由 poll 收请求并启动处理协程，不自己 `listen` 阻塞，也不用 `cpp-httplib`。服务端 TLS 由反向代理终止。客户端用 `OI::Http::Client`，可开 HTTPS 并校验证书链和主机名。
 
 JSON 只用 JsonCpp。`rpcdata` 的 body 用它自己的 `FromJson` / `ToJson`。
 
-服务端仍是 `cpp-httplib` 的阻塞 listen，不进协程。客户端用基础库 `OI::Http::Client`，内部是一条 `SessionManager` 上的连接。默认 keep-alive 串行复用；构造参数 `bReuse` 为 `false` 时每条请求 `Connection: close`，收完就关。当前响应后面粘着未消费字节也要关连接，不能丢掉尾部再复用。`co_await` 后由 poll 线程收完再 `Schedule`，不要在回调里 `resume`，也不要 `sleep`，也不要再自己 `recv` / `send`。单线程链 `http_static`，多线程链 `http_m_static`。查询参数的百分号编码跟 `cpp-httplib` 的 `encode_query_param` 同一套字符。
+客户端默认从共享池复用空闲 keep-alive 连接；`bReuse` 为 `false` 时写 `Connection: close`，收完就关。对端要求关闭、半包断开、解析失败，或当前响应后面还粘着未消费字节时关掉会话。`co_await` 后由 poll 线程收完再 `Schedule`，不要在回调里 `resume`，也不要 `sleep`，也不要再自己 `recv` / `send`。单线程链 `http_static`，多线程链 `http_m_static`。
 
-- `GET /query`：百分号编码，服务端 `get_param_value` 解码后放进 JSON
-- `POST /json`：JsonCpp 解析，改完再写回
-- `POST /rpcjson`：body 是 `JsonAll` 的 `ToJson`，服务端 `FromJson` 后把 `gap` 加一再 `ToJson`。别名键如 `gap` 保持不变。只写 `[json]` 的 `iPlain` 这些，以及什么标记都不写的 `iDefault`、`sDefault`、`vDefault`、`mDefault`、`stDefault`，键名都是字段名。`[nojson]` 的 `iSkip` 不进 JSON，读入也不改原值
-- `POST /bin`：body 按字节原样返回，可以含 `\0`
+五个路径：`GET /health` 正文 `ok`；`GET /query` 回解码后的 query，缺 `text` 返回 400；`POST /json` 给 JSON 对象加 `ok`；`POST /rpcjson` 用 `JsonAll` 走一遍并把 `gap` 加一；`POST /bin` 按字节原样返回，可以含 `\0`。`[nojson]` 的字段不进 JSON，读入也不改原值。
 
 标准用例是 `modules/webserver/src/web_server.cpp` 和 `modules/webclient/src/web_client.cpp` 的 `Run`。

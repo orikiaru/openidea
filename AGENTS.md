@@ -140,9 +140,11 @@ Redis 也单独测。开关是 `[Test] redis`。先起本机 Redis（`maxmemory 
 
 # 单次 RPC 用带回复的那套
 
-单次调用的主力是把回复对象传进去、`co_await` 得到 `int32_t` 的 `RpcCall`、`Call`。按服务名走 `RouteManager::Call`，多连接任选一台走 `CallAny`。先看返回码，再读回复。非 `0` 时回复保持调用前的值。
+平时按服务名调用：`RouteManager::GetInstance().Call(服务名, 请求, 回复, 时长)`，要打某个分区再传分区号。把回复对象传进去，`co_await` 得到 `int32_t`。先看返回码，再读回复。非 `0` 时回复保持调用前的值。`CallAll`、`CallMany` 仍返回每格的 `RpcResult`。
 
-只传请求、用模板参数指定回复类型、得到 `RpcResult` 的重载先留着。`CallMany`、`CallAll` 还用这套返回方式，已有调用也不必立刻改。范例、新代码和文档不要把它当主力。
+直连 `ProtoClientManager::Call`、`RpcCall(管理器, sid, ...)` 只用于有状态的对端，例如玩家连接。回归里的 `IpcClient` 是固定测试连接，新业务不要拿它当调用范例。
+
+只传请求、用模板参数指定回复类型、得到 `RpcResult` 的单次重载先留着。范例、新代码和文档不要把它当主力。
 
 # 应用层不要睡线程
 
@@ -160,12 +162,13 @@ Redis 也单独测。开关是 `[Test] redis`。先起本机 Redis（`maxmemory 
 | --- | --- | --- |
 | 协程、Task、StartTask、co_await、yield、让出、挂起、睡眠、sleep、sleep_for | `docs/coroutine.md` | `modules/ipcserver/src/ipcserver.cpp` 的 `RegisterRpcHandler`；`modules/ipcclient/src/echo_mgr.cpp` 的 `StartTask`；空等用 `modules/ipcclient/src/log_mgr.cpp` 的 `Pump` 里 `co_await OI::Coro::yield` |
 | RPC、RpcCall、RegisterRpcHandler、回包、调用号 | `docs/coroutine.md` 的服务端和客户端 | 同上，推迟回包用同文件的 `Hold` |
+| 单向消息、Notify、NotifyAll、NotifyMany | `docs/cbaselib/notify.md`，`docs/coroutine.md` 的单向消息 | `modules/ipcserver/src/ipcudp.cpp` 的 `RegisterNotifyHandler`；按服务名见 `docs/registry.md` |
 | Redis、redisserver、RESP | `docs/cbaselib.md` 的 redis 段 | `modules/ipcclient/src/redis_mgr.cpp` 的 `Check` |
 | 定时器、时间轮、AddTimer | `docs/timer.md` | `Hold` 里的 `co_await OI::Coro::yield` |
 | 周期任务、Update、心跳、定时拉取、单例循环、OnSecondUpdate、OnTickUpdate | `docs/timer.md` 的单例更新段 | `cbaselib/proto/src/oi_registry_client.cpp` 的 `RegistryClient::OnSecondUpdate`；`modules/ipcclient/src/timer_mgr.cpp` 的 `OnTickUpdate` |
 | 协议、proto.xml、.proto、rpcdata、模块 | `docs/module.md` | `modules/protoconfig/rpc.proto` 的 `AllEcho`、`Hold` |
 | 端口、复用、bind、TIME_WAIT、监听 | `docs/cbaselib.md` 的 net 段 | `cbaselib/port/oi_net_os.cpp` 的 `NetOs_Bind` |
-| Web、HTTP、JSON、urlencode、二进制 body | `docs/module.md` 的 Web 段 | `modules/webserver` 的四个路径；`modules/webclient` 的 `Run` |
+| Web、HTTP、JSON、urlencode、二进制 body | `docs/module.md` 的 Web 段 | `modules/webserver` 的五个路径；`modules/webclient` 的 `Run` |
 | 分层、Channel、Session、会话管理器、逻辑 mgr、裸包、转发、CloneSession | `docs/develop.md` 第 1 节 | `modules/ipcserver/src/ipcudp.cpp` 的 `IpcUdp` |
 | 目录、src、类外函数、全局/静态变量、友元、StartTask、单线程/多线程选型 | `docs/develop.md` 第 2、6 节 | `RegisterRpcHandler(&类::成员)`、`RegisterNotifyHandler(&类::成员)` |
 | 错误码、iCode、errordef、自定义结构、手写序列化 | `docs/develop.md` 第 3、4 节 | `cbaselib/include/oi_errno.h` |
