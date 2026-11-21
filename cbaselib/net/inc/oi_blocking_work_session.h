@@ -38,7 +38,7 @@ class BlockingWorkSessionManager : public SessionManager
   public:
 	~BlockingWorkSessionManager();
 	// 闭包按值保活，工作异常交给完成回调；完成回调不得抛异常或阻塞。
-	// 上限 1024 条；容量不足返回 BUSY，停止/会话关闭返回 CONNECT，函数异常单独交回。
+	// 在途上限由 ConfigureBlockingPool 决定，默认 1024。容量不足返回 BUSY，停止/会话关闭返回 CONNECT，函数异常单独交回。
 	void Submit(OI::Thread::BlockingType iType, std::function<void()> fnWork, std::function<void(int32_t, std::exception_ptr)> fnDone);
 	// Session 在 poll 线程交回操作号；同一操作只消费一次。
 	void Complete(uint64_t iOperation, std::exception_ptr stError);

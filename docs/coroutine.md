@@ -48,7 +48,7 @@ if (iRet == 0)
 
 单线程构建中，后台线程误调用受保护的同步发送入口会返回 `OI_ERR_WRONG_THREAD`，并向标准错误输出记录操作名；调用仍应留在 poll 线程。多线程构建保留原有行为。此检查不能代替同步回调不得调用异步接口的约束。
 
-阻塞工作按 `OI::Thread::BlockingType` 分类，由各自的固定线程池执行。省略类型时使用 `Default`，默认 4 个线程、1024 个排队项，各类别的在途上限为线程数加队列上限，Default 取该值与 1024 的较小值；在途包含排队、执行中以及完成通知尚未消费的工作，队列上限单独计算且不包含正在执行的工作。其他类型必须在首次使用前调用 `OI::Thread::ConfigureBlockingPool(type, threads, queueLimit)` 显式配置。每个类型第一次启动后再配置返回 `OI_ERR_BUSY`；线程数须为 1–256，队列上限须大于 0。未配置的类型返回 `OI_ERR_NOT_FOUND`，队列已满返回 `OI_ERR_BUSY`，关闭后返回 `OI_ERR_CONNECT`。例如可先配置 `OI::Thread::BlockingType::File`，再用 `co_await OI::Coro::RunBlocking(OI::Thread::BlockingType::File, ReadFile, sPath, sData)` 指定类型；配置返回码须由调用方检查。
+阻塞工作按 `OI::Thread::BlockingType` 分类，由各自的固定线程池执行。省略类型时使用 `Default`，默认 4 个线程、1024 个排队项、1024 个在途。各类别的在途上限是线程数加队列上限，再与 `iInFlightLimit` 取较小值；默认 1024。在途包含排队、执行中以及完成通知尚未消费的工作，队列上限单独计算且不包含正在执行的工作。要超过 1024，首次提交前把队列和 `iInFlightLimit` 一起调大。其他类型必须在首次使用前调用 `OI::Thread::ConfigureBlockingPool(type, threads, queueLimit, inFlightLimit)` 显式配置。每个类型第一次启动后再配置返回 `OI_ERR_BUSY`；线程数须为 1–256，队列上限和在途上限都须大于 0。未配置的类型返回 `OI_ERR_NOT_FOUND`，队列已满或在途达到上限返回 `OI_ERR_BUSY`，关闭后返回 `OI_ERR_CONNECT`。例如可先配置 `OI::Thread::BlockingType::File`，再用 `co_await OI::Coro::RunBlocking(OI::Thread::BlockingType::File, ReadFile, sPath, sData)` 指定类型；配置返回码须由调用方检查。
 
 工作线程使用项目封装的 `NativeMutex`、`NativeMutexGuard` 和 `NativeMutexCond` 同步，单线程构建中也是真实的线程同步。阻塞工作会话管理器使用 FIFO 类型，完成结果进入本地就绪链表；后台在线程安全的队列从空变为非空时，通过复用的 FIFO 通道及其持久非阻塞本地 socketpair 写入一个唤醒字节。多线程 poll 的操作队列也使用独立的 FIFO 通道唤醒，读端只负责通知，实际操作由 poll 线程处理。poll 读端取出已完成工作并交给会话处理，结果和异常留在进程内存中，唤醒字节不承载业务数据。阻塞池不使用 `uv_queue_work`，不受 `UV_THREADPOOL_SIZE` 控制。执行顺序和线程亲和性没有保证；后台函数不能访问非线程安全的单线程业务管理器，借用对象的并发访问由应用同步。同步回调及其自有调用链禁止调用 `co_await`、`yield`、`StartTask`、`TaskScope` 和 RPC、Redis、HTTP 异步接口。
 

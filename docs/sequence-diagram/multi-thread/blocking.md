@@ -6,7 +6,7 @@
 
 工人接着 `exchange(Waiting)`。这次回调通常还没跑，门仍是 `Idle`，`RunBlockingTask` 挂起，业务再登记到任务等待列表并挂起。poll 上的拒绝和提交失败稍后 `Finish`。门从 `Waiting` 换成 `Ready` 才 `Schedule`。先唤醒 `RunBlockingTask`，它 `co_return` 后再把业务放进工人队列。回到哪个工人没有保证。若 poll 在 `exchange(Waiting)` 之前已经把门写成 `Ready`，工人看见 `Ready` 就不挂起；完成回调看见的不是 `Waiting`，不再 `Schedule`。
 
-已关闭，或线程池已请求停止，返回 `OI_ERR_CONNECT`。本地会话已经关闭，也是 `OI_ERR_CONNECT`。该类型在途数达到 `BlockingPoolCapacity`，返回 `OI_ERR_BUSY`。在途含排队、执行中和完成通知还没消费的工作；Default 的上限是线程数加队列上限，再与 1024 取较小值。
+已关闭，或线程池已请求停止，返回 `OI_ERR_CONNECT`。本地会话已经关闭，也是 `OI_ERR_CONNECT`。该类型在途数达到 `BlockingPoolCapacity`，返回 `OI_ERR_BUSY`。在途含排队、执行中和完成通知还没消费的工作。上限是线程数加队列上限，再与 `iInFlightLimit` 取较小值，默认 1024。
 
 未配置的非 `Default` 不在池表里，容量按 0 算，不在入场判忙。`SubmitBlockingWork` 返回 `OI_ERR_NOT_FOUND`。池队列已满返回 `OI_ERR_BUSY`，池已停止返回 `OI_ERR_CONNECT`。打开 socketpair 或登记读端失败返回 `OI_ERR_SOCKET`。提交过程抛出的异常用 `Finish(OI_OK, 异常)` 交回。这些都在 poll 上写完再唤醒，`await_resume` 对异常重抛，对非 0 状态码原样返回。
 

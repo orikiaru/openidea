@@ -196,7 +196,7 @@ int main(int iCountParam, char** vArgumentsParam)
     uint32_t iSize = 0;
     if (stMessage.iOperation != 42 ||
         stPacket.PreparePbHeader(iProtocol, iSize) != OI::Base::PB_HEADER_OK ||
-        iProtocol != 999 || iProtocol == OI::RpcData::WORK_PROTOCOL_COMPLETED)
+        iProtocol != 999 || iProtocol == static_cast<uint32_t>(OI::RpcData::WORK_PROTOCOL_COMPLETED))
     {
         std::fprintf(stderr, "work protocol extension/unknown id failed\n");
         return 9;
@@ -417,6 +417,53 @@ int main(int iCountParam, char** vArgumentsParam)
             ++iBad;
         }
         std::printf("blocking capacity rejected=%d executed=%d\n", iRejected, pExecuted->load());
+        if (OI::Thread::ConfigureBlockingPool(OI::Thread::BlockingType::Sdk, 4, 2048, 0) != OI_ERR_INVALID_ARGUMENT ||
+            OI::Thread::ConfigureBlockingPool(OI::Thread::BlockingType::Sdk, 4, 2048, 2048) != 0)
+        {
+            std::fprintf(stderr, "blocking in-flight configure failed\n");
+            ++iBad;
+        }
+        auto pSdkRelease = std::make_shared<std::atomic<bool>>(false);
+        auto pSdkExecuted = std::make_shared<std::atomic<int>>(0);
+        std::vector<OI::Coro::TaskResult<int32_t>> vSdk;
+        for (int iIndex = 0; iIndex < 1025; ++iIndex)
+        {
+            vSdk.push_back(OI::Coro::RunBlocking(OI::Thread::BlockingType::Sdk, [pSdkRelease, pSdkExecuted]()
+            {
+                ++*pSdkExecuted;
+                for (int iWait = 0; iWait < 1000 && !pSdkRelease->load(); ++iWait)
+                {
+                    uv_sleep(5);
+                }
+                return int32_t{0};
+            }));
+        }
+        auto* pSdkReleaseOwner = new std::shared_ptr<std::atomic<bool>>(pSdkRelease);
+        OI::Net::Poll::GetInstance().PostOnLoop([](void* pArgument)
+        {
+            std::unique_ptr<std::shared_ptr<std::atomic<bool>>> pOwner(static_cast<std::shared_ptr<std::atomic<bool>>*>(pArgument));
+            (*pOwner)->store(true);
+        }, pSdkReleaseOwner);
+        int iSdkRejected = 0;
+        for (const auto& stWork : vSdk)
+        {
+            const int32_t iWorkCode = co_await stWork;
+            if (iWorkCode == OI_ERR_BUSY)
+            {
+                ++iSdkRejected;
+            }
+            else if (iWorkCode != 0)
+            {
+                std::fprintf(stderr, "unexpected configured capacity status=%d\n", iWorkCode);
+                ++iBad;
+            }
+        }
+        if (iSdkRejected != 0 || pSdkExecuted->load() != 1025)
+        {
+            std::fprintf(stderr, "configured capacity rejected=%d executed=%d\n", iSdkRejected, pSdkExecuted->load());
+            ++iBad;
+        }
+        std::printf("blocking in-flight configured rejected=%d executed=%d\n", iSdkRejected, pSdkExecuted->load());
         iBad += pBad->load() + (pRuns->load() != 1);
         std::printf("shared task runs=%d bad=%d\n", pRuns->load(), iBad);
         OI::Thread::ThreadPool::GetInstance().RequestStop(iBad ? 9 : 0);
@@ -478,6 +525,7 @@ def main():
                 assert result.stderr.count("warning: coroutine start rejected: current thread is not the single-thread poll thread") == 4
             assert "blocking argument lifetime bad=0" in result.stdout
             assert "blocking capacity rejected=1 executed=1024" in result.stdout
+            assert "blocking in-flight configured rejected=0 executed=1025" in result.stdout
             assert "work protocol extension unknown id ok" in result.stdout
             assert "queued calls completed=4096 batch=3 bad=0" in result.stdout
             shutdown = subprocess.run([str(binary), str(config), "shutdown"], capture_output=True, text=True,

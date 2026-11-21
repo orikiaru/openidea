@@ -35,7 +35,7 @@ python3 tools/run_mysql_regression.py --case mysql-wake --mysqld <mysqld> --bin-
 
 数据库测量以直接执行真实 SQL、完成 `Reset` 到协程恢复的时间为主要指标；实际 `Db::Client::Call` 的 Reset 后界到协程恢复时间作为上界，分别报告，不混作同一指标。
 
-阻塞函数回归由 `BlockingMgr` 覆盖：128 个后台工作及 64 个共享等待者，核对结果和单次执行。阻塞池按类型隔离，Default 默认 4 个线程、1024 个排队项，并保留 1024 个在途工作的兼容限制；其他类型须显式配置，各自的队列上限独立。容量检查应区分在途工作与排队项，并覆盖超限拒绝、启动后配置拒绝及停止时排空已接纳工作。新增检查以实际矩阵结果为准，不代表四种构建模式已经通过。
+阻塞函数回归由 `BlockingMgr` 覆盖：128 个后台工作及 64 个共享等待者，核对结果和单次执行。阻塞池按类型隔离，Default 默认 4 个线程、1024 个排队项、1024 个在途。在途上限由 `ConfigureBlockingPool` 的 `iInFlightLimit` 配置，默认 1024，实际取它和线程数加队列的较小值。其他类型须显式配置，各自的队列和在途上限独立。容量检查应区分在途工作与排队项，并覆盖超限拒绝、启动后配置拒绝及停止时排空已接纳工作。新增检查以实际矩阵结果为准，不代表四种构建模式已经通过。
 
 输出引用 RPC 的日常压力由 EchoMgr 使用 `Call(req, res)` 覆盖。`RpcOutputMgr` 验证输出任务的请求保活、16 个等待者只提交一次、重复等待不重写响应、固定会话、业务错误保留原响应、超时后迟到回包不覆盖新响应。`RpcServiceMgr` 验证命名和分区调用。正常 Hold 必须输出 `hold output rpc shared waiters=16 submissions=1 bad=0`、`hold output rpc direct pinned error late bad=0`、`hold output rpc named any zone shared=8 bad=0`；它们已纳入脚本断言。底层单次等待器的重复等待和异常注入用例仍保留，与输出 Task 可重复等待的语义分开验证。
 

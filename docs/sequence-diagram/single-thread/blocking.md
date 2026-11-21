@@ -4,7 +4,7 @@
 
 图里的 poll 就是主线程上的循环。`CallOnLoop` 发现已经在 poll 线程，当场 `SubmitOnLoop`。后台是该 `BlockingType` 的固定线程，用户函数在那里执行。完成靠本地 socketpair 回到 poll，`DataIn` 在挂起之后的 `PollWait` 里跑。
 
-已关闭，或线程池已请求停止，`Finish` 带回 `OI_ERR_CONNECT`。本地会话已经关闭，也是 `OI_ERR_CONNECT`，发生在分配操作号之前。该类型在途数达到 `BlockingPoolCapacity`，带回 `OI_ERR_BUSY`。在途含排队、执行中和完成通知还没消费的工作；Default 的上限是线程数加队列上限，再与 1024 取较小值。这两种都在完成回调里把门写成 `Ready`。`exchange(Waiting)` 看见 `Ready`，`RunBlockingTask` 不挂起，当场 `co_return`。外层任务已经完成，业务的 `co_await` 看见 `bReady`，也不挂起。
+已关闭，或线程池已请求停止，`Finish` 带回 `OI_ERR_CONNECT`。本地会话已经关闭，也是 `OI_ERR_CONNECT`，发生在分配操作号之前。该类型在途数达到 `BlockingPoolCapacity`，带回 `OI_ERR_BUSY`。在途含排队、执行中和完成通知还没消费的工作。上限是线程数加队列上限，再与 `iInFlightLimit` 取较小值，默认 1024。这两种都在完成回调里把门写成 `Ready`。`exchange(Waiting)` 看见 `Ready`，`RunBlockingTask` 不挂起，当场 `co_return`。外层任务已经完成，业务的 `co_await` 看见 `bReady`，也不挂起。
 
 未配置的非 `Default` 不在池表里，`BlockingPoolCapacity` 为 0，入场不按在途拒绝。`SubmitBlockingWork` 返回 `OI_ERR_NOT_FOUND`。池队列已满返回 `OI_ERR_BUSY`，池已停止返回 `OI_ERR_CONNECT`。第一次 `OpenPair` 或登记读端失败返回 `OI_ERR_SOCKET`。这些都撤销刚登记的待定项，再 `Finish` 该码，同样不挂起。提交过程抛出的异常用 `Finish(OI_OK, 异常)` 交回，`await_resume` 重抛。
 

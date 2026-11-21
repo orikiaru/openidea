@@ -380,7 +380,8 @@ OI::Coro::TaskResult<int> BlockingMgr::CheckBlockingCategories()
 	const int32_t iMysqlConfig = OI::Thread::ConfigureBlockingPool(BlockingType::Mysql, 1, 1);
 	const int32_t iFileConfig = OI::Thread::ConfigureBlockingPool(BlockingType::File, 1, 4);
 	if (iMissing != OI_ERR_NOT_FOUND || iMysqlConfig != 0 || iFileConfig != 0 ||
-	    OI::Thread::ConfigureBlockingPool(BlockingType::Sdk, 0, 1) != OI_ERR_INVALID_ARGUMENT)
+	    OI::Thread::ConfigureBlockingPool(BlockingType::Sdk, 0, 1) != OI_ERR_INVALID_ARGUMENT ||
+	    OI::Thread::ConfigureBlockingPool(BlockingType::Sdk, 1, 1, 0) != OI_ERR_INVALID_ARGUMENT)
 	{
 		std::fprintf(stderr, "blocking category setup missing=%d mysql=%d file=%d\n", iMissing, iMysqlConfig, iFileConfig);
 		co_return 1;

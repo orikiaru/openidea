@@ -8,7 +8,7 @@
 
 MySQL 配置必须指定非空数据库名、1 至 65535 的有效端口，以及大于零的连接、读取和写入超时秒数；参数无效时 `MakeDriver` 抛出 `std::invalid_argument`。
 
-客户端默认使用 `OI::Thread::BlockingType::Mysql`，必须在该类型首次启动前调用 `OI::Thread::ConfigureBlockingPool(type, threads, queueLimit)` 并检查返回码。使用其他非 Default 类别时，也要先配置对应类别；`Default` 自带默认配置。阻塞池线程数和排队上限，与数据库客户端的连接数上限是两套独立限制。阻塞池配置及关闭规则见 [协程：阻塞函数](coroutine.md#阻塞函数)。
+客户端默认使用 `OI::Thread::BlockingType::Mysql`，必须在该类型首次启动前调用 `OI::Thread::ConfigureBlockingPool(type, threads, queueLimit)` 并检查返回码。使用其他非 Default 类别时，也要先配置对应类别；`Default` 自带默认配置。阻塞池线程数、排队上限和在途上限，与数据库客户端的连接数上限是各自独立的限制。在途上限默认 1024。阻塞池配置及关闭规则见 [协程：阻塞函数](coroutine.md#阻塞函数)。
 
 每个客户端维护自己的连接池：请求借用空闲连接，必要时在上限内建立连接；用完且健康的连接在清理会话状态后复用，不能安全复用的连接被丢弃。连接池已满时返回 `OI_ERR_BUSY`，不会在工作线程内等待空闲连接。连接状态可能在并发请求之间变化，应用不能依赖前一次请求留下的会话状态。
 

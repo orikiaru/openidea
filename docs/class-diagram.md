@@ -9,7 +9,6 @@
 - 第三方库。
 - 模板萃取和协议号推导，例如 `RpcHandlerArgs`、`HasTickUpdate`。生成出来的具体 rpcdata 都继承 `RpcData`，不逐个列出。
 - 测试夹具。`modules` 里只挂各进程的常驻入口，探测类留在文末。
-- `Parser`、`JBytesParser`。只在 `cbaselib/net/inc/oi_parser.h` 声明，仓库里没有调用方，不挂到通道或会话上。
 
 实线空心三角是继承。组合图里实线是持有，虚线是使用或创建；标出的成员名以头文件为准。
 

@@ -111,6 +111,7 @@ struct PoolEntry
 {
 	size_t iThreads = 4;
 	size_t iQueueLimit = 1024;
+	size_t iInFlightLimit = 1024;
 	std::shared_ptr<BlockingPool> pPool;
 };
 class Pools
@@ -130,9 +131,9 @@ void InitializeBlockingPools()
 {
 	(void)GetPools();
 }
-int32_t ConfigureBlockingPool(BlockingType iType, size_t iThreads, size_t iQueueLimit)
+int32_t ConfigureBlockingPool(BlockingType iType, size_t iThreads, size_t iQueueLimit, size_t iInFlightLimit)
 {
-	if (iThreads == 0 || iThreads > 256 || iQueueLimit == 0 || iQueueLimit > std::numeric_limits<size_t>::max() - iThreads)
+	if (iThreads == 0 || iThreads > 256 || iQueueLimit == 0 || iInFlightLimit == 0 || iQueueLimit > std::numeric_limits<size_t>::max() - iThreads)
 	{
 		return OI_ERR_INVALID_ARGUMENT;
 	}
@@ -149,6 +150,7 @@ int32_t ConfigureBlockingPool(BlockingType iType, size_t iThreads, size_t iQueue
 	}
 	stEntry.iThreads = iThreads;
 	stEntry.iQueueLimit = iQueueLimit;
+	stEntry.iInFlightLimit = iInFlightLimit;
 	return OI_OK;
 }
 size_t BlockingPoolCapacity(BlockingType iType)
@@ -161,7 +163,7 @@ size_t BlockingPoolCapacity(BlockingType iType)
 		return 0;
 	}
 	const size_t iCapacity = it->second.iThreads + it->second.iQueueLimit;
-	return iType == BlockingType::Default && iCapacity > 1024 ? 1024 : iCapacity;
+	return iCapacity > it->second.iInFlightLimit ? it->second.iInFlightLimit : iCapacity;
 }
 int32_t SubmitBlockingWork(BlockingType iType, std::function<void()> fnWork)
 {
