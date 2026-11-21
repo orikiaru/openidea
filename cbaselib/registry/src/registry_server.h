@@ -1,5 +1,6 @@
 #pragma once
 #include "oi_registry.h"
+#include "framework_protocol/oi_rpcdata_servicelease.h"
 #include "framework_protocol/rpc_ids.h"
 #include "oi_rpc_session_manager.h"
 #include "oi_singleton.h"
@@ -38,11 +39,7 @@ class RegistryServer : public ::OI::Rpc::ProtoSessionManager
   private:
 	struct Binding
 	{
-		std::string sName;
-		int32_t iId;
-		std::string sIp;
-		std::string sPort;
-		std::string sZone;
+		::OI::RpcData::ServiceLease stLease;
 		std::string sValue;
 		std::string sOwner;
 		bool bSuperseded = false;

@@ -252,6 +252,21 @@ int32_t DbMgr::CheckRowMapping()
 				&& SameRow(stByMap, stFull)
 				&& SameRow(stByRow, stFull),
 			"result row by column name");
+		::OI::Db::Result stMany = stResult;
+		stMany.vRows.push_back(stMany.vRows[0]);
+		std::vector<DbSample> vDecoded;
+		Expect(iBad, ::OI::Db::FromRows(stMany, vDecoded) == OI_OK
+				&& vDecoded.size() == 2
+				&& SameRow(vDecoded[0], stFull)
+				&& SameRow(vDecoded[1], stFull),
+			"result rows");
+		stMany.vColumns.push_back(stMany.vColumns[0]);
+		stMany.vRows[1].push_back(stMany.vRows[1][0]);
+		std::vector<DbSample> vKept{stEdge};
+		Expect(iBad, ::OI::Db::FromRows(stMany, vKept) == OI_ERR_DECODE
+				&& vKept.size() == 1
+				&& SameRow(vKept[0], stEdge),
+			"result rows reject");
 		::OI::Db::CellMap mUntouched = mFromResult;
 		Expect(iBad, !::OI::Db::RowCells(stResult, 1, mUntouched) && mUntouched == mFromResult, "result row out of range");
 		stResult.vColumns.push_back("id");

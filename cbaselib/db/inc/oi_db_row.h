@@ -340,6 +340,25 @@ bool FromRow(C& stRow, const std::vector<std::string>& vColumns, const std::vect
 	return true;
 }
 
+// 整份结果按列名读成数组。任一行列数不对、重复列、NULL 或解码失败时返回 OI_ERR_DECODE，vRows 不变。
+template <typename C>
+int32_t FromRows(const Result& stResult, std::vector<C>& vRows)
+{
+	std::vector<C> vDecoded;
+	vDecoded.reserve(stResult.vRows.size());
+	for (const std::vector<std::optional<Blob>>& vRow : stResult.vRows)
+	{
+		C stRow;
+		if (!FromRow(stRow, stResult.vColumns, vRow))
+		{
+			return OI_ERR_DECODE;
+		}
+		vDecoded.push_back(std::move(stRow));
+	}
+	vRows = std::move(vDecoded);
+	return OI_OK;
+}
+
 using ParameterMap = std::map<std::string, Parameter>;
 using CellMap = std::map<std::string, std::optional<Blob>>;
 

@@ -671,7 +671,8 @@ auto InvokeTask(TaskLaunch stLaunch, F&& fnFunction)
 	return std::forward<F>(fnFunction)();
 }
 
-// 闭包由任务保活，带捕获的协程 lambda 必须经这里启动。任务总是入队，不在调用方栈上跑。
+// 闭包按值保活到任务结束，带捕获的协程 lambda 必须经这里启动。任务总是入队，不在调用方栈上跑。
+// 只允许具名捕获。没在当前栈 co_await 的任务，要带进去的对象按值具名捕获。具名引用和裸 this 不延长被指对象的寿命。
 template <typename F>
 auto StartTask(F&& fnFunction)
 {
