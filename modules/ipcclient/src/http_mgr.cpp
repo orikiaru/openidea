@@ -57,6 +57,7 @@ OI::Coro::TaskResult<int> HttpMgr::CheckHttpFraming(int32_t iHttpPort)
 	    {"length-junk", 200, OI_ERR_PROTOCOL, ""},
 	    {"length-overflow", 200, OI_ERR_PROTOCOL, ""},
 	    {"length-conflict", 200, OI_ERR_PROTOCOL, ""},
+	    {"length-duplicate", 200, OI_ERR_PROTOCOL, ""},
 	    {"te-cl", 200, OI_ERR_PROTOCOL, ""},
 	    {"chunk-separator", 200, OI_ERR_PROTOCOL, ""},
 	    {"chunk-junk", 200, OI_ERR_PROTOCOL, ""},

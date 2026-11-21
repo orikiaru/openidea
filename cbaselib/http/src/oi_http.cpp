@@ -608,7 +608,7 @@ bool HttpSession::ParseHeaders(size_t iHeaderEnd)
 			if (EqName(m_sIncoming, iPosition, iNameEnd, "content-length") && iPosition + std::strlen("content-length") == iNameEnd)
 			{
 				uint64_t iLength = 0;
-				if (!ParseU64(m_sIncoming, iValue, iValueEnd, iLength) || (!m_pSink && m_iStatus != 304 && m_iStatus >= 200 && iLength > kMaxBody) || (m_bHasLength && m_iContentLength != iLength))
+				if (!ParseU64(m_sIncoming, iValue, iValueEnd, iLength) || (!m_pSink && m_iStatus != 304 && m_iStatus >= 200 && iLength > kMaxBody) || m_bHasLength)
 				{
 					return false;
 				}

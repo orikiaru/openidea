@@ -51,6 +51,7 @@ class RawHttpRegression(socketserver.BaseRequestHandler):
                     b"length-junk": b"HTTP/1.1 200 OK\r\nContent-Length: 1x\r\n\r\na",
                     b"length-overflow": b"HTTP/1.1 200 OK\r\nContent-Length: 18446744073709551616\r\n\r\n",
                     b"length-conflict": b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\nok",
+                    b"length-duplicate": b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nContent-Length: 2\r\n\r\nok",
                     b"te-cl": b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n",
                     b"chunk-separator": chunk + b"1\r\naXX0\r\n\r\n",
                     b"chunk-junk": chunk + b"1x\r\na\r\n0\r\n\r\n",

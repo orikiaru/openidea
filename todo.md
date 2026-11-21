@@ -24,12 +24,6 @@
 - 方向：生成器已经知道每个字段的具体类型，按标量、string、Bytes、vector、map、嵌套 rpcdata 直接写出读写，容器在生成代码里展开。框架侧对这几种类型留普通重载，不再每个字段做 `enable_if`、`decltype` 和递归模板。其余框架新增和改动按同一条来，不靠再套一层类型推断复用。改生成器和对应头，生成头不要手改。字节、JSON 和 mysql 行映射用现有回归锁住。
 - 字段分发：2026-11-13 测过 switch、map 和现在的宏，记录在 `docs/pb-dispatch.md`。宏编译快，switch 解码大约快 1 微秒、编译大约慢到 6 倍。两套都留给使用方自己选。本仓库生成的协议解码目前用宏。
 
-## 不带响应输出的 Call 暂时保留（2026-11-13）
-
-- 需求：单次调用里只传请求、得到 `RpcResult` 的那一路，和带响应引用、返回 `int32_t` 的那一路重复。原先考虑删掉按值这一路。
-- 现状：`ProtoClientManager` 没有 `CallAny`、`CallAll`、`CallMany`，只有 `Call(req, res)`，返回 `TaskResult<int32_t>`。按服务名的单次调用在 `RouteManager::Call` 和 `Call(名, 分区)`，多实例在 `ProtoMultiClientManager::Call` 和 `CallAny`，都是输出引用、`TaskResult<int32_t>`。`RouteManager::CallAll` / `CallMany` 和 `ProtoMultiClientManager::CallMany` 返回 `vector<RpcResult>`；`ProtoMultiClientManager::CallAll` 返回 `vector<PeerResult>`，每格带实例号和 `RpcResult`。这些成员模板写在 `cbaselib/proto/inc/oi_rpc_session_manager.h` 类内。只传请求、`co_await` 得到 `RpcResult` 的自由函数还在：`oi_rpc_coro.h` 的 `RpcCall(RpcSender&, req)`、`RpcCall(SessionManager&, sid, req)`，以及 `oi_rpc_session_manager.h` 的 `RpcCall(ProtoClientManager&, req)`。
-- 方向：单次调用的主力仍是带回复对象、返回 `int32_t` 的那套。只传请求的自由函数 `RpcCall` 先留着，范例和新代码不要用它当主力。批量接口继续返回 `RpcResult`。
-
 ## 多线程协程批量创建/入队偏慢（2026-11-14）
 
 - 现状：协程压力改成端到端 `live` / `wake` / `churn` 后，本机 WSL 单线程 `live` 约 69 纳秒/条（约 1450 万条/秒），多线程 3 工人约 4339 纳秒/条（约 23 万条/秒），大约慢 60 倍。`churn` 单线程约 1299 万条/秒，多线程约 373 万条/秒，也明显掉。数字在 `docs/lasttesting.md`。多线程 `StartTask` 经 `PostCoroutine` 进共享队列，工人抢同一把 `stMutex`，`Hold` 挂起列表还有一把锁；批量创建时入队和执行叠在一起。
@@ -50,9 +44,3 @@
 - 序列化格式变更要写明：`b269fb7` 起 vector/map 改为每字段一条、字段体为数量加元素，裸 `<<`/`>>` rpcdata 加长度前缀，`ReadFields` 对重复字段号抛 `ParserException`。旧版编出的报文和旧版存进 Redis / MySQL 的 PB blob 全部读不回来，`FromDbBlob` 显式拒绝多条目。项目尚无跨语言对端时可以接受，要在文档里记成不兼容变更，避免误以为平滑升级。
 - `db` 用例从 `all` 移除后连接池异常路径无覆盖：fake 驱动能注入的驱动抛异常→不健康连接剔除、失败调用不改输出、事务回滚语义，现在没有任何用例跑；Windows 端也没有任何 DB 行映射检查（`mysql` 只在 Linux 显式跑）。决定是补回一个轻量 fake 用例，还是在 `docs/testing.md` 记成有意取舍。PB 编码黄金字节已由 `hold binary container` 补进 `all`，DB 特有部分仍只在 mysql。
 - `ThreadPool::AddStopHandler` 停止后返回 `OI_ERR_CONNECT` 语义不准，换个对得上的错误码或加注释。
-
-## 直连断线后的 Call/Notify 不暂存（2026-11-18）
-
-- 需求：直连 `ProtoClientManager` 断线后的 `Call` / `Notify` 要不要像路由和多连接那样先暂存、重连再补发，还没有定。
-- 现状：只在第一次连上前暂存。`CloseSession` 先把会话从表里摘掉，`oi_net_session.cpp` 的 `NetSession::ActiveClose` 只标即将关闭，`m_bConnected` 要等 `OnDelSession` 才清掉。这期间 `oi_rpc_session_manager.cpp` 的 `ProtoClientManager::SubmitCall` 仍按旧 sid 发送，`SendBytesResult` 得到 `OI_ERR_CONNECT` 后直接 `Wake`，不暂存。暂存条件是 `!m_bEverConnected`。重连由 `OnDelSession` 里的 `Reconnect` 发起，不会把这次失败的调用再发一遍。`hold_mgr` 里断线调用断言返回 `OI_ERR_CONNECT`。路由和多连接的会话是 `PeerSession`，`ActiveClose` 里立刻 `Disconnected`，发送目标清空后 `PeerConnection::Submit` 会暂存并重连补发，和直连不是一套行为。
-- 方向：是否让直连断线后也暂存补发、跟 `PeerSession` 对齐，待定。改的话 `hold_mgr` 里断线返回 `CONNECT` 的断言和 `CheckClientNotify` 的 `dropped` 断言要一起改。
