@@ -149,6 +149,8 @@ class Session
 	}
 	// 还没写出去的字节数。
 	size_t PendingSendBytes();
+	// 当前发送队列剩余额度；实际入队仍以 SendResult 的返回码为准。
+	size_t SendCapacity();
 	// 通道写出这么多字节后扣掉排队计数。
 	virtual void OnBytesSend(size_t iBytes);
 	virtual void ActiveClose() = 0; //外部Mgr主动关闭调用,有锁,不会回调Mgr->CloseSession

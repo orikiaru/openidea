@@ -1,6 +1,7 @@
 #pragma once
 #include "oi_http_message.h"
 #include "oi_session.h"
+#include <algorithm>
 #include <charconv>
 #include <uv.h>
 
@@ -93,7 +94,7 @@ class StreamBody
 	uint64_t m_iRemaining = 0;
 	size_t m_iTrailerBytes = 0;
 	size_t m_iRetrySize = 0;
-	std::string m_sPendingWire;
+	Base::Bytes m_stPendingWire;
 	bool m_bPendingFinal = false;
 
   public:
@@ -221,7 +222,7 @@ class StreamBody
 
 	void ResetOutput()
 	{
-		m_sPendingWire.clear();
+		m_stPendingWire.Clear();
 		m_bPendingFinal = false;
 	}
 	int32_t Produce(Net::Session& stSession, BodySource& stSource, bool& bFinished, bool& bProgress, bool bChunked = true)
@@ -233,9 +234,16 @@ class StreamBody
 			{
 				return OI_ERR_CANCELLED;
 			}
-			if (!m_sPendingWire.empty())
+			if (m_stPendingWire.Size())
 			{
-				const int32_t iCode = stSession.SendResult(Base::Bytes(m_sPendingWire.data(), m_sPendingWire.size()));
+				const size_t iTake = std::min(stSession.SendCapacity(), m_stPendingWire.Size());
+				if (!iTake)
+				{
+					break;
+				}
+				const int32_t iCode = iTake == m_stPendingWire.Size()
+				                          ? stSession.SendResult(m_stPendingWire)
+				                          : stSession.SendResult(Base::Bytes(m_stPendingWire.Data(), iTake));
 				if (iCode == OI_ERR_BUSY)
 				{
 					break;
@@ -244,8 +252,12 @@ class StreamBody
 				{
 					return iCode;
 				}
-				m_sPendingWire.clear();
+				m_stPendingWire.Erase(0, iTake);
 				bProgress = true;
+				if (m_stPendingWire.Size())
+				{
+					break;
+				}
 				if (m_bPendingFinal)
 				{
 					m_bPendingFinal = false;
@@ -280,16 +292,16 @@ class StreamBody
 			{
 				char vHex[32];
 				auto stRet = std::to_chars(vHex, vHex + sizeof(vHex), iSize, 16);
-				m_sPendingWire.assign(vHex, stRet.ptr);
-				m_sPendingWire += "\r\n";
+				m_stPendingWire.Append(vHex, static_cast<size_t>(stRet.ptr - vHex));
+				m_stPendingWire.Append("\r\n", 2);
 			}
-			m_sPendingWire.append(vData, iSize);
+			m_stPendingWire.Append(vData, iSize);
 			if (bChunked)
 			{
-				m_sPendingWire += "\r\n";
+				m_stPendingWire.Append("\r\n", 2);
 			}
 			m_bPendingFinal = !iSize;
-			if (m_sPendingWire.empty())
+			if (!m_stPendingWire.Size())
 			{
 				m_bPendingFinal = false;
 				bFinished = true;

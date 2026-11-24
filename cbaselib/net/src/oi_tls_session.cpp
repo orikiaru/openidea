@@ -279,12 +279,6 @@ TlsSession::TlsSession(SessionManager* pManager, const TlsClientContext* pContex
 
 TlsSession::~TlsSession() = default;
 
-size_t TlsSession::SendCapacity()
-{
-	OI::Thread::MutexGuard stGuard(stLocker);
-	return iQueuedBytes < iMaxSendQueueBytes ? iMaxSendQueueBytes - iQueuedBytes : 0;
-}
-
 void TlsSession::PostDrain()
 {
 	if (m_bFlushPosted || m_bEnded || IsClosed() || !m_pTls)

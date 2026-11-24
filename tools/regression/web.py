@@ -300,6 +300,51 @@ def check_web_stream_length(port):
     print("web stream Content-Length upload HTTP/1.0 EOF response PASS", flush=True)
 
 
+def check_web_small_send_queue(args):
+    with regression_directory(prefix="oi-regression-web-small-queue-p%d-" % ports.PORT_OFFSET) as tmp:
+        root = Path(tmp)
+        write_owner(root, REPO, ports.PORT_OFFSET)
+        work, cfg = root / "bin", root / "config"
+        work.mkdir()
+        cfg.mkdir()
+        copy_runtime_dlls(args.bin_dir, work)
+        shutil.copy2(args.bin_dir / ("webserver" + SUFFIX), work / ("webserver" + SUFFIX))
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        config = (REPO / "deploy/config/webserver.toml").read_text(encoding="utf-8-sig")
+        config = config.replace("port = 18080", "port = %d" % port)
+        config += "\nform_regression = true\nmax_send_queue_bytes = 8192\n"
+        (cfg / "webserver.toml").write_text(config, encoding="utf-8")
+        with (root / "server.out").open("w", encoding="utf-8") as output:
+            server = launch([str(work / ("webserver" + SUFFIX))], cwd=work, stdout=output, stderr=subprocess.STDOUT)
+            try:
+                record_process(root, server)
+                deadline = time.monotonic() + 10
+                while True:
+                    try:
+                        with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                            break
+                    except OSError:
+                        if server.poll() is not None or time.monotonic() > deadline:
+                            raise RuntimeError((root / "server.out").read_text())
+                        time.sleep(0.05)
+                size = 9 * 1024 * 1024
+                block = bytes(range(251))
+                payload = (block * (size // len(block) + 1))[:size]
+                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=180)
+                try:
+                    conn.request("POST", "/test-stream", body=payload)
+                    response = conn.getresponse()
+                    body = response.read()
+                    assert response.status == 200 and response.chunked and body == payload, (response.status, response.getheaders(), len(body))
+                finally:
+                    conn.close()
+                print("web stream small server send queue PASS", flush=True)
+            finally:
+                cleanup_owned([server], [output], root, args, "web-small-queue", primary=sys.exc_info()[1])
+
+
 class UrlRegressionHandler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -712,14 +757,14 @@ def check_https(work, cfg):
     try:
         port = server.server_address[1]
         base = (REPO / "deploy/config/webclient.toml").read_text(encoding="utf-8-sig")
-        def run(host, ca_file, case):
+        def run(host, ca_file, case, send_limit=65546):
             config = base.replace('ip = "127.0.0.1"', 'ip = ' + json.dumps(host))
             config = config.replace('port = 18080', 'port = %d' % port)
             config = config.replace('https = false', 'https = true')
             config = config.replace('ca_file = ""', 'ca_file = ' + json.dumps(ca_file))
             config += '\ntls_case = %s\nstall_port = %d\n' % (json.dumps(case), stall.getsockname()[1])
             if case == "success":
-                config += '\n[HttpClientPool]\nmax_send_queue_bytes = 65546\n'
+                config += '\n[HttpClientPool]\nmax_send_queue_bytes = %d\n' % send_limit
             (cfg / "webclient.toml").write_text(config, encoding="utf-8")
             client = subprocess.run([str(work / ("webclient" + SUFFIX))], cwd=work, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
             assert client.returncode == 0 and "https regression case=%s bad=0" % case in client.stdout, (case, client.returncode, client.stdout, client.stderr)
@@ -750,6 +795,9 @@ def check_https(work, cfg):
         assert server.requests[0][1] is server.requests[1][1] is server.requests[2][1]
         assert server.requests[3][1] is not server.requests[2][1]
         assert names and all(name == "localhost" for name in names), names
+        server.requests.clear()
+        run("localhost", ca, "success", 8192)
+        assert [item[0] for item in server.requests] == ["/health", "/health", "/truncated", "/health", "/stream", "/health", "/clean-eof", "/bad-eof"], server.requests
         request_count = len(server.requests)
         run("127.0.0.1", ca, "hostname")
         assert len(server.requests) == request_count
@@ -886,6 +934,7 @@ def check_web_bind_restart(args):
 
 def run_web(args):
     check_web_bind_restart(args)
+    check_web_small_send_queue(args)
     # 仍使用模块自带的 WebClient 用例，验证别名键和未改名键的 HTTP/JSON/二进制收发。
     with regression_directory(prefix="oi-regression-web-p%d-" % ports.PORT_OFFSET) as tmp:
         root = Path(tmp)

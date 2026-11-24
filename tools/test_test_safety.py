@@ -541,6 +541,7 @@ class RegressionCleanupTests(unittest.TestCase):
                 return original_copy(source, destination)
         client = subprocess.CompletedProcess([], 1, "bad=1", "original client failure")
         with patch.object(self.web, "check_web_bind_restart"), \
+             patch.object(self.web, "check_web_small_send_queue"), \
              patch.object(self.procs.shutil, "copy2", side_effect=copy), \
              patch.object(self.web, "launch", return_value=server), \
              patch.object(self.web, "record_process"), \
@@ -570,6 +571,7 @@ class RegressionCleanupTests(unittest.TestCase):
                 fixture.completed_reuse = True
             return client
         with patch.object(self.web, "check_web_bind_restart"), \
+             patch.object(self.web, "check_web_small_send_queue"), \
              patch.object(self.procs.shutil, "copy2"), \
              patch.object(self.web, "launch", return_value=self.first), \
              patch.object(self.web, "record_process"), \

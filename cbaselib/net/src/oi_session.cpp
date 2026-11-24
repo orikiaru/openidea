@@ -72,6 +72,12 @@ size_t Session::PendingSendBytes()
 	return iQueuedBytes;
 }
 
+size_t Session::SendCapacity()
+{
+	::OI::Thread::MutexGuard stGuard(stLocker);
+	return iQueuedBytes < iMaxSendQueueBytes ? iMaxSendQueueBytes - iQueuedBytes : 0;
+}
+
 void Session::OnBytesSend(size_t iBytes)
 {
 	::OI::Thread::MutexGuard stLock(stLocker);
