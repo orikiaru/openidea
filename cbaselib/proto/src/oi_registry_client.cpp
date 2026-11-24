@@ -797,7 +797,13 @@ int32_t RegistryClient::Publish(const std::string& sSection, const std::string& 
 	}
 	std::string sAdvertiseIp;
 	std::string sAdvertisePort;
-	if (!PublishAddress(sSection, sIpLocal, sPortLocal, sAdvertiseIp, sAdvertisePort))
+	const bool bPublish = PublishAddress(sSection, sIpLocal, sPortLocal, sAdvertiseIp, sAdvertisePort);
+	if (!::OI::Net::NetAddr::ValidServicePort(sAdvertisePort))
+	{
+		fprintf(stderr, "registry publish invalid advertise_port for %s\n", sSection.c_str());
+		return OI_ERR_INVALID_ARGUMENT;
+	}
+	if (!bPublish)
 	{
 		LOG_TRACE("registry publish %s skip bind %s:%s", sNameLocal.c_str(), sIpLocal.c_str(), sPortLocal.c_str());
 		return OI_OK;

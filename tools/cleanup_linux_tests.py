@@ -11,9 +11,22 @@ from test_process_owner import owned_path, read_owner, within, linux_records, li
 APPLICATIONS = {"ipcclient", "ipcserver", "logd", "redisserver", "registry", "webclient", "webserver", "redis-server"}
 
 
-def matches(executable, arguments, cwd, roots, offset):
-    if Path(executable).name == "redis-server" and re.search(r":6379(?:\s|$)", " ".join(arguments)):
-        return False
+def matches(executable, arguments, cwd, roots, offset, *, recorded=False):
+    if Path(executable).name == "redis-server":
+        if not recorded:
+            return False
+        # Redis rewrites argv to "redis-server address:port" after startup.
+        title = re.fullmatch(r"\S*redis-server\s+[^\s/]+:(\d{1,5})(?:\s+\[cluster\])?", " ".join(arguments).strip())
+        if title:
+            port = int(title.group(1))
+        elif arguments.count("--port") == 1:
+            index = arguments.index("--port") + 1
+            if index >= len(arguments) or not re.fullmatch(r"[0-9]{1,5}", arguments[index]):
+                return False
+            port = int(arguments[index])
+        else:
+            return False
+        return 0 < port <= 65535 and port != 6379
     if any(within(executable, root) for root in roots):
         return True
     if Path(executable).name.startswith(("python", "pypy")):
@@ -32,7 +45,7 @@ def snapshot(pid):
     if stat[0] == "Z":
         return None
     return (os.readlink(root / "exe"), (root / "cmdline").read_bytes().decode(errors="replace").split("\0"),
-            os.readlink(root / "cwd"), stat[19])
+            os.readlink(root / "cwd"), int(stat[19]))
 
 
 def targets(roots, offset):
@@ -65,7 +78,7 @@ def targets(roots, offset):
                 if pid in records:
                     raise RuntimeError("cannot verify recorded WSL test PID %d" % pid) from error
             continue
-        if item and matches(*item[:3], roots, offset):
+        if item and matches(*item[:3], roots, offset, recorded=records.get(int(root.name)) == item[3]):
             found[int(root.name)] = item
     return found
 
@@ -83,7 +96,8 @@ def main():
             continue
         try:
             current = snapshot(pid)
-            if current and current[3] == item[3]:
+            if current and current[0] == item[0] and current[3] == item[3] and (
+                    Path(current[0]).name != "redis-server" or matches(*current[:3], args.root, args.offset, recorded=True)):
                 os.kill(pid, signal.SIGKILL)
         except (FileNotFoundError, ProcessLookupError):
             pass

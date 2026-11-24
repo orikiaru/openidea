@@ -2,10 +2,12 @@
 import re
 import socket
 import socketserver
+import subprocess
 import threading
 import time
 
-from regression_platform import SUFFIX, pause
+from regression_platform import SUFFIX, launch, pause
+from test_process_owner import record_process
 
 from .. import ports
 from ..config import replace, set_test_flags
@@ -88,6 +90,7 @@ def hold_environment(ctx):
 
 
 def configure_hold_client(text):
+    text = replace(text, "timer_lvs", "[4,4,4,1]")
     text = replace(text, "pull_ms", "60000")
     text = replace(text, "max_clients", "8")
     text = replace(text, "idle_ms", "200")
@@ -158,6 +161,28 @@ class HoldCase(Case):
             prepare_hold_environment(ctx)
 
     def scenario(self, ctx):
+        if ctx.mode == "hold" and ctx.scene in (None, "timer"):
+            output = ctx.root / "timer-before-init.out"
+            with output.open("w", encoding="utf-8") as stream:
+                probe = launch([str(ctx.work / ("ipcclient" + SUFFIX)), "--timer-before-init"],
+                               cwd=ctx.work, stdout=stream, stderr=subprocess.STDOUT)
+                ctx.procs.append(probe)
+                record_process(ctx.root, probe)
+                code = probe.wait(timeout=10)
+                ctx.procs.remove(probe)
+            text = output.read_text(encoding="utf-8", errors="replace")
+            assert code == 0 and re.search(r"timer before init code=-?[1-9][0-9]* called=0 bad=0", text), (code, text)
+            output = ctx.root / "timer-backlog.out"
+            with output.open("w", encoding="utf-8") as stream:
+                probe = launch([str(ctx.work / ("ipcclient" + SUFFIX)), "--timer-backlog"],
+                               cwd=ctx.work, stdout=stream, stderr=subprocess.STDOUT)
+                ctx.procs.append(probe)
+                record_process(ctx.root, probe)
+                code = probe.wait(timeout=10)
+                ctx.procs.remove(probe)
+            text = output.read_text(encoding="utf-8", errors="replace")
+            assert code == 0 and re.search(r"timer backlog first=1 second=2 final=3 child_first=0 child=1 stop=1 ticks=\d+/\d+ bad=0", text), (code, text)
+            print(text, flush=True)
         if hold_environment(ctx):
             start_hold_gameservers(ctx)
 

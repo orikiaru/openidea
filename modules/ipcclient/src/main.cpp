@@ -12,6 +12,8 @@
 #include "ipcclient.h"
 #include "hold_mgr.h"
 #include "oi_rpc_session_manager.h"
+#include "oi_timer_manager.h"
+#include "timer_mgr.h"
 
 #ifdef _SINGLE_THREAD_
 class PollWrongThreadProbe : public ::OI::Net::Channel
@@ -117,7 +119,9 @@ static int32_t CheckPollLoopBusy()
 			delete pTimer;
 			return OI_ERR_FAIL;
 		}
-		if (uv_timer_start(pTimer, [](uv_timer_t*) {}, 60000, 60000) != 0)
+		if (uv_timer_start(pTimer, [](uv_timer_t*)
+		{
+		}, 60000, 60000) != 0)
 		{
 			return OI_ERR_FAIL;
 		}
@@ -137,15 +141,38 @@ static int32_t CheckPollLoopBusy()
 
 int main(int iArgumentCount, char* vArguments[])
 {
+	if (iArgumentCount == 2 && std::strcmp(vArguments[1], "--timer-before-init") == 0)
+	{
+		bool bCalled = false;
+		const int32_t iStatus = ::OI::Timer::BaseTimerManager::GetInstance().AddTimer([&bCalled]()
+		{
+			bCalled = true;
+		}, 1);
+		const bool bPassed = iStatus != OI_OK && !bCalled;
+		std::printf("timer before init code=%d called=%d bad=%d\n", iStatus, bCalled ? 1 : 0, bPassed ? 0 : 1);
+		std::fflush(stdout);
+		return bPassed ? 0 : 1;
+	}
 	int32_t iCode = ::OI::Base::StartFramework("../config/ipcclient.toml");
 	if (iCode != OI_OK)
 	{
 		fprintf(stderr, "StartFramework failed: code=%d\n", iCode);
 		return iCode;
 	}
+	if (iArgumentCount == 2 && std::strcmp(vArguments[1], "--regression-ready") == 0)
+	{
+		std::fprintf(stderr, "ipcclient framework ready\n");
+		std::fflush(stderr);
+	}
 	if (iArgumentCount == 2 && std::strcmp(vArguments[1], "--poll-udp-close") == 0)
 	{
 		return CheckPollUdpClose();
+	}
+	if (iArgumentCount == 2 && std::strcmp(vArguments[1], "--timer-backlog") == 0)
+	{
+		iCode = TimerMgr::CheckBacklog();
+		::OI::Base::StopFramework();
+		return iCode;
 	}
 	if (iArgumentCount == 2 && std::strcmp(vArguments[1], "--poll-loop-busy") == 0)
 	{

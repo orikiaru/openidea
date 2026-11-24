@@ -114,7 +114,7 @@ class BaseTimerManager
 
 	// 每次登记独立持有闭包。次数包括首次触发；上下文中的次数表示本次之后还剩几次。
 	template <typename F>
-	    requires (std::is_invocable_v<F&, TimerContext&> || std::is_invocable_v<F&>)
+	    requires(std::is_invocable_v<F&, TimerContext&> || std::is_invocable_v<F&>)
 	int32_t AddTimer(F fnHandler, int iIntervalMilliseconds, int32_t iCount = 1)
 	{
 		if (iIntervalMilliseconds <= 0 || iCount <= 0)
@@ -154,7 +154,7 @@ class BaseTimerManager
 	// 推进 1 tick，这一跳到点的放进 vDue。调用方已持有时间轮锁。
 	void run_tick(TimerList& vDue);
 	// 把高层到期的定时器下放到更细的层。
-	void try_uniform();
+	void try_uniform(TimerList& vDue);
 	// 取出最低层这一跳到点的定时器。
 	void try_run_timer(TimerList& vDue);
 	// 推进过 tick 后，为单例的 OnTickUpdate / OnSecondUpdate 各启动协程，不等它们结束。
@@ -162,6 +162,7 @@ class BaseTimerManager
 
   private:
 	friend class TimerLevel;
+	friend class TimerTestAccess;
 	// 保护层级数组和 tick 游标。回调在锁外执行。
 	::OI::Thread::Mutex m_stWheelMutex;
 

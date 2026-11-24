@@ -47,6 +47,8 @@ def check_admission_rounds(text):
 
 
 def check_hold_timer(text):
+    assert "hold framework timer zero=-6 negative=-6 valid=0 invalid_calls=0 valid_calls=1 bad=0" in text
+    assert "hold timer boundaries phase=3 calls=18 bad=0" in text
     assert "hold timer exceptions executed=5 destroyed=5 bad=0" in text
     assert "hold timer once calls=2 destroyed=1 bad=0" in text
     assert re.search(r"hold timer repeat calls=3 throws=1 .* bad=0", text)

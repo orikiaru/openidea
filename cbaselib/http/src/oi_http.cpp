@@ -14,6 +14,7 @@
 #include "oi_timer_manager.h"
 #include <atomic>
 #include <deque>
+#include <list>
 #include <memory>
 #include <span>
 #include <stdexcept>
@@ -289,6 +290,10 @@ struct Call::Request
 	std::string sCaFile;
 	bool bReuse = true;
 	sid_t iSessionId = INVALID_SID;
+	std::vector<Net::NetAddr> vCandidates;
+	size_t iNextCandidate = 0;
+	uint64_t iDeadlineMilliseconds = 0;
+	std::list<std::shared_ptr<Request>>::iterator itWaiting;
 	HttpDial* pDial = nullptr; // poll thread only
 
 	std::string sRequest; // 待发报文。发布结果前释放，晚到的超时不再留着大包。
@@ -316,7 +321,8 @@ class HttpSessionManager final : public Net::SessionManager
 	using Pending = std::shared_ptr<Call::Request>;
 	struct Pool
 	{
-		std::deque<Pending> vWaiting;
+		std::list<Pending> vWaiting;
+		size_t iWaitingBytes = 0;
 		std::set<Pending> vActive;
 		std::deque<HttpSession*> vIdle;
 		std::unique_ptr<Net::TlsClientContext> pTls;
@@ -326,13 +332,16 @@ class HttpSessionManager final : public Net::SessionManager
 	std::map<Origin, Pool> m_mPools;
 	std::map<sid_t, HttpSession*> m_mSessions;
 	size_t m_iLimit = 4;
+	size_t m_iWaitingLimit = 1024;
+	size_t m_iWaitingBytesLimit = 64 * 1024 * 1024;
 	uint64_t m_iIdleMilliseconds = 60000;
 	bool m_bStopped = false;
 	HttpSessionManager();
 	void EnqueueOnLoop(const Pending& pCall);
 	void Pump(const Origin& stOrigin, Pool& stPool);
 	void Send(HttpSession& stSession, const Pending& pCall);
-	static void Resolved(void* pArgument, bool bOk, Net::NetAddr stAddress);
+	static void Resolved(void* pArgument, std::vector<Net::NetAddr> vCandidates);
+	void DialNext(const Pending& pCall);
 	void Finish(const Pending& pCall, int32_t iCode, const char* pReason);
 	static void Publish(const Pending& pCall, int32_t iCode, const char* pReason);
 	static void Stop();
@@ -906,7 +915,6 @@ void HttpSession::OnDataOut()
 {
 }
 
-
 void HttpSessionManager::Publish(const std::shared_ptr<Call::Request>& pRequestLocal, int32_t iCode, const char* pWhy)
 {
 	if (!pRequestLocal)
@@ -993,6 +1001,17 @@ HttpSessionManager::HttpSessionManager()
 	TryGetConfig("HttpClientPool.idle_timeout_ms", iIdle);
 	TryGetConfig("HttpClientPool.max_send_queue_bytes", iSendLimit);
 	m_iLimit = iLimit > 0 ? static_cast<size_t>(iLimit) : 4;
+	int64_t iWaiting = 1024, iWaitingBytes = 64 * 1024 * 1024;
+	TryGetConfig("HttpClientPool.max_waiting_per_server", iWaiting);
+	TryGetConfig("HttpClientPool.max_waiting_bytes_per_server", iWaitingBytes);
+	if (std::in_range<size_t>(iWaiting))
+	{
+		m_iWaitingLimit = static_cast<size_t>(iWaiting);
+	}
+	if (std::in_range<size_t>(iWaitingBytes))
+	{
+		m_iWaitingBytesLimit = static_cast<size_t>(iWaitingBytes);
+	}
 	m_iIdleMilliseconds = iIdle > 0 ? static_cast<uint64_t>(iIdle) : 60000;
 	iMaxSendQueueBytes = iSendLimit > 0 && static_cast<uint64_t>(iSendLimit) <= SIZE_MAX ? static_cast<size_t>(iSendLimit) : 64 * 1024 * 1024;
 	iMaxReceiveBufferBytes = kMaxHeader + kMaxBody;
@@ -1024,6 +1043,15 @@ void HttpSessionManager::EnqueueOnLoop(const Pending& pCall)
 		Publish(pCall, OI_ERR_CANCELLED, "cancelled");
 		return;
 	}
+	auto& stPool = m_mPools[pCall->stOrigin];
+	if (stPool.vActive.size() >= m_iLimit &&
+	    (stPool.vWaiting.size() >= m_iWaitingLimit || pCall->sRequest.size() > m_iWaitingBytesLimit - stPool.iWaitingBytes))
+	{
+		Publish(pCall, OI_ERR_BUSY, "HTTP waiting queue full");
+		return;
+	}
+	const int32_t iTimeout = pCall->iTimeoutMilliseconds > 0 ? pCall->iTimeoutMilliseconds : 5000;
+	pCall->iDeadlineMilliseconds = uv_now(Net::Poll::GetInstance().Loop()) + iTimeout;
 	// Only a live call needs a timeout. Completed requests and their bodies can be released immediately.
 	std::weak_ptr<Call::Request> pWeak = pCall;
 	const int32_t iTimerCode = Timer::BaseTimerManager::GetInstance().AddTimer([pWeak]()
@@ -1036,14 +1064,14 @@ void HttpSessionManager::EnqueueOnLoop(const Pending& pCall)
 				GetInstance().Finish(*pCallLocal, OI_ERR_TIMEOUT, "timeout");
 			}, new Pending(std::move(pHeld)));
 		}
-	}, pCall->iTimeoutMilliseconds > 0 ? pCall->iTimeoutMilliseconds : 5000);
+	}, iTimeout);
 	if (iTimerCode != OI_OK)
 	{
 		Publish(pCall, iTimerCode, "HTTP request timer");
 		return;
 	}
-	auto& stPool = m_mPools[pCall->stOrigin];
-	stPool.vWaiting.push_back(pCall);
+	pCall->itWaiting = stPool.vWaiting.insert(stPool.vWaiting.end(), pCall);
+	stPool.iWaitingBytes += pCall->sRequest.size();
 	Pump(pCall->stOrigin, stPool);
 }
 
@@ -1057,6 +1085,7 @@ void HttpSessionManager::Pump(const Origin& stOrigin, Pool& stPool)
 	while (!stPool.vWaiting.empty() && stPool.vActive.size() < m_iLimit)
 	{
 		auto pCall = std::move(stPool.vWaiting.front());
+		stPool.iWaitingBytes -= pCall->sRequest.size();
 		stPool.vWaiting.pop_front();
 		if (pCall->Cancelled())
 		{
@@ -1083,12 +1112,12 @@ void HttpSessionManager::Pump(const Origin& stOrigin, Pool& stPool)
 			CloseSession(stPool.vIdle.front()->GetSessionID());
 		}
 		stPool.vActive.insert(pCall);
-		Net::NetAddr::Resolve(stOrigin.sHost, std::to_string(stOrigin.iPort), &Resolved, new Pending(pCall));
+		Net::NetAddr::ResolveAll(stOrigin.sHost, std::to_string(stOrigin.iPort), &Resolved, new Pending(pCall));
 	}
 	stPool.bPumping = false;
 }
 
-void HttpSessionManager::Resolved(void* pArgument, bool bOk, Net::NetAddr stAddress)
+void HttpSessionManager::Resolved(void* pArgument, std::vector<Net::NetAddr> vCandidates)
 {
 	std::unique_ptr<Pending> pHeld(static_cast<Pending*>(pArgument));
 	const auto& pCall = *pHeld;
@@ -1096,43 +1125,74 @@ void HttpSessionManager::Resolved(void* pArgument, bool bOk, Net::NetAddr stAddr
 	{
 		return;
 	}
-	if (!bOk)
+	if (vCandidates.empty())
 	{
 		GetInstance().Finish(pCall, OI_ERR_CONNECT, "DNS resolution failed");
 		return;
 	}
-	Net::NetSocket stSocket;
-	stSocket.Attach(stAddress.CreateTcp(true));
-	if (stSocket.GetSocket() == INVALID_SOCKET_ID)
+	pCall->vCandidates = std::move(vCandidates);
+	GetInstance().DialNext(pCall);
+}
+
+void HttpSessionManager::DialNext(const Pending& pCall)
+{
+	while (pCall->iNextCandidate < pCall->vCandidates.size())
 	{
-		GetInstance().Finish(pCall, OI_ERR_CONNECT, "TCP socket creation failed");
+		auto& stAddress = pCall->vCandidates[pCall->iNextCandidate++];
+		Net::NetSocket stSocket;
+		stSocket.Attach(stAddress.CreateTcp(true));
+		if (stSocket.GetSocket() == INVALID_SOCKET_ID)
+		{
+			continue;
+		}
+		const int iResult = NetOs_Connect(stSocket.GetSocket(), stAddress.NetAttrPtr(), stAddress.NetAttrLen());
+		if (iResult == 0)
+		{
+			GetInstance().Connected(pCall, stSocket.GetSocket());
+			return;
+		}
+		if (errno != EINPROGRESS)
+		{
+			NetOs_Close(stSocket.GetSocket());
+			continue;
+		}
+		pCall->pDial = new HttpDial(stSocket, pCall);
+		const int32_t iRegisterStatus = Net::Poll::GetInstance().IOEventRegister(pCall->pDial, false, true);
+		if (iRegisterStatus != OI_OK)
+		{
+			Finish(pCall, OI_ERR_CONNECT, "TCP connect registration failed");
+			return;
+		}
+		if (pCall->iNextCandidate < pCall->vCandidates.size())
+		{
+			// Keep part of the original request deadline for untried addresses.
+			const uint64_t iNow = uv_now(Net::Poll::GetInstance().Loop());
+			const size_t iAttempt = pCall->iNextCandidate;
+			const uint64_t iRemaining = pCall->iDeadlineMilliseconds > iNow ? pCall->iDeadlineMilliseconds - iNow : 0;
+			const int iSlice = static_cast<int>(std::max<uint64_t>(1, iRemaining / (1 + pCall->vCandidates.size() - iAttempt)));
+			const int32_t iTimerCode = Timer::BaseTimerManager::GetInstance().AddTimer([pWeak = std::weak_ptr<Call::Request>(pCall), iAttempt]()
+			{
+				if (auto pHeld = pWeak.lock(); pHeld && pHeld->pDial && pHeld->iNextCandidate == iAttempt)
+				{
+					delete std::exchange(pHeld->pDial, nullptr);
+					GetInstance().DialNext(pHeld);
+				}
+			}, iSlice);
+			if (iTimerCode != OI_OK)
+			{
+				Finish(pCall, iTimerCode, "TCP candidate timer");
+			}
+		}
 		return;
 	}
-	const int iResult = NetOs_Connect(stSocket.GetSocket(), stAddress.NetAttrPtr(), stAddress.NetAttrLen());
-	if (iResult == 0)
-	{
-		GetInstance().Connected(pCall, stSocket.GetSocket());
-		return;
-	}
-	if (errno != EINPROGRESS)
-	{
-		NetOs_Close(stSocket.GetSocket());
-		GetInstance().Finish(pCall, OI_ERR_CONNECT, "TCP connect failed");
-		return;
-	}
-	pCall->pDial = new HttpDial(stSocket, pCall);
-	const int32_t iRegisterStatus = Net::Poll::GetInstance().IOEventRegister(pCall->pDial, false, true);
-	if (iRegisterStatus != OI_OK)
-	{
-		GetInstance().Finish(pCall, OI_ERR_CONNECT, "TCP connect registration failed");
-	}
+	Finish(pCall, OI_ERR_CONNECT, "TCP connect failed");
 }
 
 void HttpSessionManager::Connected(const Pending& pCall, net_socket_t iSocket)
 {
 	if (iSocket == INVALID_SOCKET_ID)
 	{
-		Finish(pCall, OI_ERR_CONNECT, "TCP connect failed");
+		DialNext(pCall);
 		return;
 	}
 	auto& stPool = m_mPools.at(pCall->stOrigin);
@@ -1204,7 +1264,8 @@ void HttpSessionManager::Finish(const Pending& pCall, int32_t iCode, const char*
 	}
 	if (!stPool.vActive.erase(pCall))
 	{
-		std::erase(stPool.vWaiting, pCall);
+		stPool.iWaitingBytes -= pCall->sRequest.size();
+		stPool.vWaiting.erase(pCall->itWaiting);
 	}
 	Publish(pCall, iCode, pReason);
 	Pump(pCall->stOrigin, stPool);

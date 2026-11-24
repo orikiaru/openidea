@@ -21,6 +21,7 @@
 #include "oi_poll.h"
 #include "oi_net_session.h"
 #include "oi_timer_manager.h"
+#include "oi_framework_timer.h"
 #include <uv.h>
 #include "test_board.h"
 #include <atomic>
@@ -32,11 +33,10 @@
 #include <memory>
 #include <optional>
 #include <random>
+#include <thread>
 #include <string>
 #include <thread>
 #include <vector>
-
-
 
 // 秒更新单独注册。一个单例不能同时有 OnTickUpdate 和 OnSecondUpdate。
 class HoldSecondProbe
@@ -123,6 +123,155 @@ struct TimerRepeatState
 	std::atomic<int64_t> vTicks[3]{};
 };
 
+struct TimerBoundaryState
+{
+	std::atomic<int32_t> iCalls{0};
+	std::atomic<int32_t> iBad{0};
+	std::atomic<int32_t> iPhase{0};
+};
+
+struct FrameworkTimerProbeState
+{
+	std::atomic<int32_t> iInvalidCalls{0};
+	std::atomic<int32_t> iValidCalls{0};
+};
+
+class FrameworkTimerProbe : public OI::Timer::BaseTimer
+{
+	std::shared_ptr<FrameworkTimerProbeState> m_pState;
+	bool m_bRepeat;
+	int32_t m_iCalls = 0;
+
+  public:
+	FrameworkTimerProbe(std::shared_ptr<FrameworkTimerProbeState> pState, bool bRepeat)
+	    : m_pState(std::move(pState)), m_bRepeat(bRepeat)
+	{
+	}
+	bool OnTimer() override
+	{
+		if (m_bRepeat)
+		{
+			++m_pState->iInvalidCalls;
+			if (++m_iCalls == 1)
+			{
+				return OI::Timer::RESET_TIMER;
+			}
+			delete this;
+			return OI::Timer::END_TIMER;
+		}
+		++m_pState->iValidCalls;
+		delete this;
+		return OI::Timer::END_TIMER;
+	}
+};
+
+namespace OI::Timer
+{
+class TimerTestAccess
+{
+  public:
+	static void Backdate(BaseTimerManager& stManager, int32_t iMilliseconds)
+	{
+		OI::Thread::MutexGuard stLock(stManager.m_stWheelMutex);
+		stManager.m_stLastTickMonotonic -= std::chrono::milliseconds(iMilliseconds);
+	}
+	static void Register(BaseTimerManager& stManager, BaseTimer* pTimer, int32_t iTicks)
+	{
+		OI::Thread::MutexGuard stLock(stManager.m_stWheelMutex);
+		const int32_t iMilliseconds = iTicks * stManager.m_iTickOffsetMilliseconds;
+		pTimer->InitData(iMilliseconds, stManager.m_iCurrentTick + iTicks, stManager.m_stCurrentTimeValue, iMilliseconds);
+		stManager.add_timer(pTimer);
+	}
+};
+}
+
+struct TimerBacklogState
+{
+	int32_t iRepeat = 0;
+	int32_t iStop = 0;
+	int32_t iChild = 0;
+	int32_t iChildCode = OI_ERR_FAIL;
+	int64_t iFirstTick = -1;
+	int64_t iSecondTick = -1;
+	int64_t iSlowMilliseconds = 0;
+};
+
+int32_t TimerMgr::CheckBacklog()
+{
+	return OI::Net::Poll::GetInstance().StartListener([](void*) -> int32_t
+	{
+		auto& stTimer = OI::Timer::BaseTimerManager::GetInstance();
+		auto pState = std::make_shared<TimerBacklogState>();
+		const int32_t iRepeatCode = stTimer.AddTimer([pState]()
+		{
+			++pState->iRepeat;
+			if (pState->iRepeat == 1)
+			{
+				auto& stLocalTimer = OI::Timer::BaseTimerManager::GetInstance();
+				pState->iFirstTick = stLocalTimer.GetCurTick();
+				pState->iChildCode = stLocalTimer.AddTimer([pState]()
+				{
+					++pState->iChild;
+				}, 1);
+				const auto stBegin = std::chrono::steady_clock::now();
+				std::this_thread::sleep_for(std::chrono::milliseconds(60));
+				pState->iSlowMilliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - stBegin).count();
+			}
+			else if (pState->iRepeat == 2)
+			{
+				pState->iSecondTick = OI::Timer::BaseTimerManager::GetInstance().GetCurTick();
+			}
+		}, 1, 3);
+		const int32_t iStopCode = stTimer.AddTimer([pState](OI::Timer::TimerContext& stContext)
+		{
+			++pState->iStop;
+			stContext.Stop();
+		}, 1, 3);
+		OI::Timer::TimerTestAccess::Backdate(stTimer, 220);
+		stTimer.Update();
+		const int32_t iFirstCount = pState->iRepeat;
+		const int32_t iFirstChild = pState->iChild;
+		OI::Timer::TimerTestAccess::Backdate(stTimer, 100);
+		stTimer.Update();
+		const int32_t iSecondCount = pState->iRepeat;
+		OI::Timer::TimerTestAccess::Backdate(stTimer, 100);
+		stTimer.Update();
+		const bool bPassed = iRepeatCode == OI_OK && iStopCode == OI_OK && pState->iChildCode == OI_OK && iFirstCount == 1 && iFirstChild == 0 && iSecondCount == 2 && pState->iRepeat == 3 && pState->iStop == 1 && pState->iChild == 1 && pState->iSecondTick > pState->iFirstTick && pState->iSlowMilliseconds >= 50;
+		std::printf("timer backlog first=%d second=%d final=%d child_first=%d child=%d stop=%d ticks=%lld/%lld bad=%d\n", iFirstCount, iSecondCount, pState->iRepeat, iFirstChild, pState->iChild, pState->iStop, static_cast<long long>(pState->iFirstTick), static_cast<long long>(pState->iSecondTick), bPassed ? 0 : 1);
+		std::fflush(stdout);
+		return bPassed ? OI_OK : OI_ERR_FAIL;
+	}, nullptr);
+}
+
+class BoundaryTimer : public OI::Timer::BaseTimer
+{
+	std::shared_ptr<TimerBoundaryState> m_pState;
+	int32_t m_iRequestedTicks;
+	int64_t m_iTargetTick = 0;
+
+  public:
+	BoundaryTimer(std::shared_ptr<TimerBoundaryState> pState, int32_t iRequestedTicks)
+	    : m_pState(std::move(pState)), m_iRequestedTicks(iRequestedTicks)
+	{
+	}
+	void SetTarget(int64_t iTargetTick)
+	{
+		m_iTargetTick = iTargetTick;
+	}
+	bool OnTimer() override
+	{
+		const int64_t iActualTick = OI::Timer::BaseTimerManager::GetInstance().GetCurTick();
+		if (iActualTick != m_iTargetTick)
+		{
+			std::fprintf(stderr, "timer boundary requested_ticks=%d target=%lld actual=%lld\n", m_iRequestedTicks, static_cast<long long>(m_iTargetTick), static_cast<long long>(iActualTick));
+			++m_pState->iBad;
+		}
+		++m_pState->iCalls;
+		delete this;
+		return OI::Timer::END_TIMER;
+	}
+};
+
 struct TimerOnceLifetime
 {
 	std::shared_ptr<TimerOnceState> pState;
@@ -158,6 +307,68 @@ struct TimerClosureProbe
 
 OI::Coro::TaskResult<int> TimerMgr::CheckTimerExceptions()
 {
+	auto pFrameworkProbe = std::make_shared<FrameworkTimerProbeState>();
+	auto* pZeroTimer = new FrameworkTimerProbe(pFrameworkProbe, true);
+	auto* pNegativeTimer = new FrameworkTimerProbe(pFrameworkProbe, true);
+	auto* pValidTimer = new FrameworkTimerProbe(pFrameworkProbe, false);
+	const int32_t iZeroFramework = OI::Timer::FrameworkTimer::AddTimer(pZeroTimer, 0);
+	const int32_t iNegativeFramework = OI::Timer::FrameworkTimer::AddTimer(pNegativeTimer, -1);
+	const int32_t iValidFramework = OI::Timer::FrameworkTimer::AddTimer(pValidTimer, OI::Timer::BaseTimerManager::GetInstance().GetTickOffsetMS());
+	if (iZeroFramework != OI_OK)
+	{
+		delete pZeroTimer;
+	}
+	if (iNegativeFramework != OI_OK)
+	{
+		delete pNegativeTimer;
+	}
+	if (iValidFramework != OI_OK)
+	{
+		delete pValidTimer;
+	}
+	auto pBoundary = std::make_shared<TimerBoundaryState>();
+	OI::Net::Poll::GetInstance().CallOnLoop([](void* pArgument)
+	{
+		auto* pHolder = static_cast<std::shared_ptr<TimerBoundaryState>*>(pArgument);
+		auto pState = *pHolder;
+		delete pHolder;
+		auto& stTimers = OI::Timer::BaseTimerManager::GetInstance();
+		const int32_t iCode = stTimers.AddTimer([pState](OI::Timer::TimerContext& stContext)
+		{
+			auto& stLocalTimers = OI::Timer::BaseTimerManager::GetInstance();
+			const int64_t iStartTick = stLocalTimers.GetCurTick();
+			const int32_t iPhase = static_cast<int32_t>(iStartTick % 4);
+			if (iPhase > 1 || (pState->iPhase.load() & (1 << iPhase)) != 0)
+			{
+				return;
+			}
+			pState->iPhase.fetch_or(1 << iPhase);
+			if (pState->iPhase.load() == 3)
+			{
+				stContext.Stop();
+			}
+			for (const int32_t iTicks : {3, 4, 5, 15, 16, 17, 63, 64, 65})
+			{
+				auto pTimer = std::make_unique<BoundaryTimer>(pState, iTicks);
+				OI::Timer::TimerTestAccess::Register(stLocalTimers, pTimer.get(), iTicks);
+				pTimer->SetTarget(iStartTick + iTicks);
+				pTimer.release();
+			}
+		}, 1, 64);
+		if (iCode != OI_OK)
+		{
+			++pState->iBad;
+		}
+	}, new std::shared_ptr<TimerBoundaryState>(pBoundary));
+	const auto stDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+	while (pBoundary->iCalls.load() < 18 && std::chrono::steady_clock::now() < stDeadline)
+	{
+		co_await OI::Coro::yield(50);
+	}
+	const int32_t iBoundaryBad = pBoundary->iBad.load() + (pBoundary->iCalls.load() != 18 || pBoundary->iPhase.load() != 3 ? 1 : 0);
+	LOG_TRACE("hold timer boundaries phase=%d calls=%d bad=%d", pBoundary->iPhase.load(), pBoundary->iCalls.load(), iBoundaryBad);
+	const int32_t iFrameworkBad = (iZeroFramework == OI_ERR_INVALID_ARGUMENT && iNegativeFramework == OI_ERR_INVALID_ARGUMENT && iValidFramework == OI_OK && pFrameworkProbe->iInvalidCalls == 0 && pFrameworkProbe->iValidCalls == 1) ? 0 : 1;
+	LOG_TRACE("hold framework timer zero=%d negative=%d valid=%d invalid_calls=%d valid_calls=%d bad=%d", iZeroFramework, iNegativeFramework, iValidFramework, pFrameworkProbe->iInvalidCalls.load(), pFrameworkProbe->iValidCalls.load(), iFrameworkBad);
 	TimerMgr::GetInstance().WatchUpdate(true);
 	HoldSecondProbe::GetInstance().WatchUpdate(true);
 	auto pState = std::make_shared<TimerExceptionProbe>();
@@ -328,7 +539,7 @@ OI::Coro::TaskResult<int> TimerMgr::CheckTimerExceptions()
 	LOG_TRACE("hold timer repeat calls=%d throws=%d zero_count=%d negative_count=%d zero_interval=%d negative_interval=%d bad=%d", pRepeat->iCalls.load(), pRepeat->iThrows.load(), iZeroCount, iNegativeCount, iZeroInterval, iNegativeInterval, iRepeatBad);
 	const int32_t iContextBad = (iStop == OI_OK && iExtend == OI_OK && iSetZero == OI_OK && iSetNegative == OI_OK && pRepeat->iStopped == 1 && pRepeat->iExtended == 3 && pRepeat->iSetZero == 1 && pRepeat->iSetNegative == 1 && pRepeat->vRemaining[0] == 0 && pRepeat->vRemaining[1] == 1 && pRepeat->vRemaining[2] == 0) ? 0 : 1;
 	LOG_TRACE("hold timer context stopped=%d extended=%d remaining=%d/%d/%d zero=%d negative=%d bad=%d", pRepeat->iStopped.load(), pRepeat->iExtended.load(), pRepeat->vRemaining[0].load(), pRepeat->vRemaining[1].load(), pRepeat->vRemaining[2].load(), pRepeat->iSetZero.load(), pRepeat->iSetNegative.load(), iContextBad);
-	int iBad = (pState->bPassed ? 0 : 1) + iOnceBad;
+	int iBad = (pState->bPassed ? 0 : 1) + iOnceBad + iBoundaryBad + iFrameworkBad;
 	iBad += iRepeatBad + iContextBad;
 	if (pState->vTicks[0] != pState->vTicks[1].load() || pState->vTicks[2] != pState->vTicks[3].load() || pState->vTicks[4] <= pState->vTicks[3].load())
 	{

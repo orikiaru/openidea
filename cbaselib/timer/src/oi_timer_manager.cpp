@@ -22,8 +22,14 @@ BaseTimerManager::BaseTimerManager()
 
 int32_t BaseTimerManager::Init()
 {
+	const auto& stConfig = ::OI::Base::Config::GlobalConfig();
 	uint32_t iOffsetMilliseconds = 50;
-	TryGetConfigNoReturn("Timer.offset_ms", iOffsetMilliseconds);
+	if (stConfig.Contains("Timer.offset_ms") && !stConfig.GetAs("Timer.offset_ms", iOffsetMilliseconds))
+	{
+		fprintf(stderr, "configuration read failed: key=Timer.offset_ms function=%s file=%s line=%d code=%d\n",
+		    __func__, __FILE__, __LINE__, OI_ERR_INVALID_ARGUMENT);
+		return OI_ERR_INVALID_ARGUMENT;
+	}
 	if (iOffsetMilliseconds == 0 || 1000 % iOffsetMilliseconds != 0)
 	{
 		fprintf(stderr, "Timer.offset_ms=%u must divide 1000\n", iOffsetMilliseconds);
@@ -31,7 +37,12 @@ int32_t BaseTimerManager::Init()
 	}
 
 	uint32_t iTimerLevelCount = 4;
-	TryGetConfigNoReturn("Timer.timer_lv_count", iTimerLevelCount);
+	if (stConfig.Contains("Timer.timer_lv_count") && !stConfig.GetAs("Timer.timer_lv_count", iTimerLevelCount))
+	{
+		fprintf(stderr, "configuration read failed: key=Timer.timer_lv_count function=%s file=%s line=%d code=%d\n",
+		    __func__, __FILE__, __LINE__, OI_ERR_INVALID_ARGUMENT);
+		return OI_ERR_INVALID_ARGUMENT;
+	}
 	if (iTimerLevelCount <= 2)
 	{
 		fprintf(stderr, "Timer.timer_lv_count=%u must be bigger than 2\n", iTimerLevelCount);
@@ -40,8 +51,14 @@ int32_t BaseTimerManager::Init()
 	m_iTimerLevelCount = iTimerLevelCount;
 
 	std::vector<int64_t> vTimerLevels;
-	if (!::OI::Base::Config::GlobalConfig().GetArrayAs("Timer.timer_lvs", vTimerLevels))
+	if (!stConfig.GetArrayAs("Timer.timer_lvs", vTimerLevels))
 	{
+		if (stConfig.Contains("Timer.timer_lvs"))
+		{
+			fprintf(stderr, "configuration read failed: key=Timer.timer_lvs function=%s file=%s line=%d code=%d\n",
+			    __func__, __FILE__, __LINE__, OI_ERR_INVALID_ARGUMENT);
+			return OI_ERR_INVALID_ARGUMENT;
+		}
 		//没有就给一组默认数据,影响不大.
 		std::vector<int64_t> vTmp;
 		for (size_t iIndexLocal = 0; iIndexLocal < m_iTimerLevelCount; ++iIndexLocal)
@@ -183,11 +200,15 @@ int32_t BaseTimerManager::RegisterTimer(BaseTimer* pTimer, int iMillisecond)
 	{
 		return iThreadStatus;
 	}
-	if (!pTimer)
+	if (!pTimer || iMillisecond <= 0)
 	{
 		return OI_ERR_INVALID_ARGUMENT;
 	}
 	::OI::Thread::MutexGuard stLock(m_stWheelMutex);
+	if (!m_iTickOffsetMilliseconds)
+	{
+		return OI_ERR_FAIL;
+	}
 	const int64_t iTicks = TicksFromNow(iMillisecond);
 	pTimer->InitData(iMillisecond, m_iCurrentTick + iTicks, m_stCurrentTimeValue, iTicks * m_iTickOffsetMilliseconds);
 	add_timer(pTimer);
@@ -216,7 +237,7 @@ int64_t BaseTimerManager::TicksFromNow(int iMillisecond) const
 void BaseTimerManager::add_timer(BaseTimer* pTimer)
 {
 	int64_t iOffset = pTimer->m_stData.m_iTriggerTick - m_iCurrentTick;
-	// 粗层倒出来时可能已经过了点。放到下一跳，避免在均匀过程里再进回调。
+	// 新登记或续期的任务至少间隔一跳。级联时已经到期的任务直接进入本跳的待执行批次。
 	if (iOffset <= 0)
 	{
 		iOffset = 1;
@@ -253,22 +274,36 @@ void BaseTimerManager::run_timer(BaseTimer* pTimer)
 	if (pTimer->OnTimer())
 	{
 		::OI::Thread::MutexGuard stLock(m_stWheelMutex);
-		// 周期定时器按逻辑 tick 续，停顿时后面的跳还能补上。
-		int64_t iTicks = milling2tick(pTimer->GetOffsetTime());
+		// 从回调完成时重新计时，错过的周期不在本次补帧中重放。
+		const int64_t iTicks = TicksFromNow(pTimer->GetOffsetTime());
 		pTimer->InitData(pTimer->GetOffsetTime(), m_iCurrentTick + iTicks, m_stCurrentTimeValue, iTicks * m_iTickOffsetMilliseconds);
 		add_timer(pTimer);
 	}
 }
 
-void BaseTimerManager::try_uniform()
+void BaseTimerManager::try_uniform(TimerList& vDue)
 {
 	//尝试均匀其他层级定时器
 	for (uint32_t iIndexLocal = 1; iIndexLocal < m_iTimerLevelCount; ++iIndexLocal)
 	{
-		if (m_vTimerLevels[iIndexLocal - 1].IsLevelEnd())
+		if (!m_vTimerLevels[iIndexLocal - 1].IsLevelEnd())
 		{
-			//先执行tick,以便均匀后的定时器进入准确的offset
-			m_vTimerLevels[iIndexLocal].RunTick(this, NULL);
+			break;
+		}
+		TimerList vSlot;
+		m_vTimerLevels[iIndexLocal].RunTick(vSlot);
+		while (!vSlot.empty())
+		{
+			auto* pTimer = vSlot.front();
+			if (pTimer->m_stData.m_iTriggerTick <= m_iCurrentTick)
+			{
+				vDue.splice(vDue.end(), vSlot, vSlot.begin());
+			}
+			else
+			{
+				vSlot.pop_front();
+				add_timer(pTimer);
+			}
 		}
 	}
 }
@@ -277,7 +312,7 @@ void BaseTimerManager::try_run_timer(TimerList& vDue)
 {
 	//取出本tick到点的定时器
 	TimerLevel& stLevel = m_vTimerLevels[0];
-	stLevel.RunTick(this, &vDue);
+	stLevel.RunTick(vDue);
 }
 
 void BaseTimerManager::run_tick(TimerList& vDue)
@@ -290,7 +325,7 @@ void BaseTimerManager::run_tick(TimerList& vDue)
 	//第一层如果到尾,需要触发上级均匀
 	if (m_vTimerLevels[0].IsLevelEnd())
 	{
-		try_uniform();
+		try_uniform(vDue);
 	}
 }
 }

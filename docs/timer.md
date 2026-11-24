@@ -33,7 +33,9 @@ libuv 到点调用 `OnSignal`，`OnSignal` 在 poll 线程上直接执行 `Updat
 
 回调时间按 `offset_ms` 对齐，用 `steady_clock` 计时。系统校时不影响相对延时，日历时间单独从系统时钟更新。没走完的一跳留到下次；外部 `AddTimer` 向上取整到到期 tick，不会提前触发。线程调度和回调执行仍可能造成额外延迟。`AddTimer(lambda)` 的 lambda 在 `Update` 摘除定时器、释放轮锁后直接执行，不再二次入队；回调应保持短小，耗时工作交给协程。
 
-业务侧用 `AddTimer(fn, interval_ms, count = 1)` 登记无参数回调，或接收 `OI::Timer::TimerContext&` 的回调。间隔毫秒数和执行次数均须为正，否则返回 `OI_ERR_INVALID_ARGUMENT`；成功后按原逻辑 tick 自动续期。默认执行一次，不支持登记或移除定时器对象。回调可移动捕获资源。上下文只在当前回调期间借用，不能保存引用或指针；`Remaining()` 返回本次执行之后剩余的次数，`SetRemaining(n)` 覆盖剩余次数（`n <= 0` 时不再触发），`Stop()` 停止后续触发。回调也可增加剩余次数。单例周期工作仍使用单例更新接口。
+层级边界上已到期的定时器在当前 tick 派发；高层先摘出整格，再将未到期的定时器重新挂入时间轮，避免同一格在本次推进中被反复处理。
+
+业务侧用 `AddTimer(fn, interval_ms, count = 1)` 登记无参数回调，或接收 `OI::Timer::TimerContext&` 的回调。间隔毫秒数和执行次数均须为正，否则返回 `OI_ERR_INVALID_ARGUMENT`；重复定时器从回调结束时起等待原间隔，错过的周期不重放。默认执行一次，不支持登记或移除定时器对象。回调可移动捕获资源。上下文只在当前回调期间借用，不能保存引用或指针；`Remaining()` 返回本次执行之后剩余的次数，`SetRemaining(n)` 覆盖剩余次数（`n <= 0` 时不再触发），`Stop()` 停止后续触发。回调也可增加剩余次数。单例周期工作仍使用单例更新接口。
 
 单例跟着时间轮更新：在 `DECLARE_SINGLETON` 的类里写公有的 `OI::Coro::Task OnTickUpdate(uint64_t iNowMilliseconds)` 或 `OI::Coro::Task OnSecondUpdate(time_t iNow)`。两个只能写一个，都写会编译失败；返回类型不是 `OI::Coro::Task` 也会 `static_assert` 失败。不写就不注册，等于空 Update。毫秒参数是秒时间戳乘 1000 再加毫秒；秒参数是 `time_t`。推进了 tick 才启动 `OnTickUpdate`；日历秒变化才启动 `OnSecondUpdate`，错过的秒不补。时间戳只在 `Update` 里写。
 

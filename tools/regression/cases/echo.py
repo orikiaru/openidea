@@ -75,6 +75,71 @@ class EchoCase(Case):
         assert 'registry publish name="ipc.server"' in output, output
         assert "ipc server listen" not in output, output
         print("registry publish failure released listen PASS", flush=True)
+        timer_text = (ctx.cfg / "ipcserver.toml").read_text(encoding="utf-8")
+        zero_config = ctx.cfg / "ipcserver-timer-zero.toml"
+        zero_config.write_text(replace(timer_text, "offset_ms", "0"), encoding="utf-8")
+        zero, zero_path = ctx.start("ipcserver-timer-zero",
+                                    [str(ctx.work / ("ipcserver" + SUFFIX)), str(zero_config)])
+        zero.wait(timeout=15)
+        ctx.procs.remove(zero)
+        output = zero_path.read_text(encoding="utf-8", errors="replace")
+        assert zero.returncode == expected_publish, (zero.returncode, output)
+        assert "Timer.offset_ms=0 must divide 1000" in output, output
+        assert "StartFramework failed: code=-6" in output, output
+        assert "ipc server listen" not in output, output
+        print("zero timer offset rejected PASS", flush=True)
+        for key, value in (("offset_ms", "-50"), ("timer_lv_count", "-50")):
+            invalid_text = replace(timer_text, key, value)
+            invalid_config = ctx.cfg / ("ipcserver-invalid-" + key + "-" + value + ".toml")
+            invalid_config.write_text(invalid_text, encoding="utf-8")
+            invalid, invalid_path = ctx.start("ipcserver-invalid-" + key,
+                                              [str(ctx.work / ("ipcserver" + SUFFIX)), str(invalid_config)])
+            invalid.wait(timeout=15)
+            ctx.procs.remove(invalid)
+            output = invalid_path.read_text(encoding="utf-8", errors="replace")
+            assert invalid.returncode == expected_publish, (key, invalid.returncode, output)
+            assert "key=Timer." + key in output and "function=Init" in output and "oi_timer_manager.cpp" in output, output
+            assert re.search(r"line=[1-9][0-9]*\b", output) and "code=-6" in output, output
+            assert "ipc server listen" not in output, output
+        missing_text = re.sub(r"(?m)^(?:offset_ms|timer_lv_count)\s*=.*\n", "", timer_text)
+        missing_config = ctx.cfg / "ipcserver-timer-default.toml"
+        missing_config.write_text(missing_text, encoding="utf-8")
+        default, default_path = ctx.start("ipcserver-timer-default",
+                                          [str(ctx.work / ("ipcserver" + SUFFIX)), str(missing_config)])
+        ctx.ready(default, default_path, "ipc server listen")
+        ctx.stop(default)
+        default.wait(timeout=10)
+        ctx.procs.remove(default)
+        assert default.returncode == 0, "default timer startup exit=%s" % default.returncode
+        print("timer invalid values rejected and defaults start PASS", flush=True)
+        overflow_config = ctx.cfg / "ipcserver-service-id-overflow.toml"
+        overflow_text = (ctx.cfg / "ipcserver.toml").read_text(encoding="utf-8")
+        assert 'id = 1' in overflow_text
+        overflow_config.write_text(overflow_text.replace('id = 1', 'id = 4294967297', 1), encoding="utf-8")
+        overflow, overflow_path = ctx.start("ipcserver-service-id-overflow",
+                                            [str(ctx.work / ("ipcserver" + SUFFIX)), str(overflow_config)])
+        overflow.wait(timeout=15)
+        ctx.procs.remove(overflow)
+        output = overflow_path.read_text(encoding="utf-8", errors="replace")
+        assert overflow.returncode == expected_publish, "overflow service id exit=%s\n%s" % (overflow.returncode, output)
+        assert "registry publish ipcserver:" in output and "[Service] id" in output, output
+        assert "ipc server listen" not in output, output
+        print("overflow service id rejected PASS", flush=True)
+        for value in ("0", "65536", "abc", "80x"):
+            invalid_config = ctx.cfg / ("ipcserver-advertise-" + value + ".toml")
+            invalid_text = (ctx.cfg / "ipcserver.toml").read_text(encoding="utf-8")
+            assert '# advertise_port = "27981"' in invalid_text
+            invalid_text = invalid_text.replace('# advertise_port = "27981"', 'advertise_port = "%s"' % value)
+            invalid_config.write_text(invalid_text, encoding="utf-8")
+            invalid, invalid_path = ctx.start("ipcserver-advertise-" + value,
+                                              [str(ctx.work / ("ipcserver" + SUFFIX)), str(invalid_config)])
+            invalid.wait(timeout=15)
+            ctx.procs.remove(invalid)
+            output = invalid_path.read_text(encoding="utf-8", errors="replace")
+            assert invalid.returncode == expected_publish, "invalid advertise_port=%s exit=%s\n%s" % (value, invalid.returncode, output)
+            assert "registry publish invalid advertise_port for IpcServer" in output, output
+            assert "ipc server listen" not in output, output
+        print("invalid registry advertise ports rejected PASS", flush=True)
 
     def scenario(self, ctx):
         case = ctx.name

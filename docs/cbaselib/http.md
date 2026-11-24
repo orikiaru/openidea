@@ -66,7 +66,9 @@ if (stResponse.iCode != OI_OK)
 
 可以直接用 `Client::GetUrl(url[, options])`、`Client::PostUrl(url, body, contentType[, options])` 或 `Client::SendUrl(url, request[, options])` 发起单次请求。`ClientOptions` 的 `iTimeoutMilliseconds` 控制请求超时，`sCaFile` 指定 HTTPS 的可信 CA 文件；结果仍先检查 `iCode`，再读取响应。`SendUrl` 使用 URL 中的路径和查询，`Request::sPath` 不覆盖 URL 路径。
 
-绑定客户端和 URL 请求共用进程级 HTTP 会话管理器，并发请求使用独立会话；HTTP、HTTPS 及不同 CA 配置不混用连接；限额按 scheme、规范化 host 和 port 统计，同一目标的不同 CA 配置共享该限额。需要本次请求使用新连接时，设置 `Request::bFreshConnection`。`[HttpClientPool] max_connections_per_server` 默认 4，限制每个目标的连接数；达到上限时排队，请求超时也覆盖排队时间。`idle_timeout_ms` 默认 60000，空闲连接由秒级周期清理。新连接也计入上限，达到上限时需先回收空闲连接才能创建。
+绑定客户端和 URL 请求共用进程级 HTTP 会话管理器，并发请求使用独立会话；HTTP、HTTPS 及不同 CA 配置不混用连接；限额按 scheme、规范化 host 和 port 统计，同一目标的不同 CA 配置共享该限额。需要本次请求使用新连接时，设置 `Request::bFreshConnection`。`[HttpClientPool] max_connections_per_server` 默认 4，限制每个目标的连接数；达到上限时排队，请求超时也覆盖排队时间。`max_waiting_per_server` 默认 1024，`max_waiting_bytes_per_server` 默认 67108864，以编码后的请求头和正文计数，任一配置为 0 禁止排队，超过限额返回 `OI_ERR_BUSY`。`idle_timeout_ms` 默认 60000，空闲连接由秒级周期清理。新连接也计入上限，达到上限时需先回收空闲连接才能创建。
+
+域名解析返回多个地址时，HTTP 可在请求发送之前连接失败后尝试下一个地址；请求发送后不自动重放。服务端对 `Expect: 100-continue` 先发送临时响应再接收正文，未知 expectation 返回 417。
 
 ## 服务端连接与请求时限
 

@@ -147,7 +147,11 @@ def run_case(case, args):
             ctx.started = started
             ctx.last_growth = last_growth
             ctx.last_log_bytes = last_log_bytes
-            ctx.client, ctx.clientpath = ctx.start("ipcclient", env=env)
+            command = ([str(ctx.work / ("ipcclient" + SUFFIX)), "--regression-ready"]
+                       if ctx.name == "disk-full" else None)
+            ctx.client, ctx.clientpath = ctx.start("ipcclient", command, env=env)
+            if ctx.name == "disk-full":
+                ctx.ready(ctx.client, ctx.clientpath, "ipcclient framework ready")
             # 正常通过时 hold 约 50 秒，其余不超过 35 秒；留三四倍余量，失败时不用干等。
             ctx.deadline = started + entry.timeout
             while ctx.client.poll() is None:

@@ -132,7 +132,7 @@ PB 每个字段只有一条 `uint32 index + uint32 bytesize + payload`，整数�
 
 `logd` 不调 `OI::Log::Init`，不作为日志客户端连自己。它在 `LogManager::Init` 之后调 `OI::Log::InitLocal`，自己的日志直接进本地文件。
 
-`[ThreadPool] threadcount` 是多线程工人数，必须配且大于 0，否则 `ThreadPool::Init` 返回 `OI_ERR_INVALID_ARGUMENT`。旧键 `normal` 仍会作为兼容读一次：读不到 `threadcount` 时会再读 `normal`，读到了就在 stderr 打一行 `ThreadPool.normal is deprecated, rename it to ThreadPool.threadcount`，然后照常用。旧键 `urgent`、`queue`、`max_task_count` 不再读取，留着不报错。线程池没有任务队列，只有一条协程句柄队列。
+`[ThreadPool] threadcount` 是多线程工人数，必须配且大于 0，否则 `ThreadPool::Init` 返回 `OI_ERR_INVALID_ARGUMENT`。旧键 `normal`、`urgent`、`queue`、`max_task_count` 不再读取。线程池没有任务队列，只有一条协程句柄队列。
 
 ## 发送缓冲限额与同步等待
 

@@ -295,6 +295,9 @@ def main():
             if run(mode + "-configure", mode_configure + flags) or run(mode + "-build", mode_build_command):
                 failed = True
                 break
+            if mode == "mt":
+                failed |= bool(run("mt-threadpool-config", [sys.executable, ROOT / "tools/test_threadpool_config.py",
+                                                            "--bin-dir", binary]))
             if args.mysqld:
                 failed |= bool(run(mode + "-mysql", [sys.executable, ROOT / "tools/run_mysql_regression.py",
                                                      "--mysqld", args.mysqld, "--bin-dir", binary,

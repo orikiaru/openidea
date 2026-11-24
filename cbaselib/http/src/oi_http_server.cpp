@@ -115,6 +115,7 @@ struct RequestFrame
 	bool bHeaders = false;
 	bool bHttp10 = false;
 	bool bClose = false;
+	bool bExpectContinue = false;
 	bool bChunked = false;
 	bool bTrailer = false;
 	bool bChunkTerminator = false;
@@ -188,7 +189,11 @@ struct RequestFrame
 			}
 			else if (EqualName(sName, "expect"))
 			{
-				return 417;
+				if (!EqualName(sValue, "100-continue"))
+				{
+					return 417;
+				}
+				bExpectContinue = !bHttp10;
 			}
 			else if (EqualName(sName, "connection"))
 			{
@@ -554,6 +559,15 @@ class ServerSession final : public Net::NetSession
 		m_iIdleSince = uv_now(Net::Poll::GetInstance().Loop());
 		const bool bHadSink = bool(m_stFrame.stRequest.pBodySink);
 		const int iCode = m_stFrame.Read(stInputBuffer, m_stServer);
+		if ((iCode == 0 || iCode == OI_ERR_BUSY) && m_stFrame.bHeaders && std::exchange(m_stFrame.bExpectContinue, false) && !bReadEnded)
+		{
+			static constexpr char vContinue[] = "HTTP/1.1 100 Continue\r\n\r\n";
+			if (SendResult(Base::Bytes(vContinue, sizeof(vContinue) - 1)) != OI_OK)
+			{
+				m_stServer.CloseSession(GetSessionID());
+				return;
+			}
+		}
 		if (m_stFrame.stRequest.pBodySink)
 		{
 			m_bPartial = false;

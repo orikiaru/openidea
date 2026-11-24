@@ -1,6 +1,7 @@
 #pragma once
 #include "oi_bytes.h"
 #include "oi_net_os.h"
+#include <vector>
 struct addrinfo;
 namespace OI
 {
@@ -84,6 +85,7 @@ class NetAddr
 	static std::string Endpoint(const std::string& sIp, const std::string& sPort);
 	// 0.0.0.0 或 ::。这种地址不能拿去登记。
 	bool IsUnspecified() const;
+	static bool ValidServicePort(const std::string& sPort);
 	// 按当前地址族建 TCP 套接字。
 	net_socket_t CreateTcp(bool bNonblock) const;
 	// 按当前地址族建 UDP 套接字。
@@ -91,6 +93,7 @@ class NetAddr
 	// 字面 IPv4 / IPv6 在返回前回调。域名在 poll 线程解析，有 IPv4 用 IPv4，否则用 IPv6。
 	// 只在 poll 线程调用。成功失败都回调一次。
 	static void Resolve(const std::string& sHost, const std::string& sPort, void (*fnDone)(void* pArgument, bool bOk, NetAddr stAddr), void* pArgument);
+	static void ResolveAll(const std::string& sHost, const std::string& sPort, void (*fnDone)(void*, std::vector<NetAddr>), void* pArgument);
 	// 地址已经填过。
 	bool IsValidAttr() const;
 	// 交给系统调用的地址指针。

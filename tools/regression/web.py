@@ -31,6 +31,8 @@ class HostHttpRegression(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def respond(self):
+        if hasattr(self.server, "first_request_at") and self.server.first_request_at is None:
+            self.server.first_request_at = time.monotonic()
         self.server.hosts.append(self.headers.get("Host"))
         self.server.connections.append(self.connection)
         self.server.connection_headers.append(self.headers.get("Connection"))
@@ -135,6 +137,21 @@ def check_web_transport(port, output_path):
             assert reader.read(1) == b"", "keep-alive idle connection stayed open"
             assert time.monotonic() - started >= 2.0, "keep-alive idle connection closed early"
     print("web idle PASS: first byte and keep-alive", flush=True)
+
+    with socket.create_connection(("127.0.0.1", port), timeout=10) as conn:
+        with conn.makefile("rb") as reader:
+            conn.sendall(b"POST /bin HTTP/1.1\r\nHost: localhost\r\nExpect: 100-continue\r\nContent-Length: 4\r\n\r\n")
+            assert reader.readline() == b"HTTP/1.1 100 Continue\r\n"
+            assert reader.readline() == b"\r\n"
+            conn.sendall(b"test")
+            status, _, body = read_response(reader)
+            assert status.startswith("HTTP/1.1 200 ") and body == b"test", (status, body)
+    with socket.create_connection(("127.0.0.1", port), timeout=10) as conn:
+        with conn.makefile("rb") as reader:
+            conn.sendall(b"POST /bin HTTP/1.1\r\nHost: localhost\r\nExpect: unsupported\r\nContent-Length: 4\r\n\r\n")
+            status, _, _ = read_response(reader)
+            assert status.startswith("HTTP/1.1 417 "), status
+    print("web Expect PASS: 100 before body and unsupported 417", flush=True)
 
     with socket.create_connection(("127.0.0.1", port), timeout=10) as conn:
         with conn.makefile("rb") as reader:
@@ -629,17 +646,17 @@ def check_http_pool(work, cfg):
     try:
         config = (REPO / "deploy/config/webclient.toml").read_text(encoding="utf-8-sig")
         config = config.replace('port = 18080', 'port = %d' % server.server_address[1])
-        config += '\npool_case = true\npool_control_port = %d\n[HttpClientPool]\nmax_connections_per_server = 2\nidle_timeout_ms = 500\n' % control.server_address[1]
+        config += '\npool_case = true\npool_control_port = %d\n[HttpClientPool]\nmax_connections_per_server = 2\nmax_waiting_per_server = 2\nmax_waiting_bytes_per_server = 1024\nidle_timeout_ms = 500\n' % control.server_address[1]
         (cfg / "webclient.toml").write_text(config, encoding="utf-8")
         client = subprocess.run([str(work / ("webclient" + SUFFIX))], cwd=work, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20)
         assert client.returncode == 0 and "pool regression bad=0" in client.stdout, (client.returncode, client.stdout, client.stderr)
         requests = {path: (conn, at) for path, conn, at in server.requests}
-        assert len(server.requests) == 7 and set(requests) == {"/hold-one", "/hold-two", "/queued-success", "/after-queue", "/busy", "/fresh-full", "/after-idle"}, server.requests
+        waiting = set(requests) & {"/queued-success", "/count-busy", "/count-other"}
+        assert len(waiting) == 2 and len(server.requests) == 8 and set(requests) == {"/hold-one", "/hold-two", "/after-queue", "/busy", "/fresh-full", "/after-idle"} | waiting, server.requests
         first, second = requests["/hold-one"][0], requests["/hold-two"][0]
         assert first is not second
         assert server.released_at is not None and sum(at < server.released_at for _, at in server.accepted) == 2, server.accepted
-        assert requests["/queued-success"][1] >= server.released_at
-        assert requests["/queued-success"][0] in (first, second)
+        assert all(requests[path][1] >= server.released_at and requests[path][0] in (first, second) for path in waiting), server.requests
         assert requests["/after-queue"][0] in (first, second)
         assert requests["/busy"][0] in (first, second)
         assert requests["/fresh-full"][0] not in (first, second)
@@ -974,6 +991,13 @@ def run_web(args):
                     client = subprocess.run([str(work / ("webclient" + SUFFIX))], cwd=work, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180)
                 print(client.stdout, flush=True)
                 assert client.returncode == 0 and "rpc=1 bin=1 bad=0" in client.stdout, client.stderr
+                resolved = socket.getaddrinfo("localhost", None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+                families = list(dict.fromkeys(item[0] for item in resolved if item[0] in (socket.AF_INET, socket.AF_INET6)))
+                if not families:
+                    raise EnvironmentBlocked("localhost has no IPv4 or IPv6 stream address")
+                print("web localhost resolver order:", ["IPv4" if family == socket.AF_INET else "IPv6" for family in families], flush=True)
+                if len(families) < 2:
+                    print("web localhost dual-stack fallback ENVIRONMENT BLOCKED: only one address family", flush=True)
                 with IPv6HttpServer(("::1", 0), HostHttpRegression) as fixture:
                     fixture.hosts = []
                     fixture.connections = []
@@ -982,7 +1006,10 @@ def run_web(args):
                     thread.start()
                     try:
                         fixture_port = fixture.server_address[1]
-                        for host, reuse in (("::1", True), ("[::1]", False)):
+                        cases = [("::1", True), ("[::1]", False)]
+                        if socket.AF_INET6 in families:
+                            cases.append(("localhost", True))
+                        for host, reuse in cases:
                             config = (REPO / "deploy/config/webclient.toml").read_text(encoding="utf-8-sig")
                             config = shift_ports(config).replace('[WebClient]\nip = "127.0.0.1"', '[WebClient]\nip = "' + host + '"')
                             config = config.replace("port = 18080", "port = " + str(fixture_port))
@@ -993,7 +1020,8 @@ def run_web(args):
                             fixture.connection_headers.clear()
                             client = subprocess.run([str(work / ("webclient" + SUFFIX))], cwd=work, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
                             assert client.returncode == 0 and "rpc=1 bin=1 bad=0" in client.stdout, (host, client.stdout, client.stderr)
-                            assert fixture.hosts == ["[::1]:%d" % fixture_port] * 9, (host, fixture.hosts)
+                            expected_host = "localhost" if host == "localhost" else "[::1]"
+                            assert fixture.hosts == ["%s:%d" % (expected_host, fixture_port)] * 9, (host, fixture.hosts)
                             assert fixture.connection_headers == [("keep-alive" if reuse else "close")] * 9, (host, fixture.connection_headers)
                             assert len({id(connection) for connection in fixture.connections}) == (1 if reuse else 9), (host, fixture.connections)
                             print("web ipv6 host %s reuse=%s PASS" % (host, reuse), flush=True)
@@ -1002,6 +1030,31 @@ def run_web(args):
                         thread.join(timeout=3)
                         if thread.is_alive():
                             raise RuntimeError("IPv6 HTTP fixture failed to stop")
+                if socket.AF_INET in families:
+                    with http.server.ThreadingHTTPServer(("127.0.0.1", 0), HostHttpRegression) as fixture:
+                        fixture.daemon_threads = True
+                        fixture.hosts, fixture.connections, fixture.connection_headers = [], [], []
+                        fixture.first_request_at = None
+                        thread = threading.Thread(target=fixture.serve_forever, kwargs={"poll_interval": 0.05})
+                        thread.start()
+                        try:
+                            fixture_port = fixture.server_address[1]
+                            config = (REPO / "deploy/config/webclient.toml").read_text(encoding="utf-8-sig")
+                            config = shift_ports(config).replace('[WebClient]\nip = "127.0.0.1"', '[WebClient]\nip = "localhost"')
+                            config = config.replace("port = 18080", "port = " + str(fixture_port))
+                            config = config.replace("timeout_ms = 5000", "timeout_ms = 1500")
+                            (cfg / "webclient.toml").write_text(config, encoding="utf-8")
+                            started = time.monotonic()
+                            client = subprocess.run([str(work / ("webclient" + SUFFIX))], cwd=work, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+                            assert client.returncode == 0 and "rpc=1 bin=1 bad=0" in client.stdout, (client.stdout, client.stderr)
+                            assert fixture.hosts == ["localhost:%d" % fixture_port] * 9, fixture.hosts
+                            assert fixture.first_request_at is not None, "IPv4 fixture received no request"
+                            print("web localhost IPv4-only first request ms=%.1f PASS" % ((fixture.first_request_at - started) * 1000), flush=True)
+                        finally:
+                            fixture.shutdown()
+                            thread.join(timeout=3)
+                            if thread.is_alive():
+                                raise RuntimeError("IPv4 HTTP fixture failed to stop")
                 check_http_pool(work, cfg)
                 check_http_disconnect(work, cfg)
                 check_url_client(work, cfg)

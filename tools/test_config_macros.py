@@ -38,7 +38,7 @@ def main():
             'else()\ntarget_compile_options(config_test PRIVATE -ffunction-sections -fdata-sections)\n'
             'target_link_options(config_test PRIVATE -Wl,--gc-sections)\nendif()\n'
             % (source, config_source, paths, source, paths), encoding="utf-8")
-        (temp / "config.toml").write_text('value = 42\ntext = "wrong"\nbad_array = ["wrong", "type"]\ngood_array = [1, 2]\n', encoding="utf-8")
+        (temp / "config.toml").write_text('value = 42\ntext = "wrong"\nbad_array = ["wrong", "type"]\ngood_array = [1, 2]\ntoo_large = 4294967297\nnegative = -1\nbad_int_array = [1, 4294967297]\n', encoding="utf-8")
         (temp / "invalid.toml").write_text("value = 99\nbroken = [\n", encoding="utf-8")
         for mode in ("Debug", "Release"):
             build = temp / ("build-" + mode.lower())

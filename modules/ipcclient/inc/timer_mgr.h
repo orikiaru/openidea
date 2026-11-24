@@ -18,6 +18,7 @@ class TimerMgr
 	OI::Coro::TaskResult<int> CheckTimerExceptions();
 
   public:
+	static int32_t CheckBacklog();
 	// 时间轮跳回调。观察打开时记次数，上一次没结束就记重叠。
 	OI::Coro::Task OnTickUpdate(uint64_t iNowMilliseconds);
 	// 打开或关掉跳计数，并记下开始观察时的 tick。

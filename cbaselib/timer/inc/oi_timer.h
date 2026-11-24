@@ -79,6 +79,7 @@ class BaseTimer
 	};
 
 	friend class BaseTimerManager;
+	friend class TimerTestAccess;
 	TimerData m_stData; // 在时间轮上的位置。只由管理器改，外部不要动。
 	// 写入间隔、目标 tick 和触发时间。AddTimer 和续期都走这里。
 	void InitData(int iMillsec, timer_tick_t iTriggerTick, timeval stNow, int64_t iDelayMilliseconds);

@@ -17,6 +17,16 @@ Windows 频率为 CIM `CurrentClockSpeed` 报告值；WSL 频率为 `/proc/cpuin
 
 ## 显式用例
 
+### 时间轮、HTTP 与配置定向验证（2026-11-24）
+
+本轮不是同一最终源码的四路全量。旧时间轮级联语义的对照出现目标 tick 20、实际 tick 21；新版边界回归检查 18 次准点执行且不重入，Linux 多线程输出 `hold timer boundaries phase=3 calls=18 bad=0`。Windows 的 localhost 双栈回退专项耗时 868.8 ms；两台远程 Linux 的 localhost 只解析到 IPv4，不能在这两台验证双栈回退。
+
+较早的 Linux 多线程、单线程各跑了 22 项业务全量以及 MySQL 和静态注册发现；MySQL 的行映射、行操作和客户端检查均为 `bad=0`。多线程那轮安全检查因测试脚本语法失败，修正后使用相同 Redis 配置单独重跑 45 项通过，原矩阵汇总仍为失败；单线程矩阵汇总通过。这两轮早于最后的配置读取调整，不能当作最终源码全量。
+
+随后对最终直接读取实现做定向验收：Linux 两种线程模式的配置宏兼容和整数越界测试、两个定时器整数配置非法值的启动拒绝及缺省启动均通过；多线程另验证旧线程键拒绝和时间轮专项，均通过。
+
+Linux 单线程旧续期行为对照使用同一正式积压探针、50ms tick，以测试访问回拨单调时间基点 220ms：三次 Update 后的累计回调数为 `3/3/3`，首次补跑三次，探针输出 `bad=1`、退出 255。新版 Linux 多线程与单线程分别输出 `first=1 second=2 final=3 child_first=0 child=1 stop=1 ticks=1/6 bad=0`：每次 Update 后累计次数依次为 1、2、3，首次回调新登记的 1ms 定时器不在首次 Update 补跑，Stop 只执行一次。探针在首次回调中实际等待 60ms；此定向故障注入不代表生产 poll 线程允许阻塞。
+
 2026-11-21，同一工作区跑了不进 `--case all` 的协程、数据库和序列化。都是退出码 0。这不是全量。回声没有重跑。Linux 用记录中的远程机器。本机 Windows 频率沿用上面全量记录的 CIM 值，本轮没有另采。
 
 数据库功能用例四路都是 `mysql row mapping bad=0`、`mysql rows bad=0`、`mysql done bad=0`。

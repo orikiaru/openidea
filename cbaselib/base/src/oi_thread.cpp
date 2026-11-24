@@ -54,18 +54,11 @@ int32_t ThreadPool::Init()
 #ifdef _SINGLE_THREAD_
 	stThreadData.iThreadCount = 1;
 #else
-	// 只读工人数。旧配置里的 urgent、queue、max_task_count 已无对应队列，保留也不报错。
-	if (!TryGetConfig("ThreadPool.threadcount", stThreadData.iThreadCount))
+	if (!::OI::Base::Config::GlobalConfig().GetAs("ThreadPool.threadcount", stThreadData.iThreadCount))
 	{
-		// normal 是改名前的键，留着兼容老配置，读到了提示一次改名。
-		if (!TryGetConfig("ThreadPool.normal", stThreadData.iThreadCount))
-		{
-			fprintf(stderr, "ThreadPool.threadcount missing or not an integer; set [ThreadPool] threadcount = <worker count>\n");
-			fflush(stderr);
-			return OI_ERR_INVALID_ARGUMENT;
-		}
-		fprintf(stderr, "ThreadPool.normal is deprecated, rename it to ThreadPool.threadcount\n");
-		fflush(stderr);
+		fprintf(stderr, "configuration read failed: key=ThreadPool.threadcount function=%s file=%s line=%d code=%d\n",
+		    __func__, __FILE__, __LINE__, OI_ERR_INVALID_ARGUMENT);
+		return OI_ERR_INVALID_ARGUMENT;
 	}
 	if (stThreadData.iThreadCount <= 0)
 	{

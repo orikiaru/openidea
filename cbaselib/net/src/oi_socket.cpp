@@ -7,6 +7,9 @@
 #include <fcntl.h>
 
 #include <stdlib.h>
+#include <charconv>
+#include <algorithm>
+#include <memory>
 #include <string.h>
 #ifndef _WIN32
 #include <netdb.h>
@@ -201,6 +204,14 @@ NetAddr::NetAddr()
 {
 }
 
+bool NetAddr::ValidServicePort(const std::string& sPort)
+{
+	uint16_t iPort = 0;
+	const char* pEnd = sPort.data() + sPort.size();
+	const auto stResult = std::from_chars(sPort.data(), pEnd, iPort);
+	return stResult.ec == std::errc{} && stResult.ptr == pEnd && iPort != 0;
+}
+
 bool NetAddr::Fill(const std::string& sIp, const std::string& sPort, bool& bBadPort)
 {
 	bBadPort = false;
@@ -382,48 +393,70 @@ net_socket_t NetAddr::CreateUdp(bool bNonblock) const
 struct ResolveJob
 {
 	uv_getaddrinfo_t stRequest;
-	std::string sPort;
-	void (*fnDone)(void* pArgument, bool bOk, NetAddr stAddr);
+	void (*fnDone)(void*, std::vector<NetAddr>);
 	void* pArgument;
 };
 
 static void OnResolve(uv_getaddrinfo_t* pRequest, int iStatus, addrinfo* pResponse)
 {
 	ResolveJob* pJob = static_cast<ResolveJob*>(pRequest->data);
-	NetAddr stAddr;
-	bool bOk = iStatus == 0 && stAddr.Init(pResponse);
+	std::vector<NetAddr> vAddresses;
+	if (iStatus == 0)
+	{
+		for (auto* pAddress = pResponse; pAddress; pAddress = pAddress->ai_next)
+		{
+			NetAddr stAddress;
+			if (stAddress.Init(pAddress->ai_addr, static_cast<socklen_t>(pAddress->ai_addrlen)))
+			{
+				vAddresses.push_back(stAddress);
+			}
+		}
+	}
 	if (pResponse)
 	{
 		uv_freeaddrinfo(pResponse);
 	}
-	if (bOk)
-	{
-		const std::string sHost = stAddr.Host();
-		bOk = !sHost.empty() && stAddr.Init(sHost, pJob->sPort);
-	}
-	void (*fnDone)(void*, bool, NetAddr) = pJob->fnDone;
+	auto fnDone = pJob->fnDone;
 	void* pArgument = pJob->pArgument;
 	delete pJob;
-	fnDone(pArgument, bOk, stAddr);
+	fnDone(pArgument, std::move(vAddresses));
 }
 
 void NetAddr::Resolve(const std::string& sHost, const std::string& sPort, void (*fnDone)(void* pArgument, bool bOk, NetAddr stAddr), void* pArgument)
+{
+	struct Callback
+	{
+		decltype(fnDone) fnComplete;
+		void* pContext;
+	};
+	ResolveAll(sHost, sPort, [](void* pContext, std::vector<NetAddr> vAddresses)
+	{
+		std::unique_ptr<Callback> pCallback(static_cast<Callback*>(pContext));
+		const auto it = std::find_if(vAddresses.begin(), vAddresses.end(), [](const NetAddr& stAddress)
+		{
+			return stAddress.Family() == AF_INET;
+		});
+		pCallback->fnComplete(pCallback->pContext, !vAddresses.empty(), it != vAddresses.end() ? *it : vAddresses.empty() ? NetAddr()
+		                                                                                                                  : vAddresses.front());
+	}, new Callback{fnDone, pArgument});
+}
+
+void NetAddr::ResolveAll(const std::string& sHost, const std::string& sPort, void (*fnDone)(void*, std::vector<NetAddr>), void* pArgument)
 {
 	assert(Poll::GetInstance().InLoopThread());
 	NetAddr stLiteral;
 	bool bBadPort = false;
 	if (stLiteral.Fill(sHost, sPort, bBadPort))
 	{
-		fnDone(pArgument, true, stLiteral);
+		fnDone(pArgument, {stLiteral});
 		return;
 	}
 	if (bBadPort)
 	{
-		fnDone(pArgument, false, NetAddr());
+		fnDone(pArgument, {});
 		return;
 	}
 	ResolveJob* pJob = new ResolveJob();
-	pJob->sPort = sPort;
 	pJob->fnDone = fnDone;
 	pJob->pArgument = pArgument;
 	memset(&pJob->stRequest, 0, sizeof(pJob->stRequest));
@@ -432,10 +465,10 @@ void NetAddr::Resolve(const std::string& sHost, const std::string& sPort, void (
 	memset(&stHints, 0, sizeof(stHints));
 	stHints.ai_family = AF_UNSPEC;
 	stHints.ai_socktype = SOCK_STREAM;
-	if (uv_getaddrinfo(Poll::GetInstance().Loop(), &pJob->stRequest, OnResolve, sHost.c_str(), NULL, &stHints) != 0)
+	if (uv_getaddrinfo(Poll::GetInstance().Loop(), &pJob->stRequest, OnResolve, sHost.c_str(), sPort.c_str(), &stHints) != 0)
 	{
 		delete pJob;
-		fnDone(pArgument, false, NetAddr());
+		fnDone(pArgument, {});
 	}
 }
 

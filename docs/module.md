@@ -91,7 +91,9 @@ RPC 帧在 IO 线程按读取上限原地解码；嵌套结构和容器复用同
 
 `host` 可以写 IPv4、IPv6 字面地址或域名。IPv6 字面地址可以带方括号或不带方括号，请求的 `Host` 头统一使用方括号；HTTP 端口不是 80 或 HTTPS 端口不是 443 时附加端口。域名用 libuv 的 `uv_getaddrinfo` 在它自己的线程池里解析一次，回调回到 poll 线程，再交给 `SessionManager` 去连，不卡 poll。`Client` 最后一个参数 `bReuse` 默认是复用：请求从进程共享池复用空闲连接，并发请求使用独立会话，请求头是 `Connection: keep-alive`。传 `false` 时请求头改成 `Connection: close`，这一响结束后主动关掉，下一个请求重新连。对端写了 `Connection: close`、HTTP/1.0 没有 keep-alive、报文没收完对端就断开、这一响解析失败，或者当前响应后面还粘着没消费的字节，就把这条会话关掉，下一个请求重新连。响应认 `Content-Length`、`chunked` 和读到断开三种结尾。 服务端收到客户端写半关闭时，已完整收到的请求仍可完成并发送响应；请求未完整时关闭连接。客户端收到 FIN 时先将连接标记为不可复用，再处理已收到的响应；若 FIN 晚于连接再次借出，受影响请求按连接错误结束，不自动重发。超时定时器通过弱引用查找请求状态，不会延长已完成请求的生命周期；晚到的超时不会改写已完成结果。
 
-无需保留客户端对象的场景可以使用 `Client::GetUrl`、`Client::PostUrl` 或 `Client::SendUrl` 直接请求完整 URL，并通过 `ClientOptions` 设置超时和 CA 文件。URL 请求共享进程级 HTTP 会话管理器，并发请求使用独立会话；HTTP、HTTPS 和不同 CA 配置不混用连接；限额按 scheme、规范化 host 和 port 统计，同一目标的不同 CA 配置共享该限额。单次请求需要新连接时设置 `Request::bFreshConnection`。`[HttpClientPool] max_connections_per_server` 默认 4，达到上限时请求排队且超时包含排队时间；`idle_timeout_ms` 默认 60000，空闲连接按秒级周期回收。新连接计入上限，达到上限时须回收空闲连接才能创建。
+无需保留客户端对象的场景可以使用 `Client::GetUrl`、`Client::PostUrl` 或 `Client::SendUrl` 直接请求完整 URL，并通过 `ClientOptions` 设置超时和 CA 文件。URL 请求共享进程级 HTTP 会话管理器，并发请求使用独立会话；HTTP、HTTPS 和不同 CA 配置不混用连接；限额按 scheme、规范化 host 和 port 统计，同一目标的不同 CA 配置共享该限额。单次请求需要新连接时设置 `Request::bFreshConnection`。`[HttpClientPool] max_connections_per_server` 默认 4，达到上限时请求排队且超时包含排队时间；`max_waiting_per_server` 默认 1024，`max_waiting_bytes_per_server` 默认 67108864，以编码后的请求头和正文计数，任一配置为 0 禁止排队，超过限额返回 `OI_ERR_BUSY`。`idle_timeout_ms` 默认 60000，空闲连接按秒级周期回收。新连接计入上限，达到上限时须回收空闲连接才能创建。
+
+HTTP 域名解析得到多个地址时，连接失败且尚未发送请求可尝试下一个地址；请求发送后不自动重放。服务端收到 `Expect: 100-continue` 时先发送临时响应，再接收正文；未知 expectation 返回 417。
 
 `ipcserver` 也链了这个客户端，多线程模块链 `http_m_static`。`ipcserver.toml` 的 `[HttpProbe]` 填了 `host` 时，起服后 `StartTask` 发一次 GET，打印 `http probe ... status=... bytes=... title=...`。默认不填，压测时不要打开。
 

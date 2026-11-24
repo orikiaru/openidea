@@ -78,8 +78,8 @@ class SafetyTests(unittest.TestCase):
         for offset, expected in ((2000, True), (3000, False), (None, True)):
             with self.subTest(offset=offset):
                 self.assertEqual(expected, bool(owner.read_owner(self.marked, [self.repo], offset)))
-                self.assertEqual(expected, linux.matches("/usr/bin/redis-server", ["redis-server", "*:18380"],
-                                                        str(self.marked), [self.repo], offset))
+                self.assertFalse(linux.matches("/usr/bin/redis-server", ["redis-server", "*:18380"],
+                                               str(self.marked), [self.repo], offset))
         self.assertFalse(owner.owned_path(self.marked / "bin/server", [self.root / "other"], 2000))
 
     def test_repository_prefix_boundary(self):
@@ -180,6 +180,34 @@ class SafetyTests(unittest.TestCase):
             self.assertEqual({901: 12345}, owner.linux_records([self.repo], 2000))
             self.assertEqual({}, owner.linux_records([self.repo], 3000))
             self.assertEqual({}, owner.windows_records([self.repo], 2000))
+
+    def test_linux_redis_requires_recorded_identity_and_confirmed_nondefault_port(self):
+        for arguments, recorded, start, expected in (
+            (["redis-server", "*:18380"], {}, 12345, False),
+            (["redis-server", "*:18380"], {901: 99999}, 12345, False),
+            (["redis-server", "*:18380"], {901: 12345}, 12345, True),
+            (["redis-server", "--port", "18380"], {901: 12345}, 12345, True),
+            (["redis-server", "*:6379"], {901: 12345}, 12345, False),
+            (["redis-server", "--port", "6379"], {901: 12345}, 12345, False),
+            (["redis-server", "redis.conf"], {901: 12345}, 12345, False),
+            (["redis-server", "--port", "invalid"], {901: 12345}, 12345, False),
+        ):
+            with self.subTest(arguments=arguments, recorded=recorded, start=start), \
+                 patch.object(Path, "iterdir", return_value=iter([Path("/proc/901")])), \
+                 patch.object(linux, "linux_records", return_value=recorded), \
+                 patch.object(linux, "snapshot", return_value=("/usr/bin/redis-server", arguments,
+                                                               str(self.marked), start)):
+                self.assertEqual(expected, 901 in linux.targets([self.repo], 2000))
+
+    def test_linux_redis_uses_persisted_record(self):
+        with patch.object(owner, "os", SimpleNamespace(name="posix")), \
+             patch.object(owner, "linux_start", return_value=12345):
+            owner.record_process(self.marked, Mock(pid=901))
+        with patch.object(owner.tempfile, "gettempdir", return_value=str(self.root)), \
+             patch.object(Path, "iterdir", return_value=iter([Path("/proc/901")])), \
+             patch.object(linux, "snapshot", return_value=("/usr/bin/redis-server", ["redis-server", "*:18380"],
+                                                           str(self.marked), 12345)):
+            self.assertIn(901, linux.targets([self.repo], 2000))
 
     def test_linux_registered_permission_failure_is_reported(self):
         for start in (12345, PermissionError("stat denied")):
@@ -559,24 +587,27 @@ class RegressionCleanupTests(unittest.TestCase):
         client = subprocess.CompletedProcess([], 0, "rpc=1 bin=1 bad=0", "")
         fixture = Mock()
         fixture.server_address = ("::1", 12345)
-        fixture.completed_reuse = False
+        fixture.calls = 0
         fixture.__enter__ = Mock(return_value=fixture)
         fixture.__exit__ = Mock(return_value=False)
         def run_client(*args, **kwargs):
             if hasattr(fixture, "hosts") and isinstance(fixture.hosts, list):
-                fixture.hosts.extend(["[::1]:12345"] * 9)
-                reuse = not fixture.connection_headers and not getattr(fixture, "completed_reuse", False)
+                if fixture.calls >= 3:
+                    fixture.first_request_at = self.web.time.monotonic()
+                fixture.hosts.extend([("localhost" if fixture.calls >= 2 else "[::1]") + ":12345"] * 9)
+                reuse = fixture.calls != 1
                 fixture.connection_headers.extend(["keep-alive" if reuse else "close"] * 9)
                 fixture.connections.extend(([object()] * 9) if reuse else [object() for _ in range(9)])
-                fixture.completed_reuse = True
+                fixture.calls += 1
             return client
-        with patch.object(self.web, "check_web_bind_restart"), \
-             patch.object(self.web, "check_web_small_send_queue"), \
+        with patch.multiple(self.web, check_web_bind_restart=Mock(), check_web_small_send_queue=Mock()), \
              patch.object(self.procs.shutil, "copy2"), \
              patch.object(self.web, "launch", return_value=self.first), \
              patch.object(self.web, "record_process"), \
              patch.object(self.web.socket, "create_connection"), \
+             patch.object(self.web.socket, "getaddrinfo", return_value=[(self.web.socket.AF_INET, None, None, None, None), (self.web.socket.AF_INET6, None, None, None, None)]), \
              patch.object(self.web, "IPv6HttpServer", return_value=fixture), \
+             patch.object(self.web.http.server, "ThreadingHTTPServer", return_value=fixture), \
              patch.object(self.web, "stream_response_fixture", return_value=contextlib.nullcontext(12345)), \
              patch.object(self.web, "check_http_pool"), \
              patch.object(self.web, "check_http_disconnect"), \

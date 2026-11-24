@@ -108,7 +108,7 @@ bool ParseValue(const std::string& sValue, std::string& sIp, std::string& sPort,
 			return false;
 		}
 	}
-	return !sIp.empty() && !sPort.empty();
+	return !sIp.empty() && ::OI::Net::NetAddr::ValidServicePort(sPort);
 }
 
 int ReplyInt(const ::OI::Redis::RedisResult& stR)
@@ -546,7 +546,7 @@ OI::Coro::Task RegistryServer::ReloadMysql()
 	vList.reserve(vRows.size());
 	for (const ::OI::RpcData::ServiceLease& stRow : vRows)
 	{
-		if (stRow.sName.empty() || stRow.iId <= 0 || stRow.sIp.empty() || stRow.sPort.empty())
+		if (stRow.sName.empty() || stRow.iId <= 0 || stRow.sIp.empty() || !::OI::Net::NetAddr::ValidServicePort(stRow.sPort))
 		{
 			LOG_ERROR("registry static pull bad lease name=%s id=%d", stRow.sName.c_str(), stRow.iId);
 			co_return;
@@ -568,7 +568,7 @@ OI::Coro::Task RegistryServer::ReloadMysql()
 		LOG_ERROR("registry does not accept register");
 		co_return OI_ERR_FAIL;
 	}
-	if (!ValidSpacePart(stRequest.sName) || stRequest.iId <= 0 || stRequest.sIp.empty() || stRequest.sPort.empty() ||
+	if (!ValidSpacePart(stRequest.sName) || stRequest.iId <= 0 || stRequest.sIp.empty() || !::OI::Net::NetAddr::ValidServicePort(stRequest.sPort) ||
 	    stRequest.sIp.find_first_of(" \t\r\n") != std::string::npos || stRequest.sPort.find_first_of(" \t\r\n") != std::string::npos || (!stRequest.sZone.empty() && !ValidSpacePart(stRequest.sZone)))
 	{
 		co_return OI_ERR_FAIL;

@@ -4,16 +4,13 @@
 
 - 分诊：原审查确认 6 个 P1、7 个 P2、10 个 P3。按“现实触发 × 后果 × 修复成本”重排，只留 6 条先做；其余移到「先确认」「观察/暂不修」，不删除，保留证据。
 - 对象：master `3bc339b`，静态通读 cbaselib 自有代码、modules、tools；未编译、未跑四路回归。7 路 subagent 分模块审查，主对话逐条回读代码核对；审查期间 subagent 越权改动的 5 个文件已还原，工作区干净。
-- 验收：修完按 `docs/testing.md` 跑四路 `--case all`（Windows/WSL Linux × 单线程/多线程）。以下先做项中，logd 轮转、coro 断言、HTTP Expect 要补或扩回归，不能只靠现有用例。
+- 验收：修完按 `docs/testing.md` 跑四路 `--case all`（Windows/WSL Linux × 单线程/多线程）。以下先做项中，logd 轮转、coro 断言要补或扩回归，不能只靠现有用例。
 
-### 先做（6 条）
+### 先做（3 条）
 
-1. **配置整数越界导致启动 terminate**。现状：`GetAs` 不捕获 cpptoml 的 `underflow_error`/`overflow_error`（`cbaselib/base/inc/oi_config.h:29-40`；cpptoml 只 catch `out_of_range`），各 main 的 `StartFramework` 不在 try 内。触发：`threadcount=3000000000`、`Timer.offset_ms=-50` 等越界整数。方向：`GetAs`/`GetArrayAs` catch `std::exception` 返回 false，或启动阶段统一转 `OI_ERR_INVALID_ARGUMENT` 并打印键名。
-2. **WSL 清理可能误杀用户 6379 Redis**。现状：`matches` 只认参数里的 `:6379`（`tools/cleanup_linux_tests.py:14-26`），`--port 6379` 或配置文件写法不匹配，随后按 cwd 归属命中 `APPLICATIONS` 分支。方向：解析 `--port`/配置文件端口，或直接拒绝任何 6379 的 `redis-server`；cwd 不能作为唯一判据。
-3. **logd 跨日打开新文件失败后不再重试**。现状：`OpenLogFile` 失败只打印并 `continue`（`cbaselib/logd/src/log_file_instance.cpp:222-239`），轮转标记被消费，下一次投递要等下一个跨日。触发：零点建目录/打开失败（磁盘满、权限、临时 IO 错误），之后恢复。后果：整天日志落在旧日期目录，按当天目录找不到。方向：失败时保留 `m_sPendingRotate`，后续每批写入前重试打开。
-4. **`coro` 回归断言空转**。现状：脚本只要求日志出现 `coro live=` 和字面量 `bad=0`（`tools/regression/cases/coro.py:14-19`），应用日志把 `bad=0` 写死（`modules/ipcclient/src/coro_mgr.cpp:224`）。触发：`--case coro`。后果：`live=0` 或协程出错仍 PASS，月度基准不可信。方向：解析 `live/churn/live_ns/wake_ns` 并断言大于 0；应用输出真实 bad 计数。
-5. **CMake 配置改写已跟踪的 clangd 索引文件**。现状：`framework.cmake:176-186` 直接写源码根目录；Linux/Ninja 构建后与仓库里跟踪的 Windows 版本不同，工作区变脏。方向：写构建目录，或只在内容一致时保留；至少把该文件加入忽略。
-6. **HTTP 服务端对 `Expect: 100-continue` 一律回 417**（webserver 对外时优先）。现状：`ParseHeaders` 遇到任何 `expect` 都返回 417（`cbaselib/http/src/oi_http_server.cpp:189-192`）。触发：curl 大于 1 KiB 的 `-d`/`--data-binary`、.NET `Expect100Continue` 默认开启。后果：不重试的客户端带大正文的 POST 全部失败。方向：识别 `100-continue` 后先写 `100 Continue` 再读正文，或忽略该头；只对未知 expectation 回 417。
+1. **logd 跨日打开新文件失败后不再重试**。现状：`OpenLogFile` 失败只打印并 `continue`（`cbaselib/logd/src/log_file_instance.cpp:222-239`），轮转标记被消费，下一次投递要等下一个跨日。触发：零点建目录/打开失败（磁盘满、权限、临时 IO 错误），之后恢复。后果：整天日志落在旧日期目录，按当天目录找不到。方向：失败时保留 `m_sPendingRotate`，后续每批写入前重试打开。
+2. **`coro` 回归断言空转**。现状：脚本只要求日志出现 `coro live=` 和字面量 `bad=0`（`tools/regression/cases/coro.py:14-19`），应用日志把 `bad=0` 写死（`modules/ipcclient/src/coro_mgr.cpp:224`）。触发：`--case coro`。后果：`live=0` 或协程出错仍 PASS，月度基准不可信。方向：解析 `live/churn/live_ns/wake_ns` 并断言大于 0；应用输出真实 bad 计数。
+3. **CMake 配置改写已跟踪的 clangd 索引文件**。现状：`framework.cmake:176-186` 直接写源码根目录；Linux/Ninja 构建后与仓库里跟踪的 Windows 版本不同，工作区变脏。方向：写构建目录，或只在内容一致时保留；至少把该文件加入忽略。
 
 ### 先确认（改前需要拍板，不直接排期）
 

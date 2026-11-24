@@ -48,8 +48,8 @@ class TimerLevel
 		}
 	}
 
-	// due 不为空时把这一格移进 due，否则逐个重新挂到下层。
-	void RunTick(BaseTimerManager* pMgr, TimerList* pDue);
+	// 摘下当前槽，再推进一格。本次重新登记的任务不会进入已摘下的批次。
+	void RunTick(TimerList& vExpired);
 
 	void AddTimer(BaseTimerManager* pManager, BaseTimer* pTimer, uint32_t iLevelOffset)
 	{

@@ -199,16 +199,19 @@ OI::Coro::Task WebClient::PoolRelease(std::string sControlUrl, OI::Http::Respons
 	stResponse = co_await OI::Http::Client::GetUrl(sControlUrl + "/release");
 }
 
-OI::Coro::Task WebClient::PoolQueue(std::string sBase, std::string sControlUrl, OI::Http::Response& stQueued, OI::Http::Response& stQueuedSuccess, OI::Http::Response& stReady, OI::Http::Response& stRelease)
+OI::Coro::Task WebClient::PoolQueue(std::string sBase, std::string sControlUrl, OI::Http::Response& stQueued, OI::Http::Response& stQueuedSuccess, OI::Http::Response& stReady, OI::Http::Response& stRelease, OI::Http::Response& stCountBusy, OI::Http::Response& stCountOther, OI::Http::Response& stBytesBusy)
 {
 	stReady = co_await OI::Http::Client::GetUrl(sControlUrl + "/ready");
 	if (stReady.iCode != OI_OK)
 	{
 		co_return;
 	}
+	co_await PoolGet(sBase + "/" + std::string(2048, 'x'), 3000, false, stBytesBusy);
+	co_await PoolGet(sBase + "/queued", 300, false, stQueued);
 	std::vector<OI::Coro::Task> vTasks;
-	vTasks.push_back(PoolGet(sBase + "/queued", 300, false, stQueued));
 	vTasks.push_back(PoolGet(sBase + "/queued-success", 3000, false, stQueuedSuccess));
+	vTasks.push_back(PoolGet(sBase + "/count-busy", 3000, false, stCountBusy));
+	vTasks.push_back(PoolGet(sBase + "/count-other", 3000, false, stCountOther));
 	vTasks.push_back(PoolRelease(std::move(sControlUrl), stRelease));
 	co_await OI::Coro::WhenAll(std::move(vTasks));
 }
@@ -223,10 +226,13 @@ OI::Coro::Task WebClient::RunPoolRegression(int32_t iPort, int32_t iControlPort)
 	OI::Http::Response stQueuedSuccess;
 	OI::Http::Response stReady;
 	OI::Http::Response stRelease;
+	OI::Http::Response stCountBusy;
+	OI::Http::Response stCountOther;
+	OI::Http::Response stBytesBusy;
 	std::vector<OI::Coro::Task> vTasks;
 	vTasks.push_back(PoolGet(sBase + "/hold-one", 5000, false, stHoldOne));
 	vTasks.push_back(PoolGet(sBase + "/hold-two", 5000, false, stHoldTwo));
-	vTasks.push_back(PoolQueue(sBase, sControlUrl, stQueued, stQueuedSuccess, stReady, stRelease));
+	vTasks.push_back(PoolQueue(sBase, sControlUrl, stQueued, stQueuedSuccess, stReady, stRelease, stCountBusy, stCountOther, stBytesBusy));
 	co_await OI::Coro::WhenAll(std::move(vTasks));
 	auto stAfterQueue = co_await OI::Http::Client::GetUrl(sBase + "/after-queue");
 	OI::Http::Response stBusy;
@@ -238,7 +244,25 @@ OI::Coro::Task WebClient::RunPoolRegression(int32_t iPort, int32_t iControlPort)
 	co_await OI::Coro::yield(5500);
 	auto stAfterIdle = co_await OI::Http::Client::GetUrl(sBase + "/after-idle");
 	int32_t iBad = 0;
-	if (stHoldOne.iCode != OI_OK || stHoldOne.sBody != "/hold-one" || stHoldTwo.iCode != OI_OK || stHoldTwo.sBody != "/hold-two" || stQueued.iCode != OI_ERR_TIMEOUT || stQueuedSuccess.iCode != OI_OK || stQueuedSuccess.sBody != "/queued-success" || stReady.iCode != OI_OK || stRelease.iCode != OI_OK || stAfterQueue.iCode != OI_OK || stAfterQueue.sBody != "/after-queue" || stBusy.iCode != OI_OK || stBusy.sBody != "/busy" || stFresh.iCode != OI_OK || stFresh.sBody != "/fresh-full" || stAfterIdle.iCode != OI_OK || stAfterIdle.sBody != "/after-idle")
+	int32_t iWaitingBusy = 0;
+	for (const auto& [pResponse, sPath] : std::vector<std::pair<const OI::Http::Response*, std::string>>{{&stQueuedSuccess, "/queued-success"}, {&stCountBusy, "/count-busy"}, {&stCountOther, "/count-other"}})
+	{
+		if (pResponse->iCode == OI_ERR_BUSY)
+		{
+			++iWaitingBusy;
+		}
+		else if (pResponse->iCode != OI_OK || pResponse->sBody != sPath)
+		{
+			LOG_ERROR("pool waiting response failed path=%s code=%d", sPath.c_str(), pResponse->iCode);
+			++iBad;
+		}
+	}
+	if (iWaitingBusy != 1 || stBytesBusy.iCode != OI_ERR_BUSY)
+	{
+		LOG_ERROR("pool waiting limits failed count=%d bytes=%d", iWaitingBusy, stBytesBusy.iCode);
+		++iBad;
+	}
+	if (stHoldOne.iCode != OI_OK || stHoldOne.sBody != "/hold-one" || stHoldTwo.iCode != OI_OK || stHoldTwo.sBody != "/hold-two" || stQueued.iCode != OI_ERR_TIMEOUT || stReady.iCode != OI_OK || stRelease.iCode != OI_OK || stAfterQueue.iCode != OI_OK || stAfterQueue.sBody != "/after-queue" || stBusy.iCode != OI_OK || stBusy.sBody != "/busy" || stFresh.iCode != OI_OK || stFresh.sBody != "/fresh-full" || stAfterIdle.iCode != OI_OK || stAfterIdle.sBody != "/after-idle")
 	{
 		LOG_ERROR("pool regression failed hold1=%d hold2=%d queued=%d queued_success=%d ready=%d release=%d after=%d busy=%d fresh=%d idle=%d", stHoldOne.iCode, stHoldTwo.iCode, stQueued.iCode, stQueuedSuccess.iCode, stReady.iCode, stRelease.iCode, stAfterQueue.iCode, stBusy.iCode, stFresh.iCode, stAfterIdle.iCode);
 		++iBad;

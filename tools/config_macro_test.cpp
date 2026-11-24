@@ -56,6 +56,16 @@ int main(int iArgCount, char** pArguments)
 	int iOutput = 17;
 	CHECK(!TryGetConfig("missing", iOutput));
 	CHECK(iOutput == 17);
+	CHECK(!TryGetConfig("too_large", iOutput));
+	CHECK(iOutput == 17);
+	uint32_t iUnsigned = 17;
+	CHECK(!TryGetConfig("negative", iUnsigned));
+	CHECK(iUnsigned == 17);
+	CHECK(!TryGetConfig("too_large", iUnsigned));
+	CHECK(iUnsigned == 17);
+	std::vector<int32_t> vNarrowOutput = {17, 19};
+	CHECK(!OI::Base::Config::GlobalConfig().GetArrayAs<int32_t>("bad_int_array", vNarrowOutput));
+	CHECK((vNarrowOutput == std::vector<int32_t>{17, 19}));
 	CHECK(!TryGetConfig("text", iOutput));
 	CHECK(iOutput == 17);
 	std::vector<int64_t> vOutput = {17, 19};

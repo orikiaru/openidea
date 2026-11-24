@@ -96,12 +96,15 @@ class RegressionChecksTest(unittest.TestCase):
         binary = (b"HTTP/1.1 200 OK\r\nContent-Length: 524288\r\n"
                   b"Connection: close\r\n\r\n" + payload)
         idle_first, idle_keep = MagicMock(), MagicMock()
+        expect_continue, expect_unknown = MagicMock(), MagicMock()
         fixed_large, chunk_large, fixed_over, chunk_over = (MagicMock() for _ in range(4))
         keep, half, chunk, multipart, abandoned = MagicMock(), MagicMock(), MagicMock(), MagicMock(), MagicMock()
-        for conn in (idle_first, idle_keep, fixed_large, chunk_large, fixed_over, chunk_over):
+        for conn in (idle_first, idle_keep, expect_continue, expect_unknown, fixed_large, chunk_large, fixed_over, chunk_over):
             conn.__enter__.return_value = conn
         idle_first.recv.return_value = b""
         idle_keep.makefile.return_value = io.BytesIO(ok)
+        expect_continue.makefile.return_value = io.BytesIO(b"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\ntest")
+        expect_unknown.makefile.return_value = io.BytesIO(b"HTTP/1.1 417 Expectation Failed\r\nContent-Length: 0\r\n\r\n")
         fixed_large.makefile.return_value = io.BytesIO(binary)
         chunk_large.makefile.return_value = io.BytesIO(binary)
         for conn in (fixed_over, chunk_over):
@@ -121,7 +124,7 @@ class RegressionChecksTest(unittest.TestCase):
         bad.getresponse.return_value.status = 400
         healthy.getresponse.return_value.status = 200
         healthy.getresponse.return_value.read.return_value = b"ok"
-        with patch.object(web.socket, "create_connection", side_effect=[idle_first, idle_keep, keep, half,
+        with patch.object(web.socket, "create_connection", side_effect=[idle_first, idle_keep, expect_continue, expect_unknown, keep, half,
                                                                           fixed_large, chunk_large, fixed_over,
                                                                           chunk_over, chunk, multipart, abandoned]), \
              patch.object(web.http.client, "HTTPConnection", side_effect=[bad, healthy]), \
