@@ -20,12 +20,18 @@ class DbCase(Case):
     def check(self, ctx):
         case, text = ctx.name, ctx.text
         if case in ("blocking-wake", "mysql-wake"):
-            assert "wake benchmark blocking_finish_to_resume n=1000" in text
             if case == "blocking-wake":
-                assert "wake benchmark default_empty_serial n=10000" in text
-                assert "wake benchmark default_paired_serial n=10000" in text
-                assert "wake benchmark default_paired_finish_to_resume n=10000" in text
+                assert "wake benchmark default_empty_serial n=100000" in text
+                for name in ("native_coordinator_to_worker", "native_worker_to_coordinator", "native_roundtrip"):
+                    assert f"wake benchmark {name} n=100000" in text
+                stamp = ctx.args.bin_dir / "oi_test_hooks.txt"
+                if stamp.exists() and stamp.read_text().strip().upper() in ("ON", "1", "TRUE") and \
+                        "wake benchmark trace skipped multi-thread" not in text:
+                    for name in ("trace_submit_to_worker", "trace_worker", "trace_done_to_post",
+                                 "trace_post_to_poll", "trace_poll_to_resume", "trace_finish_to_resume", "trace_total"):
+                        assert f"wake benchmark {name} n=100000" in text
             if case == "mysql-wake":
+                assert "wake benchmark blocking_finish_to_resume n=1000" in text
                 assert "wake benchmark mysql_direct_submit_to_worker_start n=1000" in text
                 assert "wake benchmark mysql_direct_worker_start_to_finish n=1000" in text
                 assert "wake benchmark mysql_direct_finish_to_resume n=1000" in text

@@ -9,6 +9,20 @@ namespace OI
 {
 namespace Net
 {
+#ifdef OI_ENABLE_BLOCKING_WAKE_TRACE
+struct BlockingWakeTrace
+{
+	int64_t iWorkerStart = 0;
+	int64_t iWorkerDone = 0;
+	int64_t iPost = 0;
+	int64_t iPoll = 0;
+	// 单线程专项独占默认池。样本在协程帧内覆盖下一次默认任务及其恢复。
+	BlockingWakeTrace();
+	~BlockingWakeTrace();
+	BlockingWakeTrace(const BlockingWakeTrace&) = delete;
+	BlockingWakeTrace& operator=(const BlockingWakeTrace&) = delete;
+};
+#endif
 // 进程内完成通知，无网络报文，不对外监听端口。
 struct WorkCompletion
 {
