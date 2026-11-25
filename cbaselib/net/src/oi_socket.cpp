@@ -362,6 +362,17 @@ bool NetAddr::IsUnspecified() const
 	return false;
 }
 
+bool NetAddr::IsUnspecifiedLiteral(const std::string& sIp, const std::string& sPort)
+{
+	NetAddr stAddr;
+	bool bBadPort = false;
+	if (!stAddr.Fill(sIp, sPort, bBadPort))
+	{
+		return false;
+	}
+	return stAddr.IsUnspecified();
+}
+
 net_socket_t NetAddr::CreateTcp(bool bNonblock) const
 {
 	if (m_iProtocolType == AF_INET)

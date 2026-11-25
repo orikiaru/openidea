@@ -101,7 +101,9 @@ def check(registry_port, redis_port):
         rpc(old, -1004, request(name, 77), 1)
         rpc(old, -1004, request(sentinel, 78), 2)
         # 分隔符不得进入地址字段：拒绝后已登记实例和 Redis 原值保持不变。
-        for index, (ip, port) in enumerate(((b"127.0.0.1 extra", b"43210"), (b"127.0.0.1", b"43210 extra"))):
+        for index, (ip, port) in enumerate((
+                (b"127.0.0.1 extra", b"43210"), (b"127.0.0.1", b"43210 extra"),
+                (b"0.0.0.0", b"43210"), (b"::", b"43210"), (b"[::]", b"43210"), (b"*", b"43210"))):
             invalid = b"".join((field(0, name), field(1, struct.pack("<i", 77)),
                                 field(2, ip), field(3, port), field(4, b"")))
             rpc(old, -1004, invalid, 20 + index, expected_code=-1)

@@ -803,6 +803,17 @@ int32_t RegistryClient::Publish(const std::string& sSection, const std::string& 
 		fprintf(stderr, "registry publish invalid advertise_port for %s\n", sSection.c_str());
 		return OI_ERR_INVALID_ARGUMENT;
 	}
+	std::string sExplicitIp;
+	bool bExplicitIp = ::OI::Base::Config::GlobalConfig().GetAs(sSection + ".advertise_ip", sExplicitIp) && !sExplicitIp.empty();
+	if (!bExplicitIp)
+	{
+		bExplicitIp = ::OI::Base::Config::GlobalConfig().GetAs("Service.advertise_ip", sExplicitIp) && !sExplicitIp.empty();
+	}
+	if (bExplicitIp && (sAdvertiseIp == "*" || ::OI::Net::NetAddr::IsUnspecifiedLiteral(sAdvertiseIp, sAdvertisePort)))
+	{
+		fprintf(stderr, "registry publish unreachable advertise_ip for %s\n", sSection.c_str());
+		return OI_ERR_INVALID_ARGUMENT;
+	}
 	if (!bPublish)
 	{
 		LOG_TRACE("registry publish %s skip bind %s:%s", sNameLocal.c_str(), sIpLocal.c_str(), sPortLocal.c_str());

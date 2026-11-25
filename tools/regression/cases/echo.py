@@ -140,6 +140,21 @@ class EchoCase(Case):
             assert "registry publish invalid advertise_port for IpcServer" in output, output
             assert "ipc server listen" not in output, output
         print("invalid registry advertise ports rejected PASS", flush=True)
+        for index, value in enumerate(("0.0.0.0", "::", "[::]", "*")):
+            invalid_config = ctx.cfg / ("ipcserver-advertise-ip-%d.toml" % index)
+            invalid_text = (ctx.cfg / "ipcserver.toml").read_text(encoding="utf-8")
+            assert '# advertise_ip = "203.0.113.10"' in invalid_text
+            invalid_text = invalid_text.replace('# advertise_ip = "203.0.113.10"', 'advertise_ip = "%s"' % value)
+            invalid_config.write_text(invalid_text, encoding="utf-8")
+            invalid, invalid_path = ctx.start("ipcserver-advertise-ip-%d" % index,
+                                              [str(ctx.work / ("ipcserver" + SUFFIX)), str(invalid_config)])
+            invalid.wait(timeout=15)
+            ctx.procs.remove(invalid)
+            output = invalid_path.read_text(encoding="utf-8", errors="replace")
+            assert invalid.returncode == expected_publish, "unreachable advertise_ip=%s exit=%s\n%s" % (value, invalid.returncode, output)
+            assert "registry publish unreachable advertise_ip for IpcServer" in output, output
+            assert "ipc server listen" not in output, output
+        print("unreachable registry advertise addresses rejected PASS", flush=True)
 
     def scenario(self, ctx):
         case = ctx.name

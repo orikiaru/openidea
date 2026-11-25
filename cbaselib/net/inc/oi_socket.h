@@ -85,6 +85,8 @@ class NetAddr
 	static std::string Endpoint(const std::string& sIp, const std::string& sPort);
 	// 0.0.0.0 或 ::。这种地址不能拿去登记。
 	bool IsUnspecified() const;
+	// 字面地址是 0.0.0.0、:: 或 [::]。域名和 * 返回 false，不打日志。
+	static bool IsUnspecifiedLiteral(const std::string& sIp, const std::string& sPort);
 	static bool ValidServicePort(const std::string& sPort);
 	// 按当前地址族建 TCP 套接字。
 	net_socket_t CreateTcp(bool bNonblock) const;
