@@ -4,7 +4,7 @@
 
 - **2026-11-26 四路全量通过**：Windows MT/ST、WSL Linux MT/ST 的 `all` 都是 22/22，Linux 两路另跑真 MySQL 通过。这次 Windows MT 没有出现 WinError 5，但此前连续两轮的清理失败仍然算数，待办 1 不关。详见 [最近测试报告](<docs/lasttesting.md#全量2026-11-26四路通过>)。
 - 全仓格式检查仍有 **13 份 HEAD 既有失败**；最新两轮未重跑 **ASan/coro**，历史专项不冒充最新验收。规范化/外围工具移到 [条件待办 D](<todonext.md#d-外围工具规则与检查覆盖>)。
-- 本轮新增**规范路由 hook 与自测**（工具脚本，这批改动未触及 C++，未跑编译回归），待验项见 [条件待办 D](<todonext.md#d-外围工具规则与检查覆盖>)。近期只保留下列五组，按顺序执行最小行动，不借机大重构；有行为改动后按 [测试规程](<docs/testing.md>) 跑规定平台/线程回归并加对应有效负例。
+- 本轮新增**规范路由 hook 与自测**（工具脚本，这批改动未触及 C++，未跑编译回归），待验项见 [条件待办 D](<todonext.md#d-外围工具规则与检查覆盖>)。近期只保留下列七组，按顺序执行最小行动，不借机大重构；有行为改动后按 [测试规程](<docs/testing.md>) 跑规定平台/线程回归并加对应有效负例。
 - 其他独立未完成事项与复现时间线合并到根目录 [todonext](<todonext.md>)：推迟不等于不存在、已修或已接受；达到各项触发条件再提级。完成历史见 [归档](<docs/fixed.md>)，原审查证据见 [11-24](<docs/review-20261124.md>) / [11-25](<docs/review-20261125.md>)，不再复制三轮同一事项。
 
 ## 1. Windows MT registry 清理 WinError 5：失败瞬间取证/定位
@@ -49,3 +49,17 @@
   - [旧 review](<docs/review-20261124.md#23-configure-仍改写已跟踪的-clangd未修>)保留历史证据。
 - **最小方向**：改成构建目录产物或显式 opt-in 的本地索引配置，保持开发者可发现/使用；不能只加 gitignore——仍被跟踪的文件照样被改写。
 - **验收**：Windows VS / Linux Ninja 分别 configure，受控源码文件逐字节不变（在已有脏树上比较前后，不要求抹掉其他工作），同时 clangd 仍能找到编译数据库并完成索引。
+
+## 7. 配置路径从进程参数读取
+
+- **需求**：每个进程都能用启动参数指定配置文件，不写死路径。
+- **现状**：只有 [ipcserver 读第一个参数](<modules/ipcserver/src/main.cpp#L10-L15>)；ipcclient、webserver、webclient、redisserver 都写死 `../config/<进程>.toml` 传给 [StartFramework](<cbaselib/base/src/oi_app.cpp#L13-L19>)。ipcclient 第一个参数已被 `--thread-mode`、`--test-hooks` 等探针占用。
+- **方向**：统一一种参数写法（例如 `--config <路径>`），缺省仍用原路径，放进框架公共入口，不在每个 main 各写一份；和现有探针参数不冲突。参数名和是否放进 `StartFramework` 待定。
+- **验收**：每个进程分别用缺省路径和指定路径启动；指定不存在的文件时启动失败并报出路径。回归脚本复制配置的方式不变也能通过。
+
+## 8. 日志文件改名：`.log.txt` 后缀、带时间、放同一个目录
+
+- **需求**：日志文件后缀改成 `.log.txt`，所有日志文件名带时间，全部放在一个目录里。
+- **现状**：logd 按天建子目录 `根目录/yy_mm_dd/`（[UpdateLogPath](<cbaselib/logd/src/log_manager.cpp#L161-L168>)），每个级别一个文件，文件名只有级别、没有后缀（[GetLogLvName](<cbaselib/logd/src/log_manager.cpp#L124-L143>) 的 `trace`、`debug`、`info`、`warning`、`error`）；跨天 [OnCrossDay](<cbaselib/logd/src/log_manager.cpp#L106-L122>) 换目录轮转。
+- **方向**：根目录下直接放 `<级别>_<时间>.log.txt` 这类文件，跨天轮转改为换文件名而不是换目录。时间精度（只到日期，还是带启动时刻）、是否带进程名、「所有日志」是否包含 stdout 重定向和测试脚本产出的日志，都待定。
+- **验收**：跨天轮转后新旧文件都在同一目录、名字带对应时间、内容不丢不重；回归脚本和文档里按旧目录/文件名找日志的地方一并改。
