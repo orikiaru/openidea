@@ -1,0 +1,143 @@
+# 规范路由索引，唯一来源。
+#
+# AGENTS.md「关键词对上文档」表由 `python tools/agent_route.py --write` 从这里生成，
+# `--check` 校验两边一致、文档存在、正则可编译。Claude Code 的 hook 也读这里：
+#   keywords  用户消息、派给 subagent 的提示词里出现就提示必读（ASCII 词按整词、不分大小写）；
+#   paths     Edit/Write 的目标文件匹配这些 glob（相对仓库根）就要求先读 doc；
+#   content   改 C++ 文件时新内容匹配这些正则，也要求先读 doc。
+# 只有 paths、content 会拦截编辑，keywords 只提示。不填就不拦。
+
+[[route]]
+id = "coroutine"
+doc = "docs/coroutine.md"
+section = "硬性约束"
+example = "`modules/ipcserver/src/ipcserver.cpp` 的 `RegisterRpcHandler`；`modules/ipcclient/src/echo_mgr.cpp` 的 `StartTask`；空等用 `modules/ipcclient/src/log_mgr.cpp` 的 `Pump` 里 `co_await OI::Coro::yield`"
+keywords = ["协程", "Task", "StartTask", "TaskScope", "co_await", "yield", "让出", "挂起", "睡眠", "sleep", "sleep_for", "RunBlocking", "lambda", "捕获", "WhenAll"]
+paths = ["cbaselib/base/inc/oi_coro*.h", "cbaselib/base/src/oi_coro*.cpp"]
+content = ['\bco_await\b', '\bco_return\b', '\bStartTask\b', '\bTaskScope\b', '\bRunBlocking\b', 'Coro::yield', '\[\s*[&=]\s*[,\]]', '\bsleep_for\b', '\busleep\s*\(', '\bSleep\s*\(']
+
+[[route]]
+id = "rpc"
+doc = "docs/coroutine.md"
+section = "服务端和客户端"
+example = "同上，推迟回包用同文件的 `Hold`"
+keywords = ["RPC", "RpcCall", "RegisterRpcHandler", "RouteManager", "回包", "调用号", "CallAll", "CallMany"]
+paths = []
+content = ['\bRpcCall\b', '\bRegisterRpcHandler\b', '\bRouteManager\b']
+
+[[route]]
+id = "notify"
+doc = "docs/cbaselib/notify.md"
+section = ""
+example = "`modules/ipcserver/src/ipcudp.cpp` 的 `RegisterNotifyHandler`；按服务名见 `docs/registry.md`；协程侧见 `docs/coroutine.md` 的单向消息"
+keywords = ["单向消息", "Notify", "NotifyAll", "NotifyMany"]
+paths = []
+content = ['\bRegisterNotifyHandler\b', '\bNotify(All|Many)?\s*\(']
+
+[[route]]
+id = "redis"
+doc = "docs/cbaselib.md"
+section = "redis 段"
+example = "`modules/ipcclient/src/redis_mgr.cpp` 的 `Check`"
+keywords = ["Redis", "redisserver", "RESP", "CallRedis"]
+paths = ["cbaselib/redis/**", "modules/redisserver/**", "modules/ipcclient/src/redis_mgr.cpp"]
+content = ['\bCallRedis\b', 'OI::Redis::']
+
+[[route]]
+id = "timer"
+doc = "docs/timer.md"
+section = ""
+example = "`Hold` 里的 `co_await OI::Coro::yield`"
+keywords = ["定时器", "时间轮", "AddTimer", "BaseTimer"]
+paths = ["cbaselib/timer/**"]
+content = ['\bAddTimer\b', '\bBaseTimer\b']
+
+[[route]]
+id = "update"
+doc = "docs/timer.md"
+section = "单例更新段"
+example = "`cbaselib/proto/src/oi_registry_client.cpp` 的 `RegistryClient::OnSecondUpdate`；`modules/ipcclient/src/timer_mgr.cpp` 的 `OnTickUpdate`"
+keywords = ["周期任务", "Update", "心跳", "定时拉取", "单例循环", "OnSecondUpdate", "OnTickUpdate"]
+paths = []
+content = ['\bOnSecondUpdate\b', '\bOnTickUpdate\b', '\bCallOnLoop\b']
+
+[[route]]
+id = "proto"
+doc = "docs/module.md"
+section = ""
+example = "`modules/protoconfig/rpc.proto` 的 `AllEcho`、`Hold`"
+keywords = ["协议", "proto.xml", ".proto", "rpcdata", "模块"]
+paths = ["**/*.proto", "**/proto.xml"]
+content = []
+
+[[route]]
+id = "net"
+doc = "docs/cbaselib.md"
+section = "net 段"
+example = "`cbaselib/port/oi_net_os.cpp` 的 `NetOs_Bind`"
+keywords = ["端口", "复用", "bind", "TIME_WAIT", "监听"]
+paths = ["cbaselib/port/oi_net_os*"]
+content = []
+
+[[route]]
+id = "web"
+doc = "docs/module.md"
+section = "Web 段"
+example = "`modules/webserver` 的五个路径；`modules/webclient` 的 `Run`"
+keywords = ["Web", "HTTP", "JSON", "urlencode", "二进制 body"]
+paths = ["modules/webserver/**", "modules/webclient/**"]
+content = []
+
+[[route]]
+id = "layer"
+doc = "docs/develop.md"
+section = "第 1 节"
+example = "`modules/ipcserver/src/ipcudp.cpp` 的 `IpcUdp`"
+keywords = ["分层", "Channel", "Session", "会话管理器", "逻辑 mgr", "裸包", "转发", "CloneSession"]
+paths = []
+content = []
+
+[[route]]
+id = "layout"
+doc = "docs/develop.md"
+section = "第 2、6 节"
+example = "`RegisterRpcHandler(&类::成员)`、`RegisterNotifyHandler(&类::成员)`"
+keywords = ["目录", "类外函数", "全局变量", "静态变量", "友元", "单线程/多线程选型"]
+paths = []
+content = []
+
+[[route]]
+id = "errno"
+doc = "docs/develop.md"
+section = "第 3、4 节"
+example = "`cbaselib/include/oi_errno.h`"
+keywords = ["错误码", "iCode", "errordef", "自定义结构", "手写序列化"]
+paths = ["cbaselib/include/oi_errno.h"]
+content = []
+
+[[route]]
+id = "time"
+doc = "docs/develop.md"
+section = "第 5 节"
+example = "`cbaselib/timer/inc/oi_timer_helper.h` 的 `GetTime`"
+keywords = ["时间", "计时", "GetTime", "毫秒", "过期", "ttl", "缓存"]
+paths = []
+content = []
+
+[[route]]
+id = "testing"
+doc = "docs/testing.md"
+section = "硬性约束"
+example = "`modules/ipcclient/src/udp_mgr.cpp` 的 `UdpMgr`；另见 `docs/develop.md` 第 7 节，远程 Linux 另读 `.agents/skills/linux-remote-test/SKILL.md`"
+keywords = ["测试", "回归", "补用例", "全量", "矩阵", "验收", "clangd", "logd", "EchoMgr", "LogMgr", "RedisMgr", "HoldMgr", "run_regressions", "test_matrix"]
+paths = ["tools/regression/**", "tools/run_regressions.py", "tools/test_matrix.py", "tools/parallel_matrix.py", "tools/kill_test_procs.py", "deploy/config/**", "modules/ipcclient/src/*_mgr.cpp"]
+content = []
+
+[[route]]
+id = "commit"
+doc = "docs/develop.md"
+section = "第 8 节"
+example = "AGENTS.md「提交就是提交并推送」"
+keywords = ["提交", "推送", "子模块", "todo"]
+paths = []
+content = []

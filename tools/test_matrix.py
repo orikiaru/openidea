@@ -267,6 +267,10 @@ def main():
             failed = True
         if run("inheritance", [sys.executable, ROOT / "tools/check_inheritance.py"]):
             failed = True
+        if run("agent-route-tests", [sys.executable, ROOT / "tools/test_agent_route.py"]):
+            failed = True
+        if run("agent-route", [sys.executable, ROOT / "tools/agent_route.py", "--check"]):
+            failed = True
         if run("process-fixtures", [sys.executable, ROOT / "tools/test_regression_platform.py"]):
             failed = True
         if run("test-safety", [sys.executable, ROOT / "tools/test_test_safety.py"]):

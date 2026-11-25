@@ -1,0 +1,27 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "\"$(command -v python3 || command -v python)\" \"$CLAUDE_PROJECT_DIR/tools/agent_route.py\" hook", "timeout": 10 }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Agent|Task|Edit|Write|MultiEdit",
+        "hooks": [
+          { "type": "command", "command": "\"$(command -v python3 || command -v python)\" \"$CLAUDE_PROJECT_DIR/tools/agent_route.py\" hook", "timeout": 10 }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Read",
+        "hooks": [
+          { "type": "command", "command": "\"$(command -v python3 || command -v python)\" \"$CLAUDE_PROJECT_DIR/tools/agent_route.py\" hook", "timeout": 10 }
+        ]
+      }
+    ]
+  }
+}

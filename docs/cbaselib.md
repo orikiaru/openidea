@@ -70,6 +70,13 @@ ZAdd 更新已有成员返回成功，默认计数表示新成员数量，0 不�
 
 命令语义参照 Redis 官方 [HMGET](https://redis.io/docs/latest/commands/hmget/)、[HSCAN](https://redis.io/docs/latest/commands/hscan/)、[ZRANGEBYSCORE](https://redis.io/docs/latest/commands/zrangebyscore/)、[ZPOPMIN](https://redis.io/docs/latest/commands/zpopmin/)。新增 GetEx/GetDel/LPos/SMIsMember/ZMScore 等接口要求服务端支持对应命令，未知命令保留为服务端错误，不隐式降级或重放。
 
+**单 key 接口约束**
+
+- 常用 Redis 命令提供明确的单 key 接口，key 使用 std::string；值支持 string 和 rpcdata，按模板序列化/反序列化，统一返回 int32_t 错误码。
+- 禁止隐式多 key 查询、自动合并成 MGET/MSET 或隐藏跨 key 操作。标准接口可以不提供多 key 能力；不得假设 Redis 集群的不同 key 位于同一槽。
+- PING、Lua 及确需多 key 的特殊命令保留原生 CallRedis，由调用方显式指定命令和参数并处理集群约束。
+- 输出引用接口的 `co_await` 写法和 0/1 数组类型见 [协程](coroutine.md) 的硬性约束。
+
 标准接口严格只操作一个 key；HGetAll、SMembers、范围查询访问的是同一个 key 的多个元素。没有 MGET/MSET、批量 DEL 或隐式跨 key 合并。集群多 key 操作必须由调用方通过原生接口显式指定并处理同槽要求；当前 redisserver 仍是既有代理，不因此获得 Redis Cluster 的 MOVED/ASK 自动路由能力。
 
 PING、Lua 和特殊选项保留原生 `CallRedis({"PING"})` / `CallRedisSync(...)`，不带输出参数时返回共享 hiredis 回执 `RedisResult`，可用 `GetRet()` 取得统一错误码，并按需读取原始回执/错误文本。需要类型化结果时直接 `co_await CallRedis({"PING"}, sPong)`、`co_await CallRedis({"EVAL", "return 42", "0"}, iNumber)`；同步对应 `CallRedisSync(args, output)`。它们同样返回 int32_t，支持字符串、整数、布尔、double、数组、rpcdata 等输出；Lua 返回 rpcdata 的二进制字符串时直接按指定模板解码。Lua 的 false/nil 在 RESP 中是空值，返回 NOT_FOUND，不擅自转换成 bool false；bool 输出只接受整数 0/1。原生命令不会自动合并或改写 key 参数。

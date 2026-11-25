@@ -6,6 +6,8 @@
 
 只编译用 `python tools/build.py`（`--mode mt|st`，默认吃满逻辑核），不要手写 cmake。单测：`python tools/test_build.py`。
 
+规范路由用 `python tools/agent_route.py`，唯一索引是 `.agents/rules/index.toml`：`--write` 重新生成 AGENTS.md「关键词对上文档」表，`--check` 校验索引并核对表是否同步，`hook` 是 `.claude/settings.json` 配的 Claude Code hook 入口（从 stdin 读事件，出错放行，`OI_ROUTE_OFF=1` 关闭）。单测：`python tools/test_agent_route.py`。矩阵会自动执行单测和 `--check`；需要 Python 3.11+ 或 tomli，缺少时两者打印「跳过」并返回 0。
+
 下文为单项测试的补充说明，平台环境、完整用例清单和结果判定以统一规程为准。
 
 ## 回归脚本结构

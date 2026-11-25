@@ -111,7 +111,7 @@ class MatrixOutcomeTests(unittest.TestCase):
         self.assertNotIn("restore-configure", calls)
 
     def test_nonzero_steps_cannot_pass(self):
-        for step in ("field-names", "inheritance-tests", "inheritance", "process-fixtures", "test-safety", "matrix-outcomes",
+        for step in ("field-names", "inheritance-tests", "inheritance", "agent-route-tests", "agent-route", "process-fixtures", "test-safety", "matrix-outcomes",
                      "regression-checks", "build-tests", "linux-sync-tests", "config-macros",
                      "mt-configure", "mt-build", "mt-tests", "st-tests"):
             with self.subTest(step=step):

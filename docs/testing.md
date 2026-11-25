@@ -2,6 +2,40 @@
 
 面向维护者与 AI：按本文件执行，不要另写客户端，不要跳过失败，不要把只编译、WSL 运行或强杀退出算成 Windows 原生测试通过。最近一次结果写在 [lasttesting.md](lasttesting.md)，不要写进本文件。
 
+## 硬性约束
+
+下面这些从 AGENTS.md 移来，跑编译、回归或补用例前先读；后面带编号的各节是具体操作。
+
+第三方测试工具（Redis、编译器、SDK 等）安装在持久目录并复用，严禁把停止进程理解为删除可执行文件、源码安装目录或卸载工具。清理只移除本次测试的临时配置、日志和数据；不要把工具安装在测试临时目录或 `/tmp` 中。缺依赖先核对已有安装及 `--redis-binary` 路径，不要直接重复下载安装。
+
+每次测试前后都把本项目相关进程全部停掉重来，关不掉的直接强杀：按本仓库/本路副本的完整路径或 `.oi-test-owner.json` 归属标记匹配，Windows 记录的 PID 还必须核对进程创建时间；端口、通用脚本名和临时目录前缀不能单独作为归属依据。系统自带同名的 `Registry` 进程不能碰；WSL 只清本项目测试进程，保留用户 6379 上的 Redis。上一轮的残留进程不能带进下一轮。清理用 `python tools/kill_test_procs.py`（并行时加 `--lane`），目录和 WSL 用户参数与矩阵保持一致；清理失败或有残留必须报错，不要另写清理命令。
+
+编译和回归一律交给 subagent 跑，主对话不直接跑矩阵。Cursor 里 subagent 固定用 `grok-4.7-high`（Grok 4.7）。Codex 里固定用 Terra，不用 Astra。这是已确认的长期偏好，不用每轮再问；只有用户要求更换时再确认。实现稳定后默认四路并行验收，按 `docs/testing.md` 第 7 节的范本同时派四个 subagent；subagent 回报每个平台、线程模式和用例的通过、失败、环境阻塞，以及失败日志的关键行。
+
+完整操作规程统一维护在 `docs/testing.md`，跨平台构建/测试/恢复使用 `tools/test_matrix.py`，原生用例入口为 `tools/run_regressions.py`。测试脚本必须留在工程内；报告中区分实际通过、失败和环境阻塞。每次全量四组都通过，把日期、平台、线程模式、通过项数、机器 CPU 型号和实测频率写进 `docs/lasttesting.md` 的「全量」，替换上一次全量记录。不要写进 `docs/testing.md`。只跑了部分用例不要写成全量通过。
+
+有行为的改动，Linux 和 Windows 都要跑。默认还要单线程、多线程各跑一遍，缺一套不算测完。只有改动明确跟线程无关、并且是纯逻辑时，可以不切单线程和多线程；这种例外要在回复里写明。协程、挂起、调度、`Task`、`StartTask`、`co_await`、`yield` 一定涉及单线程和多线程，不能当成纯逻辑跳过。
+
+单线程和多线程指 `ipcclient` 和 `ipcserver`。`logd` 只能多线程。`redisserver` 按它自己的编译选项是单线程。Linux 优先用本机 `.local/linux-hosts.json` 里的远程机器，这个文件不进仓库：4 核那台编译 Release 并跑多线程，2 核那台跑单线程，用户名以文件为准，只走公钥，不把密码写进代码或命令。文件不存在，或里面缺 IP、用户名时，先问用户。用户选择不提供，就改用 WSL，构建目录 `~/openidea-build-gcc13`；之后一直用 WSL，直到用户再次明确说用远程机器。Windows 用 `build-win`（Visual Studio 17 2022，x64），同样两种线程模式各编一次。两边的可执行文件都在 `deploy/bin`，换平台或换线程模式之前先编出要跑的那一套。单线程和多线程各用各的构建目录：多线程是 `build-win` 或 `~/openidea-build-gcc13`，单线程是同级的 `build-win-st`、`~/openidea-build-gcc13-st`。不要把同一目录改回另一种线程模式再编一遍。回归入口是 `python3 tools/run_regressions.py --case all`。Linux 无论在远程还是 WSL，都用 `-DOI_IPC_SINGLE_THREAD=ON` 和 `OFF` 各编一次。
+
+`ipcclient` 里四个 Mgr 都要跑到：`EchoMgr`、`LogMgr`、`RedisMgr`、`HoldMgr`。开关在 `deploy/config/ipcclient.toml` 的 `[Test]`：`echo`、`log`、`redis`、`hold`。一次只开一个。`CoroMgr` 的 `coro` 和 `tools/gen_dispatch_bench.py` 的序列化压力不进 `--case all`。一个月测一次，同一台机器上一次只跑一个，不要并排占满 CPU。结果写进 `docs/lasttesting.md`。
+
+测的是 `logd`、`ipcserver`、`ipcclient` 这三个进程。不要另写一个日志客户端。日志从 `LogMgr` 发出，回声从 `EchoMgr` 发出。
+
+Linux 产物在 `.local/linux-hosts.json` 指定的远程机器上编、在那台机器上跑；用户没提供地址时改在 WSL 里编、在 WSL 里跑。构建目录是 `~/openidea-build-gcc13`，可执行文件在 `deploy/bin`。进程的当前目录必须是某层 `bin`，配置在同级的 `config`。`logd` 读 `../config/logd.toml`，另外两个读 `../config/<名字>.toml`。
+
+跑之前把这三份 toml 拷到临时目录再改，不要改仓库里的那份。日志目录改到 `/tmp` 下面，不要写进仓库。
+
+顺序是先 `logd`（端口 19995），再 `ipcserver`（等到输出 `ipc server listen`，端口 17981），最后 `ipcclient`。
+
+回声看客户端退出码和这一行：`ok` 等于 `[TestEcho].total`，`mismatch=0`，`rpc_fail=0`。
+
+日志看日志服落盘的文件字节，不要只看客户端打印的 `enqueue_rate`。那个数是塞进发送缓冲的速度。端到端用文件字节除以从启动客户端到文件不再增长的时间。文件总量不要超过 10GB，超过 2GB 就停。测完删掉临时日志目录，并停掉这三个进程。
+
+Redis 也单独测。开关是 `[Test] redis`。先起本机 Redis（`maxmemory 1536mb`），再起 `redisserver`（等到 `redis server listen`，端口 16379），最后 `ipcclient`。客户端连的是 redisserver，不是 Redis。看退出码，以及 `redis integrity ok` 和 `redis stress` 那一行里 `bad=0`。测完停掉 `redisserver`。
+
+`HoldMgr` 的开关是 `[Test] hold`。要同时起 `ipcserver` 和 `redisserver`。看退出码，以及 `hold done bad=0`。
+
 ## 1. 范围与通过条件
 
 - Windows 原生 MSVC x64 Release、Linux WSL GCC 13，各运行多线程 MT 和单线程 ST，共四组。
@@ -69,7 +103,7 @@ Hold 的迟到回包检查先让标记 802 的调用超时，再保持标记 803
 
 Windows：Python 3.10+、Visual Studio 2022 的“使用 C++ 的桌面开发”（MSVC v143 x64、MSBuild、Windows SDK）、CMake。仅有 cl.exe 不够，还要有 MSVC include/lib 与 SDK include/lib。脚本会寻找 PATH 中的 CMake，也能找到 VS 附带的 CMake。配置前检查这几项；缺 CMake、MSVC、MSBuild 或 Windows SDK 时，终端写明缺哪一项和安装步骤，并停止编译。CMake 配置或编译日志里出现找不到生成器、编译器或 v143 工具集时，同样把这段说明打到终端并追加进该步日志。
 
-Linux：优先用仓库根目录 `.local/linux-hosts.json` 里的远程机器。该文件只留在本机，不进仓库，记录每台机器的 IP、用户名、核数和职责。4 核机器编译 Release 并跑多线程，2 核机器跑单线程，登录只用公钥，不把密码写进代码或命令。文件不存在，或缺少 IP、用户名时，先问用户。用户选择不提供，就改用 WSL，直到用户再次明确说用远程机器。从 Windows 同步源码只用 `python tools/sync_linux_remote.py --role mt|st|all`，不要手写 tar/scp；远程登录与矩阵步骤见 `.cursor/skills/linux-remote-test/SKILL.md`。WSL 和远程都要有 Python 3.8+、cmake、gcc-13/g++-13、make、已编译的 Redis 服务端。缺 CMake、gcc-13 或 g++-13 时，终端写明缺哪一个以及 apt 安装命令，并停止编译。源码编译 Redis 应使用持久外部依赖目录（例如 `~/opt/redis-7.4.12`），通过 `/usr/local/bin/redis-server` 安装入口复用；默认路径为该入口。禁止把工具装到 `/tmp` 或测试临时目录，停止测试进程时不删除工具安装或源码。路径不存在必须提供 `--redis-binary`，脚本不会下载不明 Redis 二进制。
+Linux：优先用仓库根目录 `.local/linux-hosts.json` 里的远程机器。该文件只留在本机，不进仓库，记录每台机器的 IP、用户名、核数和职责。4 核机器编译 Release 并跑多线程，2 核机器跑单线程，登录只用公钥，不把密码写进代码或命令。文件不存在，或缺少 IP、用户名时，先问用户。用户选择不提供，就改用 WSL，直到用户再次明确说用远程机器。从 Windows 同步源码只用 `python tools/sync_linux_remote.py --role mt|st|all`，不要手写 tar/scp；远程登录与矩阵步骤见 `.agents/skills/linux-remote-test/SKILL.md`。WSL 和远程都要有 Python 3.8+、cmake、gcc-13/g++-13、make、已编译的 Redis 服务端，以及 OpenSSL 3.0+ 开发库（TLS 目标需要）。Ubuntu 20.04 自带的是 1.1.1，要源码编到持久目录（本机 WSL 为 `/root/opt/openssl-3.0.18`），矩阵加 `--define OPENSSL_ROOT_DIR=<目录> --define OPENSSL_USE_STATIC_LIBS=ON`；`parallel_matrix.py` 的 `--define` 只传给 Linux 路。缺 CMake、gcc-13 或 g++-13 时，终端写明缺哪一个以及 apt 安装命令，并停止编译。源码编译 Redis 应使用持久外部依赖目录（例如 `~/opt/redis-7.4.12`），通过 `/usr/local/bin/redis-server` 安装入口复用；默认路径为该入口。禁止把工具装到 `/tmp` 或测试临时目录，停止测试进程时不删除工具安装或源码。路径不存在必须提供 `--redis-binary`，脚本不会下载不明 Redis 二进制。
 
 测试占用本机端口 19995、17981、16379、16380、17990、17992、17993，另有 UDP 17983。测试 Redis 用 16380，不用 6379：Windows 动态端口段可能被 Hyper-V/WinNAT 保留，本机已有的 6379 Redis 也不会和测试冲突。复制出的 `redisserver.toml`、`registry.toml` 由脚本改到 16380，仓库里的配置仍是 6379。运行前脚本探测占用；不杀其他人的服务。同一份工作目录内不要并行；要并行就用 `tools/parallel_matrix.py`，它把工作目录同步成四份（Windows 在 `F:/oi-par`，Linux 在 WSL 的 `/root/oi-par`），Windows MT/ST、Linux MT/ST 各用一份，`--port-offset` 依次为 0、1000、2000、3000，所有测试端口整体平移，互不抢占：
 
@@ -212,7 +246,7 @@ python3 tools/format_cpp.py --check --clang-format /path/to/clang-format-18.1.8
 git diff --check
 ```
 
-脚本级回归另含 `python tools/test_regression_checks.py`、`python tools/test_preflight_ports.py` 和 `python tools/test_test_safety.py`，矩阵会自动执行。回归驱动实现在 `tools/regression/`：`runner.py` 是通用流程，`cases/` 是按用例的配置、启动和断言，`ports.py` 持有会被 `--port-offset` 重新绑定的端口常量；命令行入口仍是 `tools/run_regressions.py`。
+脚本级回归另含 `python tools/test_regression_checks.py`、`python tools/test_preflight_ports.py` 和 `python tools/test_test_safety.py`，矩阵会自动执行。矩阵还执行规范路由的 `agent-route-tests`（`python tools/test_agent_route.py`）和 `agent-route`（`python tools/agent_route.py --check`）两步；Python 低于 3.11 且没有 tomli 时两步打印「跳过」并返回 0，矩阵仍记 PASS，是否真的检查过看该步日志，跳过的一路不算已检查。回归驱动实现在 `tools/regression/`：`runner.py` 是通用流程，`cases/` 是按用例的配置、启动和断言，`ports.py` 持有会被 `--port-offset` 重新绑定的端口常量；命令行入口仍是 `tools/run_regressions.py`。
 
 结果目录包含：environment.json（环境、HEAD、diff 摘要）、matrix.json（每一步命令和退出码）、每一步日志、每个用例的进程输出、results.json（逐例通过/失败）、summary.json（整体结果）。同时运行两端时还有 platforms.json。
 

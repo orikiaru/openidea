@@ -10,7 +10,7 @@ description: >-
 
 矩阵语义、用例和通过条件以 `docs/testing.md` 为准。本技能只规定怎样从 Windows 登到远程机器并跑完，不另写客户端，不改断言。
 
-编译和回归交给 subagent。Codex 用 `grok-4.7-high`。subagent 只跑测试和回报，不改仓库，不提交。
+编译和回归交给 subagent，模型按 AGENTS.md「杂活交给 subagent」。subagent 只跑测试和回报，不改仓库，不提交。
 
 ## 选机器
 
@@ -36,9 +36,17 @@ ssh -i <identity> -o IdentitiesOnly=yes -o BatchMode=yes -o PreferredAuthenticat
 
 ## 同步源码
 
-远程已有 `test_matrix.py` 或 `run_regressions.py` 在跑时，不要同步，也不要再开一轮。
+**只准用**仓库根下的标准入口，禁止手写 `tar`/`scp`/PowerShell 管道解包：
 
-从仓库根打 tar，包含 `.git`，排除 `.local`、`build-win`、`build-clangd`、`build-clangd-win`、`build-clangd-linux`、`deploy/bin`、`.vs`、`__pycache__`。解到 `$HOME/openidea`。不要删除 `$HOME/opt`、已有 Redis/CMake 安装，或 `$HOME/openidea-test-results`。
+```powershell
+python tools/sync_linux_remote.py --role mt
+python tools/sync_linux_remote.py --role st
+python tools/sync_linux_remote.py --role all
+```
+
+可选：`--require-text modules/ipcclient/src/coro_mgr.cpp:live_ns=` 同步后校验远端文件内容；`--identity` 覆盖私钥；`--force` 才在远端看似忙碌时仍同步（默认拒绝）。
+
+脚本会读 `.local/linux-hosts.json`，打 tar（含 `.git`，排除 `.local`、`build-win`、`build-clangd*`、`deploy/bin`、`.vs`、`__pycache__`），公钥 `scp` 后在远端解到临时目录再原子替换 `source`（默认 `$HOME/openidea`）。远端已有 `test_matrix.py` 或 `run_regressions.py` 时默认不同步、也不要再开矩阵。不要删除 `$HOME/opt`、已有 Redis/CMake 安装，或 `$HOME/openidea-test-results`。单测：`python tools/test_sync_linux_remote.py`。
 
 ## 远程预检
 
@@ -65,9 +73,13 @@ python3 tools/cleanup_linux_tests.py --root "$HOME/openidea"
 
 Windows 宿主上的 WSL 路仍用 `python tools/kill_test_procs.py`，见 `docs/testing.md` 第 7 节。
 
+## 只编译
+
+不要手写 `cmake`。在要编的那台机器上执行 `python3 tools/build.py --mode mt|st`。并行度默认是该机逻辑核数。Windows 宿主用 `python tools/build.py`。
+
 ## 跑矩阵
 
-同一构建目录上已有矩阵时不要再开。结果目录用新的 `$HOME/openidea-test-results/<lane>-<日期>`，不要覆盖上一轮失败目录。把标准输出追加到同级的 `runner.log`。
+同一构建目录上已有矩阵时不要再开。结果目录用新的 `$HOME/openidea-test-results/<lane>-<日期>`，不要覆盖上一轮失败目录。标准输出写到同级的 `runner.log`。
 
 ```sh
 export PATH="$HOME/opt/cmake/bin:$PATH"
@@ -81,16 +93,18 @@ python3 tools/test_matrix.py --platform native --mode <mt|st> --jobs <jobs> --ca
   --artifacts "$HOME/openidea-test-results/<lane>-<日期>"
 ```
 
-全量大约数分钟到二十分钟。SSH 等到进程结束，或 `setsid` 放到后台后只轮询结果文件，不要在编译或用例中途重开。
+全量大约数分钟到二十分钟。长任务只用 `setsid nohup python3 tools/test_matrix.py ... > runner.log 2>&1 &` 启动，判断结束只看 artifacts 里 `summary.json` 的 `completed` 字段或 `test_matrix` 进程是否还在，不要自己另造退出码文件。不要在编译或用例中途重开。
 
 单线程用 `--mode st`，构建目录是 `$HOME/openidea-build-gcc13-st`，结束后该目录的 `CMakeCache.txt` 仍是 `OI_IPC_SINGLE_THREAD:BOOL=ON`。多线程目录保持 `OFF`。不要再编回另一种模式。`summary.json` 的 `restore_skipped` 为 true，`restored` 为 false。编译成功不等于用例通过。
+
+只在显式要求时跑的用例（例如 `mysql`）直接加在上面的 `test_matrix.py` 命令上：`--mysqld "$MYSQL/bin/mysqld" --define OI_MYSQL_INCLUDE_DIR="$MYSQL/include" --define OI_MYSQL_LIBRARY="$MYSQL/lib/libmysqlclient.so"`。缺 `libaio` 时把已有兼容库目录加进 `LD_LIBRARY_PATH`。不要单独先编译再跑 mysql。
 
 ## 回报
 
 只写看到的证据：
 
 1. 退出码、起止时间。
-2. `summary.json` 的 `passed`、`completed`、`restored`。
+2. `summary.json` 的 `passed`、`completed`、`restored`、`restore_skipped`。
 3. `matrix.json` 每一步退出码。
 4. 每个用例通过、失败或环境阻塞，以及耗时。
 5. hold 日志里 `hold timer update` 那一行原文。

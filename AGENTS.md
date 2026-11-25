@@ -19,6 +19,16 @@
 
 需要用户做决定时（方案取舍、范围、是否继续），用选择题工具给出选项，推荐项放第一个并标明推荐，不要只在正文里列问题让用户打字回答。每个问题单独能看懂，选项写清楚各自的后果。
 
+- 能从代码、配置、git 历史自己查出来的，查完写进选项，不要反问用户。
+- Review 或修复建议要用户决定改不改时，选项里必须有一项「不修改」；用户没选之前不动代码。
+- 选项依据（代码位置、文档原句、实测结果）写进问题描述，不要只给结论。
+
+# 技能放在 .agents/skills
+
+流程类技能（提交、远程测试等）统一放 `.agents/skills/<name>/SKILL.md`，Claude Code、Codex、Cursor 都从这里找，不在 `.cursor/skills`、`.claude/skills` 再放副本。`name` 与目录名一致，只用小写字母、数字、连字符，中文触发词写进 `description`。经验性内容优先补进已有技能，不为一个小技巧新开目录。技能只写「事情怎么做」；代码怎么写仍以本文件和 `docs/` 为准，不在技能里复制一份。
+
+技能里不写死个人路径、机器地址、账号和凭据。机器信息放本机 `.local/`（不进仓库），缺了先问用户；能自查的（工具路径、构建目录、端口占用）自己查。
+
 # 提交就是提交并推送
 
 用户说「提交」时，包含本地 `git commit` 和推送到当前分支的远程。推送用普通 `git push`，不要强推。远程拒绝或需要登录时，把验证信息交给用户。
@@ -59,56 +69,17 @@
 - 诊断日志不直接输出完整请求、凭据或业务敏感值；外部错误文本按需脱敏、限长，高频重复故障可限频，但不能完全丢失首次原因和发生情况。
 - 协程结果和多人等待先复用现有任务机制；分别核对连接配置域名与每次拨号地址的归属。
 - 优先维护现有稳定接口和架构。只有当前实现妨碍正确性或应用层安全使用时才考虑重构；没有实质问题可以明确报告未发现，不为凑优化项制造改动。
-- `RunBlocking` 的同步回调及其自有调用链禁止调用 `co_await`、`yield`、`StartTask`、`TaskScope` 和 RPC、Redis、HTTP 异步接口。返回 `int32_t` 的签名不能证明内部没有异步调用；Review 必须沿自有调用链核对。框架完成通知和主协程调度不属于用户同步回调；阻塞工作回执由独立非阻塞写端唤醒，poll 监视读端并交会话处理。
-- `RunBlocking` 的 lambda 只能按值捕获临时变量，初始化捕获把临时对象移进闭包，对象活到任务结束。禁止 `[&]`、引用捕获、裸 `this`、成员，以及指向调用方栈上局部对象的指针或引用。要带进后台的具名局部变量先做成临时对象再捕获，或作为右值参数交给 `RunBlocking`。输出仍用左值引用参数，调用方保证活到任务完成。Review 必须看捕获列表，不能只看函数签名。
-- Lambda 只允许具名捕获。禁止默认捕获 `[&]`、`[=]`，以及带额外项的默认捕获。这是 `docs/09-key-rules.md` 第 6 节，协程和 `RunBlocking` 都不另开例外。具名引用捕获、裸 `this`、成员，以及指向调用方栈上局部对象的指针或引用，不延长被指对象的寿命。任务在离开创建点之前已在当前协程栈上被 `co_await`，包括同一帧里 `co_await WhenAll` 等到结束：调用方帧一直活着，协程函数的参数用引用，具名引用只指向这场还活着的对象。已经活在当前帧里的对象不要再按值拷进任务。任务没有在当前栈上被 `co_await` 就离开创建点时，`StartTask`、`TaskScope::Start`、把 `Task` 存起来或交给别的协程之后创建方返回，要带进去的对象必须具名按值捕获，或用初始化捕获移进闭包。Review 必须沿任务实际活到的地方核对具名引用还指得着；证明不了就改成按值。按值捕获只保住捕获的那一份，不延长它里面的指针、引用、迭代器、`string_view`、`span`。`StartTask` 和 `TaskScope::Start` 保住闭包本身直到任务结束。协程函数的引用参数不会复制进帧。直接调用临时的带捕获协程 lambda 不行，lambda 在语句结束时销毁。`RunBlocking` 的回调跑在别的线程上，即使外层正在 `co_await`，仍然只按值具名捕获。
-- `co_await` 和 `yield` 挂起期间别的协程会运行，多线程恢复还可能换工人。挂起前取得的迭代器、容器元素引用或指针、`string_view`、`span`，恢复后继续用，必须保证这段时间容器没有插入、删除、重分配、重哈希、移动或销毁。本协程帧独占的局部容器、按值放进帧的容器，以及范围 for 把临时对象延长到整个循环的情形，挂起期间没有任何代码改它，迭代器才算稳定。成员、共享容器，以及别的协程或线程拿得到的对象，不算稳定。不稳定时先拷出 key、下标或值，恢复后再查找。`vector<bool>` 的代理引用和 JSON 迭代器同样不能跨挂起。范围 for 的隐藏迭代器按同一条核对。`RpcContext` 由框架覆盖整段处理协程，处理函数里可以跨挂起使用。
-- `MutexGuard`、`SpinLockGuard`、`NativeMutexGuard` 必须在 `co_await` 或 `yield` 之前结束。多线程 `Mutex` 由加锁的那条线程持有，挂起后可能在别的工人上恢复，锁却一直占到守卫析构。单线程下 `Mutex` 和 `SpinLock` 是空实现，挂起期间别的协程仍会改数据。`NativeMutex` 在单线程构建里也是真锁。先放开守卫，恢复后重新加锁，再查条件。
-- 单线程模式的任务创建和启动必须在 poll 线程；跨线程调用会输出警告并抛出 `std::logic_error`，拒绝创建或启动。多线程模式不限制启动线程。故障注入负例允许刻意跨线程验证拒绝，不作为业务调用范例。
-- 单线程模式的 poll 线程在 `Poll::Init` 里才记下。在这之前，带 `CheckThreadAccess` 守卫的接口（`SessionManager::Init`、`AddTimer`、`AddStopHandler`、RPC、Registry 等）一律返回 `OI_ERR_WRONG_THREAD`。框架按 `StartFramework` 的顺序初始化，应用和第三方接入时，这些接口都要放在 `Poll::Init` 之后调用。
-- 阻塞回归须使用真实同步阻塞读取或同步 SDK，前台用 timer 和 RPC 验证活性后解阻塞，不能只靠返回值、sleep 或轮询冒充真实阻塞。引用入参和输出须活到任务真正完成，不能提前超时释放。
+- 协程硬底线：`RunBlocking` 的同步回调及其自有调用链禁止 `co_await`、`yield`、`StartTask`、`TaskScope` 和 RPC、Redis、HTTP 异步接口；Lambda 只许具名捕获；`MutexGuard` 等锁守卫不跨 `co_await`、`yield`；挂起后迭代器、元素引用、`string_view`、`span` 按失效处理，除非容器挂起期间保持稳定。捕获寿命、单线程 poll 线程限制、阻塞回归等细则见 `docs/coroutine.md` 的硬性约束。
 
 流式 source/sink 回调不得阻塞 poll 或保存借用的 span/视图；返回 `OI_ERR_BUSY` 表示当前片未消费，重试前不得产生消费副作用。验证流取消与释放的回归须有旧状态取消并释放的可观察证据；新请求健康另行验证。普通协程 handler 可在客户端断开后完成并丢弃响应。
 
 # 回声和日志要分开测
 
-第三方测试工具（Redis、编译器、SDK 等）安装在持久目录并复用，严禁把停止进程理解为删除可执行文件、源码安装目录或卸载工具。清理只移除本次测试的临时配置、日志和数据；不要把工具安装在测试临时目录或 `/tmp` 中。缺依赖先核对已有安装及 `--redis-binary` 路径，不要直接重复下载安装。
-
-每次测试前后都把本项目相关进程全部停掉重来，关不掉的直接强杀：按本仓库/本路副本的完整路径或 `.oi-test-owner.json` 归属标记匹配，Windows 记录的 PID 还必须核对进程创建时间；端口、通用脚本名和临时目录前缀不能单独作为归属依据。系统自带同名的 `Registry` 进程不能碰；WSL 只清本项目测试进程，保留用户 6379 上的 Redis。上一轮的残留进程不能带进下一轮。清理用 `python tools/kill_test_procs.py`（并行时加 `--lane`），目录和 WSL 用户参数与矩阵保持一致；清理失败或有残留必须报错，不要另写清理命令。
-
-编译和回归一律交给 subagent 跑，主对话不直接跑矩阵。Cursor 里 subagent 固定用 `grok-4.7-high`（Grok 4.7）。Codex 里固定用 Terra，不用 Astra。这是已确认的长期偏好，不用每轮再问；只有用户要求更换时再确认。实现稳定后默认四路并行验收，按 `docs/testing.md` 第 7 节的范本同时派四个 subagent；subagent 回报每个平台、线程模式和用例的通过、失败、环境阻塞，以及失败日志的关键行。
-
-完整操作规程统一维护在 `docs/testing.md`，跨平台构建/测试/恢复使用 `tools/test_matrix.py`，原生用例入口为 `tools/run_regressions.py`。测试脚本必须留在工程内；报告中区分实际通过、失败和环境阻塞。每次全量四组都通过，把日期、平台、线程模式、通过项数、机器 CPU 型号和实测频率写进 `docs/lasttesting.md` 的「全量」，替换上一次全量记录。不要写进 `docs/testing.md`。只跑了部分用例不要写成全量通过。
-
-有行为的改动，Linux 和 Windows 都要跑。默认还要单线程、多线程各跑一遍，缺一套不算测完。只有改动明确跟线程无关、并且是纯逻辑时，可以不切单线程和多线程；这种例外要在回复里写明。协程、挂起、调度、`Task`、`StartTask`、`co_await`、`yield` 一定涉及单线程和多线程，不能当成纯逻辑跳过。
-
-单线程和多线程指 `ipcclient` 和 `ipcserver`。`logd` 只能多线程。`redisserver` 按它自己的编译选项是单线程。Linux 优先用本机 `.local/linux-hosts.json` 里的远程机器，这个文件不进仓库：4 核那台编译 Release 并跑多线程，2 核那台跑单线程，用户名以文件为准，只走公钥，不把密码写进代码或命令。文件不存在，或里面缺 IP、用户名时，先问用户。用户选择不提供，就改用 WSL，构建目录 `~/openidea-build-gcc13`；之后一直用 WSL，直到用户再次明确说用远程机器。Windows 用 `build-win`（Visual Studio 17 2022，x64），同样两种线程模式各编一次。两边的可执行文件都在 `deploy/bin`，换平台或换线程模式之前先编出要跑的那一套。单线程和多线程各用各的构建目录：多线程是 `build-win` 或 `~/openidea-build-gcc13`，单线程是同级的 `build-win-st`、`~/openidea-build-gcc13-st`。不要把同一目录改回另一种线程模式再编一遍。回归入口是 `python3 tools/run_regressions.py --case all`。Linux 无论在远程还是 WSL，都用 `-DOI_IPC_SINGLE_THREAD=ON` 和 `OFF` 各编一次。
-
-`ipcclient` 里四个 Mgr 都要跑到：`EchoMgr`、`LogMgr`、`RedisMgr`、`HoldMgr`。开关在 `deploy/config/ipcclient.toml` 的 `[Test]`：`echo`、`log`、`redis`、`hold`。一次只开一个。`CoroMgr` 的 `coro` 和 `tools/gen_dispatch_bench.py` 的序列化压力不进 `--case all`。一个月测一次，同一台机器上一次只跑一个，不要并排占满 CPU。结果写进 `docs/lasttesting.md`。
-
-测的是 `logd`、`ipcserver`、`ipcclient` 这三个进程。不要另写一个日志客户端。日志从 `LogMgr` 发出，回声从 `EchoMgr` 发出。
-
-Linux 产物在 `.local/linux-hosts.json` 指定的远程机器上编、在那台机器上跑；用户没提供地址时改在 WSL 里编、在 WSL 里跑。构建目录是 `~/openidea-build-gcc13`，可执行文件在 `deploy/bin`。进程的当前目录必须是某层 `bin`，配置在同级的 `config`。`logd` 读 `../config/logd.toml`，另外两个读 `../config/<名字>.toml`。
-
-跑之前把这三份 toml 拷到临时目录再改，不要改仓库里的那份。日志目录改到 `/tmp` 下面，不要写进仓库。
-
-顺序是先 `logd`（端口 19995），再 `ipcserver`（等到输出 `ipc server listen`，端口 17981），最后 `ipcclient`。
-
-回声看客户端退出码和这一行：`ok` 等于 `[TestEcho].total`，`mismatch=0`，`rpc_fail=0`。
-
-日志看日志服落盘的文件字节，不要只看客户端打印的 `enqueue_rate`。那个数是塞进发送缓冲的速度。端到端用文件字节除以从启动客户端到文件不再增长的时间。文件总量不要超过 10GB，超过 2GB 就停。测完删掉临时日志目录，并停掉这三个进程。
-
-Redis 也单独测。开关是 `[Test] redis`。先起本机 Redis（`maxmemory 1536mb`），再起 `redisserver`（等到 `redis server listen`，端口 16379），最后 `ipcclient`。客户端连的是 redisserver，不是 Redis。看退出码，以及 `redis integrity ok` 和 `redis stress` 那一行里 `bad=0`。测完停掉 `redisserver`。
-
-`HoldMgr` 的开关是 `[Test] hold`。要同时起 `ipcserver` 和 `redisserver`。看退出码，以及 `hold done bad=0`。
+有行为的改动，Linux 和 Windows 都要跑，单线程、多线程各跑一遍，缺一套不算测完。编译和回归一律交给 subagent 跑，主对话不直接跑矩阵。每次测试前后按进程归属清理，用 `python tools/kill_test_procs.py`（并行时加 `--lane`），清理失败或有残留必须报错。平台与构建目录、纯逻辑例外、四个 Mgr 的开关、启动顺序、判定行和全量记录等细则见 `docs/testing.md` 的硬性约束。
 
 # Redis 单 key 接口
 
-- 常用 Redis 命令提供明确的单 key 接口，key 使用 std::string；值支持 string 和 rpcdata，按模板序列化/反序列化，统一返回 int32_t 错误码。
-- 禁止隐式多 key 查询、自动合并成 MGET/MSET 或隐藏跨 key 操作。标准接口可以不提供多 key 能力；不得假设 Redis 集群的不同 key 位于同一槽。
-- PING、Lua 及确需多 key 的特殊命令保留原生 CallRedis，由调用方显式指定命令和参数并处理集群约束。
-
-- Redis/RPC 等输出引用接口按“单条语句 co_await、检查返回码、使用输出”顺序调用；依赖上一步输出时不要在一个 `&&` / `||` 表达式里串多个 co_await。Redis 整数标记数组用 `vector<int64_t>`（Redis 整数回执是 64 位，不是因为 0/1 标志需要 64 位）。`vector<bool>` 是标准库特化，禁止作为模板结果；`WhenAll` 汇合 `TaskResult<bool>` 时返回 `vector<int32_t>` 的 0/1。回归用例同样遵守，失败日志要能定位具体检查。
+Redis 标准接口只提供单 key 接口，禁止隐式多 key 查询或自动合并成 MGET/MSET，确需多 key 的走原生 `CallRedis`。细则见 `docs/cbaselib.md` redis 段的「单 key 接口约束」；输出引用接口的 `co_await` 写法见 `docs/coroutine.md` 的硬性约束。
 
 # 严禁多继承
 
@@ -141,41 +112,43 @@ Redis 也单独测。开关是 `[Test] redis`。先起本机 Redis（`maxmemory 
 
 # 单次 RPC 用带回复的那套
 
-平时按服务名调用：`RouteManager::GetInstance().Call(服务名, 请求, 回复, 时长)`，要打某个分区再传分区号。把回复对象传进去，`co_await` 得到 `int32_t`。先看返回码，再读回复。非 `0` 时回复保持调用前的值。`CallAll`、`CallMany` 仍返回每格的 `RpcResult`。
-
-直连 `ProtoClientManager::Call`、`RpcCall(管理器, sid, ...)` 只用于有状态的对端，例如玩家连接。回归里的 `IpcClient` 是固定测试连接，新业务不要拿它当调用范例。
-
-只传请求、用模板参数指定回复类型、得到 `RpcResult` 的单次重载先留着。范例、新代码和文档不要把它当主力。
+单次 RPC 按服务名用 `RouteManager::GetInstance().Call(服务名, 请求, 回复, 时长)` 带回复调用，先看返回码再读回复；直连只用于有状态的对端。细则见 `docs/coroutine.md` 的硬性约束。
 
 # 应用层不要睡线程
 
-应用层要空等，先打开 `docs/coroutine.md` 和 `modules/ipcclient/src/log_mgr.cpp` 的 `Pump`，确认写法是 `co_await OI::Coro::yield(毫秒)`，对上了再写。不要换成 `sleep`、`sleep_for`、`Sleep`、`usleep`。单线程只有一条线程，睡下去 poll 停转。
+应用层空等只用 `co_await OI::Coro::yield(毫秒)`，不要 `sleep`、`sleep_for`、`Sleep`、`usleep`，单线程睡下去 poll 停转。细则见 `docs/coroutine.md` 的硬性约束。
 
 # 单例周期任务走 Update
 
-单例要周期干活（心跳、定时拉取、过期清理），在类里写公有的 `OI::Coro::Task OnSecondUpdate(time_t)`，要比秒更细才用 `OnTickUpdate(uint64_t)`，两个只能写一个。框架按时间轮启动协程，上一次没 `co_return` 就跳过这一轮，所以函数体里直接顺序 `co_await` RPC、Redis，不用在途标志。不要自己挂 `BaseTimer`、`AddTimer` 循环、`CallOnLoop` 催促或回调链来做周期任务。到点判断用 `GetTime`/`SteadyMilliseconds` 记下次时间；别的线程要催一轮，只置一个原子标志，等下一次 Update 处理。
+单例周期任务在类里写公有的 `OI::Coro::Task OnSecondUpdate(time_t)` 或 `OnTickUpdate(uint64_t)`，两个只能写一个，不自己挂 `BaseTimer`、`AddTimer` 循环或 `CallOnLoop` 催促。细则见 `docs/timer.md` 的单例更新段。
 
 # 关键词对上文档
 
-请求里出现下表的词时，先读对应文档，再按标准用例改。不要另写一套挂起、配对或绑定。
+请求里出现下表的词、改到下表规范管的路径或代码时，先读对应文档，再按标准用例改。不要另写一套挂起、配对或绑定。
+
+表由 `.agents/rules/index.toml` 生成，改路由只改那份索引，再跑 `python tools/agent_route.py --write`。Claude Code 由 `.claude/settings.json` 的 hook 强制执行：用户消息和派给 subagent 的提示词命中就注入必读文档；编辑命中路径或写入对应代码时，本会话没读过该文档会被拦下，读完重试。Codex、Cursor 没有这套 hook，按本表自觉先读。
+
+<!-- route-index:begin 由 tools/agent_route.py --write 生成，改 .agents/rules/index.toml -->
 
 | 关键词 | 文档 | 标准用例 |
 | --- | --- | --- |
-| 协程、Task、StartTask、co_await、yield、让出、挂起、睡眠、sleep、sleep_for | `docs/coroutine.md` | `modules/ipcserver/src/ipcserver.cpp` 的 `RegisterRpcHandler`；`modules/ipcclient/src/echo_mgr.cpp` 的 `StartTask`；空等用 `modules/ipcclient/src/log_mgr.cpp` 的 `Pump` 里 `co_await OI::Coro::yield` |
-| RPC、RpcCall、RegisterRpcHandler、回包、调用号 | `docs/coroutine.md` 的服务端和客户端 | 同上，推迟回包用同文件的 `Hold` |
-| 单向消息、Notify、NotifyAll、NotifyMany | `docs/cbaselib/notify.md`，`docs/coroutine.md` 的单向消息 | `modules/ipcserver/src/ipcudp.cpp` 的 `RegisterNotifyHandler`；按服务名见 `docs/registry.md` |
-| Redis、redisserver、RESP | `docs/cbaselib.md` 的 redis 段 | `modules/ipcclient/src/redis_mgr.cpp` 的 `Check` |
-| 定时器、时间轮、AddTimer | `docs/timer.md` | `Hold` 里的 `co_await OI::Coro::yield` |
+| 协程、Task、StartTask、TaskScope、co_await、yield、让出、挂起、睡眠、sleep、sleep_for、RunBlocking、lambda、捕获、WhenAll | `docs/coroutine.md` 的硬性约束 | `modules/ipcserver/src/ipcserver.cpp` 的 `RegisterRpcHandler`；`modules/ipcclient/src/echo_mgr.cpp` 的 `StartTask`；空等用 `modules/ipcclient/src/log_mgr.cpp` 的 `Pump` 里 `co_await OI::Coro::yield` |
+| RPC、RpcCall、RegisterRpcHandler、RouteManager、回包、调用号、CallAll、CallMany | `docs/coroutine.md` 的服务端和客户端 | 同上，推迟回包用同文件的 `Hold` |
+| 单向消息、Notify、NotifyAll、NotifyMany | `docs/cbaselib/notify.md` | `modules/ipcserver/src/ipcudp.cpp` 的 `RegisterNotifyHandler`；按服务名见 `docs/registry.md`；协程侧见 `docs/coroutine.md` 的单向消息 |
+| Redis、redisserver、RESP、CallRedis | `docs/cbaselib.md` 的 redis 段 | `modules/ipcclient/src/redis_mgr.cpp` 的 `Check` |
+| 定时器、时间轮、AddTimer、BaseTimer | `docs/timer.md` | `Hold` 里的 `co_await OI::Coro::yield` |
 | 周期任务、Update、心跳、定时拉取、单例循环、OnSecondUpdate、OnTickUpdate | `docs/timer.md` 的单例更新段 | `cbaselib/proto/src/oi_registry_client.cpp` 的 `RegistryClient::OnSecondUpdate`；`modules/ipcclient/src/timer_mgr.cpp` 的 `OnTickUpdate` |
 | 协议、proto.xml、.proto、rpcdata、模块 | `docs/module.md` | `modules/protoconfig/rpc.proto` 的 `AllEcho`、`Hold` |
 | 端口、复用、bind、TIME_WAIT、监听 | `docs/cbaselib.md` 的 net 段 | `cbaselib/port/oi_net_os.cpp` 的 `NetOs_Bind` |
 | Web、HTTP、JSON、urlencode、二进制 body | `docs/module.md` 的 Web 段 | `modules/webserver` 的五个路径；`modules/webclient` 的 `Run` |
-| 分层、Channel、Session、会话管理器、逻辑 mgr、裸包、转发、CloneSession | `docs/develop.md` 第 1 节 | `modules/ipcserver/src/ipcudp.cpp` 的 `IpcUdp` |
-| 目录、src、类外函数、全局/静态变量、友元、StartTask、单线程/多线程选型 | `docs/develop.md` 第 2、6 节 | `RegisterRpcHandler(&类::成员)`、`RegisterNotifyHandler(&类::成员)` |
-| 错误码、iCode、errordef、自定义结构、手写序列化 | `docs/develop.md` 第 3、4 节 | `cbaselib/include/oi_errno.h` |
-| 时间、计时、GetTime、毫秒、过期、ttl、缓存 | `docs/develop.md` 第 5 节 | `cbaselib/timer/inc/oi_timer_helper.h` 的 `GetTime` |
-| 测试、回归、补用例、全量、clangd | `docs/develop.md` 第 7 节、`docs/testing.md`；远程 Linux 另读 `.cursor/skills/linux-remote-test/SKILL.md` | `modules/ipcclient/src/udp_mgr.cpp` 的 `UdpMgr` |
-| 提交、推送、子模块、todo | `docs/develop.md` 第 8 节 | 本文件「提交就是提交并推送」 |
+| 分层、Channel、Session、会话管理器、逻辑 mgr、裸包、转发、CloneSession | `docs/develop.md` 的第 1 节 | `modules/ipcserver/src/ipcudp.cpp` 的 `IpcUdp` |
+| 目录、类外函数、全局变量、静态变量、友元、单线程/多线程选型 | `docs/develop.md` 的第 2、6 节 | `RegisterRpcHandler(&类::成员)`、`RegisterNotifyHandler(&类::成员)` |
+| 错误码、iCode、errordef、自定义结构、手写序列化 | `docs/develop.md` 的第 3、4 节 | `cbaselib/include/oi_errno.h` |
+| 时间、计时、GetTime、毫秒、过期、ttl、缓存 | `docs/develop.md` 的第 5 节 | `cbaselib/timer/inc/oi_timer_helper.h` 的 `GetTime` |
+| 测试、回归、补用例、全量、矩阵、验收、clangd、logd、EchoMgr、LogMgr、RedisMgr、HoldMgr、run_regressions、test_matrix | `docs/testing.md` 的硬性约束 | `modules/ipcclient/src/udp_mgr.cpp` 的 `UdpMgr`；另见 `docs/develop.md` 第 7 节，远程 Linux 另读 `.agents/skills/linux-remote-test/SKILL.md` |
+| 提交、推送、子模块、todo | `docs/develop.md` 的第 8 节 | AGENTS.md「提交就是提交并推送」 |
+
+<!-- route-index:end -->
 
 
 # 字段、参数和局部变量命名规范
@@ -199,7 +172,7 @@ Redis 也单独测。开关是 `[Test] redis`。先起本机 Redis（`maxmemory 
 - 不需要删除元素、位置操作或手动推进时，使用范围 for：只读 `const auto&`，修改元素 `auto&`；map 优先使用引用结构化绑定。
 - 迭代器属于特殊命名，允许 `it`、`nextIt` 等不带类型前缀；解引用得到的元素和结构化绑定按实际类型命名，例如 `const auto& [sKey, stValue]`。
 - 需要 erase 后继续、迭代器位置或 JSON 成员名等迭代器专属接口时保留显式迭代，声明用 `auto`；不得为了改范围 for 改变遍历/删除语义。
-- 迭代器、元素引用和范围 for 的隐藏迭代器跨 `co_await`、`yield` 的条件见上面的 Review：容器在挂起期间必须保持稳定，否则先拷出 key、下标或值。
+- 迭代器、元素引用和范围 for 的隐藏迭代器跨 `co_await`、`yield` 的条件见 `docs/coroutine.md` 的硬性约束：容器在挂起期间必须保持稳定，否则先拷出 key、下标或值。
 
 # C++ 大括号与排版
 

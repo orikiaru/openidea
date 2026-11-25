@@ -37,9 +37,15 @@ libuv 到点调用 `OnSignal`，`OnSignal` 在 poll 线程上直接执行 `Updat
 
 业务侧用 `AddTimer(fn, interval_ms, count = 1)` 登记无参数回调，或接收 `OI::Timer::TimerContext&` 的回调。间隔毫秒数和执行次数均须为正，否则返回 `OI_ERR_INVALID_ARGUMENT`；重复定时器从回调结束时起等待原间隔，错过的周期不重放。默认执行一次，不支持登记或移除定时器对象。回调可移动捕获资源。上下文只在当前回调期间借用，不能保存引用或指针；`Remaining()` 返回本次执行之后剩余的次数，`SetRemaining(n)` 覆盖剩余次数（`n <= 0` 时不再触发），`Stop()` 停止后续触发。回调也可增加剩余次数。单例周期工作仍使用单例更新接口。
 
+## 单例更新
+
+单例要周期干活（心跳、定时拉取、过期清理），在类里写公有的 `OI::Coro::Task OnSecondUpdate(time_t)`，要比秒更细才用 `OnTickUpdate(uint64_t)`，两个只能写一个。框架按时间轮启动协程，上一次没 `co_return` 就跳过这一轮，所以函数体里直接顺序 `co_await` RPC、Redis，不用在途标志。不要自己挂 `BaseTimer`、`AddTimer` 循环、`CallOnLoop` 催促或回调链来做周期任务。到点判断用 `GetTime`/`SteadyMilliseconds` 记下次时间；别的线程要催一轮，只置一个原子标志，等下一次 Update 处理。
+
 单例跟着时间轮更新：在 `DECLARE_SINGLETON` 的类里写公有的 `OI::Coro::Task OnTickUpdate(uint64_t iNowMilliseconds)` 或 `OI::Coro::Task OnSecondUpdate(time_t iNow)`。两个只能写一个，都写会编译失败；返回类型不是 `OI::Coro::Task` 也会 `static_assert` 失败。不写就不注册，等于空 Update。毫秒参数是秒时间戳乘 1000 再加毫秒；秒参数是 `time_t`。推进了 tick 才启动 `OnTickUpdate`；日历秒变化才启动 `OnSecondUpdate`，错过的秒不补。时间戳只在 `Update` 里写。
 
 注册在单例第一次 `GetInstance` 构造完成后自动进行，析构前自动注销。注销后不再启动新的，已经在跑的协程不取消。注册表比所有单例先构造、后析构，析构顺序不会访问已经销毁的对象。`RunFramework` 开始前不分发，`main` 里的 `Init` 都在第一次 Update 之前做完；之后才第一次取到的单例从下一跳开始收到。时间轮在 poll 线程推进 tick 后，为每个注册的单例 `StartTask` 一条独立协程，只启动、不等待。单线程放进本线程的运行队列，多线程放进工人队列。一个单例慢，不会挡住别的单例，也不会挡住时间轮。同一单例的上一条协程没 `co_return` 之前不会再启动，期间到点的跳或秒直接跳过，不补，也不排队。更新里可以 `co_await`（RPC、Redis、`yield` 等），不能调 `CallRedisSync`、`Lookup`、`PullSync`、`Publish`、`sleep`。抛出的异常交给任务错误处理器报告，这条更新的在跑标志会清掉，下一跳或下一秒照常启动。多线程下，更新协程和工人、和其他单例的更新并发，成员要按需自己保护。框架自己用这条更新扫 RPC 超时：`RpcCallManager` 的 `OnTickUpdate` 每跳扫一次。
+
+## 让出与时长
 
 协程不等在 poll 回调里。`OI::Coro::yield` 接受毫秒整数，也接受 `OI::Timer::MS`。`MS` 在挂起前换成毫秒。大于 0 时先切到 poll 线程 `AddTimer`，到点再把协程句柄放回调度队列。小于等于 0 不进时间轮，只把句柄放回队列。
 

@@ -55,6 +55,9 @@
 - **测试错误收尾**：[历史错误路径](<docs/review-20261124.md#62-错误路径资源>)的 LogMgr 持续发送失败永不达标、HoldMgr Pump 异常未 Done、CheckSyncOnLoop 无超时。延期：外围 harness 故障路径，相关异常复现或工具批次提级；须有非 0 失败、原错误原因及安全收尾，不仅超时杀进程。
 - **工具/扫描器范围**：[历史工具缺口](<docs/review-20261124.md#63-测试覆盖缺口>)保留 CIM 无创建时间静默跳过、registry proxy.close 覆盖原异常、log-backpressure 复用 logd.out 截断、matrix 只扫默认 VS；[继承/格式漏 tools 自有 C++、sync --require-text 吃前导点](<docs/review-20261124.md#7-已知项状态复核后不变>)。延期：独立工具批次或再次阻挡证据采集时提级；不得降低进程归属安全条件，补隐藏路径/失败清理与自定义安装位置负例。
 - **旧文档差异**：[历史文档清单](<docs/review-20261124.md#64-文档>)保留 StartFramework 返回码、UDP Notify 入队/实际 sendto 语义、行号漂移（含接入表/Redis/HTTP）、project 的 XML、已不存在基类、时序图本机字节序、time 续期措辞。延期：专题文档同步时逐项对当前实现核实；hooks 自动恢复口径已归档，不重复列未完成，不因旧报告一句话改写当前合同。
+- **规范路由 hook 真实会话验证**：价值是确认必读文档真能拦住未读就改。证据：[hook 实现](<tools/agent_route.py>)与[自测](<tools/test_agent_route.py>) 26 用例都是模拟事件；2026-11-25 真实会话只观察到 subagent 的 `PostToolUse(Read)` 带 `agent_id`（状态目录出现「会话号-agent 号」文件），编辑拦截、subagent 编辑事件的 `agent_id`、`PreToolUse(Agent)` 的 `updatedInput` 改写均未实测。subagent 编辑时合并主会话已读记录是有意放宽，不是缺陷。延期：hook 出错一律放行，失效只是退回自觉先读；下次新开会话即可做。验收：新会话未读 `docs/coroutine.md` 时向 C++ 写 `co_await` 被拒、读后重试放行；派 subagent（原提示词不含「【规范路由】」字样，否则按设计不追加）后其收到的提示词带【规范路由】；主会话未读时，subagent A 读后自己可写、subagent B 仍被拒，确认拦截按 agent 记账。失败按实际事件字段修正并补自测。
+- **Linux 侧规范路由检查被跳过**：价值是让 Linux 矩阵这两步真正执行，而不是空 PASS。证据：WSL `python3` 为 3.8.10 且无 tomli，[矩阵](<tools/test_matrix.py>)的 `agent-route-tests`、`agent-route` 打印「跳过」并返回 0。延期：索引检查与平台无关，Windows 侧 Python 3.13 可执行（加入矩阵后尚未跑过全量）。最小方向：WSL（及远程 Linux）装 Python 3.11+ 或 tomli，装在持久位置，不改脚本的跳过口径。验收：Linux 矩阵两步日志无「跳过」、自测 26 用例实际执行；临时改坏索引或 AGENTS.md 表时 `agent-route` 返回非零。
+- **四路回归 subagent 定义（可选）**：价值是派四路时不用每次手工替换范本占位符。证据：[测试规程](<docs/testing.md>)第 7 节范本目前只能复制粘贴。延期：现有范本可用，仅为便利。最小方向：做成 `.claude/agents/regression-lane.md` 一类定义，只引用第 7 节、不复制规则，Codex/Cursor 仍按范本；决定做时先确认不与「杂活交给 subagent」的模型约定冲突。验收：用它派一路，清理、运行、回报与范本一致，偏移和路名不串。
 
 ## E. 性能与未来优化
 
