@@ -2,9 +2,11 @@
 
 每份用自己的构建目录和 deploy/bin，并用不同的 --port-offset，互不抢端口。
 Windows 侧 Redis 用原生 redis-server.exe；WSL 转发在大流量下会卡死，不要用 --redis-wsl。
+同一路副本已有进程在用时拒绝启动，不同步、不杀进程；先用 kill_test_procs.py --lane 清掉再跑。
 """
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -61,6 +63,38 @@ def sync_linux(user, destination):
         wsl(user, ["sh", "-c", 'printf "gitdir: %s\\n" "$1" > "$2"', "sh", linux_path(user, git_dir()), destination + "/.git"], check=True)
 
 
+def lane_copy(args, platform, lane):
+    return args.windows_root / lane if platform == "windows" else args.linux_root + "/" + lane
+
+
+def windows_lane_users(processes, copy, own_pid):
+    # 只认副本目录下的路径，windows-mt 不能匹配到 windows-mt-old 之类的兄弟目录。
+    needle = str(copy).replace("\\", "/").rstrip("/").lower() + "/"
+    users = []
+    for item in processes:
+        command = (item.get("CommandLine") or "").replace("\\", "/").lower()
+        if item.get("ProcessId") != own_pid and needle in command:
+            users.append("%s %s" % (item.get("ProcessId"), item.get("CommandLine")))
+    return users
+
+
+def lane_users(platform, copy, user):
+    if platform == "windows":
+        script = "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress"
+        output = subprocess.run(["powershell", "-NoProfile", "-Command", script], capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", check=True).stdout
+        processes = json.loads(output or "[]")
+        return windows_lane_users([processes] if isinstance(processes, dict) else processes, copy, os.getpid())
+    result = wsl(user, ["pgrep", "-af", "--", copy.rstrip("/") + "/"], capture_output=True, text=True,
+                 encoding="utf-8", errors="replace")
+    # pgrep 没找到返回 1；其他非 0 是查询本身失败，不能当空闲。
+    if result.returncode == 1:
+        return []
+    if result.returncode != 0:
+        raise RuntimeError("lane busy check failed %s: %s" % (copy, result.stderr.strip()))
+    return [line for line in result.stdout.splitlines() if line.strip()]
+
+
 def main():
     use_utf8_children()
     parser = argparse.ArgumentParser(description=__doc__)
@@ -78,26 +112,35 @@ def main():
     parser.add_argument("--lane", action="append", choices=["%s-%s" % (platform, mode) for platform, mode, _ in LANES],
                         help="run only these lanes; repeatable, default all four")
     args = parser.parse_args()
+    selected = [(platform, mode, offset) for platform, mode, offset in LANES
+                if not args.lane or "%s-%s" % (platform, mode) in args.lane]
+    busy = []
+    for platform, mode, offset in selected:
+        lane = "%s-%s" % (platform, mode)
+        users = lane_users(platform, lane_copy(args, platform, lane), args.wsl_user)
+        if users:
+            busy.append("%s in use:\n  %s" % (lane, "\n  ".join(users)))
+    if busy:
+        print("\n".join(busy), file=sys.stderr, flush=True)
+        print("refuse to start; clean with: python tools/kill_test_procs.py --lane <lane>", file=sys.stderr, flush=True)
+        return 2
     artifacts = args.artifacts.resolve()
     artifacts.mkdir(parents=True, exist_ok=True)
 
     processes = []
     try:
-        for platform, mode, offset in LANES:
+        for platform, mode, offset in selected:
             lane = "%s-%s" % (platform, mode)
-            if args.lane and lane not in args.lane:
-                continue
             output = artifacts / lane
             log = (artifacts / (lane + ".log")).open("w", encoding="utf-8")
             common = ["--mode", mode, "--case", args.case, "--jobs", str(args.jobs), "--port-offset", str(offset)]
+            copy = lane_copy(args, platform, lane)
             if platform == "windows":
-                copy = args.windows_root / lane
                 sync_windows(copy)
                 command = [sys.executable, str(copy / "tools/test_matrix.py"), "--build-dir", str(copy / "build-win"),
                            "--redis-binary", args.windows_redis_binary, "--artifacts", str(output)] + common
                 cwd = copy
             else:
-                copy = args.linux_root + "/" + lane
                 sync_linux(args.wsl_user, copy)
                 command = ["wsl", "-u", args.wsl_user, "--exec", "python3", copy + "/tools/test_matrix.py",
                            "--build-dir", copy + "/build", "--artifacts", linux_path(args.wsl_user, output)] + common

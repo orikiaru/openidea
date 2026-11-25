@@ -1,6 +1,10 @@
 # 已完成与已核对
 
-本文件记录已完成实现/断言、已核对排除项及已定接受策略；三类分开记录，不把排除或接受写成修复。近期六组行动见根目录 [活动待办](<../todo.md>)；其他未完成、待验证、待定策略和未确认疑点（含延期理由、提级条件与复现时间线）见根目录 [条件待办](<../todonext.md>)，[补充入口](<todo.md>)只保留导航。
+本文件记录已完成实现/断言、已核对排除项及已定接受策略；三类分开记录，不把排除或接受写成修复。近期五组行动见根目录 [活动待办](<../todo.md>)；其他未完成、待验证、待定策略和未确认疑点（含延期理由、提级条件与复现时间线）见根目录 [条件待办](<../todonext.md>)，[补充入口](<todo.md>)只保留导航。
+
+## 2026-11-26 归档
+
+- **关键回归假绿：RPC race、线程模式、MySQL**：旧 `CheckRpcRace` 全超时也能过，hold/udp 接受任一线程模式。现在 8 次调用必须同时出现回复和超时、标记不重复、内容无错；另有延迟 0 必须回复、延迟 5000 加 1 秒超时必须超时的受控调用，以及全超时、重复标记、错误内容 3 个负例，判定器漏检任一负例就失败。`all`、`hold`、`udp` 必须带 `--expect-thread st|mt`，二进制模式不符或 udp 工人数不对都失败；`tools/test_regression_checks.py` 覆盖这些负例。数据库不写 fake 驱动，用真 MySQL 的 `mysql` 用例。2026-11-26 四路 `all` 都是 22/22，Linux 两路 `mysql row mapping`、`mysql rows`、`mysql done` 都是 `bad=0`，见 [测试记录](<lasttesting.md#全量2026-11-26四路通过>)。附带的 blob 升级边界写在 [数据库说明](<database.md>)。
 
 ## 2026-11-25 状态归档（完成不等于最终四路全绿）
 
@@ -14,7 +18,7 @@
 - **coro 真实断言与失败退出**：旧应用把 `bad=0` 写死并直接成功退出，脚本只查日志字面量，协程数或计时为 0 也可假绿。现计数、计时及退出状态均参与验收，不再靠字面量。历史 Windows MT/ST 定向用例完成 10 万次挂起唤醒、100 万空任务并报告 `bad=0`，ST 的 held/wake/done 分别为 100000/100000/1000000；详见 [历史专项](<lasttesting.md#回归验收专项2026-11-25-早先历史记录本轮未重跑>)。**最新两轮矩阵均未重跑 coro**，不将历史专项当最新专项验收。旧行为和最初故障负例建议见 [11-24 review §2.2](<review-20261124.md#22-coro-用例仍然无法失败未修>)。
 - **Windows HTTP 释放探针**：旧非 glibc 分支 before/after 恒为 0，保留 32×1 MiB 也可通过。现由测试钩子观察大缓冲释放次数和释放后容量，回归要求 **32 次释放、释放后容量仍至少 1 MiB 的次数为 0**，不将此等同 RSS/工作集精确测量。历史 Windows 故障负例保留响应缓冲，得到 `retained=63 bad=1`，证明该负例能失败；相关业务断言通过，最新 Windows MT 整路仍因 registry 清理失败而失败。旧假绿路径见 [11-24 review §4.3](<review-20261124.md#43-windows-上-http-大响应释放检查恒通过>)，专项见 [测试记录](<lasttesting.md#回归验收专项2026-11-25-早先历史记录本轮未重跑>)。
 - **test-hooks 能力以实际二进制为准（合并历史 marker 同根项）**：原 Linux 标记落在额外 Release 子目录，手动 hook 构建可能静默跳过七项 trace；`--platform both` 又可能让 Linux configure 覆盖 Windows 标记。更根本地，configure 成功但构建失败时，新标记与旧产物不一致；Windows MT 曾实测只 configure ON→OFF→ON，标记变化而 ipcclient.exe SHA256 始终为 `7F17003649D5CBFE213AB34367D71783930358F1A5945899798361F6E8226BB2`，Linux 同机制当时未实测。现夹具直接运行实际可执行文件的 `--test-hooks` 查询，退出码 **40=关闭、41=启用**，不再用构建目录标记证明能力；Linux 两路实测两个程序均返回 40。更早 Linux ST hooks=ON 七项各 100000 样本、删除标记后失败是**历史 marker 批次**的有效性证据，不当作最终二进制查询分支的删除标记验收。原问题见 [11-24 review §4.4](<review-20261124.md#44-linux-手动-hook-构建下-blocking-wake-的-trace-断言静默跳过>)、[11-25 测试有效性](<review-20261125.md#4-新增-p2p3测试有效性>)。
-- **matrix ASan/ST 目录与 Windows 参数拒绝**：旧 `--mode st --asan` 把 MT build 传给 ASan，可能用错/缺配置目录；Windows 的 `--asan`、`--clock-faults` 原来静默忽略而可假绿。现按线程模式选构建目录，并在原生 Windows 明确拒绝不支持参数。此处归档目录选择及拒绝语义，不是宣称最新 ASan 已跑；**最新两轮未重跑 ASan**，旧 `-st-st` 缺 OpenSSL 头构建失败仍保留在 [测试边界](<lasttesting.md#最终排版后复验2026-11-25当前最终源码未全绿>)。原问题见 [11-25 测试有效性](<review-20261125.md#4-新增-p2p3测试有效性>)。
+- **matrix ASan/ST 目录与 Windows 参数拒绝**：旧 `--mode st --asan` 把 MT build 传给 ASan，可能用错/缺配置目录；Windows 的 `--asan`、`--clock-faults` 原来静默忽略而可假绿。现按线程模式选构建目录，并在原生 Windows 明确拒绝不支持参数。此处归档目录选择及拒绝语义，不是宣称最新 ASan 已跑；**最新两轮未重跑 ASan**，旧 `-st-st` 缺 OpenSSL 头构建失败仍保留在 [测试边界](<lasttesting.md#最终排版后复验2026-11-25历史记录>)。原问题见 [11-25 测试有效性](<review-20261125.md#4-新增-p2p3测试有效性>)。
 - **HTTP chunk-size 长度/CRLF 一致与 Connection close 优先**：旧普通客户端完整行不限长；服务端 1024 字节正文后的 CR 单独到达拒绝、CRLF 同到却接受，流式客户端又把 CRLF 计入上限。Windows ST 修复前实测 1024 字节整包返回 200、分段在 LF 前返回 400；这些是旧行为，不是当前待测结论。新行为三条解析路径统一按**不含 CRLF 的 1024 字节**限额，1023/1024/1025 与整包/拆 CRLF 纳入断言。旧普通响应多行 Connection 可由后来的 keep-alive 覆盖 close，Windows ST 旧行为曾 9 次复用同一连接；现只要任一字段含 close 就优先关闭，不因后续 keep-alive 返池。相关修复断言已通过；不把旧记录「仍需测 1023/1025、其他平台」继续作为活动未完成，也不把最终 Windows MT 清理失败改写成整路通过。原长度问题见 [11-25 review §3](<review-20261125.md#3-新增-p2框架--协议>)。
 - **hooks 不自动恢复的文档口径**：原文同时称矩阵会自动恢复 hooks、又记录 `restore_skipped=true / restored=false`，与实现不一致。现按实际行为说明**只设置、不自动恢复**，手动运行/交付前须显式重配 OFF，不是新增自动恢复能力。原矛盾见 [11-24 review §6.4](<review-20261124.md#64-文档>)。
 
@@ -32,7 +36,7 @@
 
 ### 验证总边界与仍开放项
 
-排版前首轮 Windows MT/ST、Linux MT/ST 的 `all` 各 **22/22**，Linux 两路另通过 MySQL 和 registry-static；其后只有 3 文件 4 处空白排版修正，最终复验 **Windows ST、Linux MT/ST 三路 22/22，Windows MT 21/22**。Windows MT registry **业务 PASS 后**删除临时 exe 报 **WinError 5**，整路 exit=1、passed=false、completed=false；未重跑刷绿。报错瞬间锁持有者未知，事后无持续占用不证明已修；仍保留临时目录 **25 文件、30,969,999 字节（约 30.97 MB）**，不能宣称没有临时数据。详细结果只维护于 [最近测试记录](<lasttesting.md#最终排版后复验2026-11-25当前最终源码未全绿>)。
+排版前首轮 Windows MT/ST、Linux MT/ST 的 `all` 各 **22/22**，Linux 两路另通过 MySQL 和 registry-static；其后只有 3 文件 4 处空白排版修正，最终复验 **Windows ST、Linux MT/ST 三路 22/22，Windows MT 21/22**。Windows MT registry **业务 PASS 后**删除临时 exe 报 **WinError 5**，整路 exit=1、passed=false、completed=false；未重跑刷绿。报错瞬间锁持有者未知，事后无持续占用不证明已修；仍保留临时目录 **25 文件、30,969,999 字节（约 30.97 MB）**，不能宣称没有临时数据。详细结果只维护于 [最近测试记录](<lasttesting.md#最终排版后复验2026-11-25历史记录>)。
 
 全仓仍有 **13 份 HEAD 既有格式失败**；最新 ASan/coro 未跑。当前清理失败、关键回归有效性、日志交付语义、UDP EAGAIN、timer 公有入口未 Init、configure 改写 clangd 列在 [近期行动](<../todo.md>)；TCP 候选回退、通用 TLS 聚合边界、logd 轮转重试策略、ServiceTable 观察者生命周期、逐协议限制设计、存量格式/AST 缺依赖、全部其他未确认疑点与未来能力列在 [条件待办](<../todonext.md>)，复现导航见 [补充入口](<todo.md>)。延期不等于不存在或已修，不由本次归档关闭。
 

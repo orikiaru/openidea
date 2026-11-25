@@ -280,7 +280,8 @@ def main():
         for name, script in (("regression-checks", "test_regression_checks.py"),
                              ("preflight-ports", "test_preflight_ports.py"),
                              ("build-tests", "test_build.py"),
-                             ("linux-sync-tests", "test_sync_linux_remote.py")):
+                             ("linux-sync-tests", "test_sync_linux_remote.py"),
+                             ("parallel-lane-tests", "test_parallel_matrix.py")):
             if run(name, [sys.executable, ROOT / "tools" / script]):
                 failed = True
         if args.case == "all" and run("config-macros", [sys.executable, ROOT / "tools/test_config_macros.py", "--cmake", cmake]):
@@ -311,7 +312,7 @@ def main():
                                                      "--port-offset", args.port_offset]))
             test = [sys.executable, ROOT / "tools/run_regressions.py", "--case", args.case,
                     "--bin-dir", binary, "--redis-binary", args.redis_binary, "--artifacts", output / mode,
-                    "--port-offset", args.port_offset]
+                    "--port-offset", args.port_offset, "--expect-thread", mode]
             if args.redis_wsl:
                 test += ["--redis-wsl", "--wsl-user", args.wsl_user]
             failed |= bool(run(mode + "-tests", test))

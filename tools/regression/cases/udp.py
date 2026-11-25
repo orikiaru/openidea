@@ -44,7 +44,12 @@ class UdpCase(Case):
             assert "udp client bind before=-3 output=12345 start=0 sessions=0 bad=0" in text
             assert "udp ipv6 oversized start=0 open=0 send=-6 bad=0" in text
             assert re.search(r"udp reverse peers first=9 second=6 dup=0/0 old=-\d+ bad=0", text)
-            assert re.search(r"udp queue packets=1 reopen=1 concurrent=1 workers=(?:0|2) queued=0 requeue=0 old=-\d+ count=2/2 after=1 observe_ms=\d+ bad=0", text)
+            expect = ctx.args.expect_thread
+            assert expect in ("st", "mt"), "udp requires --expect-thread st or mt"
+            workers = "0" if expect == "st" else "2"
+            assert re.search(r"udp queue packets=1 reopen=1 concurrent=1 workers=%s queued=0 requeue=0 old=-\d+ count=2/2 after=1 observe_ms=\d+ bad=0" % workers, text), text
+            other = "2" if expect == "st" else "0"
+            assert "workers=%s " % other not in text, text
             assert "udp queue budget first=0 busy=-5 after=0 packets=2 bad=0" in text
             assert "udp merge frames=1 raw=1 peers=1 limit=1 bad=0" in text
             assert "udp datagram max=0 over=-6 received=65507 bad=0" in text
@@ -56,12 +61,14 @@ class UdpCase(Case):
             wrong_probe = subprocess.run([str(work / ("ipcclient" + SUFFIX)), "--poll-wrong-thread"],
                                          cwd=work, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
             wrong_output = wrong_probe.stdout + wrong_probe.stderr
-            if "poll wrong thread probe mt skipped=1" in wrong_output:
-                assert wrong_probe.returncode == 0, (wrong_probe.returncode, wrong_output)
+            if expect == "mt":
+                assert wrong_probe.returncode == 0 and "poll wrong thread probe mt skipped=1" in wrong_output, (wrong_probe.returncode, wrong_output)
+                assert "poll wrong thread probe registered=1" not in wrong_output, wrong_output
             else:
                 assert wrong_probe.returncode != 0 and "poll wrong thread probe registered=1" in wrong_output and \
                        "single-thread registered channel unregister outside poll thread channel=" in wrong_output and \
                        "unexpectedly survived" not in wrong_output, (wrong_probe.returncode, wrong_output)
+                assert "poll wrong thread probe mt skipped=1" not in wrong_output, wrong_output
             print("poll udp close probe:", close_output.strip(), flush=True)
             print("poll wrong thread probe exit=%d output=%s" % (wrong_probe.returncode, wrong_output.strip()), flush=True)
             busy_probe = subprocess.run([str(work / ("ipcclient" + SUFFIX)), "--poll-loop-busy"],

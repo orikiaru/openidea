@@ -256,5 +256,37 @@ class CoroResultChecks(unittest.TestCase):
             with self.subTest(invalid=invalid), self.assertRaises(AssertionError):
                 case.check(SimpleNamespace(mode="coro", text=invalid))
 
+class FakeGreenChecks(unittest.TestCase):
+    def test_rpc_race_rejects_timeout_duplicate_and_wrong_content(self):
+        from regression.cases.hold import check_rpc_race, require_thread_mode
+        marks = ",".join("%d:%s" % (100 + index, "R" if index < 2 else "T") for index in range(8))
+        valid = "hold rpc race marks=%s reply=2 timeout=6 controlled_reply=1 controlled_timeout=1 negatives=3 bad=0" % marks
+        check_rpc_race(valid)
+        timed_out = valid.replace(marks, ",".join("%d:T" % (100 + index) for index in range(8))).replace("reply=2 timeout=6", "reply=0 timeout=8")
+        duplicated = valid.replace("100:R,101:R", "100:R,100:R", 1)
+        wrong = valid.replace("100:R", "100:B", 1)
+        for bad in (timed_out, duplicated, wrong, valid.replace("negatives=3", "negatives=0"), valid.replace("bad=0", "bad=1")):
+            with self.subTest(bad=bad):
+                with self.assertRaises(AssertionError):
+                    check_rpc_race(bad)
+        st = "hold foreign task st rejected=1 runs=0 bad=0\nwarning: coroutine start rejected: current thread is not the single-thread poll thread"
+        mt = "hold foreign task mt skipped=1 bad=0"
+        require_thread_mode(st, "st")
+        require_thread_mode(mt, "mt")
+        with self.assertRaises(AssertionError):
+            require_thread_mode(mt, "st")
+        with self.assertRaises(AssertionError):
+            require_thread_mode(st, "mt")
+        with self.assertRaises(AssertionError):
+            require_thread_mode(st + "\n" + mt, "st")
+
+    def test_hold_and_udp_require_expected_thread(self):
+        script = Path(regression.__file__)
+        result = subprocess.run([sys.executable, str(script), "--case", "hold"], capture_output=True, text=True,
+                                env=child_env(), **TEXT)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("expect-thread", result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

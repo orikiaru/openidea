@@ -224,7 +224,10 @@ def main(doc=None):
     parser.add_argument("--artifacts", type=Path, help="retain process output and results.json, not bulk log payload")
     parser.add_argument("--redis-timeline", action="store_true", help="capture hold PING and BLPOP execution timestamps from the owned Redis fixture")
     parser.add_argument("--port-offset", type=int, default=0, help="shift every test port; parallel work copies need distinct offsets")
+    parser.add_argument("--expect-thread", choices=("st", "mt"), help="thread mode the hold and udp binaries must match")
     options = parser.parse_args()
+    if options.case in ("all", "hold", "udp") and options.expect_thread is None:
+        parser.error("--expect-thread st or mt is required for hold and udp; either mode is not a pass")
     if options.redis_timeline and (options.case not in ("hold", "hold-redis") or not options.artifacts):
         parser.error("--redis-timeline requires --case hold or hold-redis and --artifacts")
     options.redis_binary = options.redis_binary or Path(shutil.which("redis-server") or "/usr/local/bin/redis-server")

@@ -1,4 +1,4 @@
-"""WSL: python3 tools/run_regressions.py --case all [--clock-fault-so /tmp/oi-clock.so].
+"""WSL: python3 tools/run_regressions.py --case all --expect-thread mt [--clock-fault-so /tmp/oi-clock.so].
 
 只启动仓库现有进程，临时配置和日志自动清理；不会终止不属于本次测试的进程。
 先编出待测版本，单、多线程分别运行一次。Redis 默认使用已有的源码编译产物。

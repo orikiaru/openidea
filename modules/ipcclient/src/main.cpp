@@ -141,6 +141,15 @@ static int32_t CheckPollLoopBusy()
 
 int main(int iArgumentCount, char* vArguments[])
 {
+	if (iArgumentCount == 2 && std::strcmp(vArguments[1], "--thread-mode") == 0)
+	{
+#ifdef _SINGLE_THREAD_
+		std::printf("thread_mode=st\n");
+#else
+		std::printf("thread_mode=mt\n");
+#endif
+		return 0;
+	}
 	if (iArgumentCount == 2 && std::strcmp(vArguments[1], "--test-hooks") == 0)
 	{
 #ifdef OI_ENABLE_BLOCKING_WAKE_TRACE

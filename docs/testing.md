@@ -105,7 +105,7 @@ Windows：Python 3.10+、Visual Studio 2022 的“使用 C++ 的桌面开发”�
 
 Linux：优先用仓库根目录 `.local/linux-hosts.json` 里的远程机器。该文件只留在本机，不进仓库，记录每台机器的 IP、用户名、核数和职责。4 核机器编译 Release 并跑多线程，2 核机器跑单线程，登录只用公钥，不把密码写进代码或命令。文件不存在，或缺少 IP、用户名时，先问用户。用户选择不提供，就改用 WSL，直到用户再次明确说用远程机器。从 Windows 同步源码只用 `python tools/sync_linux_remote.py --role mt|st|all`，不要手写 tar/scp；远程登录与矩阵步骤见 `.agents/skills/linux-remote-test/SKILL.md`。WSL 和远程都要有 Python 3.8+、cmake、gcc-13/g++-13、make、已编译的 Redis 服务端，以及 OpenSSL 3.0+ 开发库（TLS 目标需要）。Ubuntu 20.04 自带的是 1.1.1，要源码编到持久目录（本机 WSL 为 `/root/opt/openssl-3.0.18`），矩阵加 `--define OPENSSL_ROOT_DIR=<目录> --define OPENSSL_USE_STATIC_LIBS=ON`；`parallel_matrix.py` 的 `--define` 只传给 Linux 路。缺 CMake、gcc-13 或 g++-13 时，终端写明缺哪一个以及 apt 安装命令，并停止编译。源码编译 Redis 应使用持久外部依赖目录（例如 `~/opt/redis-7.4.12`），通过 `/usr/local/bin/redis-server` 安装入口复用；默认路径为该入口。禁止把工具装到 `/tmp` 或测试临时目录，停止测试进程时不删除工具安装或源码。路径不存在必须提供 `--redis-binary`，脚本不会下载不明 Redis 二进制。
 
-测试占用本机端口 19995、17981、16379、16380、17990、17992、17993，另有 UDP 17983。测试 Redis 用 16380，不用 6379：Windows 动态端口段可能被 Hyper-V/WinNAT 保留，本机已有的 6379 Redis 也不会和测试冲突。复制出的 `redisserver.toml`、`registry.toml` 由脚本改到 16380，仓库里的配置仍是 6379。运行前脚本探测占用；不杀其他人的服务。同一份工作目录内不要并行；要并行就用 `tools/parallel_matrix.py`，它把工作目录同步成四份（Windows 在 `F:/oi-par`，Linux 在 WSL 的 `/root/oi-par`），Windows MT/ST、Linux MT/ST 各用一份，`--port-offset` 依次为 0、1000、2000、3000，所有测试端口整体平移，互不抢占：
+测试占用本机端口 19995、17981、16379、16380、17990、17992、17993，另有 UDP 17983。测试 Redis 用 16380，不用 6379：Windows 动态端口段可能被 Hyper-V/WinNAT 保留，本机已有的 6379 Redis 也不会和测试冲突。复制出的 `redisserver.toml`、`registry.toml` 由脚本改到 16380，仓库里的配置仍是 6379。运行前脚本探测占用；不杀其他人的服务。同一份工作目录内不要并行；要并行就用 `tools/parallel_matrix.py`，它把工作目录同步成四份（Windows 在 `F:/oi-par`，Linux 在 WSL 的 `/root/oi-par`），Windows MT/ST、Linux MT/ST 各用一份，`--port-offset` 依次为 0、1000、2000、3000，所有测试端口整体平移，互不抢占。同一路副本不能同时被两次 `parallel_matrix.py` 使用：启动前只要所选任一路副本下还有进程，就整次拒绝并列出这些进程，不同步也不杀进程，先用 `python tools/kill_test_procs.py --lane <路>` 清掉再跑：
 
 ```powershell
 python tools/parallel_matrix.py --windows-redis-binary C:/tools/redis/redis-server.exe --artifacts C:/Users/Admin/openidea-test-results/parallel
@@ -195,15 +195,17 @@ python3 tools/test_matrix.py --case hold --mode all
 明确已经构建好时，可以直接运行：
 
 ```sh
-python3 tools/run_regressions.py --case all --artifacts /tmp/oi-test-artifacts
+python3 tools/run_regressions.py --case all --expect-thread mt --artifacts /tmp/oi-test-artifacts
 ```
+
+`all`、`hold`、`udp` 必须带 `--expect-thread st` 或 `mt`，并且和这次二进制的线程模式一致。不带，或者二进制是另一种模式，都算失败。
 
 可定向运行 `--case hold-blocking`、`--case hold-timer` 或 `--case hold-redis`。三项分别只执行阻塞、定时器或 Redis 迟到回包检查；阻塞场景启动 ipcserver，定时器场景不启动其他业务服务，Redis 场景只启动 redisserver 和临时 Redis，三项均启动日志服。端口预检只检查对应服务端口。完整 `hold` 和 `all` 的覆盖保持不变。定向用例检查各自的完成标记和真实结果，Redis 场景也支持 `--redis-timeline --artifacts <目录>`。
 
 排查 Hold 的 Redis 迟到回包时，可对本次测试启动的 Redis 开启只读 MONITOR：
 
 ```sh
-python3 tools/run_regressions.py --case hold --redis-timeline --port-offset 2000 --artifacts /path/to/results
+python3 tools/run_regressions.py --case hold --expect-thread mt --redis-timeline --port-offset 2000 --artifacts /path/to/results
 ```
 
 `hold/redis-timeline.out` 只保留 PING 和测试用 BLPOP 的 Redis 执行时间及上游连接地址；结合 `hold/ipcclient.out` 的超时和耗时检查。MONITOR 记录执行命令，不能证明回包已送达客户端；定位丢包或错配仍需采集代理和客户端收发时间。端口偏移须与该路一致，测试前后按第 7 节清理对应路。
@@ -211,7 +213,7 @@ python3 tools/run_regressions.py --case hold --redis-timeline --port-offset 2000
 Windows 原生直接运行时，要选择带 exe 的 Release 目录：
 
 ```powershell
-python tools/run_regressions.py --case all --bin-dir deploy/bin/Release --redis-binary C:/tools/redis/redis-server.exe --artifacts C:/Users/Admin/openidea-test-results/direct
+python tools/run_regressions.py --case all --expect-thread mt --bin-dir deploy/bin/Release --redis-binary C:/tools/redis/redis-server.exe --artifacts C:/Users/Admin/openidea-test-results/direct
 ```
 
 Windows 的日志故障测试要求该产物以 `-DOI_ENABLE_TEST_HOOKS=ON` 构建；矩阵配置 Windows 为 ON、Linux 为 OFF，不会自动恢复构建选项。回归夹具直接对实际运行的 `ipcclient` 和 `logd` 执行 `--test-hooks` 查询，而不是依赖 configure 时生成的标记文件：退出码 40 表示关闭，41 表示启用，其他退出码视为查询失败；标准输出仅供诊断。`blocking-wake` 在 ipcclient 启用钩子且为单线程时要求所有 trace 行，关闭钩子或多线程时不要求分段。更改构建选项后须完整构建再运行。

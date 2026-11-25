@@ -3,6 +3,8 @@
 #include "oi_singleton.h"
 #include <cstdint>
 #include <string>
+#include <utility>
+#include <vector>
 
 // 超时、回包撞车和 Redis 迟到回包。其余检查在各自的 mgr，Pump 按原来的顺序调用。
 class HoldMgr
@@ -24,6 +26,8 @@ class HoldMgr
 	OI::Coro::TaskResult<int> CheckRpcLateReply();
 	// 服务端延迟落在客户端超时前后，每个调用只能拿到回包或超时之一。
 	OI::Coro::TaskResult<int> CheckRpcRace();
+	// 重复标记、错误内容或缺一种结局都算失败。放在协程外面，避免 g++ 在协程帧里生成 lambda。
+	static int RaceBad(const std::vector<std::pair<int32_t, RaceOutcome>>& vOutcomes);
 	// 发一次 PING，确认前面的超时没有把 Redis 连接打坏。
 	OI::Coro::TaskResult<int> CheckRedisPing(const char* pLabel);
 	// Redis 超时后迟到的回复不能串给下一条命令；回复与超时同时到也只能取其一。

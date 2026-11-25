@@ -15,6 +15,41 @@ from ..probes import check_hold_blocking, check_hold_timer
 from . import Case
 
 
+def check_rpc_race(text):
+    """每个标记只完成一次，回包和超时都要出现，受控的 0ms 回包和 5s 超时不能对调。"""
+    match = re.search(
+        r"hold rpc race marks=([0-9:RTB,]+) reply=(\d+) timeout=(\d+) "
+        r"controlled_reply=(\d+) controlled_timeout=(\d+) negatives=(\d+) bad=(\d+)",
+        text)
+    assert match, "missing hold rpc race marker"
+    seen = {}
+    reply = timeout = 0
+    for item in match.group(1).split(","):
+        mark, status = item.split(":")
+        assert status in ("R", "T"), item
+        assert mark not in seen, "duplicate race completion " + mark
+        seen[mark] = status
+        reply += status == "R"
+        timeout += status == "T"
+    assert set(seen) == {str(mark) for mark in range(100, 108)}, seen
+    assert reply >= 1 and timeout >= 1, match.group(0)
+    assert int(match.group(2)) == reply and int(match.group(3)) == timeout, match.group(0)
+    assert match.group(4) == "1" and match.group(5) == "1", match.group(0)
+    assert match.group(6) == "3" and match.group(7) == "0", match.group(0)
+
+
+def require_thread_mode(text, expect):
+    """本路预期的线程模式必须和日志一致，另一种模式的行出现就算失败。"""
+    assert expect in ("st", "mt"), "hold requires --expect-thread st or mt"
+    if expect == "st":
+        assert "hold foreign task st rejected=1 runs=0 bad=0" in text
+        assert "hold foreign task mt skipped=1 bad=0" not in text
+        assert "warning: coroutine start rejected: current thread is not the single-thread poll thread" in text
+    else:
+        assert "hold foreign task mt skipped=1 bad=0" in text
+        assert "hold foreign task st rejected=1 runs=0 bad=0" not in text
+
+
 class RawHttpRegression(socketserver.BaseRequestHandler):
     # 原始 TCP 回包夹具：库级 HTTP 服务通常不会生成这些畸形报文。
     def handle(self):
@@ -247,10 +282,8 @@ class HoldCase(Case):
             assert "hold hot start inline=1 queued=1 bad=0" in text
             assert "hold shared tasks waiters=64 bad=0" in text
             check_hold_blocking(text)
-            assert ("hold foreign task st rejected=1 runs=0 bad=0" in text or
-                    "hold foreign task mt skipped=1 bad=0" in text)
-            if "hold foreign task st rejected=1 runs=0 bad=0" in text:
-                assert "warning: coroutine start rejected: current thread is not the single-thread poll thread" in text
+            require_thread_mode(text, ctx.args.expect_thread)
+            check_rpc_race(text)
             for waiter_count in (2, 8, 64, 256):
                 for shared_mode in range(3):
                     assert f"hold started task mode={shared_mode} waiters={waiter_count} runs=1 awakened={waiter_count} bad=0" in text

@@ -37,6 +37,9 @@
 #include "oi_rpcdata_allechores.h"
 #include "oi_rpcdata_holdreq.h"
 #include "oi_rpcdata_holdres.h"
+#include <string>
+#include <utility>
+#include <vector>
 #include "ipcclient.h"
 #include "rpc_ids.h"
 #include "oi_redis.h"
@@ -281,6 +284,41 @@ OI::Coro::TaskResult<int> HoldMgr::CheckRpcLateReply()
 	co_return iBadLocal;
 }
 
+int HoldMgr::RaceBad(const std::vector<std::pair<int32_t, RaceOutcome>>& vOutcomes)
+{
+	std::vector<int32_t> vSeen;
+	int iReply = 0;
+	int iTimeout = 0;
+	for (const auto& [iMark, iOutcome] : vOutcomes)
+	{
+		for (int32_t iSeen : vSeen)
+		{
+			if (iSeen == iMark)
+			{
+				return 1;
+			}
+		}
+		vSeen.push_back(iMark);
+		if (iOutcome == RaceOutcome::Reply)
+		{
+			++iReply;
+		}
+		else if (iOutcome == RaceOutcome::Timeout)
+		{
+			++iTimeout;
+		}
+		else
+		{
+			return 1;
+		}
+	}
+	if (iReply < 1 || iTimeout < 1 || iReply + iTimeout != static_cast<int>(vOutcomes.size()))
+	{
+		return 1;
+	}
+	return 0;
+}
+
 // 服务端延迟落在客户端超时前后，每个调用只能拿到回包或超时之一。
 OI::Coro::TaskResult<int> HoldMgr::CheckRpcRace()
 {
@@ -292,16 +330,64 @@ OI::Coro::TaskResult<int> HoldMgr::CheckRpcRace()
 	{
 		vCalls.push_back(RaceOne(100 + iIndexLocal, vDelays[iIndexLocal]));
 	}
-	int iReplyNumber = 0, iTimeoutNumber = 0, iRaceBad = 0;
-	for (const auto& stCall : vCalls)
+	// 重复标记、错误内容、全超时都算失败。800ms 到 1800ms 只要求两种结局都出现，不按时间比例猜哪一次该回包。
+	int iNegatives = 0;
+	std::vector<std::pair<int32_t, RaceOutcome>> vAllTimeout;
+	for (int iIndex = 0; iIndex < 8; ++iIndex)
 	{
-		const RaceOutcome iOutcome = co_await stCall;
+		vAllTimeout.emplace_back(100 + iIndex, RaceOutcome::Timeout);
+	}
+	const std::vector<std::pair<int32_t, RaceOutcome>> vDuplicate = {
+		{100, RaceOutcome::Reply}, {100, RaceOutcome::Reply}, {101, RaceOutcome::Timeout},
+	};
+	const std::vector<std::pair<int32_t, RaceOutcome>> vWrong = {
+		{100, RaceOutcome::Bad}, {101, RaceOutcome::Reply}, {102, RaceOutcome::Timeout},
+	};
+	if (RaceBad(vAllTimeout) != 0)
+	{
+		++iNegatives;
+	}
+	if (RaceBad(vDuplicate) != 0)
+	{
+		++iNegatives;
+	}
+	if (RaceBad(vWrong) != 0)
+	{
+		++iNegatives;
+	}
+	std::vector<std::pair<int32_t, RaceOutcome>> vOutcomes;
+	std::string sMarks;
+	for (int iIndex = 0; iIndex < 8; ++iIndex)
+	{
+		const int32_t iMark = 100 + iIndex;
+		const RaceOutcome iOutcome = co_await vCalls[static_cast<size_t>(iIndex)];
+		vOutcomes.emplace_back(iMark, iOutcome);
+		if (!sMarks.empty())
+		{
+			sMarks.push_back(',');
+		}
+		sMarks += std::to_string(iMark);
+		sMarks.push_back(':');
+		sMarks.push_back(iOutcome == RaceOutcome::Reply ? 'R' : iOutcome == RaceOutcome::Timeout ? 'T' : 'B');
+	}
+	const RaceOutcome iControlledReply = co_await RaceOne(200, 0);
+	const RaceOutcome iControlledTimeout = co_await RaceOne(201, 5000);
+	int iReplyNumber = 0;
+	int iTimeoutNumber = 0;
+	for (const auto& [iMark, iOutcome] : vOutcomes)
+	{
+		(void)iMark;
 		iReplyNumber += iOutcome == RaceOutcome::Reply ? 1 : 0;
 		iTimeoutNumber += iOutcome == RaceOutcome::Timeout ? 1 : 0;
-		iRaceBad += iOutcome == RaceOutcome::Bad ? 1 : 0;
 	}
-	LOG_TRACE("hold rpc race n=%zu done=%zu reply=%d timeout=%d bad=%d cpu_ms=%lld wall_ms=%lld",
-	    vCalls.size(), vCalls.size(), iReplyNumber, iTimeoutNumber, iRaceBad, HoldTest::CpuMs(iCpuBegin), HoldTest::WallMs(iWallBegin));
+	int iRaceBad = RaceBad(vOutcomes);
+	if (iControlledReply != RaceOutcome::Reply || iControlledTimeout != RaceOutcome::Timeout || iNegatives != 3)
+	{
+		++iRaceBad;
+	}
+	LOG_TRACE("hold rpc race marks=%s reply=%d timeout=%d controlled_reply=%d controlled_timeout=%d negatives=%d bad=%d cpu_ms=%lld wall_ms=%lld",
+	    sMarks.c_str(), iReplyNumber, iTimeoutNumber, iControlledReply == RaceOutcome::Reply ? 1 : 0,
+	    iControlledTimeout == RaceOutcome::Timeout ? 1 : 0, iNegatives, iRaceBad, HoldTest::CpuMs(iCpuBegin), HoldTest::WallMs(iWallBegin));
 	fflush(stdout);
 	co_return iRaceBad;
 }
