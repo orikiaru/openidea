@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import runpy
+import shutil
 import socket
 import subprocess
 import sys
@@ -650,6 +651,124 @@ class RegressionCleanupTests(unittest.TestCase):
                 with self.procs.regression_directory():
                     raise ValueError("test failure")
         directory.cleanup.assert_called_once_with()
+
+    def test_cleanup_order_is_recorded_and_recorder_failure_is_not_the_result(self):
+        owner.write_owner(self.root, self.root, 0)
+        with self.assertRaisesRegex(RuntimeError, "graceful shutdown"):
+            self.cleanup()
+        data = json.loads((self.root / owner.MARKER).read_text(encoding="utf-8"))
+        self.assertEqual([(step["label"], step["ok"]) for step in data["cleanup"]], [
+            ("graceful shutdown ['first-owned']", False),
+            ("force shutdown ['first-owned']", True),
+            ("reap ['first-owned']", True),
+            ("graceful shutdown ['old-owned']", True),
+            ("output close", True),
+            ("output close", True),
+            ("artifact directory", True),
+            ("artifact process.out", True),
+            ("artifact enumeration", True),
+        ])
+        self.assertIn("CalledProcessError", data["cleanup"][0]["error"])
+        self.first.kill.assert_called_once_with()
+        self.stopped.side_effect = [subprocess.CalledProcessError(1, "helper"), None]
+        with patch.object(self.procs, "note_cleanup_step", side_effect=RuntimeError("marker")):
+            with self.assertRaisesRegex(RuntimeError, "graceful shutdown"):
+                self.cleanup()
+        self.assertEqual(self.first.kill.call_count, 2)
+
+
+@unittest.skipUnless(os.name == "nt", "delete denial snapshot uses Windows file locks")
+class DeleteDenialTests(unittest.TestCase):
+    def test_locked_file_records_holder_and_still_raises(self):
+        import ctypes
+        from ctypes import wintypes
+        from regression import procs
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+                                       wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        kernel.CreateFileW.restype = wintypes.HANDLE
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        held = {}
+
+        def release():
+            handle = held.get("handle")
+            if handle is not None and handle != wintypes.HANDLE(-1).value:
+                kernel.CloseHandle(handle)
+            root = held.get("root")
+            if root is not None:
+                shutil.rmtree(root, ignore_errors=True)
+            record = held.get("record")
+            if record is not None and record.is_file():
+                record.unlink()
+
+        self.addCleanup(release)
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            with self.assertRaises(PermissionError) as caught:
+                with procs.regression_directory(prefix="oi-denial-") as name:
+                    root = Path(name)
+                    held["root"] = root
+                    held["record"] = root.parent / (root.name + ".delete-denial.json")
+                    owner.write_owner(root, root, 0)
+                    owner.note_cleanup_step(root, "graceful shutdown", None)
+                    target = root / "bin" / "ipcclient.exe"
+                    target.parent.mkdir()
+                    target.write_bytes(b"exe")
+                    handle = kernel.CreateFileW(str(target), 0x80000000, 0, None, 3, 0, None)
+                    self.assertNotEqual(handle, wintypes.HANDLE(-1).value)
+                    held["handle"] = handle
+        self.assertIn(caught.exception.winerror, (5, 32))
+        text = stderr.getvalue()
+        self.assertIn("delete denial ", text)
+        records = json.loads(held["record"].read_text(encoding="utf-8"))
+        self.assertGreaterEqual(len(records), 1)
+        matched = [item for item in records if item["winerror"] in (5, 32) and item["path"].endswith("ipcclient.exe")]
+        self.assertTrue(matched, records)
+        record = matched[0]
+        self.assertEqual(record["cleanup"], [{"label": "graceful shutdown", "ok": True, "error": None}])
+        holders = [item for item in record["holders"]["holders"] if item["pid"] == os.getpid()]
+        self.assertEqual(len(holders), 1, record["holders"])
+        self.assertEqual(holders[0]["birth"], owner.windows_birth(os.getpid()))
+        self.assertFalse(record["holders"]["exclusive_open"]["opened"])
+        self.assertEqual(record["owner_processes"], [])
+
+    def test_capture_failure_does_not_replace_delete_error(self):
+        import ctypes
+        from ctypes import wintypes
+        from regression import procs
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+                                       wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        kernel.CreateFileW.restype = wintypes.HANDLE
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        held = {}
+
+        def release():
+            handle = held.get("handle")
+            if handle is not None and handle != wintypes.HANDLE(-1).value:
+                kernel.CloseHandle(handle)
+            root = held.get("root")
+            if root is not None:
+                shutil.rmtree(root, ignore_errors=True)
+
+        self.addCleanup(release)
+        stderr = io.StringIO()
+        with patch.object(procs, "delete_denial_record", side_effect=RuntimeError("capture boom")):
+            with contextlib.redirect_stderr(stderr):
+                with self.assertRaises(PermissionError) as caught:
+                    with procs.regression_directory(prefix="oi-denial-") as name:
+                        root = Path(name)
+                        held["root"] = root
+                        target = root / "ipcclient.exe"
+                        target.write_bytes(b"exe")
+                        handle = kernel.CreateFileW(str(target), 0x80000000, 0, None, 3, 0, None)
+                        self.assertNotEqual(handle, wintypes.HANDLE(-1).value)
+                        held["handle"] = handle
+        self.assertIn(caught.exception.winerror, (5, 32))
+        self.assertIn("capture boom", stderr.getvalue())
+        self.assertNotIn("capture boom", str(caught.exception))
 
 
 if __name__ == "__main__":

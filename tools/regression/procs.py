@@ -1,5 +1,6 @@
 """回归临时目录、所有权记录、进程生命周期和收尾。"""
 import contextlib
+import os
 from pathlib import Path
 import shutil
 import socket
@@ -10,7 +11,7 @@ import threading
 import time
 
 from regression_platform import SUFFIX, WINDOWS, launch, pause, stop, WslRedis
-from test_process_owner import record_process, write_owner
+from test_process_owner import delete_denial_record, load_owner, note_cleanup_step, record_process, write_owner
 
 from . import ports
 
@@ -31,6 +32,40 @@ def test_hook_enabled(work, executable, hook):
 
 
 @contextlib.contextmanager
+def note_windows_delete_denial(root):
+    """On Windows, snapshot WinError 5/32 at the failing unlink or rmdir, then let that error propagate."""
+    if os.name != "nt":
+        yield
+        return
+    # rmtree 会先删掉归属文件，再碰到仍被占用的 exe。步骤和 PID 必须提前读出来。
+    owner_data = load_owner(root)
+    originals = {"unlink": os.unlink, "rmdir": os.rmdir}
+    noted = {"count": 0}
+
+    def guard(function):
+        def wrapped(path, *args, **kwargs):
+            try:
+                return function(path, *args, **kwargs)
+            except PermissionError as error:
+                if getattr(error, "winerror", None) in (5, 32) and noted["count"] < 8:
+                    noted["count"] += 1
+                    try:
+                        delete_denial_record(path, error, root, owner_data)
+                    except Exception as capture_error:
+                        print("delete denial capture failed:", repr(capture_error), file=sys.stderr, flush=True)
+                raise
+        return wrapped
+
+    os.unlink = guard(originals["unlink"])
+    os.rmdir = guard(originals["rmdir"])
+    try:
+        yield
+    finally:
+        os.unlink = originals["unlink"]
+        os.rmdir = originals["rmdir"]
+
+
+@contextlib.contextmanager
 def regression_directory(**kwargs):
     directory = tempfile.TemporaryDirectory(**kwargs)
     try:
@@ -38,7 +73,8 @@ def regression_directory(**kwargs):
     finally:
         primary = sys.exc_info()[1]
         try:
-            directory.cleanup()
+            with note_windows_delete_denial(directory.name):
+                directory.cleanup()
         except BaseException as error:
             if primary is None:
                 raise
@@ -61,10 +97,17 @@ def cleanup_owned(procs, handles, root, args, case, *, db=None, db_paused=False,
     def attempt(label, action):
         try:
             action()
-            return True
+            failed = None
         except BaseException as error:
-            errors.append((label, error))
-            return False
+            failed = error
+        try:
+            note_cleanup_step(root, label, failed)
+        except Exception as record_error:
+            print("cleanup step not recorded:", label, repr(record_error), file=sys.stderr, flush=True)
+        if failed is None:
+            return True
+        errors.append((label, failed))
+        return False
 
     if db_paused:
         attempt("resume Redis", lambda: pause(db, False) if db.poll() is None else None)
