@@ -1,6 +1,38 @@
 # 待办
 
+## 2026-11-24 全仓 review 待修项
+
+- 分诊：静态审查 master `5d6cf82`，10 路分模块；上轮 3 条先做项仍未修，本轮新增 2 个 P2（批量 RPC 回滚挂起、容器解码内存放大）、2 个测试有效性 P2（Windows HTTP 释放检查恒通过、Linux hook 标记路径不一致），其余为 P3。逐条证据、触发链、已核对项和未覆盖项见 [2026-11-24 全仓 review](docs/review-20261124.md)。
+- 验证：本轮未编译、未跑四路回归；机械检查中继承检查通过（272 个自有文件），字段命名和格式检查因环境阻塞。修完按 `docs/testing.md` 跑四路 `--case all`（Windows/WSL Linux × 单线程/多线程），并补本条要求的定向用例。
+- 上轮 2026-11-21 的 3 条先做项已并入本节跟踪；旧节保留历史证据。
+
+### 先做（7 条）
+
+1. **logd 跨日打开失败后的策略与重试**（上轮未修，先拍板）。位置：`cbaselib/logd/src/log_file_instance.cpp:220-239`、`cbaselib/logd/inc/log_file_instance.h:15-32`。现状：`OpenLogFile` 失败只 `fprintf` 后 `continue`，轮转条目随 `vWriting.clear()` 丢弃；`LogFileInstance` 没有 pending-rotate 成员，`Rotate` 只在 `LogManager::OnCrossDay` 每天零点调用一次（`cbaselib/logd/src/log_manager.cpp:106-122`）。触发：零点建目录/打开失败（磁盘满、权限、瞬时 IO），之后恢复。后果：当天五个级别的日志继续写旧日期文件，按当天目录找不到；调用方仍是 `OI_OK`，无错误码/计数。注意：`docs/fixed.md:22` 已把「失败继续写当前文件、不退出」记为已修，但 11-21 todo 要求的「保留 pending、后续每批重试」仍未做；先确认是否还要求重试。修法：失败时把路径存成员（受 `m_stCacheLocker`），每批写完先重试打开，成功再清并留限频诊断。验收：Linux 注入次日路径为普通文件，首次失败后恢复，断言当天目录出现文件、失败期间日志不丢、stderr 有原因；若决定不重试，把策略写进文档并从 todo 删除。
+2. **`coro` 回归断言空转**（上轮未修）。位置：`modules/ipcclient/src/coro_mgr.cpp:219-228`、`tools/regression/cases/coro.py:14-20`。现状：日志行把 `bad=0` 写成字面量（224 行），结束时直接 `RequestStop(0)`（228 行），没有 `TestBoard`；脚本只断言出现 `"coro live="` 和字面 `"bad=0"`，不解析 `live/churn/live_ns/wake_ns`。触发：`--case coro`。后果：协程数量、唤醒计数或基准口径退化到 0 时仍 exit 0、脚本仍 PASS，月度基准不可信。修法：应用输出真实 `bad`（`HeldCount`/`WakeDone`/`ChurnDone` 与期望不符即非 0）；脚本解析 `live/churn/live_ns/wake_ns` 并断言 `>0`；`coro` 走 `TestBoard::Arm/Done` 或明确的非 0 退出。验收：用一次 `live` 或 `wake` 少 1 的旧实现确认脚本会失败，再验证修复后通过。
+3. **configure 改写已跟踪的 `.clangd`**（上轮未修）。位置：`framework.cmake:171-206`（201 行写 `${CMAKE_SOURCE_DIR}/.clangd`，205 行还会写框架目录）。现状：`.clangd` 是跟踪文件；Ninja/Makefiles 构建把 `CompilationDatabase` 写成构建目录相对路径并丢掉 `Compiler: clang-cl`，配置一次工作区就脏。修法：只写构建目录，或内容一致时保留；至少加入 `.gitignore` 并在交付说明里写清。验收：Linux/Ninja 与 Windows VS 各 configure 一次，`git status` 干净，clangd 仍能读到编译数据库。
+4. **批量 RPC 构建失败后的回滚永久挂起**（本轮新增）。位置：`cbaselib/proto/inc/oi_rpc_coro.h:825-841`（回滚）、`cbaselib/proto/inc/oi_rpc_coro.h:378-398`（`Dispatch` 先置 `bDispatched` 再 `Bind`）、`cbaselib/proto/inc/oi_rpc_coro.h:817-819`（构造并 `Submit`）。触发：`CallAll/CallMany/Notify*` 构造或 `Submit` 时 `make_shared`/`Bind`/请求拷贝抛 `bad_alloc`，`Send` 记下 `stBuildError`。后果：回滚只判断 `bDispatched`，于是 `co_await` 一个 `iCallId == 0`、gate 仍为 `Idle`、从未登记到 `RpcCallManager` 的等待器；`Arm` 永久挂起，`std::rethrow_exception` 到不了，协程帧、请求副本和已提交结果泄漏。修法：回滚条件加 `!stCall->bDispatched || stCall->iCallId == 0` 跳过；或 `Dispatch` 失败时先把 gate 置 `Ready`、写 `stSubmissionError` 再抛。验收：加一次可注入的分配失败，`CallAll/CallMany` 在超时内以原异常返回，`WaitStats` 和帧数回基线；旧实现应表现为挂起/超时。
+5. **容器解码内存放大**（本轮新增）。位置：`cbaselib/base/inc/oi_bytes_stream.h:243-264`（vector）、`280-304`（map）；现有协议 `modules/include/oi_rpcdata_alltypesdata.h:22-24` 已有 `vector<Inner>`、`map<string, Inner>`。触发：对端声明大 `count`、每元素只放 4 字节空 body；校验只有 `iCount > RemainSize()/4`（map 为 8），未约束本地 `sizeof(T)`。后果：16MB 字段可展开出数百 MB 的 `Inner`，64MB 帧可到 GB 级；对端可控，小内存机被 OOM killer 杀或长时间停顿。修法：解码加累计分配预算（字段长度 + 元素数 + 嵌套深度），或按 `iCount * sizeof(T)` 设上限分段拒绝；不要用 `sizeof(T)` 做线格式下界，会误杀合法的空元素数组。验收：构造 16MB 字段、`count = RemainSize()/4`、空 body 的包，断言在预算内失败且 RSS 有界；100 万个 `int32_t` 的合法数组仍能解；旧实现对照应吃内存。
+6. **Windows HTTP 大响应释放检查恒通过**（本轮新增）。位置：`modules/ipcclient/src/http_mgr.cpp:104-116`、`modules/ipcclient/src/http_mgr.cpp:118-139`（判定 133 行）。触发：Windows 单/多线程 `hold` 的 `hold http release before=... after=...`。现状：非 glibc 分支 `AllocatedBytes()` 直接 `return 0`，`iBefore == iAfter == 0`，`iAfter > iBefore + 8MB` 永不成立；32×1MB 响应留在堆上也报 `bad=0`。后果：Windows 两路对该性质没有覆盖，报告却显示通过。修法：用 `GetProcessMemoryInfo` 的 `PrivateUsage`/工作集，或让 harness 明确标记该检查在 Windows 未覆盖、不能算通过。验收：Windows 上 `before/after` 非 0，旧实现保留 32MB 能让 `bad=1`；或脚本输出 `skipped` 且四路汇总记为未覆盖。
+7. **Linux 手动 hook 构建下 blocking-wake 断言静默跳过**（本轮新增）。位置：`CMakeLists.txt:71`、`tools/regression/cases/db.py:27-32`、`tools/test_matrix.py:292-294`。触发：Linux 以 `-DOI_ENABLE_TEST_HOOKS=ON` 构建后按 `docs/testing.md` 用 `--case blocking-wake --bin-dir deploy/bin` 运行。现状：标记写到 `${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>/oi_test_hooks.txt`，Linux 设 `CMAKE_BUILD_TYPE=Release` 后落在 `deploy/bin/Release/`；`bin_dir` 是 `deploy/bin`，`stamp.exists()` 为假，`trace_submit_to_worker` 等 7 项断言整段跳过，测试仍 PASS。矩阵在 Linux 强制 hooks=OFF，所以不影响 `--case all`。修法：去掉 `$<CONFIG>` 子目录或让 runner 显式接收标记路径；请求 hook 而标记缺失时 fail。验收：Linux hooks=ON 跑 `--case blocking-wake --bin-dir deploy/bin` 必须出现 7 行 `wake benchmark trace_*`；删掉标记后同一命令必须失败。
+
+### 先确认（改前拍板，不直接排期）
+
+- **RPC 半关闭丢回包**（P1，已知）。FIN 到达即 `PassiveClose(0)` 并 `CloseSession` 摘会话，处理协程稍后 `SendFrame` 按 sid 查不到，回包丢失；仓库内客户端不发 FIN。二选一：明确不支持半关闭并写进文档/回归，或按 `ServerSession::PassiveClose` 延迟摘会话，补 `shutdown(SHUT_WR)` 后仍收到回包的用例。
+- **`m_bLost` 只置不清**。被同名同 id 接管后永久停止登记；占用方退出、键过期也不恢复，只能重启。先定策略：允许恢复就定期 `RegPull` 判断空出后清零重登记，否则把状态显式暴露给应用。
+- **Redis late ping 偶发超时**。`hold-redis` 的 BLPOP 后 PING 偶发在 2 秒预算内没回包；客户端 FIFO 认领与 `m_iSwept` 账目自洽，需按 `docs/todo.md` 抓一次失败时 redisserver/Redis 两侧时间线，再决定修客户端/redisserver 还是放宽用例余量。
+
+### 观察/暂不修（P3，保留证据）
+
+- **规则/机械项**：`rpc_pending_mgr` 三处默认捕获 `[&]`（`modules/ipcclient/src/rpc_pending_mgr.cpp:133-142,539-546,566-569`）；生成器 `module_file_gen.py:176` 与三个模块 `main.cpp` 的 `[&]`；两处 `||` 里串多个 `co_await`（`rpc_output_mgr.cpp:146`、`rpc_service_mgr.cpp:252`）；`--timer-before-init` 的 `[&bCalled]`；`PostCoroutine` 单线程空实现、`oi_lock.h` 两套接口不对称；`timer_lvs` 单层槽数无上限；`Bytes::Insert` 越界只 assert；Windows pthread 兼容层递归属性缺失。
+- **错误路径**：HTTP 服务端缓冲响应超额度时静默断连（`oi_http_server.cpp:526-535`）；redisserver 大回包丢弃且 `AppendReply` 可能 bad_alloc 穿过 hiredis C 回调（`redis_server.cpp:147-197,206-235`）；HTTP trailer 每段重扫（`oi_http_server.cpp:333-344`）；HTTP 客户端流式源结束后 2ms 泵空转（`oi_http.cpp:469-501`）、请求超额度整包 BUSY（`1236-1241`）；UDP sendto 失败静默丢包、绑定口无释放（`udp_channel.cpp:190-196`）；`PickOne/ToDbMap` 的 `ToJsonText` 异常穿透（`oi_db_row.h:436-457`）；JSON `double` 接受 inf（`oi_json.h:148-152`）；registry 一条坏行放弃整表（`registry_server.cpp:538-560`）；logger 静默丢日志、`LogMgr` 持续失败死循环；`HoldMgr::Pump` 无兜底 try/catch；`PollUnregisterProbe` 二次 close fd；`CheckSyncOnLoop` 无超时。
+- **测试覆盖**：`CheckRpcRace` 只累计 Bad、全超时也过；`CallAll` 部分失败、UDP 丢包、域名解析次数、webtest 响应源取消/释放均缺用例；`hold`/`udp` 线程模式断言接受任一模式；`kill_test_procs` CIM 缺创建时间时静默跳过、`registry` proxy close 覆盖原始异常、log-backpressure 探针复用 `logd.out`、`test_matrix` 只扫默认 VS 路径。
+- **文档**：`docs/cbaselib.md:126` 的 `StartFramework` 返回码 -2/-1 错误；`docs/cbaselib/notify.md:66` 的 UDP `RpcNotify` 返回 `OI_ERR_FAIL` 与实现不符；`docs/testing.md:175` 与同文件 210 行的 hooks 恢复说法矛盾；`docs/cbaselib.md:16-25` 等行号锚点漂移；`project.md` 的 XML、`Protocol`/`Rpc` 基类、时序图 README 的字节序、`time.md` 的续期措辞过期。
+- **已知项状态不变**：`res_id` BUSY 错配（不可达）、非法 `[Registry]` 配置 3 秒 TIMEOUT、旧会话迟到 `OnClientDisconnect`/`OnPeerDisconnect`、TLS `SendResult` 跨线程、停服 `uv_loop_close` EBUSY、`StopAccept` fd 未真关、`PauseEvents` 覆盖新增位、Redis 空队列回执丢弃、chunked 8MiB/413 RST、线程池 `threadcount` 无上限、继承/格式检查漏 `tools` 下 C++、`sync_linux_remote` 前导点；redisserver 64MiB 首参复制已不成立，可更新 todo。
+
 ## 2026-11-21 全仓 review 待修项
+
+> 本节 3 条先做项截至 2026-11-24 仍未修，已并入上一节跟踪；本节保留原始证据。
 
 - 分诊：原审查确认 6 个 P1、7 个 P2、10 个 P3。按“现实触发 × 后果 × 修复成本”重排，只留 6 条先做；其余移到「先确认」「观察/暂不修」，不删除，保留证据。
 - 对象：master `3bc339b`，静态通读 cbaselib 自有代码、modules、tools；未编译、未跑四路回归。7 路 subagent 分模块审查，主对话逐条回读代码核对；审查期间 subagent 越权改动的 5 个文件已还原，工作区干净。
