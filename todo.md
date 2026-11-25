@@ -1,5 +1,24 @@
 # 待办
 
+## 2026-11-25 全仓 review 新增待修项
+
+- 分诊：静态审查 master `793b572`，8 路只读审查；**未发现新的可稳定触发 P1**。逐条证据、触发条件、置信度和已核对项见 [2026-11-25 全仓 review](docs/review-20261125.md)。本轮只记录，未改代码。
+- 验证：未编译、未跑四路回归。修完按 `docs/testing.md` 跑四路 `--case all`（Windows/WSL Linux × 单线程/多线程），并补对应定向用例。
+
+### 先做（5 条）
+
+1. **libuv C 回调链统一异常边界**（系统性）。现状：`Poll::OnPoll`（`cbaselib/net/src/oi_poll.cpp:84-105`）、`Session::SwapInBuff`（`oi_session.cpp:88-106`）、`Poll::State::Drain`（`oi_poll.cpp:279-324`）直接调用，无 try；定时器路径（`oi_timer_manager.cpp:164-176`）已有保护可对照。可达点位：logd `WriteLog/DeferWrite`（`log_server_session.cpp:41-73` 的 try 只包 deserialize）、HTTP `Produce/OnPlaintext/RequestFrame::Read`（`oi_http_stream.h:295`、`oi_http.cpp:717,891`、`oi_http_server.cpp:280,324`）、redisserver `OnConnect/OnDisconnect`（`redis_server.cpp:238-272`）。后果：OOM 时 `bad_alloc` 穿 C 帧 → UB/terminate。修法：在 `OnPoll`/`Drain` 外层统一 `try/catch(...)` 转 `PassiveClose`/`ReportTaskError`。
+2. **ServiceTable 观察者裸指针无注销**。位置：`cbaselib/base/src/oi_registry.cpp:88-98,246-253`、`oi_registry.h:76,80`；栈上观察者 `modules/ipcclient/src/blocking_mgr.cpp:311`。后果：被观察服务实例变化时回调已析构对象 → UAF（当前回归未触发）。修法：加 `Unwatch` 并在管理器析构时摘除，或改 `weak_ptr`/令牌。
+3. **UDP EAGAIN 后立即重开写关注**。位置：`cbaselib/net/src/oi_udp_channel.cpp:181-226`。后果：UDP 常报可写的平台（Windows）发送缓冲满时 poll 线程 100% CPU。修法：EAGAIN 用短 timer 或本 tick 闸门退避。
+4. **HTTP 客户端 chunked size 行完整时不限长**。位置：`cbaselib/http/src/oi_http.cpp:657-672`；服务端有 1024 上限（`oi_http_server.cpp:302-306`）。后果：超长全 `0` 行被当终止块，body 提前结束/状态错位。修法：对完整行同样校验长度。
+5. **logd 本地日志丢 + 日志客户端已连接发送失败不回退入队**。位置：`log_manager.cpp:181-191`（注释「满时」与实际「有等待者即丢」不符）、`oi_rpc_session_manager.cpp:195-223`、`oi_log_client.cpp:45`。后果：诊断日志与断线/背压瞬间的日志静默丢失。
+
+### 观察/暂不修（P2/P3，保留证据）
+
+- **框架**：redisserver 把 `*-1` 改写成 `$-1`（`redis_server.cpp:179-181`）；poll 注册失败先关 fd 后 uv_close（`oi_poll.cpp:765-777`，需注入验证）；`sid_t` int32 回绕（`oi_header.h:43-44`、`oi_session_manager.cpp:672,748`）；发送上限只校验到 SIZE_MAX（`oi_session_manager.cpp:26-45`）；BlockingWorkChannel 控制管道破裂 EOF 空转（`oi_blocking_work_channel.cpp:158-191`）；协程 `await_suspend` noexcept 里堆分配（`oi_coro.h:197-238`）。
+- **测试有效性**：wake_bench 求和断言恒真（`wake_bench.cpp:96-100,242-248`）；web IPv6 环境阻塞只打印不生效（`web.py:994-1001`）；hold 死配置 `max_clients/idle_ms`（`hold.py:92-96`）；`test_matrix --mode st --asan` 用错目录、Windows 静默忽略（`test_matrix.py:323-324`）；clock 注入不校验生效（`hold.py:189-195`）；`--platform both` 覆盖 Windows hook 标记（`CMakeLists.txt:71`）；`buckets=0` 断言（`hold.py:239`）；`run_web` 断言丢 stdout（`web.py:993`）。
+- **不计为缺陷**：BlockingMgr 与 DbMgr 争抢 MySQL 阻塞池（需同时开 `Test.hold`+`Test.db`，规程禁止）；`Bytes::Overlaps` 跨对象指针比较（技术性 UB，无实务影响）。
+
 ## 2026-11-24 全仓 review 待修项
 
 - 分诊：静态审查 master `5d6cf82`，10 路分模块；上轮 3 条先做项仍未修，本轮新增 2 个 P2（批量 RPC 回滚挂起、容器解码内存放大）、2 个测试有效性 P2（Windows HTTP 释放检查恒通过、Linux hook 标记路径不一致），其余为 P3。逐条证据、触发链、已核对项和未覆盖项见 [2026-11-24 全仓 review](docs/review-20261124.md)。
