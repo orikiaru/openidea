@@ -4,6 +4,8 @@
 #include "oi_poll.h"
 #include "oi_session_manager.h"
 #include <uv.h>
+#include <algorithm>
+#include <cstdint>
 #include <new>
 namespace OI
 {
@@ -83,6 +85,10 @@ void ProtoSession::OnDataIn()
 	// 一包就是 协议id + 总大小 + 序列化结构。对不上或者解析失败，丢掉这一包。
 	// 借 _ibuff 的内存原地解析，不整块拷一份。
 	::OI::Base::BytesStream stOutputStream;
+	// 预算随帧上限放大：内网大帧不误拒，对外小帧仍限住解码膨胀。
+	const size_t iBudgetFloor = ::OI::Base::BytesStream::DefaultDecodeBudgetBytes();
+	const size_t iBudgetScaled = m_iFrameBytes > SIZE_MAX / 4 ? SIZE_MAX : m_iFrameBytes * 4;
+	stOutputStream.SetDecodeBudget(std::max(iBudgetFloor, iBudgetScaled));
 	stOutputStream.Swap(stInputBuffer);
 	// 构造时只收 ProtoSessionManager。
 	auto* pProtoManager = static_cast<ProtoSessionManager*>(pSessionManager);

@@ -58,11 +58,33 @@ class OutputRpcProbe : public DeferredRpcProbe
 	}
 };
 
-// 用实际回包编码尺寸构造边界，超限请求的输出不得被覆盖。
+// 按外部入口的方式收紧：只读自己配置段的 max_receive_buffer_bytes，帧上限跟着减 8。
+class ReceiveLimitProbe : public DeferredRpcProbe
+{
+  public:
+	const std::string GetIDString() override
+	{
+		return "HoldReceiveLimit";
+	}
+	int32_t LoadLimits()
+	{
+		return LoadSessionLimits();
+	}
+};
+
+// 用实际回包编码尺寸构造边界，超限请求的输出不得被覆盖。额度来自显式配置，不是默认值。
 OI::Coro::TaskResult<int> RpcOutputMgr::CheckReceiveLimit()
 {
-	static DeferredRpcProbe stClient;
+	static ReceiveLimitProbe stClient;
 	int iBad = 0;
+	const int32_t iLoad = stClient.LoadLimits();
+	const size_t iLimit = stClient.MaxReceiveBufferBytes();
+	const size_t iFrameLimit = stClient.MaxFrameBytes();
+	LOG_TRACE("hold receive limit configured receive=%zu frame=%zu load=%d", iLimit, iFrameLimit, iLoad);
+	if (iLoad != OI_OK || iLimit != 1048576 || iFrameLimit != iLimit - OI::Net::kFrameHeaderBytes)
+	{
+		co_return 1;
+	}
 	const int32_t iConnect = co_await stClient.StartClient();
 	if (iConnect != OI_OK)
 	{
@@ -70,7 +92,7 @@ OI::Coro::TaskResult<int> RpcOutputMgr::CheckReceiveLimit()
 		co_return 1;
 	}
 	OI::RpcData::AllEchoReq stRequest;
-	stRequest.stData.sMessage.assign(OI::Net::kDefaultReceiveBufferBytes - 1024, 'x');
+	stRequest.stData.sMessage.assign(iLimit - 1024, 'x');
 	OI::RpcData::AllEchoRes stExpected;
 	stExpected.stData = stRequest.stData;
 	stExpected.iCode = 1;
@@ -78,12 +100,12 @@ OI::Coro::TaskResult<int> RpcOutputMgr::CheckReceiveLimit()
 	stBody << uint64_t(1) << int32_t(0);
 	stExpected.serialize(stBody);
 	const size_t iInitialSize = OI::Rpc::EncodePbFrame(OI::Rpc::RpcProtoId<OI::RpcData::AllEchoRes>::iValue, stBody).Size();
-	if (iInitialSize >= OI::Net::kDefaultReceiveBufferBytes)
+	if (iInitialSize >= iLimit)
 	{
 		LOG_TRACE("hold receive limit initial=%zu bad=1", iInitialSize);
 		co_return 1;
 	}
-	stRequest.stData.sMessage.append(OI::Net::kDefaultReceiveBufferBytes - iInitialSize, 'x');
+	stRequest.stData.sMessage.append(iLimit - iInitialSize, 'x');
 	stExpected.stData = stRequest.stData;
 	OI::Base::BytesStream stExactBody;
 	stExactBody << uint64_t(1) << int32_t(0);
@@ -91,7 +113,7 @@ OI::Coro::TaskResult<int> RpcOutputMgr::CheckReceiveLimit()
 	const size_t iExactSize = OI::Rpc::EncodePbFrame(OI::Rpc::RpcProtoId<OI::RpcData::AllEchoRes>::iValue, stExactBody).Size();
 	OI::RpcData::AllEchoRes stOutput;
 	const int32_t iExact = co_await OI::Rpc::RpcCall(stClient, stRequest, stOutput, OI::Timer::Seconds(10));
-	if (iExactSize != OI::Net::kDefaultReceiveBufferBytes || iExact != OI_OK || stOutput.stData.sMessage != stRequest.stData.sMessage || stOutput.iCode != 1)
+	if (iExactSize != iLimit || iExact != OI_OK || stOutput.stData.sMessage != stRequest.stData.sMessage || stOutput.iCode != 1)
 	{
 		++iBad;
 	}
@@ -104,12 +126,61 @@ OI::Coro::TaskResult<int> RpcOutputMgr::CheckReceiveLimit()
 	stOutput.stData.sMessage = "preserved";
 	stOutput.iCode = 713;
 	const int32_t iOver = co_await OI::Rpc::RpcCall(stClient, stRequest, stOutput, OI::Timer::Seconds(10));
-	if (iOverSize != OI::Net::kDefaultReceiveBufferBytes + 1 || iOver == OI_OK || stOutput.stData.sMessage != "preserved" || stOutput.iCode != 713)
+	if (iOverSize != iLimit + 1 || iOver == OI_OK || stOutput.stData.sMessage != "preserved" || stOutput.iCode != 713)
 	{
 		++iBad;
 	}
 	LOG_TRACE("hold receive limit exact=%zu exact_code=%d over_code=%d preserved=%d bad=%d", iExactSize, iExact, iOver,
 	    stOutput.stData.sMessage == "preserved" && stOutput.iCode == 713, iBad);
+	co_return iBad;
+}
+
+// 每个 28 字节字符串线上占 32 字节，逻辑计费另加 sizeof(std::string)。帧约 43 MiB，计费落在 (64 MiB, 256 MiB)。
+// 固定 64 MiB 预算时服务端解请求就抛 ParserException，调用拿不到 OI_OK。
+OI::Coro::TaskResult<int> RpcOutputMgr::CheckDecodeBudget()
+{
+	static DeferredRpcProbe stClient;
+	constexpr size_t iWordBytes = 28;
+	constexpr size_t iWordCount = 1400000;
+	const size_t iFloor = OI::Base::BytesStream::DefaultDecodeBudgetBytes();
+	const size_t iScaled = 4 * stClient.MaxFrameBytes();
+	const size_t iCharged = iWordCount * (sizeof(std::string) + iWordBytes);
+	OI::RpcData::AllEchoReq stRequest;
+	stRequest.stData.vWords.reserve(iWordCount);
+	for (size_t iIndex = 0; iIndex < iWordCount; ++iIndex)
+	{
+		std::string sWord = std::to_string(iIndex);
+		sWord.resize(iWordBytes, 'w');
+		stRequest.stData.vWords.push_back(std::move(sWord));
+	}
+	OI::Base::BytesStream stBody;
+	stBody << uint64_t(1);
+	stRequest.serialize(stBody);
+	const size_t iFrame = OI::Rpc::EncodePbFrame(OI::Rpc::RpcProtoId<OI::RpcData::AllEchoReq>::iValue, stBody).Size();
+	int iBad = 0;
+	if (iCharged <= iFloor || iCharged >= iScaled || iFrame < 40 * 1024 * 1024 || iFrame > 48 * 1024 * 1024 ||
+	    iFrame > stClient.MaxReceiveBufferBytes())
+	{
+		++iBad;
+	}
+	int32_t iCode = OI_ERR_CONNECT;
+	if ((co_await stClient.StartClient()) != OI_OK)
+	{
+		++iBad;
+	}
+	else
+	{
+		OI::RpcData::AllEchoRes stOutput;
+		stOutput.iCode = 713;
+		iCode = co_await OI::Rpc::RpcCall(stClient, stRequest, stOutput, OI::Timer::Seconds(30));
+		if (iCode != OI_OK || stOutput.iCode != 1 || stOutput.stData.vWords != stRequest.stData.vWords)
+		{
+			++iBad;
+		}
+	}
+	stClient.CloseAllSessions();
+	LOG_TRACE("hold decode budget scaled words=%zu charged=%zu frame=%zu code=%d bad=%d", iWordCount, iCharged, iFrame, iCode, iBad);
+	fflush(stdout);
 	co_return iBad;
 }
 
@@ -453,5 +524,6 @@ OI::Coro::TaskResult<int> RpcOutputMgr::Run(sid_t iSessionId)
 	int iBad = co_await CheckOutputRpcTask(iSessionId);
 	iBad += co_await CheckClientNotify();
 	iBad += co_await CheckReceiveLimit();
+	iBad += co_await CheckDecodeBudget();
 	co_return iBad;
 }

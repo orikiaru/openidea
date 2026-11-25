@@ -28,7 +28,7 @@
 
 `base` 是进程里的公共件。`Bytes` 是二进制缓冲，`BytesStream` 做序列化，线上整数和浮点统一小端，不看主机字节序。`Config` 读 toml。`ThreadPool` 只有一条协程句柄队列：多线程工人只 `resume` 协程，单线程由 `PumpOnce` 推进协程和 IO。协程任务、`WhenAll`、`yield` 在 `OI::Coro`（`oi_coro.h`），RPC、Redis、HTTP 复用它，不把协程运行时放在协议头里。应用层写协程。`DECLARE_SINGLETON(T)` 提供 `T::GetInstance()`，返回唯一实例的引用，不进入继承链。`FilePath` 检查路径在不在，并补齐中间目录。锁在 `oi_lock.h`，自有代码用 `OI::Thread::Mutex`、`MutexGuard`、`SpinLock`、`SpinLockGuard`、`MutexCond`。`MutexCond::WaitUntil(Mutex&, steady_clock::time_point)` 到截止时间返回 false，不带条件参数，等待要自己写 while 循环。单线程编译下这些加锁和等待都是空实现，`WaitUntil` 直接返回 false。
 
-`BytesStream` 读取上限可嵌套并由守卫恢复；嵌套协议和容器在原流内解码，不另复制子包。RPC 收包在 IO 线程按帧上限完成请求与回包解码；编码仍使用原来的追加和临时缓冲。每个独立帧默认有 64 MiB 逻辑解码预算，嵌套容器与多个字段累计共用，读取事务回滚时恢复，下一独立帧重新计数。vector 按元素对象大小计费，map 按键值对象加四个指针估算节点，string 和 Bytes 正文另计；容器扩容余量、分配器与其他内存不精确计入，因此不是精确 RSS 硬上限。
+`BytesStream` 读取上限可嵌套并由守卫恢复；嵌套协议和容器在原流内解码，不另复制子包。RPC 收包在 IO 线程按帧上限完成请求与回包解码；编码仍使用原来的追加和临时缓冲。每个独立帧有逻辑解码预算：`BytesStream` 默认 64 MiB，RPC 会话按 max(64 MiB, 4 × 帧上限) 调用 `SetDecodeBudget`，嵌套容器与多个字段累计共用，读取事务回滚时恢复，下一独立帧重新计数。vector 按元素对象大小计费，map 按键值对象加四个指针估算节点，string 和 Bytes 正文另计；容器扩容余量、分配器与其他内存不精确计入，因此不是精确 RSS 硬上限。
 
 `GetConfigAndAssert` 在读取失败时触发断言，关闭断言的构建仍会执行读取；`TryGetConfigAndReturnFalse` 仅用于返回 `bool` 的函数，读取失败时返回 false。返回错误码的函数应使用 `TryGetConfig` 并自行处理失败。`ParseConfig` 返回错误码，解析失败返回 `OI_ERR_INVALID_ARGUMENT` 且保留已有配置。
 
@@ -136,9 +136,9 @@ PB 每个字段只有一条 `uint32 index + uint32 bytesize + payload`，整数�
 
 ## 发送缓冲限额与同步等待
 
-普通 TCP/RPC 组件段支持 `max_receive_buffer_bytes`，默认 1048576 字节（1 MiB），限制每会话尚未解析的输入；对 RPC 而言包含 8 字节帧头。TCP 首次读取按 4096 字节（4 KiB）申请，随后按需增长且不超过接收限额，不在连接建立时预分配 1 MiB。RPC 组件另支持会话级 `max_frame_bytes`（正文上限，默认 1048568 字节，即接收限额减 8）与 `incomplete_frame_timeout_ms`（默认 10000）。接收限额至少为正文上限加 8 字节帧头；这些配置须满足初始化校验。服务端请求与客户端回包两端均检查，包头声明超限立即断连；残包从首次出现开始计时，滴流不延期，完整包取消计时，空闲连接不启动计时。这些限制与 `[Rpc]` 已接收请求的执行额度及 64 MiB 逻辑解码预算相互独立，也不是整个进程的 RSS 上限。
+普通 TCP/RPC 组件段支持 `max_receive_buffer_bytes`，默认 67108872 字节（64 MiB + 8），限制每会话尚未解析的输入；对 RPC 而言包含 8 字节帧头。默认按内网对端可信放宽；面向游戏客户端等外部连接的入口应在组件段收紧，例如只配 `max_receive_buffer_bytes = 1048576`，正文上限自动取它减 8（1048568）。TCP 首次读取按 4096 字节（4 KiB）申请，随后按需增长且不超过接收限额，不在连接建立时预分配整个限额。RPC 组件另支持会话级 `max_frame_bytes`（正文上限，默认 67108864 字节即 64 MiB，未配时取接收限额减 8）与 `incomplete_frame_timeout_ms`（默认 10000）。接收限额至少为正文上限加 8 字节帧头；这些配置须满足初始化校验。服务端请求与客户端回包两端均检查，包头声明超限立即断连；残包从首次出现开始计时，滴流不延期，完整包取消计时，空闲连接不启动计时。这些限制与 `[Rpc]` 已接收请求的执行额度及每帧逻辑解码预算（max(64 MiB, 4 × 帧上限)）相互独立，也不是整个进程的 RSS 上限。
 
-HTTP 是已选定的例外：保留原有独立接收额度（客户端 `kMaxHeader + kMaxBody`，64 KiB 头部加 8 MiB 正文），不套用普通 TCP/RPC 的 1 MiB 默认值；普通缓冲正文既有 8 MiB 限制不变，服务端也保留自己的头部/正文限制。流式正文另按其接口处理，见 [HTTP](cbaselib/http.md)。
+HTTP 使用独立额度：客户端 `kMaxHeader + kMaxBody`（64 KiB 头部加 8 MiB 正文），不跟随普通 TCP/RPC 的接收默认值；普通缓冲正文既有 8 MiB 限制不变，服务端也保留自己的头部/正文限制。流式正文另按其接口处理，见 [HTTP](cbaselib/http.md)。
 
 Redis 超时扫描直接运行在 poll 的 200ms 周期计时器上，工人上调用同步接口不会堵住这次扫描。超时项仍保留到对应回执或断连，防止响应串位。`--case redis-queue-timeout` 通过现有 RedisMgr 的 `[Regression] redis_queue_timeout` 开关复测；`--case rpc-ingress` 注入超大声明、残包、滴流和合法边界分片后，再运行现有回声负载。这两项已纳入 `--case all`。
 
@@ -158,7 +158,7 @@ Redis 入队、发送、解析和断连处理都在 poll 线程，等待项与�
 
 停服时，ThreadPool 先发布 StopRequested，再在 poll 上运行初始化阶段注册的停止回调，最后通知工人退出并 join，之后才停止 poll。Redis 的停止回调以 Disconnected 结束等待并关闭连接；停止后同步/协程 Redis 新调用直接失败，不再排到已退出的网络循环。停止回调不能阻塞；业务自身的 TaskScope 仍须按协程文档在正常退出前 Join。
 
-redisserver 的 `[Redis] max_pending_bytes`（默认 64MiB）和 `max_pending_commands`（默认 65536）按每条上游连接计费，字节数包含完整 RESP 请求；收到回执或上游断连时归还额度，不因客户端超时而提前归还。任一额度不足就保留未发送命令并暂停该下游读取；两项都降到各自限额一半后恢复，并先处理已有输入缓冲。恢复通过 `Poll::PostOnLoop` 排到后续事件循环，不再依赖时间轮；每轮按等待队列轮转，每个会话最多转发一条命令，未处理完的排队尾。额度不足的大请求保留队首，避免被小请求持续挤占；新到请求不能越过已有等待者。单条命令超过字节限额会关闭下游连接，解析长度时即拒绝，不能等待一个永远凑不齐的额度。这是请求积压上限，并非进程 RSS 上限：分配器容量、下游输入缓冲、内核缓冲及响应内存另计。
+redisserver 的 `[Redis] max_pending_bytes`（默认 64MiB）和 `max_pending_commands`（默认 65536）按每条上游连接计费，字节数包含完整 RESP 请求；收到回执或上游断连时归还额度，不因客户端超时而提前归还。任一额度不足就保留未发送命令并暂停该下游读取；两项都降到各自限额一半后恢复，并先处理已有输入缓冲。恢复通过 `Poll::PostOnLoop` 排到后续事件循环，不再依赖时间轮；每轮按等待队列轮转，每个会话最多转发一条命令，未处理完的排队尾。额度不足的大请求保留队首，避免被小请求持续挤占；新到请求不能越过已有等待者。单条命令超过字节限额会关闭下游连接，解析长度时即拒绝，不能等待一个永远凑不齐的额度；格式错误或超限时记一条 `redisserver rejects malformed or oversized command sid=... limit=...` 错误日志。这是请求积压上限，并非进程 RSS 上限：分配器容量、下游输入缓冲、内核缓冲及响应内存另计。
 
 复测使用 `python3 tools/run_regressions.py --case redis-shutdown`、`redis-backpressure-bytes`、`redis-backpressure-count`；用例都在现有 RedisMgr，通过临时配置的 `[Regression] redis_shutdown / redis_pressure / redis_oversized` 启用。停服测试在同步等待时发送 SIGTERM；背压测试暂停并恢复本机 Redis，检查限额、内存增量及 64 条大响应逐条配对，还验证超大命令拒绝后的重连。`--case all` 包含这三项，需在两种线程模式分别运行。
 

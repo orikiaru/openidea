@@ -11,8 +11,9 @@ namespace OI
 {
 namespace Net
 {
-inline constexpr size_t kDefaultReceiveBufferBytes = 1024 * 1024;
+// 默认按内网可信对端放宽；对外入口在组件段配 max_receive_buffer_bytes 收紧。
 inline constexpr size_t kFrameHeaderBytes = 2 * sizeof(uint32_t);
+inline constexpr size_t kDefaultReceiveBufferBytes = 64 * 1024 * 1024 + kFrameHeaderBytes;
 
 enum
 {

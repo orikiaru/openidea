@@ -2,7 +2,26 @@
 
 全量四组都通过时，改写下面的「全量」，只留最近一次。写明日期、平台、线程模式、通过项数，以及机器的 CPU 型号和实测频率。只跑了部分用例不要写成全量通过。操作步骤仍在 [testing.md](testing.md)。
 
-> **当前状态：最终排版后复验不是四路全绿。** Windows MT 为 21/22：registry 业务 PASS 后临时 exe 删除报 WinError 5，整路失败；Windows ST 和 Linux MT/ST 三路通过。下方「全量」保留最近一次四路完整通过的**排版前首轮**，不能替代当前失败。没有重跑刷绿，也不能声称所有门禁通过或没有遗留临时数据。
+> **当前状态：收包额度与解码预算修复后四路复验，不是四路全绿。** Windows ST、Linux WSL MT/ST 三路 22/22；Windows MT 22 项业务断言全部 PASS，但 registry 之后删除临时 exe 又报 WinError 5，按 `results.json` 记 21/22、整路失败，与上次同一已知问题（[待办 1](<../todo.md#1-windows-mt-registry-清理-winerror-5失败瞬间取证定位>)）。下方「全量」保留最近一次四路完整通过的**排版前首轮**，不能替代当前结果。没有重跑刷绿。
+
+## 收包额度与解码预算复验（2026-11-25 晚，当前工作区未提交改动）
+
+受测 HEAD `1ce19f1a4c33b1751b80dd2b583801f388dcd835` 加工作区改动：默认接收额度恢复 64 MiB + 8、解码预算取 max(64 MiB, 4 × 帧上限)、redisserver 超限拒绝日志、`test_config_macros.py` 在 Linux 固定 g++-13，以及对应用例与文档。四路都由 `tools/parallel_matrix.py` 跑 `--case all`，同时开跑同一份源码。Linux 用本机 WSL（Ubuntu 20.04，GCC 13.1），不是远程机器；WSL 自带 OpenSSL 1.1.1，按 [testing.md](testing.md) 第 2 节用 `/root/opt/openssl-3.0.18` 静态链接。
+
+| 平台 | 线程 | CPU | 频率读数 MHz | `all` 结果 | 矩阵状态 | 耗时 |
+| --- | --- | --- | --- | ---: | --- | --- |
+| Windows | 多线程 | Intel Core i9-11900K | 未另采 | **21/22，失败** | registry 业务 PASS 后临时目录清理 WinError 5；exit=1、passed=false、completed=false | 582.7 秒 |
+| Windows | 单线程 | Intel Core i9-11900K | 未另采 | 22/22 | exit=0、passed=true、completed=true | 609.8 秒 |
+| WSL Linux | 多线程 | Intel Core i9-11900K | 3503.997（`/proc/cpuinfo` 采样） | 22/22 | exit=0、passed=true、completed=true | — |
+| WSL Linux | 单线程 | Intel Core i9-11900K | 3503.997（同上） | 22/22 | exit=0、passed=true、completed=true | — |
+
+四路都出现本轮新断言的成功标记：`hold decode budget scaled words=1400000 charged=84000000 frame=44800326 code=0 bad=0`、`hold receive limit configured receive=1048576 frame=1048568 load=0`、`rpc default receive exact=67108872 over=67108873 PASS`、`rpc configured receive exact=1048576 over=1048577 PASS`、`redis oversized command rejected limit=1048576 PASS`、`hold batch bind failure caught=1 registered=1 submits=1 drops=1 elapsed=... bad=0`，以及汇总小预算边界、16 MiB 放大和 6000 字节容量检查的 `hold binary container bad=0`。
+
+失败路径：把 `SetDecodeBudget` 那一行临时去掉、其余不变，Windows 多线程 hold 输出 `hold decode budget scaled ... code=-1 bad=1`，服务端 `decode_request ... reason=ParserException`，用例失败；恢复后通过。
+
+**Windows MT 清理失败边界**：`registry PASS seconds= 0.23` 之后 `TemporaryDirectory.cleanup` 删除 `oi-regression-p0-f5oql9zw\bin\ipcclient.exe` 报 `[WinError 5]`，其后 `udp`、`multi`、`local`、`web`、`web-coro` 业务均 PASS。目录留存 25 文件、30,978,331 字节；事后 CIM 无该目录下的进程，独占打开 `ipcclient.exe` 成功，只说明事后无持续占用，报错瞬间的占用者未取到。结果目录：`.tmpfiles/win-par/`、`.tmpfiles/wsl-par2/`（工作区临时目录，不入库）。
+
+本轮未跑 ASan、coro、mysql、registry-static。
 
 ## 全量（最近四路完整通过：2026-11-25 排版前首轮）
 

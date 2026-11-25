@@ -27,6 +27,8 @@ class RpcOutputMgr
 	// 16 个等待者只提交一次。重复等待、固定会话、业务错误和迟到回包都不覆盖输出。
 	OI::Coro::TaskResult<int> CheckOutputRpcTask(sid_t iSessionId);
 	OI::Coro::TaskResult<int> CheckReceiveLimit();
+	// 帧在 64 MiB 以内、逻辑计费超过 64 MiB 的大字符串数组要能往返；预算随帧上限放大。
+	OI::Coro::TaskResult<int> CheckDecodeBudget();
 	// 按值和输出引用同时在飞。没连上时，固定 sid 回 CONNECT。
 	OI::Coro::TaskResult<int> CheckDeferredRpcSession();
 	// 问这条直连上的 ipcserver 收到了几条该标记的 PeerNote。失败回错误码。

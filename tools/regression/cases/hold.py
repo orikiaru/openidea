@@ -175,6 +175,13 @@ class HoldCase(Case):
                 text += "\n[Regression]\nhold_scene = \"%s\"\n" % ctx.scene
             if ctx.mode == "hold":
                 text = configure_hold_client(text)
+            if hold_environment(ctx):
+                # 模拟对外入口：只配接收额度，帧上限自动取它减 8；验证回包方向按这份小额度断开。
+                text += "\n[HoldReceiveLimit]\nmax_receive_buffer_bytes = 1048576\n"
+        if name == "ipcserver" and hold_environment(ctx):
+            # 解码预算用例的请求帧约 43 MiB，执行中额度放到 128 MiB，免得先被接纳上限挡成 BUSY。
+            text = replace(text, "max_inflight_bytes", "134217728")
+            text = replace(text, "session_max_inflight_bytes", "134217728")
         return text
 
     def prepare(self, ctx):
@@ -258,7 +265,12 @@ class HoldCase(Case):
             server_text = serverpath.read_text(encoding="utf-8", errors="replace")
             assert "hold receive limit server reply=1048576" in server_text
             assert "hold receive limit server reply=1048577" in server_text
+            assert "hold receive limit configured receive=1048576 frame=1048568 load=0" in text, text
             assert re.search(r"hold receive limit exact=1048576 exact_code=0 over_code=-\d+ preserved=1 bad=0", text), text
+            budget_scaled = re.search(r"hold decode budget scaled words=(\d+) charged=(\d+) frame=(\d+) code=0 bad=0", text)
+            assert budget_scaled, "missing decode budget scaled marker"
+            charged, frame = int(budget_scaled.group(2)), int(budget_scaled.group(3))
+            assert 64 * 1024**2 < charged < 256 * 1024**2 and 40 * 1024**2 <= frame <= 48 * 1024**2, budget_scaled.group(0)
             assert "hold disconnect drain calls=4096 bad=0" in text
             assert re.search(r"hold batch bind failure caught=1 registered=1 submits=1 drops=1 elapsed=\d+ bad=0", text), text
             assert "hold batch failure slots bad=0" in text

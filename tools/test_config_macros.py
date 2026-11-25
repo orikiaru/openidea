@@ -40,9 +40,11 @@ def main():
             % (source, config_source, paths, source, paths), encoding="utf-8")
         (temp / "config.toml").write_text('value = 42\ntext = "wrong"\nbad_array = ["wrong", "type"]\ngood_array = [1, 2]\ntoo_large = 4294967297\nnegative = -1\nbad_int_array = [1, 4294967297]\n', encoding="utf-8")
         (temp / "invalid.toml").write_text("value = 99\nbroken = [\n", encoding="utf-8")
+        # Linux 与主构建一样固定 gcc-13，不跟随系统默认 g++。
+        compiler = [] if test_matrix.WINDOWS else ["-DCMAKE_CXX_COMPILER=g++-13"]
         for mode in ("Debug", "Release"):
             build = temp / ("build-" + mode.lower())
-            subprocess.run([cmake, "-S", str(temp), "-B", str(build), "-DCMAKE_BUILD_TYPE=" + mode], check=True)
+            subprocess.run([cmake, "-S", str(temp), "-B", str(build), "-DCMAKE_BUILD_TYPE=" + mode] + compiler, check=True)
             subprocess.run([cmake, "--build", str(build), "--target", "config_test", "--config", mode], check=True)
             executable = build / mode / "config_test.exe" if test_matrix.WINDOWS else build / "config_test"
             subprocess.run([str(executable), str(temp / "config.toml"), str(temp / "invalid.toml")], check=True)

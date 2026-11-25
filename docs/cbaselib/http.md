@@ -52,7 +52,7 @@ if (stResponse.iCode != OI_OK)
 
 请求和响应中的多个 `Connection` 字段及逗号分隔的 token 会一起判断：只要出现 `close`，就关闭连接，即使其他字段包含 `keep-alive`。chunked 正文的 chunk size 行最多 1024 字节，行尾的 CRLF 不计入上限。
 
-当前正文默认整体缓冲。HTTP 是普通 TCP/RPC 默认 1 MiB 收包限制的明确例外：客户端保留原有 `kMaxHeader + kMaxBody` 独立接收额度（64 KiB + 8 MiB），服务端也保留自己的头部/正文限制；普通缓冲正文上限仍为 8 MiB，不因通用收包默认值调整而缩小。此额度不是预分配大小或精确 RSS 上限；流式正文另见下节接口。
+当前正文默认整体缓冲。HTTP 使用独立接收额度，不跟随普通 TCP/RPC 的收包默认值（64 MiB + 8）或组件配置：客户端保留 `kMaxHeader + kMaxBody`（64 KiB + 8 MiB），服务端也保留自己的头部/正文限制；普通缓冲正文上限仍为 8 MiB。此额度不是预分配大小或精确 RSS 上限；流式正文另见下节接口。
 
 ## HTTPS
 

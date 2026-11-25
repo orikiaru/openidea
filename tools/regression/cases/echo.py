@@ -6,7 +6,7 @@ from regression_platform import SUFFIX, WINDOWS
 from .. import ports
 from ..config import replace, set_test_flags
 from ..probes import check_echo, echo_total, set_echo_total
-from ..rpc_faults import reset_connections, rpc_default_receive_boundary, rpc_ingress_faults
+from ..rpc_faults import reset_connections, rpc_ingress_faults, rpc_receive_boundary
 from . import Case
 
 
@@ -154,15 +154,24 @@ class EchoCase(Case):
             server_config = ctx.cfg / "ipcserver.toml"
             text = server_config.read_text(encoding="utf-8")
             text = re.sub(r"(?m)^\s*(?:max_frame_bytes|max_receive_buffer_bytes)\s*=.*\n", "", text)
-            server_config.write_text(text, encoding="utf-8")
-            ctx.server, ctx.serverpath = ctx.start("ipcserver-default-limit", [str(ctx.work / ("ipcserver" + SUFFIX))])
-            ctx.ready(ctx.server, ctx.serverpath, "ipc server listen")
-            rpc_default_receive_boundary()
-            ctx.stop(ctx.server)
-            ctx.server.wait(timeout=10)
-            assert ctx.server.returncode == 0, "default-limit probe server failed to stop"
-            ctx.procs.remove(ctx.server)
-            server_config.write_text(replace(server_config.read_text(encoding="utf-8"), "session_max_inflight_count", "4096"), encoding="utf-8")
+            # 默认额度：两行都不配，64 MiB + 8 的整帧要能回包。执行中额度放大，免得 64 MiB 请求被接纳上限挡成 BUSY；
+            # 残包时限放回 10 秒，大帧在本机传输期间不被 250ms 的入站故障时限截断。
+            default_text = replace(text, "max_inflight_bytes", "134217728")
+            default_text = replace(default_text, "session_max_inflight_bytes", "134217728")
+            default_text = replace(default_text, "incomplete_frame_timeout_ms", "10000")
+            # 对外入口式收紧：只配接收额度，帧上限自动取它减 8。
+            assert "[IpcServer]\n" in text
+            configured_text = text.replace("[IpcServer]\n", "[IpcServer]\nmax_receive_buffer_bytes = 1048576\n", 1)
+            for label, limit, probe_text in (("default", 64 * 1024 * 1024 + 8, default_text), ("configured", 1024 * 1024, configured_text)):
+                server_config.write_text(probe_text, encoding="utf-8")
+                ctx.server, ctx.serverpath = ctx.start("ipcserver-%s-limit" % label, [str(ctx.work / ("ipcserver" + SUFFIX))])
+                ctx.ready(ctx.server, ctx.serverpath, "ipc server listen")
+                rpc_receive_boundary(limit, label)
+                ctx.stop(ctx.server)
+                ctx.server.wait(timeout=10)
+                assert ctx.server.returncode == 0, "%s-limit probe server failed to stop" % label
+                ctx.procs.remove(ctx.server)
+            server_config.write_text(replace(text, "session_max_inflight_count", "4096"), encoding="utf-8")
             ctx.server, ctx.serverpath = ctx.start("ipcserver-echo", [str(ctx.work / ("ipcserver" + SUFFIX))])
             ctx.ready(ctx.server, ctx.serverpath, "ipc server listen")
 

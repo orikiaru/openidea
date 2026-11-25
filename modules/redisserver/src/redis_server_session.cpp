@@ -227,6 +227,8 @@ size_t RedisServerSession::ProcessInput(size_t iBudget)
 		size_t iNumber = ScanCommand(pPointer, pEnd, iArgumentCount, bBad, m_pOwner->MaxCommandBytes());
 		if (bBad)
 		{
+			// 格式错误或单条命令超过 max_pending_bytes；连接随即关闭，每会话只记一次。
+			LOG_ERROR("redisserver rejects malformed or oversized command sid=%d limit=%zu", GetSessionID(), m_pOwner->MaxCommandBytes());
 			PassiveClose(PARSER_ERR_PROTOCOL_SIZE);
 			break;
 		}

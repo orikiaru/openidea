@@ -210,6 +210,17 @@ class BytesStream : public Bytes
 		m_iDecodedBytes = 0;
 		StartTransaction();
 	}
+	// 换每帧解码预算。只在开始解码前调用，下一次 StartReadFrame 起按新值计数。
+	void SetDecodeBudget(size_t iBytes)
+	{
+		m_iDecodeBudgetBytes = iBytes;
+		m_iDecodedBytes = 0;
+		m_iSnapshotDecodedBytes = 0;
+	}
+	static constexpr size_t DefaultDecodeBudgetBytes()
+	{
+		return m_iDefaultDecodeBudgetBytes;
+	}
 	// 读游标退回最近一次 StartTransaction。
 	void RollBack()
 	{

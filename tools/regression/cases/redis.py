@@ -128,6 +128,19 @@ class RedisCase(Case):
         return False
 
     def diagnostics(self, ctx):
+        if ctx.name == "redis-backpressure-bytes":
+            # 普通接收额度默认 64 MiB，2 MiB 的 ECHO 必须由 max_pending_bytes 的解析拒绝断开。
+            # 先正常停 redisserver 刷新 stdout，再排空日志服核对落盘。
+            ctx.stop(ctx.rs)
+            ctx.rs.wait(timeout=10)
+            assert ctx.rs.returncode == 0, "redisserver stop exit=%s" % ctx.rs.returncode
+            ctx.procs.remove(ctx.rs)
+            rejected = r"redisserver rejects malformed or oversized command sid=\d+ limit=%d\b" % ctx.maximum_bytes
+            assert ctx.maximum_bytes == 1048576, ctx.maximum_bytes
+            assert re.search(rejected, ctx.rsp.read_text(encoding="utf-8", errors="replace")), "oversized command rejection missing from redisserver output"
+            assert re.search(rejected, ctx.stop_backends()), "oversized command rejection missing from logd disk"
+            print("redis oversized command rejected limit=%d PASS" % ctx.maximum_bytes, flush=True)
+            return
         if ctx.name != "redis":
             return
         diagnostics = ctx.stop_backends()

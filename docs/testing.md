@@ -47,11 +47,12 @@ Hold 的迟到回包检查先让标记 802 的调用超时，再保持标记 803
 
 正常 Hold 的二进制容器检查覆盖空和非空容器、嵌套容器与 rpcdata、连续流式对象、后续字段、固定黄金字节，以及畸形数量、截断、尾随字节和重复 key 拒绝并保持输出；同时检查数据库 blob 的格式和严格解码。脚本要求 `hold binary container bad=0`。
 
-本轮新增断言（已加入用例，四路结果待验收，不能当成已通过）：
+收包额度与解码预算相关断言（2026-11-25 四路复验：断言本身四路都成立；Windows 多线程整路因 registry 临时目录清理 WinError 5 未通过，见 [lasttesting.md](lasttesting.md)）：
 
-- 64 MiB 是每独立帧的逻辑解码预算：按元素对象及变长正文估算，嵌套与多字段累计，读取事务回滚恢复，下一独立帧重置，不是精确 RSS 硬上限。检查小预算边界及 100 万个 int32_t 合法数组。
+- `BytesStream` 默认每独立帧 64 MiB 逻辑解码预算，RPC 会话取 max(64 MiB, 4 × 帧上限)：按元素对象及变长正文估算，嵌套与多字段累计，读取事务回滚恢复，下一独立帧重置，不是精确 RSS 硬上限。检查小预算边界及 100 万个 int32_t 合法数组。
 - 使用 16 MiB 合法编码（count 加恰好 count 个长度为 0 的 rpcdata body）验证内存放大防护；必须读完 count 就因默认预算拒绝，游标仍在 count 之后且原输出完整保留，不能靠坏长度或截断触发失败。另检查小样本恰好预算可解、少 1 字节拒绝。
-- 真实 TCP 首读 4 KiB 后按需增长，不预分配 1 MiB；接收额度 6000 字节（非 2 的幂）时容量不越界。另检查缓冲在 6000 容量下删除前缀后压实并追加，内容正确；申请 6001 时拒绝且容量与内容不变。
+- 真实 TCP 首读 4 KiB 后按需增长，不预分配整个接收额度；接收额度 6000 字节（非 2 的幂）时容量不越界。另检查缓冲在 6000 容量下删除前缀后压实并追加，内容正确；申请 6001 时拒绝且容量与内容不变。
+- 解码预算随帧上限放大：正常 Hold 用 `AllEchoReq.stData.vWords` 发 140 万个 28 字节字符串，帧约 43 MiB（低于 64 MiB 帧上限），按 `sizeof(std::string)` 算出的逻辑计费落在 (64 MiB, 256 MiB)，经 ipcserver `AllEcho` 往返后数量和内容一致。固定 64 MiB 预算时服务端解请求即抛 ParserException，调用拿不到 0。脚本临时把 ipcserver 的 `[Rpc]` 两项字节额度放到 128 MiB，并要求 `hold decode budget scaled words=... charged=... frame=... code=0 bad=0` 且计费、帧大小在区间内。
 - 批量 RPC 第二次 Bind 注入失败后，回滚只等待非零 callid 的已登记项；要求原 bad_alloc 传回，首个已提交项正常清理，登记等待恢复基线（本场景归零），而不是只检查后续调用健康。要求 `hold batch bind failure caught=1 registered=1 submits=1 drops=1 elapsed=... bad=0`。
 
 路由与请求生命周期回归也集成在正常 Hold 中：容量策略隔离与真实大包收发、持有租约时不回收/释放后连接状态销毁及重新获取、暂停期间已缓存路由仍可用、未缓存名字超时或在恢复后得到空名单、短暂停后未缓存名字等后台拉取，以及保留已完成任务时请求资源仍被销毁。路由管理器固定为常驻单例，测试同时断言不同策略的连接共用管理器。脚本只在临时配置缩短池空闲时限，并把 `pull_ms` 拉长，避免周期拉取打断用例；通过暂停本次启动的 registry 进程覆盖上述缓存语义，finally 中恢复暂停状态再清理。应用请求仍从 ipcclient 发出，不新增测试客户端。
@@ -184,7 +185,7 @@ Windows 的日志故障测试要求该产物以 `-DOI_ENABLE_TEST_HOOKS=ON` 构�
 主要成功标记：
 
 - echo：按 `[TestEcho] total` 核对 `total` 和 `ok`（仓库配置为 1000000），`mismatch=0 rpc_fail=0`，连接只启动一次。registry、reset、rpc-ingress 在临时配置中将回声数设为 100，并按该数量核对端到端收发；registry 的直连后备端口故意设错，以验证通过注册发现连接。客户端同时在途的请求数由 `[TestEcho] inflight` 限定（默认 2048），必须低于服务端 `[Rpc] session_max_inflight_count`，否则多线程下会被回 `OI_ERR_BUSY`。
-- 收包限额：普通 TCP/RPC 默认 1 MiB，RPC 包含 8 字节帧头，请求和回包两端均检查；首读 4 KiB、按需增长不代表预分配整个限额。`rpc-ingress` 核对超大声明、残包、滴流及合法边界分片。HTTP 例外保留原有 `kMaxHeader + kMaxBody` 独立额度与普通正文 8 MiB 限制；不能把 HTTP 大包回归改小来适应通用默认值。
+- 收包限额：普通 TCP/RPC 默认 64 MiB + 8（帧正文 64 MiB），按内网可信放宽；对外入口在组件段只配 `max_receive_buffer_bytes` 收紧，帧上限自动减 8。RPC 包含 8 字节帧头，请求和回包两端均检查；首读 4 KiB、按需增长不代表预分配整个限额。`rpc-ingress` 核对超大声明、残包、滴流及合法边界分片，再分两次起 ipcserver：去掉两项限额走默认，恰好 67108872 字节的 Hold 帧必须回包、声明正文 67108865 的包头必须断开，输出 `rpc default receive exact=67108872 over=67108873 PASS`（这次临时放大 `[Rpc]` 字节额度和残包时限）；只配 `max_receive_buffer_bytes = 1048576`，恰好 1048576 字节成功、声明正文 1048569 断开，输出 `rpc configured receive exact=1048576 over=1048577 PASS`。正常 Hold 的 `HoldReceiveLimit` 探针只配 `max_receive_buffer_bytes = 1048576`，要求 `hold receive limit configured receive=1048576 frame=1048568 load=0`，ipcserver 按默认额度收下请求，回包恰好 1048576 字节成功、多 1 字节由客户端断开且输出保持原值（`preserved=1`）。`redis-backpressure-bytes` 的 2 MiB ECHO 不再被接收额度挡住，脚本正常停 redisserver 后要求其输出和日志服落盘都有 `redisserver rejects malformed or oversized command sid=... limit=1048576`。HTTP 使用独立的 `kMaxHeader + kMaxBody` 额度与普通正文 8 MiB 限制，不跟随通用默认值；不能把 HTTP 大包回归改小来适应通用默认值。
 - empty：显式 `--case empty` 才跑，不包含在 `all`。仓库配置 `[Test] empty = false`。请求和回复都没有字段。每条协议单独 `StartTask`，在途数由 `[TestEmpty] inflight`（默认 2048）限制。主协程每 1 毫秒 `yield` 一次看完成数，完成数用互斥锁保护。日志只留一行 `empty mode=... total=1000000 ms=... rate=.../s rpc_fail=0`。
 - 客户端时限：跑 hold 那套的用例（含 rpc-admission、clock）120 秒，Redis 压力类和 redis-shutdown 20 秒，coro、empty 各 180 秒，其余 60 秒。超时按失败处理并打印客户端输出。
 - log：逐条核对实际磁盘记录、字节数和内容；端到端速度以落盘字节除以客户端开始到文件最后增长的时间，不能拿 enqueue_rate 代替。
