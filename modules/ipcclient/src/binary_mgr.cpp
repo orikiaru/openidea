@@ -1,3 +1,7 @@
+#include "oi_tcp_channel.h"
+#include "oi_net_session.h"
+#include "oi_net_os.h"
+#include <uv.h>
 #include "binary_mgr.h"
 #include "hold_test.h"
 #include "oi_rpc_coro.h"
@@ -36,6 +40,7 @@
 #include <memory>
 #include <optional>
 #include <random>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -83,6 +88,31 @@ int BinaryMgr::CheckBinaryBool()
 	return iBad;
 }
 
+namespace
+{
+class ReceiveCapacityProbe : public OI::Net::NetSession
+{
+  public:
+	std::vector<size_t> vCapacities;
+	std::vector<size_t> vSizes;
+	std::vector<std::string> vReceived;
+	ReceiveCapacityProbe()
+	    : NetSession(nullptr)
+	{
+	}
+	void OnDataIn() override
+	{
+		vCapacities.push_back(stInputBuffer.Capacity());
+		vSizes.push_back(stInputBuffer.Size());
+		vReceived.emplace_back(stInputBuffer.Data(), stInputBuffer.Size());
+		stInputBuffer.Clear();
+	}
+	void OnDataOut() override
+	{
+	}
+};
+}
+
 // clang-format off
 int BinaryMgr::CheckBinaryContainers()
 {
@@ -97,6 +127,90 @@ int BinaryMgr::CheckBinaryContainers()
 	};
 	try
 	{
+		uv_os_sock_t vSockets[2];
+		const int iPairCode = uv_socketpair(SOCK_STREAM, 0, vSockets, 0, 0);
+		fnCheck(iPairCode == 0, "tcp capacity socket pair");
+		if (iPairCode == 0)
+		{
+			ReceiveCapacityProbe stProbe;
+			OI::Net::NetSocket stSocket;
+			stSocket.Attach(vSockets[0]);
+			{
+				OI::Net::TCP_Channel stChannel(stSocket, &stProbe);
+				const char iFirst = 'x';
+				const int iFirstSent = NetOs_Send(vSockets[1], &iFirst, 1);
+				stChannel.DataIn();
+				const std::string sLarger(8192, 'y');
+				const int iLargerSent = NetOs_Send(vSockets[1], sLarger.data(), sLarger.size());
+				stChannel.DataIn();
+				fnCheck(iFirstSent == 1 && iLargerSent == static_cast<int>(sLarger.size())
+					&& stProbe.vSizes.size() == 2 && stProbe.vSizes[0] == 1 && stProbe.vSizes[1] == sLarger.size()
+					&& stProbe.vReceived[0] == "x" && stProbe.vReceived[1] == sLarger
+					&& stProbe.vCapacities[0] == 4096 && stProbe.vCapacities[1] >= sLarger.size()
+					&& stProbe.vCapacities[1] <= 1024 * 1024, "tcp first read capacity and growth");
+			}
+			NetOs_Close(vSockets[1]);
+		}
+		uv_os_sock_t vLimitedSockets[2];
+		const int iLimitedPairCode = uv_socketpair(SOCK_STREAM, 0, vLimitedSockets, 0, 0);
+		fnCheck(iLimitedPairCode == 0, "tcp limited socket pair");
+		if (iLimitedPairCode == 0)
+		{
+			ReceiveCapacityProbe stLimitedProbe;
+			stLimitedProbe.SetReceiveQueueLimit(6000);
+			OI::Net::NetSocket stLimitedSocket;
+			stLimitedSocket.Attach(vLimitedSockets[0]);
+			{
+				OI::Net::TCP_Channel stLimitedChannel(stLimitedSocket, &stLimitedProbe);
+				const std::string sLimited(5000, 'z');
+				const int iSent = NetOs_Send(vLimitedSockets[1], sLimited.data(), sLimited.size());
+				stLimitedChannel.DataIn();
+				fnCheck(iSent == static_cast<int>(sLimited.size()) && stLimitedProbe.vReceived.size() == 1
+					&& stLimitedProbe.vReceived[0] == sLimited && stLimitedProbe.vCapacities[0] >= sLimited.size()
+					&& stLimitedProbe.vCapacities[0] <= 6000, "tcp non-power-of-two capacity limit");
+			}
+			NetOs_Close(vLimitedSockets[1]);
+		}
+		{
+			constexpr size_t iCapacityLimit = 6000;
+			constexpr size_t iErasedBytes = 1000;
+			std::string sOriginal(iCapacityLimit, '\0');
+			for (size_t iIndex = 0; iIndex < sOriginal.size(); ++iIndex)
+			{
+				sOriginal[iIndex] = static_cast<char>('a' + iIndex % 26);
+			}
+			const std::string sSuffix(iErasedBytes, '!');
+			const std::string sExpected = sOriginal.substr(iErasedBytes) + sSuffix;
+			OI::Base::Bytes stLimitedBytes;
+			stLimitedBytes.Reserve(iCapacityLimit, iCapacityLimit);
+			stLimitedBytes.Append(sOriginal.data(), sOriginal.size());
+			fnCheck(stLimitedBytes.Size() == iCapacityLimit && stLimitedBytes.Capacity() == iCapacityLimit,
+				"bytes limited reserve reaches non-power-of-two limit");
+			const size_t iErased = stLimitedBytes.Erase(size_t{0}, iErasedBytes);
+			fnCheck(iErased == iErasedBytes && stLimitedBytes.Size() == iCapacityLimit - iErasedBytes
+				&& stLimitedBytes.Capacity() == iCapacityLimit - iErasedBytes,
+				"bytes prefix erase leaves bounded tail capacity");
+			// The erased prefix is smaller than the live suffix: the limit must force compaction, not growth.
+			const size_t iReserved = stLimitedBytes.Reserve(iCapacityLimit, iCapacityLimit);
+			stLimitedBytes.Append(sSuffix.data(), sSuffix.size());
+			fnCheck(iReserved == iCapacityLimit && stLimitedBytes.Capacity() == iCapacityLimit
+				&& stLimitedBytes.Size() == sExpected.size()
+				&& std::memcmp(stLimitedBytes.Data(), sExpected.data(), sExpected.size()) == 0,
+				"bytes limited reserve compacts prefix and preserves appended content");
+			bool bCapacityRejected = false;
+			try
+			{
+				stLimitedBytes.Reserve(iCapacityLimit + 1, iCapacityLimit);
+			}
+			catch (const std::length_error&)
+			{
+				bCapacityRejected = true;
+			}
+			fnCheck(bCapacityRejected && stLimitedBytes.Capacity() == iCapacityLimit
+				&& stLimitedBytes.Size() == sExpected.size()
+				&& std::memcmp(stLimitedBytes.Data(), sExpected.data(), sExpected.size()) == 0,
+				"bytes reserve one byte over limit preserves capacity and content");
+		}
 		for (int iLegacy = 0; iLegacy < 3; ++iLegacy)
 		{
 			OI::Base::BytesStream stLegacy;
@@ -371,6 +485,193 @@ int BinaryMgr::CheckBinaryContainers()
 			bDuplicateRejected = true;
 		}
 		fnCheck(bDuplicateRejected && mDecoded == std::map<std::string, int32_t>{{"old", 7}}, "duplicate map key preserves output");
+
+		// Budget checks use valid, small payloads; only the explicit budget makes them fail.
+		OI::Base::BytesStream stBudgetWire;
+		stBudgetWire << std::vector<int32_t>{1, 2};
+		OI::Base::BytesStream stBudgetLow(stBudgetWire, sizeof(int32_t));
+		std::vector<int32_t> vBudgetOutput = {77};
+		bool bBudgetRejected = false;
+		try
+		{
+			stBudgetLow >> vBudgetOutput;
+		}
+		catch (const OI::Base::ParserException&)
+		{
+			bBudgetRejected = true;
+		}
+		fnCheck(bBudgetRejected && vBudgetOutput == std::vector<int32_t>{77}, "vector budget preserves output");
+
+		OI::Base::BytesStream stBudgetMapWire;
+		stBudgetMapWire << std::map<int32_t, int32_t>{{1, 2}};
+		OI::Base::BytesStream stBudgetMap(stBudgetMapWire, sizeof(std::map<int32_t, int32_t>::value_type));
+		std::map<int32_t, int32_t> mBudgetOutput = {{7, 8}};
+		bBudgetRejected = false;
+		try
+		{
+			stBudgetMap >> mBudgetOutput;
+		}
+		catch (const OI::Base::ParserException&)
+		{
+			bBudgetRejected = true;
+		}
+		fnCheck(bBudgetRejected && mBudgetOutput == std::map<int32_t, int32_t>{{7, 8}}, "map budget preserves output");
+
+		OI::Base::BytesStream stBudgetNestedWire;
+		stBudgetNestedWire << std::vector<std::vector<int32_t>>{{1, 2}};
+		OI::Base::BytesStream stBudgetNested(stBudgetNestedWire, sizeof(std::vector<int32_t>) + sizeof(int32_t));
+		std::vector<std::vector<int32_t>> vBudgetNested = {{77}};
+		bBudgetRejected = false;
+		try
+		{
+			stBudgetNested >> vBudgetNested;
+		}
+		catch (const OI::Base::ParserException&)
+		{
+			bBudgetRejected = true;
+		}
+		fnCheck(bBudgetRejected && vBudgetNested == std::vector<std::vector<int32_t>>{{77}}, "nested budget shared and output preserved");
+
+		OI::Base::BytesStream stBudgetStringsWire;
+		stBudgetStringsWire << std::vector<std::string>{"ab", "cd"};
+		OI::Base::BytesStream stBudgetStrings(stBudgetStringsWire, 2 * sizeof(std::string) + 3);
+		std::vector<std::string> vBudgetStrings = {"old"};
+		bBudgetRejected = false;
+		try
+		{
+			stBudgetStrings >> vBudgetStrings;
+		}
+		catch (const OI::Base::ParserException&)
+		{
+			bBudgetRejected = true;
+		}
+		fnCheck(bBudgetRejected && vBudgetStrings == std::vector<std::string>{"old"}, "string content shares budget");
+
+		OI::Base::BytesStream stBudgetFieldsWire;
+		stBudgetFieldsWire.WritePb(1, std::vector<int32_t>{1, 2});
+		stBudgetFieldsWire.WritePb(2, std::vector<int32_t>{3, 4});
+		OI::Base::BytesStream stBudgetFields(stBudgetFieldsWire, 3 * sizeof(int32_t));
+		std::vector<int32_t> vBudgetFirst;
+		std::vector<int32_t> vBudgetSecond = {77};
+		stBudgetFields.ReadPbHeader(iSequence, iSize);
+		stBudgetFields.ReadPb(iSize, vBudgetFirst);
+		stBudgetFields.ReadPbHeader(iSequence, iSize);
+		bBudgetRejected = false;
+		try
+		{
+			stBudgetFields.ReadPb(iSize, vBudgetSecond);
+		}
+		catch (const OI::Base::ParserException&)
+		{
+			bBudgetRejected = true;
+		}
+		fnCheck(vBudgetFirst == std::vector<int32_t>({1, 2}) && bBudgetRejected
+			&& vBudgetSecond == std::vector<int32_t>{77}, "sibling fields share budget");
+
+		OI::Base::BytesStream stBudgetRetry(stBudgetWire, 2 * sizeof(int32_t));
+		stBudgetRetry.StartTransaction();
+		stBudgetRetry >> vBudgetOutput;
+		stBudgetRetry.RollBack();
+		vBudgetOutput = {77};
+		stBudgetRetry >> vBudgetOutput;
+		fnCheck(vBudgetOutput == std::vector<int32_t>({1, 2}) && stBudgetRetry.RemainSize() == 0,
+			"rollback restores budget for retry");
+
+		OI::Base::BytesStream stBudgetFramesWire;
+		stBudgetFramesWire << std::vector<int32_t>{1, 2} << std::vector<int32_t>{3, 4};
+		OI::Base::BytesStream stBudgetFrames(stBudgetFramesWire, 2 * sizeof(int32_t));
+		stBudgetFrames.StartReadFrame();
+		stBudgetFrames >> vBudgetFirst;
+		stBudgetFrames.StartReadFrame();
+		stBudgetFrames >> vBudgetSecond;
+		fnCheck(vBudgetFirst == std::vector<int32_t>({1, 2}) && vBudgetSecond == std::vector<int32_t>({3, 4})
+			&& stBudgetFrames.RemainSize() == 0, "independent frames reset budget");
+		stBudgetFrames.Clear();
+		stBudgetFrames << std::vector<int32_t>{5, 6};
+		stBudgetFrames >> vBudgetOutput;
+		fnCheck(vBudgetOutput == std::vector<int32_t>({5, 6}), "clear resets budget");
+		stBudgetFrames.Clear();
+		stBudgetFrames << std::vector<int32_t>{5, 6, 7};
+		vBudgetOutput = {77};
+		bBudgetRejected = false;
+		try
+		{
+			stBudgetFrames >> vBudgetOutput;
+		}
+		catch (const OI::Base::ParserException&)
+		{
+			bBudgetRejected = true;
+		}
+		fnCheck(bBudgetRejected && vBudgetOutput == std::vector<int32_t>{77}, "clear retains configured budget");
+
+		const std::vector<int32_t> vMillion(1000000, 42);
+		OI::Base::BytesStream stMillionWire;
+		stMillionWire << vMillion;
+		OI::Base::BytesStream stMillionInput(stMillionWire);
+		std::vector<int32_t> vMillionOutput;
+		stMillionInput >> vMillionOutput;
+		fnCheck(vMillionOutput == vMillion && stMillionInput.RemainSize() == 0, "million int32 default budget");
+
+		{
+			constexpr size_t iDefaultBudgetBytes = 64 * 1024 * 1024;
+			constexpr uint32_t iBudgetObjectCount = static_cast<uint32_t>(iDefaultBudgetBytes / sizeof(OI::RpcData::AllTypesData));
+			constexpr size_t iAmplifiedWireBytes = 16 * 1024 * 1024;
+			constexpr uint32_t iAmplifiedObjectCount = static_cast<uint32_t>(iAmplifiedWireBytes / sizeof(uint32_t) - 1);
+			fnCheck(iBudgetObjectCount > 0 && iAmplifiedObjectCount > iBudgetObjectCount
+				&& static_cast<size_t>(iBudgetObjectCount) * sizeof(OI::RpcData::AllTypesData) <= iDefaultBudgetBytes
+				&& (static_cast<size_t>(iBudgetObjectCount) + 1) * sizeof(OI::RpcData::AllTypesData) > iDefaultBudgetBytes,
+				"rpcdata default budget boundary calculation");
+			auto fnEmptyObjectBudget = [fnCheck](OI::Base::BytesStream& stInput, uint32_t iCount, bool bExpectRejected, const char* pLabel)
+			{
+				std::vector<OI::RpcData::AllTypesData> vOutput(1);
+				vOutput[0].iGap = -77;
+				vOutput[0].sMessage = "old";
+				vOutput[0].vNumbers = {77};
+				bool bRejected = false;
+				try
+				{
+					stInput >> vOutput;
+				}
+				catch (const OI::Base::ParserException&)
+				{
+					bRejected = true;
+				}
+				if (bExpectRejected)
+				{
+					fnCheck(bRejected && stInput.GetCurPos() == sizeof(uint32_t)
+						&& stInput.RemainSize() == static_cast<size_t>(iCount) * sizeof(uint32_t)
+						&& vOutput.size() == 1 && vOutput[0].iGap == -77 && vOutput[0].sMessage == "old"
+						&& vOutput[0].vNumbers == std::vector<int32_t>{77}, pLabel);
+				}
+				else
+				{
+					bool bDefaultObjects = true;
+					for (const auto& stObject : vOutput)
+					{
+						bDefaultObjects = bDefaultObjects && stObject.iGap == 0 && stObject.sMessage.empty()
+							&& stObject.vNumbers.empty() && stObject.stRawData.Size() == 0;
+					}
+					fnCheck(!bRejected && vOutput.size() == iCount && bDefaultObjects && stInput.RemainSize() == 0, pLabel);
+				}
+			};
+			// The same generated type accepts empty bodies at its exact logical object cost, but not one byte less.
+			constexpr uint32_t iSmallObjectCount = 2;
+			char vSmallWire[(iSmallObjectCount + 1) * sizeof(uint32_t)]{};
+			OI::Base::StoreLittleEndian(vSmallWire, iSmallObjectCount);
+			constexpr size_t iSmallBudgetBytes = iSmallObjectCount * sizeof(OI::RpcData::AllTypesData);
+			OI::Base::BytesStream stExactBudget(vSmallWire, sizeof(vSmallWire), iSmallBudgetBytes);
+			fnEmptyObjectBudget(stExactBudget, iSmallObjectCount, false, "rpcdata empty bodies exact object budget decode");
+			OI::Base::BytesStream stShortBudget(vSmallWire, sizeof(vSmallWire), iSmallBudgetBytes - 1);
+			fnEmptyObjectBudget(stShortBudget, iSmallObjectCount, true, "rpcdata empty bodies one byte short preserves output");
+
+			// Count plus exactly count zero body lengths: no illegal length or truncated body can cause this rejection.
+			// Keep the default constructor budget; never enlarge it to create gigabytes of generated objects.
+			std::string sEmptyBodies(iAmplifiedWireBytes, '\0');
+			OI::Base::StoreLittleEndian(sEmptyBodies.data(), iAmplifiedObjectCount);
+			OI::Base::BytesStream stAmplifiedInput(sEmptyBodies.data(), sEmptyBodies.size());
+			fnEmptyObjectBudget(stAmplifiedInput, iAmplifiedObjectCount, true,
+				"rpcdata 16 MiB empty bodies reject default amplification and preserve output");
+		}
 
 		const auto stBlob = OI::Db::ToDbBlob(vNumbers);
 		const unsigned char vBlobExpected[] = {0, 0, 0, 0, 12, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 254, 255, 255, 255};

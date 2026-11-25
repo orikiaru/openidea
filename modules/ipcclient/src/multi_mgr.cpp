@@ -362,10 +362,10 @@ OI::Coro::TaskResult<int32_t> MultiMgr::CheckRouteLimits(bool bConfigured)
 			++iBad;
 		}
 		const auto stInfo = stManager.ConnectionInfo(*stRoute.vClients[0]);
-		const size_t iFrame = bConfigured ? 1048576 : 64 * 1024 * 1024;
+		const size_t iFrame = bConfigured ? 1048576 : OI::Net::kDefaultReceiveBufferBytes - OI::Net::kFrameHeaderBytes;
 		const uint64_t iIncomplete = bConfigured ? 1234 : 10000;
 		const uint64_t iIdle = bConfigured ? 5678 : 60000;
-		if (stInfo.iSendBytes != 64 * 1024 * 1024 || stInfo.iReceiveBytes != iFrame + 8 ||
+		if (stInfo.iSendBytes != 64 * 1024 * 1024 || stInfo.iReceiveBytes != iFrame + OI::Net::kFrameHeaderBytes ||
 		    stInfo.iFrameBytes != iFrame || stInfo.iIncompleteMilliseconds != iIncomplete ||
 		    stManager.IdleTimeoutMilliseconds() != iIdle)
 		{

@@ -138,7 +138,8 @@ struct RequestFrame
 		{
 			return 400;
 		}
-		bool bCloseToken = false, bKeepToken = false, bLength = false, bHost = false;
+		HeaderFields::ConnectionTokens stConnection;
+		bool bLength = false, bHost = false;
 		sText.remove_prefix(iLine + 2);
 		while (!sText.empty())
 		{
@@ -197,22 +198,11 @@ struct RequestFrame
 			}
 			else if (EqualName(sName, "connection"))
 			{
-				while (!sValue.empty())
-				{
-					const auto iEndToken = sValue.find(',');
-					const auto sToken = Trim(sValue.substr(0, iEndToken));
-					bCloseToken |= EqualName(sToken, "close");
-					bKeepToken |= EqualName(sToken, "keep-alive");
-					if (iEndToken == View::npos)
-					{
-						break;
-					}
-					sValue.remove_prefix(iEndToken + 1);
-				}
+				stConnection.Read(sValue);
 			}
 			sText.remove_prefix(iEnd + 2);
 		}
-		bClose = bCloseToken || (sVersion == "HTTP/1.0" && !bKeepToken);
+		bClose = stConnection.ShouldClose(bHttp10);
 		if ((bChunked && bLength) || (!bHost && sVersion == "HTTP/1.1"))
 		{
 			return 400;
@@ -299,10 +289,15 @@ struct RequestFrame
 			}
 			if (iRemaining == 0)
 			{
-				const auto iEnd = fnView().find("\r\n");
-				if (iEnd == View::npos || iEnd > 1024)
+				const auto sRest = fnView();
+				const auto iEnd = sRest.find("\r\n");
+				if (Detail::ChunkLineTooLong(sRest, iEnd))
 				{
-					return stBytes.Size() > 1024 ? 400 : 0;
+					return 400;
+				}
+				if (iEnd == View::npos)
+				{
+					return 0;
 				}
 				const auto sLine = fnView().substr(0, iEnd);
 				if (!Number(sLine.substr(0, sLine.find(';')), iRemaining, 16))

@@ -848,6 +848,21 @@ OI::Coro::Task WebClient::Run()
 					++iBadLocal;
 				}
 			}
+			for (int iSize : {1023, 1024, 1025})
+			{
+				OI::Http::Request stFixtureRequest;
+				stFixtureRequest.sPath = "/size-" + std::to_string(iSize);
+				auto pFixtureSink = std::make_shared<WebTestSink>();
+				stFixtureRequest.pBodySink = pFixtureSink;
+				OI::Http::Response stFixtureResponse = co_await stFixtureClient.Send(stFixtureRequest);
+				const int32_t iExpected = iSize <= 1024 ? OI_OK : OI_ERR_PROTOCOL;
+				if (stFixtureResponse.iCode != iExpected || (iExpected == OI_OK &&
+				                                                (stFixtureResponse.iStatus != 200 || !pFixtureSink->Valid() || pFixtureSink->Size() != 2)))
+				{
+					LOG_ERROR("web stream chunk size=%d code=%d status=%d bytes=%zu", iSize, stFixtureResponse.iCode, stFixtureResponse.iStatus, pFixtureSink->Size());
+					++iBadLocal;
+				}
+			}
 		}
 		OI::Http::Client stShortClient(sIpLocal, iPortLocal, 500, true);
 		OI::Http::Request stTimeoutRequest;

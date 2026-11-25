@@ -23,6 +23,7 @@ class RpcPendingMgr
 	int CheckRpcDisconnectDrain(PendingClient& stPending);
 	// 登记后序列化异常，以及发送异常与完成回调竞争。恢复后不能留下悬空等待项。
 	OI::Coro::TaskResult<int> CheckRpcExceptions(PendingClient& stPending);
+	OI::Coro::TaskResult<int> CheckBatchBindFailure(PendingClient& stPending);
 	// 队首留一条长超时，再拒绝十万条。索引数量保持不变。
 	int CheckRpcExpiry(PendingClient& stPending);
 	// 不同剩余时长落到同一小段绝对截止时间，而不是每条一个桶。

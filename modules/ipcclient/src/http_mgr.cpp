@@ -36,6 +36,14 @@
 #include <thread>
 #include <vector>
 
+#if defined(OI_HTTP_RELEASE_TEST_HOOK)
+namespace OI::Http
+{
+void ResetReleaseProbe();
+void ReadReleaseProbe(size_t& iCount, size_t& iRetained);
+}
+#endif
+
 OI::Coro::TaskResult<int> HttpMgr::CheckHttpFraming(int32_t iHttpPort)
 {
 	int iBadLocal = 0;
@@ -54,6 +62,9 @@ OI::Coro::TaskResult<int> HttpMgr::CheckHttpFraming(int32_t iHttpPort)
 	    {"204", 204, OI_OK, ""},
 	    {"304", 304, OI_OK, ""},
 	    {"chunk-good", 200, OI_OK, "ok"},
+	    {"size-1023", 200, OI_OK, "ok"},
+	    {"size-1024", 200, OI_OK, "ok"},
+	    {"size-1025", 200, OI_ERR_PROTOCOL, ""},
 	    {"length-junk", 200, OI_ERR_PROTOCOL, ""},
 	    {"length-overflow", 200, OI_ERR_PROTOCOL, ""},
 	    {"length-conflict", 200, OI_ERR_PROTOCOL, ""},
@@ -77,6 +88,18 @@ OI::Coro::TaskResult<int> HttpMgr::CheckHttpFraming(int32_t iHttpPort)
 		{
 			++iBadLocal;
 			LOG_TRACE("http regression path=%s status=%d code=%d error=%s", stCase.pPath, stResult.iStatus, stResult.iCode, stResult.sError.c_str());
+		}
+	}
+	for (const auto& sPath : std::vector<std::string>{"/connection-close-first", "/connection-close-last"})
+	{
+		auto stBefore = co_await stHttp.Get("/connection-id", {});
+		auto stClose = co_await stHttp.Get(sPath, {});
+		auto stAfter = co_await stHttp.Get("/connection-id", {});
+		if (stBefore.iCode != OI_OK || stClose.iCode != OI_OK || stAfter.iCode != OI_OK ||
+		    stBefore.sBody.empty() || stBefore.sBody != stClose.sBody || stClose.sBody == stAfter.sBody)
+		{
+			++iBadLocal;
+			LOG_TRACE("http connection close path=%s before=%s close=%s after=%s", sPath.c_str(), stBefore.sBody.c_str(), stClose.sBody.c_str(), stAfter.sBody.c_str());
 		}
 	}
 	LOG_TRACE("hold http framing bad=%d", iBadLocal);
@@ -120,6 +143,9 @@ OI::Coro::TaskResult<int> HttpMgr::CheckHttpRelease(int32_t iHttpPort)
 {
 	int iBadLocal = 0;
 	OI::Http::Client stLargeHttp("127.0.0.1", iHttpPort, 30000);
+#if defined(OI_HTTP_RELEASE_TEST_HOOK)
+	OI::Http::ResetReleaseProbe();
+#endif
 	const size_t iBefore = AllocatedBytes();
 	for (int iIndex = 0; iIndex < 32; ++iIndex)
 	{
@@ -130,10 +156,26 @@ OI::Coro::TaskResult<int> HttpMgr::CheckHttpRelease(int32_t iHttpPort)
 		}
 	}
 	const size_t iAfter = AllocatedBytes();
+#if defined(OI_HTTP_RELEASE_TEST_HOOK)
+	size_t iCount = 0;
+	size_t iRetained = 0;
+	OI::Http::ReadReleaseProbe(iCount, iRetained);
+	if (iCount != 32 || iRetained != 0)
+	{
+		++iBadLocal;
+	}
+	LOG_TRACE("hold http release probe count=%zu retained=%zu bad=%d", iCount, iRetained, iBadLocal);
+#elif !defined(__GLIBC__)
+	// 没有可用的探针时不能把这项当成已覆盖。
+	++iBadLocal;
+	LOG_TRACE("hold http release probe unavailable");
+#endif
+#if defined(__GLIBC__)
 	if (iAfter > iBefore + 8 * 1024 * 1024)
 	{
 		++iBadLocal;
 	}
+#endif
 	LOG_TRACE("hold http release before=%zu after=%zu bad=%d", iBefore, iAfter, iBadLocal);
 	co_return iBadLocal;
 }

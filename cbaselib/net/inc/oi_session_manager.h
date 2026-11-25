@@ -70,9 +70,9 @@ class SessionManager
 	// 新建会话的发送队列上限。
 	size_t iMaxSendQueueBytes = 64 * 1024 * 1024;
 	// 新建会话的接收缓冲上限。
-	size_t iMaxReceiveBufferBytes = 64 * 1024 * 1024 + 8;
+	size_t iMaxReceiveBufferBytes = kDefaultReceiveBufferBytes;
 	// 单帧上限。再大的帧直接关掉会话。
-	size_t iMaxFrameBytes = 64 * 1024 * 1024;
+	size_t iMaxFrameBytes = kDefaultReceiveBufferBytes - kFrameHeaderBytes;
 	// 半帧超过这么久就关掉会话。
 	uint64_t iIncompleteFrameTimeoutMilliseconds = 10000;
 	// UDP 会话这么久没收没发就关掉。

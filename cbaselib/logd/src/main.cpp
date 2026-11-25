@@ -1,5 +1,6 @@
-#include <stdio.h>
+#include <cstdio>
 #include <exception>
+#include <cstring>
 #include "oi_net.h"
 #include "oi_base.h"
 #include "log_server.h"
@@ -13,6 +14,16 @@ static int32_t WriteSelfLog(LOG_LEVEL iLevel, const char* pText, size_t iLength)
 
 int main(int iArgumentCount, char* vArguments[])
 {
+	if (iArgumentCount == 2 && std::strcmp(vArguments[1], "--test-hooks") == 0)
+	{
+#ifdef OI_ENABLE_TEST_HOOKS
+		std::printf("log_fault=1\n");
+		return 41;
+#else
+		std::printf("log_fault=0\n");
+		return 40;
+#endif
+	}
 	int32_t iCode = ::OI::Base::StartFramework("../config/logd.toml");
 	if (iCode != OI_OK)
 	{

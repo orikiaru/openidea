@@ -25,7 +25,7 @@ class Bytes
 	static char m_iEmptyCharacter;
 
 	// 容量不够时换一块更大的。
-	void Grow(size_t iNeed);
+	void Grow(size_t iNeed, size_t iCapacityLimit = SIZE_MAX);
 	// 可写起点。
 	char* Mutable()
 	{
@@ -98,6 +98,8 @@ class Bytes
 	// n 大于当前有效长度时只扩容，不改 Size()。
 	// n 更小时把 Size() 收到 n，容量保留，避免写缓冲反复缩容。
 	size_t Reserve(size_t iSize);
+	// 按需扩容，分配时连同增长余量一起限制。
+	size_t Reserve(size_t iSize, size_t iCapacityLimit);
 	// 直接往 End() 写了 n 字节后调用。n 超过 Capacity() - Size() 抛 std::out_of_range
 	void Commit(size_t iNumber);
 	// 交换两块缓冲的指针和长度。

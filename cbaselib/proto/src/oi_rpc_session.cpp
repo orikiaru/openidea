@@ -100,7 +100,7 @@ void ProtoSession::OnDataIn()
 				break;
 			}
 		}
-		stOutputStream.StartTransaction();
+		stOutputStream.StartReadFrame();
 		uint32_t iIdLocal = 0;
 		uint32_t iSize = 0;
 		::OI::Base::PbHeaderState iSt = stOutputStream.PreparePbHeader(iIdLocal, iSize);

@@ -11,6 +11,9 @@ namespace OI
 {
 namespace Net
 {
+inline constexpr size_t kDefaultReceiveBufferBytes = 1024 * 1024;
+inline constexpr size_t kFrameHeaderBytes = 2 * sizeof(uint32_t);
+
 enum
 {
 	// 可以收发。
@@ -45,7 +48,7 @@ class Session
 	// TCP 在交付最后一批字节前标记，只在 poll 线程读写。
 	bool bReadEnded = false;
 	// 接收缓冲上限。会话发布前设置，之后只由 poll 线程看。
-	size_t iMaxReceiveBufferBytes = 64 * 1024 * 1024 + 8;
+	size_t iMaxReceiveBufferBytes = kDefaultReceiveBufferBytes;
 	// 待写到套接字的字节。
 	::OI::Base::Bytes stOutputBuffer;
 	// 已读入、还没交给协议解析的字节。

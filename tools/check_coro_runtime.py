@@ -480,13 +480,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build-dir", type=Path, default=Path.home() / "openidea-build-gcc13")
     parser.add_argument("--asan", action="store_true")
+    parser.add_argument("--mode", choices=("all", "mt", "st"), default="all")
     args = parser.parse_args()
     build = args.build_dir.resolve()
     entry = next(row for row in json.loads((build / "compile_commands.json").read_text())
                  if row["file"].endswith("/ipcclient/src/main.cpp"))
     link_dir = build / "modules/ipcclient"
     link_base = shlex.split((link_dir / "CMakeFiles/ipcclient.dir/link.txt").read_text())
-    for mode in ("mt", "st"):
+    for mode in (("mt", "st") if args.mode == "all" else (args.mode,)):
         with tempfile.TemporaryDirectory(prefix="oi-coro-runtime-") as directory:
             root = Path(directory)
             source, obj, binary = root / "probe.cpp", root / "probe.o", root / "probe"

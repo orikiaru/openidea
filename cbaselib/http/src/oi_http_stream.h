@@ -7,6 +7,17 @@
 
 namespace OI::Http::Detail
 {
+// 上限只计算长度行正文。分片末尾的 CR 可能是尚未收全的 CRLF。
+inline bool ChunkLineTooLong(std::string_view sData, size_t iEnd)
+{
+	constexpr size_t iMaxChunkLineBytes = 1024;
+	if (iEnd != sData.npos)
+	{
+		return iEnd > iMaxChunkLineBytes;
+	}
+	return sData.size() - static_cast<size_t>(sData.ends_with('\r')) > iMaxChunkLineBytes;
+}
+
 inline bool ValidFieldLine(std::string_view sLine)
 {
 	const auto iColon = sLine.find(':');
@@ -136,12 +147,16 @@ class StreamBody
 			if (m_iPhase == Phase::Size || m_iPhase == Phase::Trailers)
 			{
 				auto iEnd = sRest.find("\r\n");
-				const size_t iLimit = m_iPhase == Phase::Size ? 1024 : Block - m_iTrailerBytes;
+				if (m_iPhase == Phase::Size && ChunkLineTooLong(sRest, iEnd))
+				{
+					return OI_ERR_PROTOCOL;
+				}
+				const size_t iTrailerLimit = Block - m_iTrailerBytes;
 				if (iEnd == sRest.npos)
 				{
-					return sRest.size() > iLimit ? OI_ERR_PROTOCOL : OI_OK;
+					return m_iPhase == Phase::Trailers && sRest.size() > iTrailerLimit ? OI_ERR_PROTOCOL : OI_OK;
 				}
-				if (iEnd + 2 > iLimit)
+				if (m_iPhase == Phase::Trailers && iEnd + 2 > iTrailerLimit)
 				{
 					return OI_ERR_PROTOCOL;
 				}

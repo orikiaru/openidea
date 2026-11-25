@@ -25,6 +25,23 @@ namespace OI
 namespace Http
 {
 
+#if defined(OI_HTTP_RELEASE_TEST_HOOK)
+static std::atomic<size_t> stLargeReleaseCount{0};
+static std::atomic<size_t> stLargeReleaseRetained{0};
+
+void ResetReleaseProbe()
+{
+	stLargeReleaseCount.store(0);
+	stLargeReleaseRetained.store(0);
+}
+
+void ReadReleaseProbe(size_t& iCount, size_t& iRetained)
+{
+	iCount = stLargeReleaseCount.load();
+	iRetained = stLargeReleaseRetained.load();
+}
+#endif
+
 QueryParams::QueryParams(std::initializer_list<Entry> vEntries)
     : m_vEntries(vEntries)
 {
@@ -392,7 +409,6 @@ class HttpSession : public ::OI::Net::TlsSession
 	bool m_bActive;
 
 	void ReleaseIncoming();
-	void NoteConnection(const std::string& sValue);
 	bool ParseHeaders(size_t iHeaderEnd);
 	bool ConsumeChunks();
 	bool Consume();
@@ -420,7 +436,20 @@ HttpSession::HttpSession(HttpSessionManager& stManager, const Origin& stOrigin, 
 
 void HttpSession::ReleaseIncoming()
 {
+#if defined(OI_HTTP_RELEASE_TEST_HOOK)
+	const size_t iBefore = m_sIncoming.capacity();
+#endif
 	std::string().swap(m_sIncoming);
+#if defined(OI_HTTP_RELEASE_TEST_HOOK)
+	if (iBefore >= 1024 * 1024)
+	{
+		++stLargeReleaseCount;
+		if (m_sIncoming.capacity() >= 1024 * 1024)
+		{
+			++stLargeReleaseRetained;
+		}
+	}
+#endif
 }
 
 bool HttpSession::BeginResponse(const Call::Request& stCall)
@@ -507,55 +536,6 @@ void HttpSession::Abandon()
 	ReleaseIncoming();
 }
 
-void HttpSession::NoteConnection(const std::string& sValue)
-{
-	bool bClose = false;
-	bool bKeep = false;
-	size_t iPosition = 0;
-	while (iPosition < sValue.size())
-	{
-		while (iPosition < sValue.size() && (sValue[iPosition] == ' ' || sValue[iPosition] == '\t' || sValue[iPosition] == ','))
-		{
-			iPosition += 1;
-		}
-		if (iPosition >= sValue.size())
-		{
-			break;
-		}
-		size_t iEnd = iPosition;
-		while (iEnd < sValue.size() && sValue[iEnd] != ',')
-		{
-			iEnd += 1;
-		}
-		size_t iTokenEnd = iEnd;
-		while (iTokenEnd > iPosition && (sValue[iTokenEnd - 1] == ' ' || sValue[iTokenEnd - 1] == '\t'))
-		{
-			iTokenEnd -= 1;
-		}
-		if (EqName(sValue, iPosition, iTokenEnd, "close") && iPosition + std::strlen("close") == iTokenEnd)
-		{
-			bClose = true;
-		}
-		else if (EqName(sValue, iPosition, iTokenEnd, "keep-alive") && iPosition + std::strlen("keep-alive") == iTokenEnd)
-		{
-			bKeep = true;
-		}
-		if (iEnd >= sValue.size())
-		{
-			break;
-		}
-		iPosition = iEnd + 1;
-	}
-	if (bClose)
-	{
-		m_bCloseAfter = true;
-	}
-	else if (bKeep)
-	{
-		m_bCloseAfter = false;
-	}
-}
-
 bool HttpSession::ParseHeaders(size_t iHeaderEnd)
 {
 	m_vHeaders.clear();
@@ -581,7 +561,7 @@ bool HttpSession::ParseHeaders(size_t iHeaderEnd)
 	m_bHasLength = false;
 	m_bChunked = false;
 	m_iContentLength = 0;
-	m_bCloseAfter = m_sIncoming.compare(0, 9, "HTTP/1.0 ") == 0;
+	HeaderFields::ConnectionTokens stConnection;
 	size_t iPosition = iLineEnd + 2;
 	while (iPosition < iHeaderEnd)
 	{
@@ -642,11 +622,12 @@ bool HttpSession::ParseHeaders(size_t iHeaderEnd)
 			}
 			else if (EqName(m_sIncoming, iPosition, iNameEnd, "connection") && iPosition + std::strlen("connection") == iNameEnd)
 			{
-				NoteConnection(m_sIncoming.substr(iValue, iValueEnd - iValue));
+				stConnection.Read(std::string_view(m_sIncoming).substr(iValue, iValueEnd - iValue));
 			}
 		}
 		iPosition = iEnd + 2;
 	}
+	m_bCloseAfter = stConnection.ShouldClose(m_sIncoming.starts_with("HTTP/1.0 "));
 	return !(m_bHasLength && m_bChunked);
 }
 
@@ -654,16 +635,18 @@ bool HttpSession::ConsumeChunks()
 {
 	for (;;)
 	{
-		size_t iLineEnd = m_sIncoming.find("\r\n", m_iChunkPosition);
-		if (iLineEnd == std::string::npos)
+		const auto sRest = std::string_view(m_sIncoming).substr(m_iChunkPosition);
+		const auto iEnd = sRest.find("\r\n");
+		if (Detail::ChunkLineTooLong(sRest, iEnd))
 		{
-			if (m_sIncoming.size() - m_iChunkPosition > 1024)
-			{
-				Fail("chunk");
-				return true;
-			}
+			Fail("chunk");
+			return true;
+		}
+		if (iEnd == sRest.npos)
+		{
 			return false;
 		}
+		const size_t iLineEnd = m_iChunkPosition + iEnd;
 		uint64_t iSize = 0;
 		if (!ParseHex(m_sIncoming, m_iChunkPosition, iLineEnd, iSize))
 		{
@@ -1014,6 +997,7 @@ HttpSessionManager::HttpSessionManager()
 	}
 	m_iIdleMilliseconds = iIdle > 0 ? static_cast<uint64_t>(iIdle) : 60000;
 	iMaxSendQueueBytes = iSendLimit > 0 && static_cast<uint64_t>(iSendLimit) <= SIZE_MAX ? static_cast<size_t>(iSendLimit) : 64 * 1024 * 1024;
+	// HTTP 保留独立正文额度；TLS 跨轮缓存的记录可能在本轮一起解密，不能套用 RPC 默认帧限额。
 	iMaxReceiveBufferBytes = kMaxHeader + kMaxBody;
 }
 

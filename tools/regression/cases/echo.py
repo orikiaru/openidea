@@ -6,7 +6,7 @@ from regression_platform import SUFFIX, WINDOWS
 from .. import ports
 from ..config import replace, set_test_flags
 from ..probes import check_echo, echo_total, set_echo_total
-from ..rpc_faults import reset_connections, rpc_ingress_faults
+from ..rpc_faults import reset_connections, rpc_default_receive_boundary, rpc_ingress_faults
 from . import Case
 
 
@@ -152,6 +152,16 @@ class EchoCase(Case):
             assert ctx.server.returncode == 0, "ingress probe server failed to stop"
             ctx.procs.remove(ctx.server)
             server_config = ctx.cfg / "ipcserver.toml"
+            text = server_config.read_text(encoding="utf-8")
+            text = re.sub(r"(?m)^\s*(?:max_frame_bytes|max_receive_buffer_bytes)\s*=.*\n", "", text)
+            server_config.write_text(text, encoding="utf-8")
+            ctx.server, ctx.serverpath = ctx.start("ipcserver-default-limit", [str(ctx.work / ("ipcserver" + SUFFIX))])
+            ctx.ready(ctx.server, ctx.serverpath, "ipc server listen")
+            rpc_default_receive_boundary()
+            ctx.stop(ctx.server)
+            ctx.server.wait(timeout=10)
+            assert ctx.server.returncode == 0, "default-limit probe server failed to stop"
+            ctx.procs.remove(ctx.server)
             server_config.write_text(replace(server_config.read_text(encoding="utf-8"), "session_max_inflight_count", "4096"), encoding="utf-8")
             ctx.server, ctx.serverpath = ctx.start("ipcserver-echo", [str(ctx.work / ("ipcserver" + SUFFIX))])
             ctx.ready(ctx.server, ctx.serverpath, "ipc server listen")

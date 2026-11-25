@@ -1,8 +1,10 @@
 import io
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import run_regressions as regression
@@ -16,6 +18,55 @@ MULTIPART_BODY = (b"--fixture\r\nContent-Disposition: form-data; name=\"field\"\
 
 
 class RegressionChecksTest(unittest.TestCase):
+    def test_blocking_wake_checks_actual_trace_capability(self):
+        text = "\n".join("wake benchmark " + name + " n=100000" for name in
+                         ("default_empty_serial", "native_coordinator_to_worker",
+                          "native_worker_to_coordinator", "native_roundtrip"))
+        ctx = SimpleNamespace(name="blocking-wake", text=text, work=Path("fixture"))
+        case = cases.get_case("blocking-wake")
+        with patch("regression.cases.db.test_hook_enabled", return_value=True) as query:
+            with self.assertRaises(AssertionError):
+                case.check(ctx)
+            query.assert_called_once_with(ctx.work, "ipcclient", "blocking_wake_trace")
+            ctx.text += "\n" + "\n".join("wake benchmark " + name + " n=100000" for name in
+                ("trace_submit_to_worker", "trace_worker", "trace_done_to_post", "trace_post_to_poll",
+                 "trace_poll_to_resume", "trace_finish_to_resume", "trace_total"))
+            self.assertFalse(case.check(ctx))
+        ctx.text = text
+        with patch("regression.cases.db.test_hook_enabled", return_value=False):
+            self.assertFalse(case.check(ctx))
+        with patch("regression.cases.db.test_hook_enabled", side_effect=RuntimeError("unknown binary")):
+            with self.assertRaisesRegex(RuntimeError, "unknown binary"):
+                case.check(ctx)
+
+    def test_hook_query_rejects_unknown_and_failed_programs(self):
+        from regression.procs import test_hook_enabled
+        from regression_platform import SUFFIX
+        work = Path("fixture")
+        for code, expected in ((41, True), (40, False)):
+            with patch("regression.procs.subprocess.run", return_value=SimpleNamespace(returncode=code, stdout="", stderr="")) as run:
+                self.assertEqual(test_hook_enabled(work, "ipcclient", "blocking_wake_trace"), expected)
+                self.assertEqual(run.call_args.args[0], [str(work / ("ipcclient" + SUFFIX)), "--test-hooks"])
+        for code in (0, 1, 42, -1):
+            with patch("regression.procs.subprocess.run", return_value=SimpleNamespace(returncode=code, stdout="", stderr="")):
+                with self.assertRaises(RuntimeError):
+                    test_hook_enabled(work, "ipcclient", "blocking_wake_trace")
+        with patch("regression.procs.subprocess.run", side_effect=subprocess.TimeoutExpired("binary", 10)):
+            with self.assertRaises(RuntimeError):
+                test_hook_enabled(work, "ipcclient", "blocking_wake_trace")
+
+    def test_windows_log_fault_checks_logd_capability(self):
+        from regression.cases import log
+        ctx = SimpleNamespace(name="disk-full", work=Path("fixture"))
+        case = cases.get_case("disk-full")
+        with patch.object(log, "WINDOWS", True), patch.object(log, "test_hook_enabled", return_value=False) as query:
+            with self.assertRaises(RuntimeError):
+                case.prepare(ctx)
+            query.assert_called_once_with(ctx.work, "logd", "log_fault")
+        with patch.object(log, "WINDOWS", True), patch.object(log, "test_hook_enabled", return_value=True):
+            case.prepare(ctx)
+            self.assertEqual(ctx.log_env["OI_TEST_LOG_FAULT"], "full")
+
     def test_disk_failure_requires_exit_and_write_error(self):
         for operation in ("fwrite", "fflush", "injected fwrite ENOSPC"):
             message = "logd %s failed: disk full\n" % operation
@@ -120,13 +171,25 @@ class RegressionChecksTest(unittest.TestCase):
         multipart.makefile.return_value = io.BytesIO(
             b"HTTP/1.1 200 OK\r\nContent-Type: multipart/form-data; boundary=fixture\r\n" +
             ("Content-Length: %d\r\n\r\n" % len(MULTIPART_BODY)).encode() + MULTIPART_BODY)
+        boundary = [MagicMock() for _ in range(6)]
+        closing = [MagicMock() for _ in range(2)]
+        for index, conn in enumerate(boundary):
+            conn.__enter__.return_value = conn
+            stream_size = 9 * 1024 * 1024
+            pattern = bytes(range(251))
+            stream_body = (pattern * (stream_size // len(pattern) + 1))[:stream_size]
+            response = ok if index < 3 else (b"HTTP/1.1 200 OK\r\nContent-Length: 9437184\r\n\r\n" + stream_body)
+            conn.makefile.return_value = io.BytesIO(response if index % 3 != 2 else b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
+        for conn in closing:
+            conn.__enter__.return_value = conn
+            conn.makefile.return_value = io.BytesIO(ok)
         bad, healthy = MagicMock(), MagicMock()
         bad.getresponse.return_value.status = 400
         healthy.getresponse.return_value.status = 200
         healthy.getresponse.return_value.read.return_value = b"ok"
         with patch.object(web.socket, "create_connection", side_effect=[idle_first, idle_keep, expect_continue, expect_unknown, keep, half,
                                                                           fixed_large, chunk_large, fixed_over,
-                                                                          chunk_over, chunk, multipart, abandoned]), \
+                                                                          chunk_over, chunk] + boundary + closing + [multipart, abandoned]), \
              patch.object(web.http.client, "HTTPConnection", side_effect=[bad, healthy]), \
              patch.object(web.time, "sleep"), \
              patch.object(web.time, "monotonic", side_effect=[0, 3, 0, 3]), \
@@ -178,6 +241,20 @@ class RegressionChecksTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("requires assertions", result.stderr)
 
+
+
+class CoroResultChecks(unittest.TestCase):
+    def test_coro_result_counts_and_timing(self):
+        from types import SimpleNamespace
+        case = cases.get_case("coro")
+        valid = ("coro live=10 churn=20 held=10 wake=10 done=20 workers=1 "
+                 "live_ns=5 live_rate=1 wake_ns=6 wake_rate=1 churn_ns=7 churn_rate=1 bad=0")
+        case.check(SimpleNamespace(mode="coro", text=valid))
+        for invalid in (valid.replace("wake=10", "wake=9"),
+                        valid.replace("live_ns=5", "live_ns=0"),
+                        valid.replace("bad=0", "bad=1") + "\nother bad=0"):
+            with self.subTest(invalid=invalid), self.assertRaises(AssertionError):
+                case.check(SimpleNamespace(mode="coro", text=invalid))
 
 if __name__ == "__main__":
     unittest.main()

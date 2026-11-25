@@ -6,7 +6,7 @@ import subprocess
 import threading
 import time
 
-from regression_platform import SUFFIX, launch, pause
+from regression_platform import SUFFIX, WINDOWS, launch, pause
 from test_process_owner import record_process
 
 from .. import ports
@@ -19,8 +19,11 @@ class RawHttpRegression(socketserver.BaseRequestHandler):
     # 原始 TCP 回包夹具：库级 HTTP 服务通常不会生成这些畸形报文。
     def handle(self):
         self.request.settimeout(3)
+        with self.server.connection_lock:
+            self.server.connection_id += 1
+            connection_id = str(self.server.connection_id).encode()
         # 正常响应留着这条连接，让客户端按 keep-alive 接着发。畸形包和必须靠 EOF 结束的包写完就关。
-        reuse = {b"good", b"large", b"interim", b"204", b"304", b"chunk-good", b"fragmented"}
+        reuse = {b"good", b"large", b"interim", b"204", b"304", b"chunk-good", b"fragmented", b"size-1023", b"size-1024"}
         # 响应后面粘了下一条报文。客户端若丢掉尾部再复用，后续请求不再回包，用来抓住错位。
         glued = {b"tail", b"chunk-tail", b"empty-tail"}
         refused_reuse = False
@@ -60,7 +63,23 @@ class RawHttpRegression(socketserver.BaseRequestHandler):
                     b"truncated": b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\na",
                     b"only-interim": b"HTTP/1.1 100 Continue\r\n\r\n",
                 }
-                if path == b"fragmented":
+                if path in (b"connection-close-first", b"connection-close-last", b"connection-id"):
+                    headers = {b"connection-close-first": b"Connection: close\r\nConnection: keep-alive\r\n",
+                               b"connection-close-last": b"Connection: keep-alive\r\nConnection: close\r\n",
+                               b"connection-id": b""}[path]
+                    self.request.sendall(b"HTTP/1.1 200 OK\r\n" + headers + b"Content-Length: " + str(len(connection_id)).encode() + b"\r\n\r\n" + connection_id)
+                    continue
+                if path.startswith(b"size-"):
+                    size = int(path[5:])
+                    # Size line includes an extension and excludes the terminating CRLF.
+                    line = b"2;" + b"x" * (size - 2)
+                    if size == 1025:
+                        self.request.sendall(chunk + line + b"\r\nok\r\n0\r\n\r\n")
+                    else:
+                        self.request.sendall(chunk + line + b"\r")
+                        time.sleep(0.05)
+                        self.request.sendall(b"\nok\r\n0\r\n\r\n")
+                elif path == b"fragmented":
                     self.request.sendall(b"HTTP/1.1 103 Early Hints\r\nLink: </test>\r\n\r\nHTTP/1.1 200")
                     self.request.settimeout(0.02)
                     try:
@@ -101,6 +120,8 @@ def configure_hold_client(text):
 
 def prepare_hold_environment(ctx):
     http_fixture = socketserver.ThreadingTCPServer(("127.0.0.1", 0), RawHttpRegression)
+    http_fixture.connection_lock = threading.Lock()
+    http_fixture.connection_id = 0
     http_fixture.daemon_threads = True
     http_thread = threading.Thread(target=http_fixture.serve_forever, kwargs={"poll_interval": 0.05})
     http_thread.start()
@@ -234,7 +255,12 @@ class HoldCase(Case):
             assert "hold completed rpc requests retained=20 destroyed=20 bad=0" in text
             assert "hold pooled reconnect bad=0" in text
             assert "hold route backpressure status bad=0" in text
+            server_text = serverpath.read_text(encoding="utf-8", errors="replace")
+            assert "hold receive limit server reply=1048576" in server_text
+            assert "hold receive limit server reply=1048577" in server_text
+            assert re.search(r"hold receive limit exact=1048576 exact_code=0 over_code=-\d+ preserved=1 bad=0", text), text
             assert "hold disconnect drain calls=4096 bad=0" in text
+            assert re.search(r"hold batch bind failure caught=1 registered=1 submits=1 drops=1 elapsed=\d+ bad=0", text), text
             assert "hold batch failure slots bad=0" in text
             assert re.search(r"hold absolute deadline buckets calls=4096 buckets=\d+ fired=32 bad=0", text)
             assert "hold sweep exception callbacks=128 same_batch=1 guard=0 bad=0" in text
@@ -267,6 +293,8 @@ class HoldCase(Case):
             assert "hold client notify early=1 connected=1 dropped=1 reconnect=1 bad=0" in text
             assert "task failed: RPC notification failed protocol=3006 code=-3" in text
             assert re.search(r"hold http release before=\d+ after=\d+ bad=0", text)
+            if WINDOWS:
+                assert "hold http release probe count=32 retained=0 bad=0" in text
             assert "hold json validation bad=0" in text
             assert "hold server encoding bad=0" in text
             assert re.search(r"hold direct backpressure queued=-?\d+ direct=-?\d+ pinned=-?\d+ closed=-?\d+ bad=0", text)

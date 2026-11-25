@@ -95,18 +95,32 @@ class BytesStream : public Bytes
 	// StartTransaction 记下的游标。RollBack 回到这里。
 	size_t m_iSnapshotPosition;
 	size_t m_iLimit = SIZE_MAX;
+	static constexpr size_t m_iDefaultDecodeBudgetBytes = 64 * 1024 * 1024;
+	size_t m_iDecodeBudgetBytes = m_iDefaultDecodeBudgetBytes;
+	size_t m_iDecodedBytes = 0;
+	size_t m_iSnapshotDecodedBytes = 0;
+
+	// 同一帧内按容器元素存储和变长正文累计，先除后乘避免长度溢出。
+	void ChargeDecode(size_t iCount, size_t iElementBytes)
+	{
+		if (iCount > (m_iDecodeBudgetBytes - m_iDecodedBytes) / iElementBytes)
+		{
+			throw ParserException();
+		}
+		m_iDecodedBytes += iCount * iElementBytes;
+	}
 
   public:
 	BytesStream()
 	    : m_iCurrentPosition(0), m_iSnapshotPosition(0)
 	{
 	}
-	BytesStream(const Bytes& stBytes)
-	    : Bytes(stBytes), m_iCurrentPosition(0), m_iSnapshotPosition(0)
+	BytesStream(const Bytes& stBytes, size_t iDecodeBudgetBytes = m_iDefaultDecodeBudgetBytes)
+	    : Bytes(stBytes), m_iCurrentPosition(0), m_iSnapshotPosition(0), m_iDecodeBudgetBytes(iDecodeBudgetBytes)
 	{
 	}
-	BytesStream(const char* pData, size_t iDataLength)
-	    : Bytes(pData, iDataLength), m_iCurrentPosition(0), m_iSnapshotPosition(0)
+	BytesStream(const char* pData, size_t iDataLength, size_t iDecodeBudgetBytes = m_iDefaultDecodeBudgetBytes)
+	    : Bytes(pData, iDataLength), m_iCurrentPosition(0), m_iSnapshotPosition(0), m_iDecodeBudgetBytes(iDecodeBudgetBytes)
 	{
 	}
 	void Clear()
@@ -115,6 +129,8 @@ class BytesStream : public Bytes
 		m_iCurrentPosition = 0;
 		m_iSnapshotPosition = 0;
 		m_iLimit = SIZE_MAX;
+		m_iDecodedBytes = 0;
+		m_iSnapshotDecodedBytes = 0;
 	}
 	Bytes& GetMutableBuff()
 	{
@@ -186,6 +202,13 @@ class BytesStream : public Bytes
 	void StartTransaction()
 	{
 		m_iSnapshotPosition = m_iCurrentPosition;
+		m_iSnapshotDecodedBytes = m_iDecodedBytes;
+	}
+	// 同一收包缓冲可含多帧，每个独立帧有自己的预算。
+	void StartReadFrame()
+	{
+		m_iDecodedBytes = 0;
+		StartTransaction();
 	}
 	// 读游标退回最近一次 StartTransaction。
 	void RollBack()
@@ -195,6 +218,7 @@ class BytesStream : public Bytes
 			throw ParserException();
 		}
 		m_iCurrentPosition = m_iSnapshotPosition;
+		m_iDecodedBytes = m_iSnapshotDecodedBytes;
 	}
 
 	template <typename T>
@@ -246,13 +270,18 @@ class BytesStream : public Bytes
 		static_assert(!std::is_same_v<T, bool>, "vector<bool> is not a protocol container");
 		uint32_t iCount = 0;
 		(*this) >> iCount;
-		// 变长值至少有四字节长度/数量头，不能按不可信数量先分配。
+		// 先验证线上最小长度及本地预算。变长元素逐个解码成功后才扩容。
 		constexpr size_t iMinElementSize = PbFixedTrait<T>::bValue ? sizeof(T) : sizeof(uint32_t);
 		if (iCount > 0x7FFFFFFF || iCount > RemainSize() / iMinElementSize)
 		{
 			throw ParserException();
 		}
+		ChargeDecode(iCount, sizeof(T));
 		std::vector<T> vDecoded;
+		if constexpr (PbFixedTrait<T>::bValue)
+		{
+			vDecoded.reserve(iCount);
+		}
 		for (uint32_t iIndex = 0; iIndex < iCount; ++iIndex)
 		{
 			T stElement{};
@@ -288,6 +317,8 @@ class BytesStream : public Bytes
 		{
 			throw ParserException();
 		}
+		// 按键值对象加四个指针大小估计树节点，变长内容在读取时另计。
+		ChargeDecode(iCount, sizeof(typename std::map<K, V>::value_type) + 4 * sizeof(void*));
 		std::map<K, V> mDecoded;
 		for (uint32_t iIndex = 0; iIndex < iCount; ++iIndex)
 		{

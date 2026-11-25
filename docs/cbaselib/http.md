@@ -50,7 +50,9 @@ if (stResponse.iCode != OI_OK)
 
 请求和响应共享有序 `vHeaders`，保留重复字段；`GetHeader` 大小写不敏感，返回首个匹配项的指针，缺失时返回空指针；需要全部值时遍历 `vHeaders`。指针随对应消息对象及其 header 容器的修改或销毁失效。`Send` 目前支持 GET 和 POST；`Get`、`Post` 保留。请求自定义头不允许覆盖 `Host`、`Connection`、`Content-Length`、`Transfer-Encoding`、`Content-Type`、`Trailer`、`Upgrade` 或 `Expect`，正文类型由 `sContentType` 指定。非法方法、请求目标或自定义头等输入错误在 `co_await` 返回 `OI_ERR_INVALID_ARGUMENT`，状态码为 0，请求不会发送。服务端 handler 也使用同一消息类型。
 
-当前正文默认整体缓冲。
+请求和响应中的多个 `Connection` 字段及逗号分隔的 token 会一起判断：只要出现 `close`，就关闭连接，即使其他字段包含 `keep-alive`。chunked 正文的 chunk size 行最多 1024 字节，行尾的 CRLF 不计入上限。
+
+当前正文默认整体缓冲。HTTP 是普通 TCP/RPC 默认 1 MiB 收包限制的明确例外：客户端保留原有 `kMaxHeader + kMaxBody` 独立接收额度（64 KiB + 8 MiB），服务端也保留自己的头部/正文限制；普通缓冲正文上限仍为 8 MiB，不因通用收包默认值调整而缩小。此额度不是预分配大小或精确 RSS 上限；流式正文另见下节接口。
 
 ## HTTPS
 

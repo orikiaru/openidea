@@ -30,6 +30,14 @@ static int32_t HandleAllEcho(const OI::RpcData::AllEchoReq& stRequest, OI::RpcDa
 {
 	stResponse.stData = stRequest.stData;
 	stResponse.iCode = 1;
+	if (stRequest.stData.sMessage.size() > 1024 * 1024 - 2048)
+	{
+		OI::Base::BytesStream stBody;
+		stBody << uint64_t(1) << int32_t(0);
+		stResponse.serialize(stBody);
+		const auto stFrame = OI::Rpc::EncodePbFrame(OI::Rpc::RpcProtoId<OI::RpcData::AllEchoRes>::iValue, stBody);
+		LOG_TRACE("hold receive limit server reply=%zu", stFrame.Size());
+	}
 	return 0;
 }
 

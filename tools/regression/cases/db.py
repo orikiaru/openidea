@@ -1,6 +1,7 @@
 """db 组：MySQL 集成和阻塞唤醒基准。"""
 from ..config import set_test_flags
 from ..probes import EnvironmentBlocked
+from ..procs import test_hook_enabled
 from . import Case
 
 
@@ -24,9 +25,7 @@ class DbCase(Case):
                 assert "wake benchmark default_empty_serial n=100000" in text
                 for name in ("native_coordinator_to_worker", "native_worker_to_coordinator", "native_roundtrip"):
                     assert f"wake benchmark {name} n=100000" in text
-                stamp = ctx.args.bin_dir / "oi_test_hooks.txt"
-                if stamp.exists() and stamp.read_text().strip().upper() in ("ON", "1", "TRUE") and \
-                        "wake benchmark trace skipped multi-thread" not in text:
+                if test_hook_enabled(ctx.work, "ipcclient", "blocking_wake_trace"):
                     for name in ("trace_submit_to_worker", "trace_worker", "trace_done_to_post",
                                  "trace_post_to_poll", "trace_poll_to_resume", "trace_finish_to_resume", "trace_total"):
                         assert f"wake benchmark {name} n=100000" in text

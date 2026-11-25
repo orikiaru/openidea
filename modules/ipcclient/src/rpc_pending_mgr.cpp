@@ -37,6 +37,42 @@
 #include <thread>
 #include <vector>
 
+namespace
+{
+std::atomic<bool> bBatchBindFailure{false};
+struct BatchRequest : OI::RpcData::HoldReq
+{
+};
+struct BatchResponse : OI::RpcData::HoldRes
+{
+};
+struct BatchResponseId
+{
+	constexpr operator proto_type_t() const
+	{
+		if (!std::is_constant_evaluated() && bBatchBindFailure.exchange(false))
+		{
+			throw std::bad_alloc();
+		}
+		return OI::Rpc::RpcProtoId<OI::RpcData::HoldRes>::iValue;
+	}
+};
+}
+namespace OI::Rpc
+{
+template <>
+struct RpcProtoId<BatchRequest>
+{
+	using Response = BatchResponse;
+	static constexpr proto_type_t iValue = RpcProtoId<OI::RpcData::HoldReq>::iValue;
+};
+template <>
+struct RpcProtoId<BatchResponse>
+{
+	static constexpr BatchResponseId iValue{};
+};
+}
+
 // 使用真实待连接队列验证条数、字节限制以及取消后的容量恢复。
 struct RpcPendingMgr::PendingClient : OI::Rpc::ProtoClientManager
 {
@@ -373,6 +409,59 @@ OI::Coro::TaskResult<int> RpcPendingMgr::CheckRpcExceptions(PendingClient& stPen
 	co_return iBadLocal;
 }
 
+// 第二条登记前分配失败：首条等待超时后清理，再传回原异常。
+OI::Coro::TaskResult<int> RpcPendingMgr::CheckBatchBindFailure(PendingClient& stPending)
+{
+	const auto stBaseline = OI::Rpc::RpcCallManager::GetInstance().WaitStats();
+	struct BatchProbe
+	{
+		PendingClient* pClient;
+		size_t iBaselineCalls;
+		int iSubmits = 0;
+		int iDrops = 0;
+		bool bRegistered = false;
+	} stProbe{&stPending, stBaseline.iCalls};
+	OI::Rpc::RpcSender stSender;
+	stSender.pManager = &stPending;
+	stSender.pContext = &stProbe;
+	stSender.fnSubmit = [](void* pContext, uint64_t iCallId, const OI::Base::Bytes& stData)
+	{
+		auto& stLocal = *static_cast<BatchProbe*>(pContext);
+		++stLocal.iSubmits;
+		stLocal.bRegistered = OI::Rpc::RpcCallManager::GetInstance().WaitStats().iCalls == stLocal.iBaselineCalls + 1;
+		stLocal.pClient->TryPendCall(iCallId, stData);
+		bBatchBindFailure.store(true);
+	};
+	stSender.fnDrop = [](void* pContext, uint64_t iCallId)
+	{
+		auto& stLocal = *static_cast<BatchProbe*>(pContext);
+		++stLocal.iDrops;
+		stLocal.pClient->DropPendingCall(iCallId);
+		LOG_TRACE("hold batch first pending dropped");
+	};
+	stPending.SetPendingCallLimits(64, 64 * 1024 * 1024);
+	OI::Rpc::ServiceRoute stRoute;
+	stRoute.iStatus = OI::Rpc::ServiceRouteStatus::Ok;
+	stRoute.vClients = {&stSender, &stSender};
+	BatchRequest stRequest;
+	const auto iStart = OI::Timer::SteadyMilliseconds();
+	bool bCaught = false;
+	try
+	{
+		co_await OI::Rpc::RouteCall::Send<BatchResponse>(std::move(stRoute), stRequest, OI::Rpc::RpcDeadline(OI::Timer::Milliseconds(200)));
+	}
+	catch (const std::bad_alloc&)
+	{
+		bCaught = true;
+	}
+	bBatchBindFailure.store(false);
+	const auto iElapsed = OI::Timer::SteadyMilliseconds() - iStart;
+	const int iBad = bCaught && stProbe.bRegistered && stProbe.iSubmits == 1 && stProbe.iDrops == 1 && SameWaitStats(stBaseline) && iElapsed < 3000 ? 0 : 1;
+	LOG_TRACE("hold batch bind failure caught=%d registered=%d submits=%d drops=%d elapsed=%lld bad=%d", bCaught, stProbe.bRegistered,
+	    stProbe.iSubmits, stProbe.iDrops, static_cast<long long>(iElapsed), iBad);
+	co_return iBad;
+}
+
 // 每个分片留一条长超时请求堵住队首，再拒绝十万条；索引数量必须保持不变。
 int RpcPendingMgr::CheckRpcExpiry(PendingClient& stPending)
 {
@@ -587,6 +676,7 @@ OI::Coro::TaskResult<int> RpcPendingMgr::Run(sid_t iSessionId)
 	iBad += CheckRpcSessionIndex(stPending);
 	iBad += CheckRpcDisconnectDrain(stPending);
 	iBad += co_await CheckRpcExceptions(stPending);
+	iBad += co_await CheckBatchBindFailure(stPending);
 	iBad += CheckRpcExpiry(stPending);
 	iBad += co_await CheckDeadlineBuckets();
 	iBad += CheckRpcSource(iSessionId);

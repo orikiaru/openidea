@@ -75,3 +75,36 @@ def rpc_ingress_faults():
         assert struct.unpack_from("<IIi", response, 12) == (0, 4, 42), "next frame payload"
     print("rpc ingress partial-handler nested-failure next-frame admission-release PASS", flush=True)
     print("rpc ingress oversized/partial/drip/boundary/rearm PASS", flush=True)
+
+
+def rpc_default_receive_boundary():
+    # Default receive limit includes the 8-byte frame header. The unknown field
+    # pads a valid Hold request without changing its business result.
+    limit = 1024 * 1024
+    body = struct.pack("<QIIiIIi", (1 << 63) | 424244, 0, 4, 0, 1, 4, 42)
+    body += struct.pack("<II", 99, limit - 8 - len(body) - 8)
+    body += b"x" * (limit - 8 - len(body))
+    frame = struct.pack("<II", 3002, len(body)) + body
+    assert len(frame) == limit
+    with socket.create_connection(("127.0.0.1", ports.IPC_PORT), timeout=10) as stream:
+        stream.sendall(frame)
+        response = b""
+        while len(response) < 8:
+            part = stream.recv(8 - len(response))
+            assert part, "default-limit request closed before response header"
+            response += part
+        proto, size = struct.unpack("<II", response)
+        response = b""
+        while len(response) < size:
+            part = stream.recv(size - len(response))
+            assert part, "default-limit response truncated"
+            response += part
+        assert proto == 3002 and struct.unpack_from("<Qi", response) == (424244, 0), response[:16]
+        assert struct.unpack_from("<IIi", response, 12) == (0, 4, 42), response[:24]
+    with socket.create_connection(("127.0.0.1", ports.IPC_PORT), timeout=3) as stream:
+        stream.sendall(struct.pack("<II", 3002, limit - 8 + 1))
+        try:
+            assert stream.recv(1) == b"", "over-limit frame header accepted"
+        except ConnectionResetError:
+            pass
+    print("rpc default receive exact=1048576 over=1048577 PASS", flush=True)

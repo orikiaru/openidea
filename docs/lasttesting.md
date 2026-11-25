@@ -2,20 +2,48 @@
 
 全量四组都通过时，改写下面的「全量」，只留最近一次。写明日期、平台、线程模式、通过项数，以及机器的 CPU 型号和实测频率。只跑了部分用例不要写成全量通过。操作步骤仍在 [testing.md](testing.md)。
 
-## 全量
+> **当前状态：最终排版后复验不是四路全绿。** Windows MT 为 21/22：registry 业务 PASS 后临时 exe 删除报 WinError 5，整路失败；Windows ST 和 Linux MT/ST 三路通过。下方「全量」保留最近一次四路完整通过的**排版前首轮**，不能替代当前失败。没有重跑刷绿，也不能声称所有门禁通过或没有遗留临时数据。
 
-2026-11-22，同一工作区跑四组 `--case all`。四组均通过 22/22。协程压力和序列化压力不计入全量。Linux 在本机 WSL，不是远程机器。本轮没有跑 MySQL。WSL 第一次指定了不存在的 `/usr/local/bin/redis-server`，改用 `/usr/bin/redis-server` 后重跑通过；下面耗时是通过的那一轮。
+## 全量（最近四路完整通过：2026-11-25 排版前首轮）
 
-| 平台 | 线程 | CPU | 报告频率（MHz） | 通过 | 耗时 |
-| --- | --- | --- | --- | --- | --- |
-| Windows MSVC x64 Release | 多线程 | AMD Ryzen 7 9800X3D，8 核 16 线程 | 4700 | 22/22 | 431.4 秒 |
-| Windows MSVC x64 Release | 单线程 | AMD Ryzen 7 9800X3D，8 核 16 线程 | 4700 | 22/22 | 450.6 秒 |
-| 本机 WSL GCC Release，16 逻辑核 | 多线程 | AMD Ryzen 7 9800X3D，8 核 16 线程 | 4699.901 | 22/22 | 225.0 秒 |
-| 本机 WSL GCC Release，16 逻辑核 | 单线程 | AMD Ryzen 7 9800X3D，8 核 16 线程 | 4699.901 | 22/22 | 261.7 秒 |
+Windows 原生 MSVC x64 Release 和两台远程 Linux GCC 13 Release 的 MT/ST 首轮 `--case all` 均为 22/22；Linux 两路另有 MySQL 行映射、行操作、客户端三项 `bad=0` 及 registry-static 通过。**这不是当前最终排版后源码的四路全绿结论**，后者见下一节。本轮两次矩阵均未重跑 ASan 或 coro，以下历史专项保持原日期和证据边界。
 
-Windows 频率为 CIM `CurrentClockSpeed` 报告值；WSL 频率为 `/proc/cpuinfo` 的 `cpu MHz`，均不是运行期连续采样。耗时含配置和编译，取并行矩阵打印的秒数。四路测试前后按各自归属清理。
+| 平台 | 线程 | CPU | 频率读数/估计 MHz | 通过 | 耗时 |
+| --- | --- | --- | --- | ---: | --- |
+| Windows | 多线程 | Intel Core i9-11900K | 原始计数器 3504；派生估计约 4800.48 | 22/22 | 619.9 秒 |
+| Windows | 单线程 | Intel Core i9-11900K | 原始计数器 3504；派生估计约 4800.48 | 22/22 | 630.3 秒 |
+| 远程 Linux | 多线程 | Intel Xeon Platinum 8255C | 2494.140（采样读数） | 22/22 | 377 秒 |
+| 远程 Linux | 单线程 | Intel Xeon Gold 6271C | 2593.904（采样读数） | 22/22 | 694 秒 |
+
+Windows 派生频率为性能计数器原始 3504 MHz × `% Processor Performance / 100`（约 137%）的估计，不是全程持续实测频率；Linux 为 `/proc/cpuinfo` 的采样读数，也非持续采样。首轮结果目录：Windows 为 `C:/Users/Admin/openidea-test-results/resume-20261125-1710/par-windows-mt`、`C:/Users/Admin/openidea-test-results/resume-20261125-1710/par-windows-st`；Linux 为 `~/openidea-test-results/resume-20261125-1710-mt`、`~/openidea-test-results/resume-20261125-1710-st`。
+
+两轮受测 HEAD 均为 `fea6ebf1a485b873521311140a57cc44f2f33843`。首轮完整 diff SHA256 为 `0f38523204edea95d1c3c8c14cd547cd154c76386f952cc7063b61e47fadff05`（Linux 统一行尾、排除生成的 clangd 配置后匹配）；该身份包含当时文档，不是纯功能源码 hash。首轮后仅修正[协程计数表达式](<../modules/ipcclient/src/coro_mgr.cpp#L227>)、[两处模板声明](<../modules/ipcclient/src/rpc_pending_mgr.cpp#L63-L71>)、[Web 续行对齐](<../modules/webclient/src/web_client.cpp#L859-L860>)，合计 3 文件 4 处空白排版，再做最终复验。
+
+更早一轮 Windows MT、Linux MT 各为 **21/22**，原因是 local 测试仍断言旧的 64 MiB 默认接收值；那是实际失败，不能由首轮后来全过或已修改断言抹去。旧环境还曾有 Linux ST 误用新建 `-st-st` 目录而缺 OpenSSL 头配置的构建失败，以及 Windows registry/local 清理拒绝访问；后续通过不证明这些历史失败从未发生。
+
+## 最终排版后复验（2026-11-25，当前最终源码未全绿）
+
+| 平台 | 线程 | `all` 结果 | 额外用例/矩阵状态 | 耗时 |
+| --- | --- | ---: | --- | --- |
+| Windows | 多线程 | **21/22，失败** | registry 业务 PASS 后清理失败；exit=1、passed=false、completed=false | 545.3 秒 |
+| Windows | 单线程 | 22/22 | 通过 | 557.0 秒 |
+| 远程 Linux | 多线程 | 22/22 | MySQL 三项及 registry-static 通过 | 372 秒 |
+| 远程 Linux | 单线程 | 22/22 | MySQL 三项及 registry-static 通过；matrix/SSH exit=0、passed=true、completed=true | 535 秒（17:28:13–17:37:08，UTC+8） |
+
+最终结果目录：Windows 为 `C:/Users/Admin/openidea-test-results/resume-20261125-final/par-windows-mt`、`C:/Users/Admin/openidea-test-results/resume-20261125-final/par-windows-st`；Linux 为 `~/openidea-test-results/resume-20261125-final-mt`、`~/openidea-test-results/resume-20261125-final-st`。CPU 型号及 Linux 频率读数同首轮。最终 Windows MT 5 个样本的派生频率估计均值 **4800.214 MHz**、范围 **4799.334–4800.549 MHz**；原始频率计数器仍为 3504 MHz，计算口径同上，不是全程持续实测。Windows ST 沿用首轮约 4800.48 MHz 的派生估计，不冒充最终轮新采样。
+
+最终 Windows 完整 diff SHA256 为 `64dfe14ff7aa28710f3804416d4ba2d64453691e51925c5f96a9e3f3103037cc`，受测副本前后一致；Linux ST 启动身份相同，结束时排除生成的 clangd 路径变化后精确恢复此值。Linux MT 原始环境 hash 为 `b58de602609aa8546959cbf083442f67e07bc771eb075feb94c4ca7a79b528ac`；统一行尾、排除 docs/待办/clangd 后，主树与受测树的功能 diff hash 均为 `14dede71a3cb4a6f2248acd8c2b4320f3087174d9ddc163d53489f3b49824bc2`。两路 Linux 各对照 940 个已跟踪文件，仅生成配置与后写待办不同，功能源码逐字节一致；本报告和待办为验收后收尾，不宣称收尾后完整 diff hash 不变。
+
+**Windows MT 失败证据与边界**：registry 业务 PASS 后，`TemporaryDirectory.cleanup` 删除临时客户端 exe 报 `[WinError 5] Access is denied`；官方前后归属清理均 exit=0、残留进程数 0，但不能抵消目录清理失败。保留目录 `C:/Users/Admin/AppData/Local/Temp/oi-regression-p0-cs6eqfri`，**25 文件、30,969,999 字节（约 30.97 MB）**。事后 5 个归属 PID 均不存在、CIM 无同目录进程，非只读且 ACL FullControl，独占读/DELETE 开句柄成功、Restart Manager 无占用者；只证明事后无持续占用，**报错瞬间原因未知**，不猜杀毒、不视为已修。身份与留存证据见 [main-vs-tested](<C:/Users/Admin/openidea-test-results/resume-20261125-final/par-windows-mt/main-vs-tested.json>)、[lane-after-identity](<C:/Users/Admin/openidea-test-results/resume-20261125-final/par-windows-mt/lane-after-identity.json>)、[source-after](<C:/Users/Admin/openidea-test-results/resume-20261125-final/par-windows-mt/source-after.json>)、[retained-registry-directory](<C:/Users/Admin/openidea-test-results/resume-20261125-final/par-windows-mt/retained-registry-directory.json>)。不改脚本、不再重跑刷绿。
+
+**其他门禁边界**：全仓 clang-format 18.1.8 检查仍有 **13 份 HEAD 既有格式失败**；本轮新增的 3 文件 4 处排版问题已定点修正，这 3 文件分别只读检查通过，不能据此声称全仓格式通过。ASan/coro 本轮未重跑，以下历史专项不作为当前最终源码的专项验收。
 
 ## 显式用例
+
+### 回归验收专项（2026-11-25 早先历史记录，本轮未重跑）
+
+Windows 多线程和单线程的 `coro` 定向用例均完成 10 万次挂起唤醒、100 万个空任务并报告 `bad=0`；Windows 单线程实际计数为 held=100000、wake=100000、done=1000000。Windows HTTP 保留响应缓冲的故障负例输出 `retained=63 bad=1`。Linux 单线程启用测试钩子后，唤醒分段七项各有 100000 个样本；删除标记后实际运行失败，随后恢复 OFF 构建。上述专项独立于全量 22 项。
+
 
 ### 时间轮、HTTP 与配置定向验证（2026-11-24）
 

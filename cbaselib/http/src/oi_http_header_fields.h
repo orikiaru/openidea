@@ -29,6 +29,39 @@ class HeaderFields
 		});
 	}
 
+	class ConnectionTokens
+	{
+		bool m_bClose = false;
+		bool m_bKeepAlive = false;
+
+	  public:
+		void Read(std::string_view sValue)
+		{
+			while (!sValue.empty())
+			{
+				const auto iComma = sValue.find(',');
+				const auto sToken = sValue.substr(0, iComma);
+				const auto iFirst = sToken.find_first_not_of(" \t");
+				if (iFirst != sToken.npos)
+				{
+					const auto sName = sToken.substr(iFirst, sToken.find_last_not_of(" \t") - iFirst + 1);
+					m_bClose |= NameEqual(sName, "close");
+					m_bKeepAlive |= NameEqual(sName, "keep-alive");
+				}
+				if (iComma == sValue.npos)
+				{
+					break;
+				}
+				sValue.remove_prefix(iComma + 1);
+			}
+		}
+
+		bool ShouldClose(bool bHttp10) const
+		{
+			return m_bClose || (bHttp10 && !m_bKeepAlive);
+		}
+	};
+
 	static bool ValidForSend(const Message& stMessage)
 	{
 		if (!ValidValue(stMessage.sContentType))

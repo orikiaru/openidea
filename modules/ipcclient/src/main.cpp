@@ -141,6 +141,16 @@ static int32_t CheckPollLoopBusy()
 
 int main(int iArgumentCount, char* vArguments[])
 {
+	if (iArgumentCount == 2 && std::strcmp(vArguments[1], "--test-hooks") == 0)
+	{
+#ifdef OI_ENABLE_BLOCKING_WAKE_TRACE
+		std::printf("blocking_wake_trace=1\n");
+		return 41;
+#else
+		std::printf("blocking_wake_trace=0\n");
+		return 40;
+#endif
+	}
 	if (iArgumentCount == 2 && std::strcmp(vArguments[1], "--timer-before-init") == 0)
 	{
 		bool bCalled = false;

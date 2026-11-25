@@ -294,7 +294,7 @@ struct [[nodiscard]] RpcCallAwaiter
 	// 完成门。Idle 已发出还没人认领，Ready 结果已写好，Waiting 调用方已挂起。
 	std::atomic<OI::Coro::Gate> iGate;
 	std::atomic<bool> bAwaitStarted{false}; // 一次性闩。第二次 await 或移动已提交对象直接抛，不进完成门。
-	bool bDispatched = false;               // Dispatch 已经 RpcCallManager::Bind。析构时槽还在就摘掉。
+	bool bDispatched = false;               // Dispatch 已开始。成功登记后 iCallId 才有效。
 	Res stDecoded{};
 	int32_t iReplyCode = OI_ERR_FAIL;
 	std::exception_ptr stDecodeError;
@@ -826,7 +826,8 @@ class RouteCall
 		{
 			for (auto& stCall : vCalls)
 			{
-				if (!stCall || !stCall->bDispatched)
+				// Bind 失败时没有等待项，也不会有人唤醒这一格。
+				if (!stCall || stCall->iCallId == 0)
 				{
 					continue;
 				}

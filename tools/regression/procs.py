@@ -16,6 +16,20 @@ from . import ports
 
 REPO = Path(__file__).resolve().parents[2]
 
+def test_hook_enabled(work, executable, hook):
+    """Read the capability from the copied executable that the fixture runs."""
+    path = work / (executable + SUFFIX)
+    try:
+        result = subprocess.run([str(path), "--test-hooks"], cwd=work, capture_output=True,
+                                text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise RuntimeError(f"cannot query test hooks from {path}: {error}") from error
+    if result.returncode not in (40, 41):
+        raise RuntimeError(f"invalid test hook response from {path} for {hook}: "
+                           f"exit={result.returncode} stdout={result.stdout!r} stderr={result.stderr!r}")
+    return result.returncode == 41
+
+
 @contextlib.contextmanager
 def regression_directory(**kwargs):
     directory = tempfile.TemporaryDirectory(**kwargs)

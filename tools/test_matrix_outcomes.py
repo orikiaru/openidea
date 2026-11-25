@@ -178,6 +178,23 @@ class MatrixOutcomeTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 self.exercise(extra_args=("--platform", "native", "--mysqld", "/opt/m/mysqld"), windows=True)
 
+    def test_asan_uses_selected_build_directory(self):
+        for mode in ("mt", "st", "all"):
+            with self.subTest(mode=mode):
+                self.exercise(extra_args=("--mode", mode, "--asan"), windows=False)
+                modes = ("mt", "st") if mode == "all" else (mode,)
+                for selected in modes:
+                    configured = self.commands[selected + "-configure"]
+                    asan = self.commands[selected + "-asan"]
+                    self.assertEqual(configured[configured.index("-B") + 1],
+                                     asan[asan.index("--build-dir") + 1])
+                    self.assertEqual(selected, asan[asan.index("--mode") + 1])
+
+    def test_windows_native_rejects_linux_fault_options(self):
+        for option in ("--asan", "--clock-faults"):
+            with self.subTest(option=option), self.assertRaises(SystemExit):
+                self.exercise(extra_args=(option,), windows=True)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

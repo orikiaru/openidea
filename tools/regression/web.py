@@ -119,7 +119,18 @@ def check_web_transport(port, output_path):
                 raise RuntimeError("truncated HTTP response headers")
             key, value = line.decode("ascii").split(":", 1)
             headers[key.lower()] = value.strip()
-        body = reader.read(int(headers["content-length"]))
+        if headers.get("transfer-encoding", "").lower() == "chunked":
+            chunks = []
+            while True:
+                chunk_size = int(reader.readline().split(b";", 1)[0], 16)
+                if chunk_size == 0:
+                    assert reader.readline() == b"\r\n"
+                    break
+                chunks.append(reader.read(chunk_size))
+                assert reader.read(2) == b"\r\n"
+            body = b"".join(chunks)
+        else:
+            body = reader.read(int(headers["content-length"]))
         return status, headers, body
 
     with socket.create_connection(("127.0.0.1", port), timeout=10) as conn:
@@ -205,6 +216,42 @@ def check_web_transport(port, output_path):
             assert headers.get("connection", "").lower() == "close", headers
             assert reader.read(1) == b"", "connection did not close after response"
 
+    stream_size = 9 * 1024 * 1024
+    stream_pattern = bytes(range(251))
+    stream_body = (stream_pattern * (stream_size // len(stream_pattern) + 1))[:stream_size]
+    for path in (b"/bin", b"/test-stream"):
+        for size in (1023, 1024, 1025):
+            with socket.create_connection(("127.0.0.1", port), timeout=10) as conn:
+                conn.settimeout(120)
+                with conn.makefile("rb") as reader:
+                    header = b"POST " + path + b" HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+                    line = b"2;" + b"x" * (size - 2)
+                    if size == 1025:
+                        conn.sendall(header + line + b"\r\n")
+                    else:
+                        conn.sendall(header + line + b"\r")
+                        time.sleep(0.05)
+                        if path == b"/bin":
+                            conn.sendall(b"\nok\r\n0\r\n\r\n")
+                        else:
+                            conn.sendall(b"\n" + stream_body[:2] + b"\r\n" + ("%x\r\n" % (stream_size - 2)).encode())
+                            conn.sendall(stream_body[2:] + b"\r\n0\r\n\r\n")
+                    status, _, body = read_response(reader)
+                    if size <= 1024:
+                        expected = b"ok" if path == b"/bin" else stream_body
+                        assert status.startswith("HTTP/1.1 200 ") and body == expected, (path, size, status, len(body))
+                    else:
+                        assert status.startswith("HTTP/1.1 400 "), (path, size, status)
+    for headers in (b"Connection: close\r\nConnection: keep-alive\r\n", b"Connection: keep-alive\r\nConnection: close\r\n"):
+        with socket.create_connection(("127.0.0.1", port), timeout=10) as conn:
+            conn.settimeout(8)
+            with conn.makefile("rb") as reader:
+                conn.sendall(b"GET /health HTTP/1.1\r\nHost: localhost\r\n" + headers + b"\r\n")
+                status, _, body = read_response(reader)
+                assert status.startswith("HTTP/1.1 200 ") and body == b"ok", (headers, status, body)
+                assert reader.read(1) == b"", (headers, "close ignored")
+    print("web chunk size boundaries and Connection close PASS", flush=True)
+
     multipart = (b"--boundary42\r\nContent-Disposition: form-data; name=\"field\"\r\n\r\nvalue\r\n"
                  b"--boundary42\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.bin\"\r\n"
                  b"Content-Type: application/octet-stream\r\n\r\n\x00\xffxyz\r\n--boundary42--\r\n")
@@ -270,6 +317,13 @@ class StreamResponseFixture(socketserver.BaseRequestHandler):
                 return
             request += part
         path = request.split(b" ", 2)[1]
+        if path.startswith(b"/size-"):
+            size = int(path[6:])
+            self.request.sendall(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n" +
+                                 b"2;" + b"x" * (size - 2) + b"\r")
+            time.sleep(0.05)
+            self.request.sendall(b"\n\x00\x01\r\n0\r\n\r\n")
+            return
         size = 9 * 1024 * 1024
         header = b"HTTP/1.1 200 OK\r\nConnection: close\r\n"
         if path == b"/length":

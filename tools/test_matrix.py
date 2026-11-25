@@ -158,6 +158,8 @@ def main():
     args = parser.parse_args()
     if args.mysqld and WINDOWS and args.platform == "native":
         parser.error("--mysqld runs on the Linux side only")
+    if WINDOWS and args.platform == "native" and (args.asan or args.clock_faults):
+        parser.error("--asan and --clock-faults run on the Linux side only; use --platform both")
     if any("=" not in item for item in args.define):
         parser.error("--define expects NAME=VALUE")
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -320,8 +322,9 @@ def main():
                         fault[fault.index("--artifacts") + 1] = output / mode / case
                         fault += ["--clock-fault-so", library]
                         failed |= bool(run(mode + "-" + case, fault))
-        if args.asan and not WINDOWS:
-            failed |= bool(run("asan", [sys.executable, ROOT / "tools/check_coro_runtime.py", "--build-dir", build, "--asan"]))
+            if args.asan and not WINDOWS:
+                failed |= bool(run(mode + "-asan", [sys.executable, ROOT / "tools/check_coro_runtime.py",
+                                                     "--build-dir", mode_build, "--mode", mode, "--asan"]))
         completed = not failed
     except BaseException as error:
         failed = True

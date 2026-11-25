@@ -27,8 +27,8 @@ struct ServiceRoute;
 struct PeerPolicy
 {
 	size_t iSendBytes = 64 * 1024 * 1024;
-	size_t iReceiveBytes = 64 * 1024 * 1024 + 8;
-	size_t iFrameBytes = 64 * 1024 * 1024;
+	size_t iReceiveBytes = Net::kDefaultReceiveBufferBytes;
+	size_t iFrameBytes = Net::kDefaultReceiveBufferBytes - Net::kFrameHeaderBytes;
 	uint64_t iIncompleteMilliseconds = 10000;
 	size_t iHeldCount = 65536;
 	size_t iHeldBytes = 64 * 1024 * 1024;

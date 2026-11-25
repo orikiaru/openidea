@@ -12,7 +12,7 @@ from regression_platform import WINDOWS
 from .. import ports
 from ..config import replace, set_test_flags
 from ..probes import CAP, bytes_on_disk, disk_failure
-from ..procs import REPO
+from ..procs import REPO, test_hook_enabled
 from . import Case
 
 
@@ -104,9 +104,8 @@ int gettimeofday(struct timeval *tv, void *tz)
                             str(clock_source), "-o", str(clock_library), "-ldl"], check=True)
             ctx.log_env = dict(os.environ, LD_PRELOAD=f"{slow_write}:{clock_library}", TZ="UTC")
         if WINDOWS and case in ("disk-full", "log-backpressure"):
-            stamp = ctx.args.bin_dir / "oi_test_hooks.txt"
-            if not stamp.exists() or stamp.read_text().strip() != "ON":
-                raise RuntimeError("Windows fault cases require -DOI_ENABLE_TEST_HOOKS=ON")
+            if not test_hook_enabled(ctx.work, "logd", "log_fault"):
+                raise RuntimeError("Windows fault cases require logd built with -DOI_ENABLE_TEST_HOOKS=ON")
             ctx.log_env = dict(os.environ, OI_TEST_LOG_FAULT="full" if case == "disk-full" else "slow")
 
     def logd_start_failure(self, ctx, logd):

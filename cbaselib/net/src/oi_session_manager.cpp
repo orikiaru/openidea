@@ -13,6 +13,7 @@
 #include <vector>
 #include <memory>
 #include <limits>
+#include <algorithm>
 #include <stdexcept>
 namespace OI
 {
@@ -28,16 +29,20 @@ int32_t SessionManager::LoadSessionLimits()
 		fprintf(stderr, "invalid send limit for %s\n", GetIDString().c_str());
 		return OI_ERR_INVALID_ARGUMENT;
 	}
-	int64_t iReceiveLimit = 64 * 1024 * 1024 + 8;
-	int64_t iFrameLimit = 64 * 1024 * 1024;
+	int64_t iReceiveLimit = kDefaultReceiveBufferBytes;
 	int64_t iFrameTimeout = 10000;
 	int64_t iIdleTimeout = 60000;
 	TryGetConfig(GetIDString() + ".max_receive_buffer_bytes", iReceiveLimit);
+	if (iReceiveLimit < 16 || static_cast<uint64_t>(iReceiveLimit) > SIZE_MAX)
+	{
+		fprintf(stderr, "invalid receive limit for %s\n", GetIDString().c_str());
+		return OI_ERR_INVALID_ARGUMENT;
+	}
+	int64_t iFrameLimit = std::min<int64_t>(iReceiveLimit - static_cast<int64_t>(kFrameHeaderBytes), INT32_MAX);
 	TryGetConfig(GetIDString() + ".max_frame_bytes", iFrameLimit);
 	TryGetConfig(GetIDString() + ".incomplete_frame_timeout_ms", iFrameTimeout);
 	TryGetConfig(GetIDString() + ".idle_timeout_ms", iIdleTimeout);
-	if (iFrameLimit < 8 || iFrameLimit > INT32_MAX || iReceiveLimit < iFrameLimit + 8 ||
-	    static_cast<uint64_t>(iReceiveLimit) > SIZE_MAX || iFrameTimeout <= 0 || iIdleTimeout <= 0)
+	if (iFrameLimit < 8 || iFrameLimit > INT32_MAX || iReceiveLimit < iFrameLimit + static_cast<int64_t>(kFrameHeaderBytes) || iFrameTimeout <= 0 || iIdleTimeout <= 0)
 	{
 		fprintf(stderr, "invalid receive limits for %s\n", GetIDString().c_str());
 		return OI_ERR_INVALID_ARGUMENT;

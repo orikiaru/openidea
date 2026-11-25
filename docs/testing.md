@@ -17,7 +17,7 @@
 - 平台错误域、监听和时序边界不能只凭静态推断；能复现时在对应真实系统上构造触发条件，记录输入、观察到的事件和调用方结果。结论区分代码依据、实测结果与尚未覆盖的条件。
 - 测量延迟时使用单调时钟，对同一次请求配对采样，分别统计排队、执行、完成到调用方恢复的时间，并说明样本量和尾延迟；不要用不同请求的时间相减，也不要把静态推断写成实测结果。
 
-协程压力和序列化压力不包含在 `all`。一个月测一次，同一台机器上一次只跑一个，不要并排，它们会占满 CPU。协程压力是 `python3 tools/run_regressions.py --case coro`，开关是 `ipcclient` 的 `[Test] coro`，量级在 `[TestCoro]`，默认 10 万条同时挂起、100 万条创建后立即结束。序列化压力是 `python3 tools/gen_dispatch_bench.py array` 或 `switch`，不进回归进程。结果写进 [lasttesting.md](lasttesting.md)，不要写进本文件。
+协程压力和序列化压力不包含在 `all`。一个月测一次，同一台机器上一次只跑一个，不要并排，它们会占满 CPU。协程压力是 `python3 tools/run_regressions.py --case coro`，开关是 `ipcclient` 的 `[Test] coro`，量级在 `[TestCoro]`，默认 10 万条同时挂起、100 万条创建后立即结束。序列化压力是 `python3 tools/gen_dispatch_bench.py array` 或 `switch`，不进回归进程。程序输出实际 held、wake、done 计数；脚本要求它们分别等于 live、live、churn，工作量和三段单项耗时均大于零，且 bad=0，异常以非零状态退出。结果写进 [lasttesting.md](lasttesting.md)，不要写进本文件。
 
 数据库功能用例 `mysql` 显式运行，不包含在 `all`。标准入口是矩阵参数 `--mysqld <mysqld>`（`tools/test_matrix.py`，或 `tools/parallel_matrix.py` 的 Linux 路）：每种线程模式编译完成后先跑 `<mode>-mysql`，再跑全量，不额外编译。非标准安装用 `--define OI_MYSQL_INCLUDE_DIR=... --define OI_MYSQL_LIBRARY=...`。单独复现仍可直接用 `tools/run_mysql_regression.py`。WSL 的 MySQL 来自 apt 包 `mysql-server-core-8.0`、`mysql-client-core-8.0`、`libmysqlclient-dev`，不起系统服务，`mysqld` 用 `/usr/sbin/mysqld`。需提供可用的客户端库；缺少依赖或配置时记录环境阻塞，不能算通过。Linux 上 `mysqld` 缺 `libaio.so.1` 时，把已有兼容库目录放进 `LD_LIBRARY_PATH`。用例先不连库检查 `DbSample` 的行映射：字段表、按成员指针取列、按列名的参数和单元格、拒绝 NULL 和坏值、生成的建表和增删改查语句逐字比对、坏表名和主键列拒绝、PB 往返和固定小端字节、JSON，输出 `mysql row mapping bad=0`；再用生成的语句建真表，整行写入读回、主键重复拒绝、按成员指针部分更新和部分读取、upsert 已有行和新行、改全部非主键列、按主键删，并用手写 SQL 注入 NULL 和坏 blob 验证读回拒绝，输出 `mysql rows bad=0`；最后是客户端本身的参数、连接复用、会话清理、事务回滚和结果上限，三项都通过才输出 `mysql done bad=0`。
 
@@ -46,6 +46,13 @@ python3 tools/run_mysql_regression.py --case mysql-wake --mysqld <mysqld> --bin-
 Hold 的迟到回包检查先让标记 802 的调用超时，再保持标记 803 的调用在途，使用同连接的快速调用标记 804 作为收包屏障。屏障成功后检查仍有一个调用等待，并验证后续回包标记为 803；驱动要求 `hold rpc late overlap barrier=0/804 pending=1 follow=0/803 bad=0`。
 
 正常 Hold 的二进制容器检查覆盖空和非空容器、嵌套容器与 rpcdata、连续流式对象、后续字段、固定黄金字节，以及畸形数量、截断、尾随字节和重复 key 拒绝并保持输出；同时检查数据库 blob 的格式和严格解码。脚本要求 `hold binary container bad=0`。
+
+本轮新增断言（已加入用例，四路结果待验收，不能当成已通过）：
+
+- 64 MiB 是每独立帧的逻辑解码预算：按元素对象及变长正文估算，嵌套与多字段累计，读取事务回滚恢复，下一独立帧重置，不是精确 RSS 硬上限。检查小预算边界及 100 万个 int32_t 合法数组。
+- 使用 16 MiB 合法编码（count 加恰好 count 个长度为 0 的 rpcdata body）验证内存放大防护；必须读完 count 就因默认预算拒绝，游标仍在 count 之后且原输出完整保留，不能靠坏长度或截断触发失败。另检查小样本恰好预算可解、少 1 字节拒绝。
+- 真实 TCP 首读 4 KiB 后按需增长，不预分配 1 MiB；接收额度 6000 字节（非 2 的幂）时容量不越界。另检查缓冲在 6000 容量下删除前缀后压实并追加，内容正确；申请 6001 时拒绝且容量与内容不变。
+- 批量 RPC 第二次 Bind 注入失败后，回滚只等待非零 callid 的已登记项；要求原 bad_alloc 传回，首个已提交项正常清理，登记等待恢复基线（本场景归零），而不是只检查后续调用健康。要求 `hold batch bind failure caught=1 registered=1 submits=1 drops=1 elapsed=... bad=0`。
 
 路由与请求生命周期回归也集成在正常 Hold 中：容量策略隔离与真实大包收发、持有租约时不回收/释放后连接状态销毁及重新获取、暂停期间已缓存路由仍可用、未缓存名字超时或在恢复后得到空名单、短暂停后未缓存名字等后台拉取，以及保留已完成任务时请求资源仍被销毁。路由管理器固定为常驻单例，测试同时断言不同策略的连接共用管理器。脚本只在临时配置缩短池空闲时限，并把 `pull_ms` 拉长，避免周期拉取打断用例；通过暂停本次启动的 registry 进程覆盖上述缓存语义，finally 中恢复暂停状态再清理。应用请求仍从 ipcclient 发出，不新增测试客户端。
 
@@ -140,7 +147,7 @@ python tools/test_matrix.py --platform both --wsl-user root --linux-build-dir /r
 
 矩阵脚本会：记录源码身份 → 在多线程目录配置并编译 → 跑全部用例 → 在同级的单线程目录（目录名加 `-st`）配置并编译 → 跑同样用例 → 可选扩展测试。不把任一目录改回另一种线程模式。任何一步失败，最终退出码非零。平台间串行运行。
 
-默认结果在用户目录 `openidea-test-results/<时间>/`，支持 `--artifacts`。不要将批量日志数据提交进 Git。
+Linux 的 `--asan` 按 `--mode` 对应的构建目录和线程模式执行；`--mode all` 分别检查 MT 和 ST。原生 Windows 不支持 `--asan`、`--clock-faults`，传入会报参数错误；`--platform both` 可将这两个选项传给 Linux 路。默认结果在用户目录 `openidea-test-results/<时间>/`，支持 `--artifacts`。不要将批量日志数据提交进 Git。
 
 ## 4. 单项复现与断言
 
@@ -172,11 +179,12 @@ Windows 原生直接运行时，要选择带 exe 的 Release 目录：
 python tools/run_regressions.py --case all --bin-dir deploy/bin/Release --redis-binary C:/tools/redis/redis-server.exe --artifacts C:/Users/Admin/openidea-test-results/direct
 ```
 
-Windows 的日志故障测试要求该产物以 `-DOI_ENABLE_TEST_HOOKS=ON` 构建。矩阵入口自动设置和恢复；直接运行入口检查构建标记，缺失则失败，不能跳过。
+Windows 的日志故障测试要求该产物以 `-DOI_ENABLE_TEST_HOOKS=ON` 构建；矩阵配置 Windows 为 ON、Linux 为 OFF，不会自动恢复构建选项。回归夹具直接对实际运行的 `ipcclient` 和 `logd` 执行 `--test-hooks` 查询，而不是依赖 configure 时生成的标记文件：退出码 40 表示关闭，41 表示启用，其他退出码视为查询失败；标准输出仅供诊断。`blocking-wake` 在 ipcclient 启用钩子且为单线程时要求所有 trace 行，关闭钩子或多线程时不要求分段。更改构建选项后须完整构建再运行。
 
 主要成功标记：
 
 - echo：按 `[TestEcho] total` 核对 `total` 和 `ok`（仓库配置为 1000000），`mismatch=0 rpc_fail=0`，连接只启动一次。registry、reset、rpc-ingress 在临时配置中将回声数设为 100，并按该数量核对端到端收发；registry 的直连后备端口故意设错，以验证通过注册发现连接。客户端同时在途的请求数由 `[TestEcho] inflight` 限定（默认 2048），必须低于服务端 `[Rpc] session_max_inflight_count`，否则多线程下会被回 `OI_ERR_BUSY`。
+- 收包限额：普通 TCP/RPC 默认 1 MiB，RPC 包含 8 字节帧头，请求和回包两端均检查；首读 4 KiB、按需增长不代表预分配整个限额。`rpc-ingress` 核对超大声明、残包、滴流及合法边界分片。HTTP 例外保留原有 `kMaxHeader + kMaxBody` 独立额度与普通正文 8 MiB 限制；不能把 HTTP 大包回归改小来适应通用默认值。
 - empty：显式 `--case empty` 才跑，不包含在 `all`。仓库配置 `[Test] empty = false`。请求和回复都没有字段。每条协议单独 `StartTask`，在途数由 `[TestEmpty] inflight`（默认 2048）限制。主协程每 1 毫秒 `yield` 一次看完成数，完成数用互斥锁保护。日志只留一行 `empty mode=... total=1000000 ms=... rate=.../s rpc_fail=0`。
 - 客户端时限：跑 hold 那套的用例（含 rpc-admission、clock）120 秒，Redis 压力类和 redis-shutdown 20 秒，coro、empty 各 180 秒，其余 60 秒。超时按失败处理并打印客户端输出。
 - log：逐条核对实际磁盘记录、字节数和内容；端到端速度以落盘字节除以客户端开始到文件最后增长的时间，不能拿 enqueue_rate 代替。

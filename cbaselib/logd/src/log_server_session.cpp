@@ -28,7 +28,7 @@ void LogServerSession::OnDataIn()
 			break;
 		}
 		const size_t iFrameBytes = sizeof(uint32_t) * 2 + (size_t)iDeclared;
-		stPacket.StartTransaction();
+		stPacket.StartReadFrame();
 		uint32_t iProtocol = 0;
 		uint32_t iSize = 0;
 		const ::OI::Base::PbHeaderState iState = stPacket.PreparePbHeader(iProtocol, iSize);

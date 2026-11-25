@@ -58,6 +58,61 @@ class OutputRpcProbe : public DeferredRpcProbe
 	}
 };
 
+// 用实际回包编码尺寸构造边界，超限请求的输出不得被覆盖。
+OI::Coro::TaskResult<int> RpcOutputMgr::CheckReceiveLimit()
+{
+	static DeferredRpcProbe stClient;
+	int iBad = 0;
+	const int32_t iConnect = co_await stClient.StartClient();
+	if (iConnect != OI_OK)
+	{
+		LOG_TRACE("hold receive limit connect=%d bad=1", iConnect);
+		co_return 1;
+	}
+	OI::RpcData::AllEchoReq stRequest;
+	stRequest.stData.sMessage.assign(OI::Net::kDefaultReceiveBufferBytes - 1024, 'x');
+	OI::RpcData::AllEchoRes stExpected;
+	stExpected.stData = stRequest.stData;
+	stExpected.iCode = 1;
+	OI::Base::BytesStream stBody;
+	stBody << uint64_t(1) << int32_t(0);
+	stExpected.serialize(stBody);
+	const size_t iInitialSize = OI::Rpc::EncodePbFrame(OI::Rpc::RpcProtoId<OI::RpcData::AllEchoRes>::iValue, stBody).Size();
+	if (iInitialSize >= OI::Net::kDefaultReceiveBufferBytes)
+	{
+		LOG_TRACE("hold receive limit initial=%zu bad=1", iInitialSize);
+		co_return 1;
+	}
+	stRequest.stData.sMessage.append(OI::Net::kDefaultReceiveBufferBytes - iInitialSize, 'x');
+	stExpected.stData = stRequest.stData;
+	OI::Base::BytesStream stExactBody;
+	stExactBody << uint64_t(1) << int32_t(0);
+	stExpected.serialize(stExactBody);
+	const size_t iExactSize = OI::Rpc::EncodePbFrame(OI::Rpc::RpcProtoId<OI::RpcData::AllEchoRes>::iValue, stExactBody).Size();
+	OI::RpcData::AllEchoRes stOutput;
+	const int32_t iExact = co_await OI::Rpc::RpcCall(stClient, stRequest, stOutput, OI::Timer::Seconds(10));
+	if (iExactSize != OI::Net::kDefaultReceiveBufferBytes || iExact != OI_OK || stOutput.stData.sMessage != stRequest.stData.sMessage || stOutput.iCode != 1)
+	{
+		++iBad;
+	}
+	stRequest.stData.sMessage.push_back('x');
+	stExpected.stData = stRequest.stData;
+	OI::Base::BytesStream stOverBody;
+	stOverBody << uint64_t(1) << int32_t(0);
+	stExpected.serialize(stOverBody);
+	const size_t iOverSize = OI::Rpc::EncodePbFrame(OI::Rpc::RpcProtoId<OI::RpcData::AllEchoRes>::iValue, stOverBody).Size();
+	stOutput.stData.sMessage = "preserved";
+	stOutput.iCode = 713;
+	const int32_t iOver = co_await OI::Rpc::RpcCall(stClient, stRequest, stOutput, OI::Timer::Seconds(10));
+	if (iOverSize != OI::Net::kDefaultReceiveBufferBytes + 1 || iOver == OI_OK || stOutput.stData.sMessage != "preserved" || stOutput.iCode != 713)
+	{
+		++iBad;
+	}
+	LOG_TRACE("hold receive limit exact=%zu exact_code=%d over_code=%d preserved=%d bad=%d", iExactSize, iExact, iOver,
+	    stOutput.stData.sMessage == "preserved" && stOutput.iCode == 713, iBad);
+	co_return iBad;
+}
+
 OI::Coro::TaskResult<int> RpcOutputMgr::CheckOutputRpcTask(sid_t iSessionId)
 {
 	int iBad = 0;
@@ -397,5 +452,6 @@ OI::Coro::TaskResult<int> RpcOutputMgr::Run(sid_t iSessionId)
 {
 	int iBad = co_await CheckOutputRpcTask(iSessionId);
 	iBad += co_await CheckClientNotify();
+	iBad += co_await CheckReceiveLimit();
 	co_return iBad;
 }

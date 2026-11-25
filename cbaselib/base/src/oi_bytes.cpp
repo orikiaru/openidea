@@ -89,14 +89,18 @@ Bytes::~Bytes()
 	free(m_pMemory);
 }
 
-void Bytes::Grow(size_t iNeed)
+void Bytes::Grow(size_t iNeed, size_t iCapacityLimit)
 {
-	if (m_iHead + iNeed <= m_iCapacity)
+	if (iNeed > iCapacityLimit)
+	{
+		throw std::length_error("Bytes::Grow past capacity limit");
+	}
+	if (iNeed <= Capacity())
 	{
 		return;
 	}
 	// 头部空出来的比有效数据多才挪，挪的字节不超过已经删掉的，均摊下来不会退化。
-	if (iNeed <= m_iCapacity && m_iHead >= m_iSize)
+	if (iNeed <= m_iCapacity && (m_iHead >= m_iSize || m_iCapacity >= iCapacityLimit))
 	{
 		if (m_iSize > 0)
 		{
@@ -108,9 +112,10 @@ void Bytes::Grow(size_t iNeed)
 	size_t iCapacity = m_iCapacity ? m_iCapacity : 32;
 	do
 	{
-		if (iCapacity > SIZE_MAX / 2)
+		if (iCapacity > iCapacityLimit / 2)
 		{
-			throw std::bad_alloc();
+			iCapacity = iCapacityLimit;
+			break;
 		}
 		iCapacity *= 2;
 	} while (iCapacity < iNeed);
@@ -131,7 +136,12 @@ void Bytes::Grow(size_t iNeed)
 
 size_t Bytes::Reserve(size_t iSize)
 {
-	Grow(iSize);
+	return Reserve(iSize, SIZE_MAX);
+}
+
+size_t Bytes::Reserve(size_t iSize, size_t iCapacityLimit)
+{
+	Grow(iSize, iCapacityLimit);
 	if (iSize < m_iSize)
 	{
 		m_iSize = iSize;

@@ -221,10 +221,14 @@ OI::Coro::Task CoroMgr::Run()
 	const int64_t iLiveNs = PerItemNs(stLiveBegin, stLiveEnd, m_iLive);
 	const int64_t iWakeNs = PerItemNs(stWakeBegin, stWakeEnd, m_iLive);
 	const int64_t iChurnNs = PerItemNs(stChurnBegin, stChurnEnd, m_iChurn);
-	LOG_TRACE("coro live=%d churn=%d workers=%d rss_base_kb=%ld rss_live_kb=%ld bytes_per=%ld live_ns=%lld live_rate=%lld wake_ns=%lld wake_rate=%lld churn_ns=%lld churn_rate=%lld bad=0",
-	    m_iLive, m_iChurn, iWorkers, iRssBaseKb, iRssLiveKb, iBytes, static_cast<long long>(iLiveNs), static_cast<long long>(RateOf(iLiveNs)),
+	const int32_t iHeld = HeldCount();
+	const int32_t iWake = WakeDone();
+	const int32_t iChurn = ChurnDone();
+	const int32_t iBad = (iHeld != m_iLive) + (iWake != m_iLive) + (iChurn != m_iChurn) + (iLiveNs <= 0) + (iWakeNs <= 0) + (iChurnNs <= 0);
+	LOG_TRACE("coro live=%d churn=%d held=%d wake=%d done=%d workers=%d rss_base_kb=%ld rss_live_kb=%ld bytes_per=%ld live_ns=%lld live_rate=%lld wake_ns=%lld wake_rate=%lld churn_ns=%lld churn_rate=%lld bad=%d",
+	    m_iLive, m_iChurn, iHeld, iWake, iChurn, iWorkers, iRssBaseKb, iRssLiveKb, iBytes, static_cast<long long>(iLiveNs), static_cast<long long>(RateOf(iLiveNs)),
 	    static_cast<long long>(iWakeNs), static_cast<long long>(RateOf(iWakeNs)), static_cast<long long>(iChurnNs),
-	    static_cast<long long>(RateOf(iChurnNs)));
-	::OI::Thread::ThreadPool::GetInstance().RequestStop(0);
+	    static_cast<long long>(RateOf(iChurnNs)), iBad);
+	::OI::Thread::ThreadPool::GetInstance().RequestStop(iBad == 0 ? 0 : 1);
 	co_return;
 }

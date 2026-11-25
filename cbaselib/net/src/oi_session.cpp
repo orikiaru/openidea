@@ -100,6 +100,7 @@ void Session::SwapInBuff(::OI::Base::Bytes& stInputBufferLocal)
 	}
 	else
 	{
+		stInputBuffer.Reserve(stInputBuffer.Size() + stInputBufferLocal.Size(), iMaxReceiveBufferBytes);
 		stInputBuffer.Append(stInputBufferLocal);
 	}
 	stInputBufferLocal.Clear();

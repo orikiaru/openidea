@@ -39,6 +39,7 @@ BytesStream& BytesStream::operator<<(const std::string& sFirst)
 BytesStream& BytesStream::operator>>(std::string& sFirst)
 {
 	size_t iSize = ReadLenPrefix(*this);
+	ChargeDecode(iSize, 1);
 	sFirst.assign(GetCurPtr(), iSize);
 	AddCurPos(iSize);
 	return *this;
@@ -53,6 +54,7 @@ BytesStream& BytesStream::operator<<(const Bytes& stFirst)
 BytesStream& BytesStream::operator>>(Bytes& stFirst)
 {
 	size_t iSize = ReadLenPrefix(*this);
+	ChargeDecode(iSize, 1);
 	stFirst.Clear();
 	stFirst.Append(GetCurPtr(), iSize);
 	AddCurPos(iSize);
@@ -206,6 +208,7 @@ void BytesStream::ReadPb(uint32_t iSize, std::string& sValue)
 	{
 		throw ParserException();
 	}
+	ChargeDecode(iSize, 1);
 	if (iSize == 0)
 	{
 		sValue.clear();
@@ -223,6 +226,7 @@ void BytesStream::ReadPb(uint32_t iSize, Bytes& stValue)
 	{
 		throw ParserException();
 	}
+	ChargeDecode(iSize, 1);
 	stValue.Clear();
 	if (iSize > 0)
 	{

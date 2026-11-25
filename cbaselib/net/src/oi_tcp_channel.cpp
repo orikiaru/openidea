@@ -31,9 +31,10 @@ void TCP_Channel::DataIn()
 		{
 			break;
 		}
-		if (stInputBuffer.Capacity() - stInputBuffer.Size() < 16 * 1024)
+		if (stInputBuffer.Size() == stInputBuffer.Capacity())
 		{
-			stInputBuffer.Reserve(stInputBuffer.Size() + 64 * 1024);
+			const size_t iGrowBytes = std::min(iAllowance - stInputBuffer.Size(), std::max<size_t>(4096, stInputBuffer.Size()));
+			stInputBuffer.Reserve(stInputBuffer.Size() + iGrowBytes, iAllowance);
 		}
 		const size_t iReadLimit = std::min({stInputBuffer.Capacity() - stInputBuffer.Size(),
 		    iAllowance - stInputBuffer.Size(), iItemIndexRoundMax - iRound});
