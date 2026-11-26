@@ -41,7 +41,7 @@
 
 ### 1.4 Linux 矩阵的 HTTP 释放探针未编译，新增检查仍恒通过
 
-- 位置：`modules/ipcclient/src/http_mgr.cpp:146-172`、`CMakeLists.txt:67-71`、`tools/test_matrix.py:300`、`tools/regression/cases/hold.py:307`
+- 位置：`modules/ipcclient/src/test_http.cpp:146-172`、`CMakeLists.txt:67-71`、`tools/test_matrix.py:300`、`tools/regression/cases/hold.py:307`
 - 触发：Linux 两路矩阵（`OI_ENABLE_TEST_HOOKS=OFF`）跑 `hold`。
 - 现状：`OI_HTTP_RELEASE_TEST_HOOK` 只在 `OI_ENABLE_TEST_HOOKS=ON`（Windows 矩阵）时定义；Linux 下探针分支不编译，`#elif !defined(__GLIBC__)` 在 glibc 上也不成立，只剩 `mallinfo` 的 8 MiB 总增量启发式。`hold.py` 对 `bad=0` 的断言无条件通过，Windows 才断言 `probe count=32`。
 - 后果：32 条 1 MiB 响应里若只漏释放 1–7 条（<8 MiB），Linux 仍 PASS；476f229 声称用真实探针消除假绿，实际只消除了 Windows 一侧。
@@ -87,9 +87,9 @@
 
 ### 2.7 ipcclient
 
-- **`coro_mgr` 新 bad 中多项恒真**：`HeldCount()` 只 push 不摘，`(iHeld != m_iLive)` 在正常规模下恒假；`*Ns <= 0` 也不可能成立；“永久不恢复”表现为无限空转，不是 `bad=1`。位置：`modules/ipcclient/src/coro_mgr.cpp:224-227`。
-- **`udp rpc calls=` 打印配置总量而非实际调用数**：`fnReport` 参数顺序把 `m_iTotal` 填到 `calls=`，回归又把 `calls=1000` 写成字面断言。位置：`modules/ipcclient/src/udp_mgr.cpp:628-633`、`:707`。
-- **`timer_mgr` 在 poll 线程 `sleep_for`**：定向注入没有隔离标注，违反“应用层不要睡线程”，容易被后续代码复制。位置：`modules/ipcclient/src/timer_mgr.cpp:199-218`。
+- **`test_coro` 新 bad 中多项恒真**：`HeldCount()` 只 push 不摘，`(iHeld != m_iLive)` 在正常规模下恒假；`*Ns <= 0` 也不可能成立；“永久不恢复”表现为无限空转，不是 `bad=1`。位置：`modules/ipcclient/src/test_coro.cpp:224-227`。
+- **`udp rpc calls=` 打印配置总量而非实际调用数**：`fnReport` 参数顺序把 `m_iTotal` 填到 `calls=`，回归又把 `calls=1000` 写成字面断言。位置：`modules/ipcclient/src/test_udp.cpp:628-633`、`:707`。
+- **`test_timer` 在 poll 线程 `sleep_for`**：定向注入没有隔离标注，违反“应用层不要睡线程”，容易被后续代码复制。位置：`modules/ipcclient/src/test_timer.cpp:199-218`。
 
 ### 2.8 tools / 回归
 

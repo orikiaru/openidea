@@ -19,7 +19,7 @@ def reset_connections():
 
 
 def rpc_ingress_faults():
-    # 只注入畸形/分片网络数据；正常负载仍由 ipcclient 的 EchoMgr 发出。
+    # 只注入畸形/分片网络数据；正常负载仍由 ipcclient 的 TestEcho 发出。
     def closed(stream):
         try:
             assert stream.recv(1) == b"", "invalid frame accepted"

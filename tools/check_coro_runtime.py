@@ -344,6 +344,75 @@ int main(int iCountParam, char** vArgumentsParam)
             ++iBad;
         }
         std::printf("blocking argument lifetime bad=%d\n", iBad);
+        auto pCaptureRuns = std::make_shared<std::atomic<int>>(0);
+        auto pCaptureReleased = std::make_shared<std::atomic<int>>(0);
+        auto pCaptureGate = std::make_shared<std::atomic<bool>>(false);
+        auto pCaptureSuspended = std::make_shared<std::atomic<bool>>(false);
+        struct CaptureValue
+        {
+            std::shared_ptr<std::atomic<int>> pReleased;
+            ~CaptureValue()
+            {
+                ++*pReleased;
+            }
+        };
+        std::weak_ptr<CaptureValue> pCaptureWeak;
+        {
+            auto fnCreate = [pCaptureRuns, pCaptureReleased, pCaptureGate, pCaptureSuspended, &pCaptureWeak]()
+            {
+                auto pValue = std::make_shared<CaptureValue>();
+                pValue->pReleased = pCaptureReleased;
+                pCaptureWeak = pValue;
+                return OI::Coro::StartTask([pValue, pCaptureRuns, pCaptureGate, pCaptureSuspended](OI::Coro::Token) -> OI::Coro::TaskResult<int>
+                {
+                    ++*pCaptureRuns;
+                    co_await OI::Coro::yield(1);
+                    pCaptureSuspended->store(true);
+                    while (!pCaptureGate->load())
+                    {
+                        co_await OI::Coro::yield(1);
+                    }
+                    if (!pValue || pValue->pReleased->load() != 0)
+                    {
+                        co_return 7;
+                    }
+                    throw std::runtime_error("capture exception probe");
+                });
+            };
+            auto stCaptureTask = fnCreate();
+            while (!pCaptureSuspended->load())
+            {
+                co_await OI::Coro::yield(1);
+            }
+            if (pCaptureWeak.expired() || pCaptureReleased->load() != 0)
+            {
+                ++iBad;
+            }
+            pCaptureGate->store(true);
+            bool bCaught = false;
+            try
+            {
+                const int iUnexpected = co_await stCaptureTask;
+                (void)iUnexpected;
+            }
+            catch (const std::runtime_error& stError)
+            {
+                bCaught = std::string(stError.what()) == "capture exception probe";
+            }
+            if (!bCaught || pCaptureRuns->load() != 1)
+            {
+                ++iBad;
+            }
+        }
+        for (int iWait = 0; iWait < 500 && !pCaptureWeak.expired(); ++iWait)
+        {
+            co_await OI::Coro::yield(1);
+        }
+        if (!pCaptureWeak.expired() || pCaptureReleased->load() != 1)
+        {
+            ++iBad;
+        }
+        std::printf("capture exception runs=%d released=%d bad=%d\n", pCaptureRuns->load(), pCaptureReleased->load(), iBad);
         for (int iIndex = 0; iIndex < 1024; ++iIndex)
         {
             if ((co_await Child(*pLifetime)) != 42)
@@ -479,7 +548,7 @@ int main(int iCountParam, char** vArgumentsParam)
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build-dir", type=Path, default=Path.home() / "openidea-build-gcc13")
-    parser.add_argument("--asan", action="store_true")
+    parser.add_argument("--asan", action="store_true", help="instrument the probe and framework headers with AddressSanitizer and UBSan")
     parser.add_argument("--mode", choices=("all", "mt", "st"), default="all")
     args = parser.parse_args()
     build = args.build_dir.resolve()
@@ -500,7 +569,8 @@ def main():
             if mode == "st":
                 compile_args.append("-D_SINGLE_THREAD_")
             if args.asan:
-                compile_args += ["-O1", "-fsanitize=address", "-fno-omit-frame-pointer"]
+                compile_args += ["-O1", "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined",
+                                 "-fno-omit-frame-pointer"]
             subprocess.run(compile_args, cwd=entry["directory"], check=True)
             link_args = [part for part in link_base if not part.endswith(".o")]
             suffix = "_m_static.a" if mode == "mt" else "_static.a"
@@ -509,11 +579,12 @@ def main():
             link_args.insert(1, str(obj))
             link_args[link_args.index("-o") + 1] = str(binary)
             if args.asan:
-                link_args.append("-fsanitize=address")
+                link_args.append("-fsanitize=address,undefined")
             subprocess.run(link_args, cwd=link_dir, check=True)
             env = dict(os.environ)
             if args.asan:
                 env["ASAN_OPTIONS"] = "detect_leaks=0:abort_on_error=1"
+                env["UBSAN_OPTIONS"] = "halt_on_error=1:print_stacktrace=1"
             result = subprocess.run([str(binary), str(config), "normal"], capture_output=True, text=True,
                                     encoding="utf-8", errors="replace", timeout=15, env=env)
             print(mode, result.stdout, result.stderr, flush=True)
@@ -525,6 +596,7 @@ def main():
             if mode == "st":
                 assert result.stderr.count("warning: coroutine start rejected: current thread is not the single-thread poll thread") == 4
             assert "blocking argument lifetime bad=0" in result.stdout
+            assert "capture exception runs=1 released=1 bad=0" in result.stdout
             assert "blocking capacity rejected=1 executed=1024" in result.stdout
             assert "blocking in-flight configured rejected=0 executed=1025" in result.stdout
             assert "work protocol extension unknown id ok" in result.stdout

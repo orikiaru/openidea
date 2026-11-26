@@ -80,4 +80,6 @@ class UdpCase(Case):
             print("poll udp close and wrong-thread probe PASS", flush=True)
         return False
 
-CASES = (UdpCase("udp", "udp"),)
+CASES = (
+    UdpCase("udp", "udp"),
+)

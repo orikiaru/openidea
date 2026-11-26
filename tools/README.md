@@ -19,15 +19,15 @@
 - `config.py`：toml 文本助手（`shift_ports`、`replace`、`set_test_flags`）。
 - `rpc_faults.py`：RST 断连和 rpc-ingress 畸形/分片帧注入。
 - `procs.py`：临时目录、进程台账、`Context`（start/ready/stop/pause/start_logd/stop_backends）和 `cleanup_owned`。
-- `web.py`：HTTP 夹具，以及 `web` / `web-coro` 两个独立入口。
+- `web.py`、`web_coro.py`：HTTP 主场景入口；`web_client_fixtures.py`、`web_server_checks.py`、`test_bodyless.py` 提供客户端夹具与服务端检查。`cases/web.py` 注册独立执行回调，包括 Windows 专项 `web-stop`。
 - `runner.py`：通用 driver（建环境 → 配置 → 起服务 → 跑 client → 断言 → 清理）和 `main()`。
-- `cases/`：`Case` 数据类、`ALL_CASES`/`REGISTRY`/`get_case`；`echo`、`log`、`redis`、`hold`、`multi`、`udp`、`admission`、`db`、`coro` 每组实现自己的 `configure`/`prepare`/`scenario`/`client_env`/`on_poll`/`check`/`diagnostics`。
+- `cases/`：`Case` 数据类、`ALL_CASES`/`REGISTRY`/`get_case`；`echo`、`log`、`redis`、`hold`、`multi`、`udp`、`admission`、`db`、`coro`、`web` 每组实现自己的 `configure`/`prepare`/`scenario`/`client_env`/`on_poll`/`check`/`diagnostics`。
 
-新增用例：在对应组模块里加或改 `Case`，补 `configure`（toml 改写）、`prepare`（配置追加/环境）、`scenario`（额外进程）、`on_poll`（轮询中注入）、`check`（断言），再加进该组的 `CASES`；进 `--case all` 的写入 `cases/__init__.py` 的 `ALL_CASES`（顺序即执行顺序），只在定向运行（如 hold-blocking、mysql、clock-*）的写入 `TARGETED_CASES`，并同步 `runner.py` 的 `--case` choices。保持原有语句顺序、打印和断言文本。
+新增用例：在对应组实现 `Case` 的配置、准备、场景和断言钩子，在该组 `CASES` 登记名称与 mode；需定向运行时在声明中给 `targeted_reason`，默认自动纳入 `all`。独立流程在 `standalone` 传执行回调；注册表自动收集各组，runner 的 choices 和 `--list-cases` 随之生成。新增组需在注册表集中导入并登记，补脚本自测与规程，保持旧别名和行为。
 
 脚本级自检：`python tools/test_regression_checks.py`、`python tools/test_preflight_ports.py`、`python tools/test_test_safety.py`，矩阵会自动执行。测试要 patch 名字实际查找的模块（`regression.ports`、`regression.procs`、`regression.web` 等），不要 patch 薄入口 `run_regressions.py`，否则补丁不会生效。
 
-在 WSL 中执行，复用 `ipcclient` 的四个 Mgr。每个用例创建自己的临时配置和日志目录，退出时清理本次进程和目录。已有端口被占用时直接报错，不终止其他进程。日志超过 2GiB 立即失败，Redis 内存上限为 1536MiB。
+在 WSL 中执行，复用 `ipcclient` 的四个测试入口。每个用例创建自己的临时配置和日志目录，退出时清理本次进程和目录。已有端口被占用时直接报错，不终止其他进程。日志超过 2GiB 立即失败，Redis 内存上限为 1536MiB。
 
 ```sh
 cmake -S /mnt/e/openidea -B ~/openidea-build-gcc13 -DOI_IPC_SINGLE_THREAD=OFF
@@ -37,9 +37,9 @@ python3 /mnt/e/openidea/tools/run_regressions.py --case all
 
 把 `OI_IPC_SINGLE_THREAD` 改成 `ON`，重新编译并执行相同用例，即为单线程客户端和回声服务端。日志服固定多线程，Redis 代理固定单线程。测完恢复为 `OFF` 并重新编译。
 
-`all` 包含四个常规测试以及 Redis 队列限流、RST 断连、磁盘写满故障测试。也可以用 `--case echo|log|redis|redis-limit|hold|reset|disk-full` 单独执行。Redis 完整性测试还覆盖 poll 线程同步调用的拒绝、连接状态命令的拒绝和断开后的重连。
+`all` 运行已注册且不在定向列表中的 26 项，具体清单见 [测试规程](../docs/testing.md)。各项也可通过 `--case 名称` 单独执行；可选 `test-` 前缀，例如 `test-log-rotation` 与 `log-rotation` 等价。Redis 完整性测试还覆盖 poll 线程同步调用的拒绝、连接状态命令的拒绝和断开后的重连。
 
-校时故障使用进程内拦截，不需要 root，也不改变机器时间。启动两秒后模拟墙上时间前进一天或回拨一小时，仍通过 HoldMgr 核对延时、RPC 和 Redis 的超时与迟到回包。
+校时故障使用进程内拦截，不需要 root，也不改变机器时间。启动两秒后模拟墙上时间前进一天或回拨一小时，仍通过 TestHold 核对延时、RPC 和 Redis 的超时与迟到回包。
 
 ```sh
 gcc-13 -shared -fPIC /mnt/e/openidea/tools/clock_fault.c -o /tmp/oi-clock-fault.so
@@ -51,7 +51,7 @@ Redis 默认程序位置为 `/usr/local/bin/redis-server`，可通过 `--redis-b
 
 磁盘故障用 `/dev/full` 替换临时日志文件。判据是日志服非零退出并在 stderr 明确报告写入或刷新失败。该策略是失败即停止，不代表未落盘数据已经持久化，也不做自动重放。
 
-`ScheduleMgr` 检查临时带捕获协程 lambda 在让出后恢复。`RpcPendingMgr` 检查 RPC 错误来源不消费等待、毫秒时长、直接返回响应和真实断连及时结束等待。RedisMgr 检查直接返回共享回执、参数/服务端/断连错误分类；`redis-limit` 临时将等待上限设为 1，验证 Busy 拒绝后不会串包，排队完成后可以继续 PING。
+`TestSchedule` 检查临时带捕获协程 lambda 在让出后恢复。`TestRpcPending` 检查 RPC 错误来源不消费等待、毫秒时长、直接返回响应和真实断连及时结束等待。TestRedis 检查直接返回共享回执、参数/服务端/断连错误分类；`redis-limit` 临时将等待上限设为 1，验证 Busy 拒绝后不会串包，排队完成后可以继续 PING。
 
 Hold 回归验证批量定时唤醒不丢失，同时覆盖任务作用域停止/等待、异常传递、待连接 RPC 条数和字节限额及取消后的容量恢复。所有服务退出超过 3 秒需要强杀即判回归失败。
 
@@ -59,7 +59,7 @@ Hold 还注入序列化异常、排队/发送异常以及完成回调竞争，�
 
 Hold 的会话索引回归登记 4096 个等待项，换绑其中一部分后依次断开旧、新会话，检查其他会话不受影响，最后调用表、超时索引和会话索引都恢复基线。
 
-`--case redis-queue-timeout` 在现有 RedisMgr 中通过 `[Regression] redis_queue_timeout=true` 启用：在 `StartTask` 起的协程里同步调用阻塞命令，100ms 的请求预算必须在 1 秒内按 Timeout 返回，且迟到回执的配对位置仍保留。`--case rpc-ingress` 先注入超大包头、残缺包头/正文、滴流、64KiB 边界分片和计时器取消/重启，再由 EchoMgr 跑百万次回声。两项均包含在 `all`，配置只写入临时目录。
+`--case redis-queue-timeout` 在现有 TestRedis 中通过 `[Regression] redis_queue_timeout=true` 启用：在 `StartTask` 起的协程里同步调用阻塞命令，100ms 的请求预算必须在 1 秒内按 Timeout 返回，且迟到回执的配对位置仍保留。`--case rpc-ingress` 先注入超大包头、残缺包头/正文、滴流、64KiB 边界分片和计时器取消/重启，再由 TestEcho 跑百万次回声。两项均包含在 `all`，配置只写入临时目录。
 
 调度与发送回归：Hold 检查 64 个持续就绪的协程不会饿死新起的协程，发送额度跨会话/通道缓冲计数，工作线程主动断连，以及自动推断响应类型/会话号的 RPC。Redis 检查两种线程模式都拒绝在真实 libuv 定时回调中同步调用；Hold 的迟到 BLPOP 使用同步接口，要求按配置超时后仍能正确配对下一条 PING。日志测试临时把 LogClient 待发额度降到 256KiB，再核对完整 1GiB 落盘，覆盖队列满后的重试和发送计数。
 

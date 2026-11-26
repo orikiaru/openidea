@@ -1,5 +1,5 @@
 ---
-description: 协程、Task、StartTask、co_await、yield、让出、挂起、调度、睡眠、sleep、sleep_for。写或改协程前先读 docs/coroutine.md，对照标准用例，不要另起挂起或切栈的写法。空等先对上 log_mgr 的 Pump，不要用 sleep。
+description: 协程、Task、StartTask、co_await、yield、让出、挂起、调度、睡眠、sleep、sleep_for。写或改协程前先读 docs/coroutine.md，对照标准用例，不要另起挂起或切栈的写法。空等先对上 test_log 的 Pump，不要用 sleep。
 alwaysApply: false
 ---
 
@@ -7,7 +7,7 @@ alwaysApply: false
 
 先读 `docs/coroutine.md`。要结果用 `co_await`，不等用 `OI::Coro::StartTask`，让时间用 `co_await OI::Coro::yield(毫秒)`。`yield(0)` 只回队列，这一轮不再跑它。
 
-应用层空等必须先对上 `modules/ipcclient/src/log_mgr.cpp` 的 `Pump`：`co_await OI::Coro::yield(毫秒)`。对上了再写。不要用 `sleep`、`sleep_for`、`Sleep`、`usleep`。单线程睡下去，poll 停转。
+应用层空等必须先对上 `modules/ipcclient/src/test_log.cpp` 的 `Pump`：`co_await OI::Coro::yield(毫秒)`。对上了再写。不要用 `sleep`、`sleep_for`、`Sleep`、`usleep`。单线程睡下去，poll 停转。
 
 任务创建即运行：协程里调用协程函数，会在调用方栈上跑到第一次挂起再返回。不要在第一次挂起前层层调用子任务。带捕获的协程 lambda 必须经 `StartTask` 或 `TaskScope::Start` 启动。没有 `YieldToPool`、`Park`、`Wake`。
 
@@ -30,10 +30,10 @@ static int32_t HandleAllEcho(const OI::RpcData::AllEchoReq& stRequest, OI::RpcDa
 
 ```cpp
 OI::Coro::StartTask([](OI::Coro::Token) {
-    return EchoMgr::GetInstance().Run();
+    return TestEcho::GetInstance().Run();
 });
 
-OI::Coro::Task EchoMgr::Run()
+OI::Coro::Task TestEcho::Run()
 {
     std::vector<OI::Coro::Task> vWorkers;
     for (int32_t iWorker = 0; iWorker < iWorkers; ++iWorker)
@@ -44,7 +44,7 @@ OI::Coro::Task EchoMgr::Run()
     Report();
 }
 
-OI::Coro::Task EchoMgr::Pump()
+OI::Coro::Task TestEcho::Pump()
 {
     for (;;)
     {

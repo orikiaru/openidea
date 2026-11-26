@@ -35,7 +35,7 @@ def apply_port_offset(offset):
 
 
 def preflight_ports(case):
-    if case == "web":
+    if case in ("web", "web-stop"):
         return
     scene_ports = {"web-coro": (IPC_PORT, REDIS_SERVER_PORT, REDIS_PORT),
                    "hold-blocking": (LOGD_PORT, IPC_PORT), "hold-timer": (LOGD_PORT,),

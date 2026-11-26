@@ -20,11 +20,10 @@ from registry_replacement_check import check as check_registry_replacement, chec
 from registry_fault_proxy import RegistryRedisProxy
 
 from . import ports
-from .cases import ALL_CASES, get_case
+from .cases import ALL_CASES, REGISTRY, TARGETED_CASES, get_case, normalize_case_name
 from .config import replace, shift_ports
 from .probes import CAP, EnvironmentBlocked, bytes_on_disk, log_payload_on_disk
 from .procs import REPO, Context, cleanup_owned, regression_directory
-from .web import run_web, run_web_coro
 
 
 def run_case(case, args):
@@ -216,7 +215,9 @@ def run_case(case, args):
 
 def main(doc=None):
     parser = argparse.ArgumentParser(description=__doc__ if doc is None else doc)
-    parser.add_argument("--case", default="all", choices=("all", "mysql", "mysql-wake", "blocking-wake", "coro", "echo", "empty", "log", "log-backpressure", "log-contract", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "hold-blocking", "hold-timer", "hold-redis", "rpc-admission-count", "rpc-admission-bytes", "reset", "tcp-error-rearm", "tcp-close-reclaim", "disk-full", "clock-forward", "clock-back", "registry", "udp", "multi", "local", "registry-static", "web", "web-coro"))
+    parser.add_argument("--case", default="all", type=normalize_case_name, choices=("all", *REGISTRY),
+                        metavar="all|test-NAME", help="available cases: " + ", ".join("test-" + name for name in REGISTRY))
+    parser.add_argument("--list-cases", action="store_true", help="list full and targeted cases without starting services")
     parser.add_argument("--bin-dir", type=Path, default=REPO / "deploy/bin")
     parser.add_argument("--redis-binary", type=Path, help="default: redis-server on PATH")
     parser.add_argument("--clock-fault-so", type=Path)
@@ -227,8 +228,12 @@ def main(doc=None):
     parser.add_argument("--port-offset", type=int, default=0, help="shift every test port; parallel work copies need distinct offsets")
     parser.add_argument("--expect-thread", choices=("st", "mt"), help="thread mode the hold and udp binaries must match")
     options = parser.parse_args()
-    if options.case in ("all", "hold", "udp") and options.expect_thread is None:
-        parser.error("--expect-thread st or mt is required for hold and udp; either mode is not a pass")
+    if options.list_cases:
+        for name in REGISTRY:
+            print("test-" + name, TARGETED_CASES.get(name, "all"), sep=": ")
+        return
+    if options.case in ("all", "hold", "udp", "web-stop") and options.expect_thread is None:
+        parser.error("--expect-thread st or mt is required for hold, udp and web-stop")
     if options.redis_timeline and (options.case not in ("hold", "hold-redis") or not options.artifacts):
         parser.error("--redis-timeline requires --case hold or hold-redis and --artifacts")
     options.redis_binary = options.redis_binary or Path(shutil.which("redis-server") or "/usr/local/bin/redis-server")
@@ -236,26 +241,34 @@ def main(doc=None):
         parser.error("--redis-wsl is only for native Windows tests")
     if WINDOWS and options.case.startswith("clock-"):
         parser.error("clock fault injection requires Linux LD_PRELOAD; never silently skip it")
+    cases = ALL_CASES if options.case == "all" else (options.case,)
     if options.artifacts:
         options.artifacts = options.artifacts.resolve()
         options.artifacts.mkdir(parents=True, exist_ok=True)
+        plan = {"selected": list(cases)}
+        if options.case == "all":
+            plan["targeted_only"] = TARGETED_CASES
+        (options.artifacts / "plan.json").write_text(json.dumps(plan, indent=2), encoding="utf-8")
+        (options.artifacts / "results.json").write_text("[]", encoding="utf-8")
     ports.apply_port_offset(options.port_offset)
     ports.preflight_ports(options.case)
-    cases = ALL_CASES if options.case == "all" else (options.case,)
     results = []
     for item in cases:
         started = time.monotonic()
         result = {"case": item, "platform": "windows" if WINDOWS else "linux"}
         try:
+            if WINDOWS and item == "tcp-error-rearm":
+                result.update(status="skipped", reason="Unix libuv POLLERR only")
+                print(item, "SKIP:", result["reason"], flush=True)
+                continue
             if item in ("mysql", "mysql-wake"):
                 required = ("OI_TEST_MYSQL_HOST", "OI_TEST_MYSQL_PORT", "OI_TEST_MYSQL_USER", "OI_TEST_MYSQL_PASSWORD", "OI_TEST_MYSQL_DATABASE")
                 missing = [name for name in required if name not in os.environ or (name != "OI_TEST_MYSQL_PASSWORD" and not os.environ[name])]
                 if missing:
                     raise EnvironmentBlocked("missing environment variables: " + ", ".join(missing))
-            if item == "web":
-                run_web(options)
-            elif item == "web-coro":
-                run_web_coro(options)
+            entry = get_case(item)
+            if entry.standalone is not None:
+                entry.standalone(options)
             else:
                 run_case(item, options)
             result["status"] = "passed"
@@ -270,7 +283,7 @@ def main(doc=None):
             results.append(result)
             if options.artifacts:
                 (options.artifacts / "results.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
-    raise SystemExit(1 if any(item["status"] != "passed" for item in results) else 0)
+    raise SystemExit(1 if any(item["status"] not in ("passed", "skipped") for item in results) else 0)
 
 
 run = run_case

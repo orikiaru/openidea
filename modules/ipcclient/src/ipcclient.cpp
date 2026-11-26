@@ -1,13 +1,13 @@
 #include "ipcclient.h"
-#include "echo_mgr.h"
-#include "coro_mgr.h"
-#include "empty_mgr.h"
-#include "db_mgr.h"
-#include "hold_mgr.h"
-#include "log_mgr.h"
-#include "multi_mgr.h"
-#include "redis_mgr.h"
-#include "udp_mgr.h"
+#include "test_echo.h"
+#include "test_coro.h"
+#include "test_empty.h"
+#include "test_db.h"
+#include "test_hold.h"
+#include "test_log.h"
+#include "test_multi.h"
+#include "test_redis.h"
+#include "test_udp.h"
 #include "oi_redis.h"
 #include "oi_log.h"
 
@@ -23,37 +23,37 @@ int32_t IpcClient::Init()
 		LOG_ERROR("ipcclient init protocol manager failed code=%d", iCode);
 		return iCode;
 	}
-	DbMgr::GetInstance().Load();
-	EchoMgr::GetInstance().Load();
-	CoroMgr::GetInstance().Load();
-	if (EchoMgr::GetInstance().StackOn())
+	TestDb::GetInstance().Load();
+	TestEcho::GetInstance().Load();
+	TestCoro::GetInstance().Load();
+	if (TestEcho::GetInstance().StackOn())
 	{
 		OI::Coro::StartTask([](OI::Coro::Token)
 		{
-			return EchoMgr::GetInstance().StackProbe();
+			return TestEcho::GetInstance().StackProbe();
 		});
 	}
-	iCode = UdpMgr::GetInstance().Load();
+	iCode = TestUdp::GetInstance().Load();
 	if (iCode != OI_OK)
 	{
 		LOG_ERROR("ipcclient init udp load failed code=%d", iCode);
 		return iCode;
 	}
-	UdpMgr::GetInstance().Start();
-	iCode = MultiMgr::GetInstance().Load();
+	TestUdp::GetInstance().Start();
+	iCode = TestMulti::GetInstance().Load();
 	if (iCode != OI_OK)
 	{
 		LOG_ERROR("ipcclient init multi load failed code=%d", iCode);
 		return iCode;
 	}
-	MultiMgr::GetInstance().Start();
-	RedisMgr::GetInstance().Load();
-	iCode = HoldMgr::GetInstance().Load();
+	TestMulti::GetInstance().Start();
+	TestRedis::GetInstance().Load();
+	iCode = TestHold::GetInstance().Load();
 	if (iCode != OI_OK)
 	{
 		return iCode;
 	}
-	if (!RedisMgr::GetInstance().Enabled() && !HoldMgr::GetInstance().NeedsRedis())
+	if (!TestRedis::GetInstance().Enabled() && !TestHold::GetInstance().NeedsRedis())
 	{
 		return OI_OK;
 	}
@@ -64,9 +64,9 @@ int32_t IpcClient::Init()
 		return iCode;
 	}
 	::OI::Redis::RedisClient::GetInstance().StartClient();
-	if (RedisMgr::GetInstance().Enabled())
+	if (TestRedis::GetInstance().Enabled())
 	{
-		RedisMgr::GetInstance().Start();
+		TestRedis::GetInstance().Start();
 	}
 	return OI_OK;
 }
@@ -83,15 +83,15 @@ void IpcClient::OnClientConnect(::OI::Net::Session* pSession)
 	{
 		return;
 	}
-	EchoMgr::GetInstance().Load();
-	LogMgr::GetInstance().Load();
-	EchoMgr::GetInstance().Start(pSession->GetSessionID());
-	CoroMgr::GetInstance().Start();
-	EmptyMgr::GetInstance().Load();
-	EmptyMgr::GetInstance().Start();
-	LogMgr::GetInstance().Start();
-	HoldMgr::GetInstance().Start(pSession->GetSessionID());
-	DbMgr::GetInstance().Start();
+	TestEcho::GetInstance().Load();
+	TestLog::GetInstance().Load();
+	TestEcho::GetInstance().Start(pSession->GetSessionID());
+	TestCoro::GetInstance().Start();
+	TestEmpty::GetInstance().Load();
+	TestEmpty::GetInstance().Start();
+	TestLog::GetInstance().Start();
+	TestHold::GetInstance().Start(pSession->GetSessionID());
+	TestDb::GetInstance().Start();
 }
 
 void IpcClient::OnClientDisconnect(const ::OI::Net::Session* pSession)

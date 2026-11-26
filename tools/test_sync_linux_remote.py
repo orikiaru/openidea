@@ -9,17 +9,18 @@ import sync_linux_remote as sync
 class SyncLinuxRemoteTests(unittest.TestCase):
     def test_should_exclude_build_and_local(self):
         self.assertTrue(sync.should_exclude(Path(".local/linux-hosts.json")))
+        self.assertTrue(sync.should_exclude(Path(".codex/session.json")))
         self.assertTrue(sync.should_exclude(Path("build-win/CMakeCache.txt")))
         self.assertTrue(sync.should_exclude(Path("build-clangd-linux/foo.o")))
         self.assertTrue(sync.should_exclude(Path("deploy/bin/ipcclient")))
         self.assertTrue(sync.should_exclude(Path("modules/__pycache__/x.pyc")))
         self.assertFalse(sync.should_exclude(Path("deploy/config/ipcclient.toml")))
-        self.assertFalse(sync.should_exclude(Path("modules/ipcclient/src/coro_mgr.cpp")))
+        self.assertFalse(sync.should_exclude(Path("modules/ipcclient/src/test_coro.cpp")))
 
     def test_parse_require(self):
         self.assertEqual(
-            sync.parse_require(["modules/ipcclient/src/coro_mgr.cpp:live_ns="]),
-            [("modules/ipcclient/src/coro_mgr.cpp", "live_ns=")],
+            sync.parse_require(["modules/ipcclient/src/test_coro.cpp:live_ns="]),
+            [("modules/ipcclient/src/test_coro.cpp", "live_ns=")],
         )
         with self.assertRaises(SystemExit):
             sync.parse_require(["no-colon"])
@@ -28,7 +29,7 @@ class SyncLinuxRemoteTests(unittest.TestCase):
         text = sync.apply_script(
             "/home/u/openidea",
             "/home/u/openidea-sync.tar",
-            [("modules/ipcclient/src/coro_mgr.cpp", "live_ns=")],
+            [("modules/ipcclient/src/test_coro.cpp", "live_ns=")],
         )
         self.assertNotIn("\r", text)
         self.assertIn("SYNC_OK=1", text)
@@ -47,6 +48,8 @@ class SyncLinuxRemoteTests(unittest.TestCase):
             (root / "tools" / "test_matrix.py").write_text("ok\n", encoding="utf-8")
             (root / ".local").mkdir()
             (root / ".local" / "secret.json").write_text("{}\n", encoding="utf-8")
+            (root / ".codex").mkdir()
+            (root / ".codex" / "private.json").write_text("{}\n", encoding="utf-8")
             (root / "build-win").mkdir()
             (root / "build-win" / "a.obj").write_text("x", encoding="utf-8")
             (root / "deploy" / "bin").mkdir(parents=True)
@@ -64,6 +67,7 @@ class SyncLinuxRemoteTests(unittest.TestCase):
             self.assertIn("tools/test_matrix.py", names)
             self.assertIn("deploy/config/ipcclient.toml", names)
             self.assertTrue(all(not name.startswith(".local") for name in names))
+            self.assertTrue(all(not name.startswith(".codex") for name in names))
             self.assertTrue(all(not name.startswith("build-win") for name in names))
             self.assertTrue(all(not name.startswith("deploy/bin") for name in names))
 

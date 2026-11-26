@@ -132,12 +132,12 @@ Redis 标准接口只提供单 key 接口，禁止隐式多 key 查询或自动�
 
 | 关键词 | 文档 | 标准用例 |
 | --- | --- | --- |
-| 协程、Task、StartTask、TaskScope、co_await、yield、让出、挂起、睡眠、sleep、sleep_for、RunBlocking、lambda、捕获、WhenAll | `docs/coroutine.md` 的硬性约束 | `modules/ipcserver/src/ipcserver.cpp` 的 `RegisterRpcHandler`；`modules/ipcclient/src/echo_mgr.cpp` 的 `StartTask`；空等用 `modules/ipcclient/src/log_mgr.cpp` 的 `Pump` 里 `co_await OI::Coro::yield` |
+| 协程、Task、StartTask、TaskScope、co_await、yield、让出、挂起、睡眠、sleep、sleep_for、RunBlocking、lambda、捕获、WhenAll | `docs/coroutine.md` 的硬性约束 | `modules/ipcserver/src/ipcserver.cpp` 的 `RegisterRpcHandler`；`modules/ipcclient/src/test_echo.cpp` 的 `StartTask`；空等用 `modules/ipcclient/src/test_log.cpp` 的 `Pump` 里 `co_await OI::Coro::yield` |
 | RPC、RpcCall、RegisterRpcHandler、RouteManager、回包、调用号、CallAll、CallMany | `docs/coroutine.md` 的服务端和客户端 | 同上，推迟回包用同文件的 `Hold` |
 | 单向消息、Notify、NotifyAll、NotifyMany | `docs/cbaselib/notify.md` | `modules/ipcserver/src/ipcudp.cpp` 的 `RegisterNotifyHandler`；按服务名见 `docs/registry.md`；协程侧见 `docs/coroutine.md` 的单向消息 |
-| Redis、redisserver、RESP、CallRedis | `docs/cbaselib.md` 的 redis 段 | `modules/ipcclient/src/redis_mgr.cpp` 的 `Check` |
+| Redis、redisserver、RESP、CallRedis | `docs/cbaselib.md` 的 redis 段 | `modules/ipcclient/src/test_redis.cpp` 的 `Check` |
 | 定时器、时间轮、AddTimer、BaseTimer | `docs/timer.md` | `Hold` 里的 `co_await OI::Coro::yield` |
-| 周期任务、Update、心跳、定时拉取、单例循环、OnSecondUpdate、OnTickUpdate | `docs/timer.md` 的单例更新段 | `cbaselib/proto/src/oi_registry_client.cpp` 的 `RegistryClient::OnSecondUpdate`；`modules/ipcclient/src/timer_mgr.cpp` 的 `OnTickUpdate` |
+| 周期任务、Update、心跳、定时拉取、单例循环、OnSecondUpdate、OnTickUpdate | `docs/timer.md` 的单例更新段 | `cbaselib/proto/src/oi_registry_client.cpp` 的 `RegistryClient::OnSecondUpdate`；`modules/ipcclient/src/test_timer.cpp` 的 `OnTickUpdate` |
 | 协议、proto.xml、.proto、rpcdata、模块 | `docs/module.md` | `modules/protoconfig/rpc.proto` 的 `AllEcho`、`Hold` |
 | 端口、复用、bind、TIME_WAIT、监听 | `docs/cbaselib.md` 的 net 段 | `cbaselib/port/oi_net_os.cpp` 的 `NetOs_Bind` |
 | Web、HTTP、JSON、urlencode、二进制 body | `docs/module.md` 的 Web 段 | `modules/webserver` 的五个路径；`modules/webclient` 的 `Run` |
@@ -145,7 +145,7 @@ Redis 标准接口只提供单 key 接口，禁止隐式多 key 查询或自动�
 | 目录、类外函数、全局变量、静态变量、友元、单线程/多线程选型 | `docs/develop.md` 的第 2、6 节 | `RegisterRpcHandler(&类::成员)`、`RegisterNotifyHandler(&类::成员)` |
 | 错误码、iCode、errordef、自定义结构、手写序列化 | `docs/develop.md` 的第 3、4 节 | `cbaselib/include/oi_errno.h` |
 | 时间、计时、GetTime、毫秒、过期、ttl、缓存 | `docs/develop.md` 的第 5 节 | `cbaselib/timer/inc/oi_timer_helper.h` 的 `GetTime` |
-| 测试、回归、补用例、全量、矩阵、验收、clangd、logd、EchoMgr、LogMgr、RedisMgr、HoldMgr、run_regressions、test_matrix | `docs/testing.md` 的硬性约束 | `modules/ipcclient/src/udp_mgr.cpp` 的 `UdpMgr`；另见 `docs/develop.md` 第 7 节，远程 Linux 另读 `.agents/skills/linux-remote-test/SKILL.md` |
+| 测试、回归、补用例、全量、矩阵、验收、clangd、logd、TestEcho、TestLog、TestRedis、TestHold、run_regressions、test_matrix | `docs/testing.md` 的硬性约束 | `modules/ipcclient/src/test_udp.cpp` 的 `TestUdp`；另见 `docs/develop.md` 第 7 节，远程 Linux 另读 `.agents/skills/linux-remote-test/SKILL.md` |
 | 提交、推送、子模块、todo | `docs/develop.md` 的第 8 节 | AGENTS.md「提交就是提交并推送」 |
 
 <!-- route-index:end -->

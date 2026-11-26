@@ -1,4 +1,4 @@
-#include "db_mgr.h"
+#include "test_db.h"
 #include "oi_db.h"
 #include "oi_mysql.h"
 #include "oi_errno.h"
@@ -173,7 +173,7 @@ class BenchDriver : public OI::Db::Driver
 
 }
 
-OI::Coro::TaskResult<int32_t> DbMgr::RunWakeBenchmark(bool bBlockingOnly)
+OI::Coro::TaskResult<int32_t> TestDb::RunWakeBenchmark(bool bBlockingOnly)
 {
 	constexpr int32_t iWarmup = 100;
 	constexpr int32_t iSamples = 1000;

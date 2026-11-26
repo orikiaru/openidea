@@ -1,6 +1,10 @@
 """parallel_matrix 的本地单测：同一路副本已有进程在用时拒绝启动。"""
+import os
 import subprocess
+import tempfile
+import shutil
 import sys
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -55,6 +59,110 @@ class LaneBusyTests(unittest.TestCase):
         sync_windows.assert_not_called()
         popen.assert_not_called()
         mkdir.assert_not_called()
+
+
+class SyncAndBuildTests(unittest.TestCase):
+    def test_private_directories_are_excluded_and_windows_overlap_rejected(self):
+        self.assertIn(".local", matrix.EXCLUDED_DIRS)
+        self.assertIn(".codex", matrix.EXCLUDED_DIRS)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "repo"
+            root.mkdir()
+            with mock.patch.object(matrix, "ROOT", root), mock.patch.object(matrix.subprocess, "run") as run:
+                for target in (root, root / "lane", root.parent):
+                    with self.subTest(target=target), self.assertRaises(ValueError):
+                        matrix.sync_windows(target)
+                run.assert_not_called()
+
+    def test_linux_overlap_rejected_before_sync(self):
+        for destination in ("/source", "/source/child", "/"):
+            response = subprocess.CompletedProcess([], 0, "/source\n" + destination + "\n")
+            with self.subTest(destination=destination), mock.patch.object(matrix, "wsl", return_value=response) as wsl, \
+                    mock.patch.object(matrix, "linux_path", return_value="/source"):
+                with self.assertRaises(ValueError):
+                    matrix.sync_linux("root", destination)
+                self.assertEqual(wsl.call_count, 1)
+
+    def test_linux_uses_checksum_and_delete(self):
+        with mock.patch.object(matrix, "wsl", return_value=subprocess.CompletedProcess([], 0, "/source\n/tmp/linux-mt\n")), \
+                mock.patch.object(matrix, "linux_path", return_value="/source"), \
+                mock.patch.object(matrix, "git_dir", return_value=None):
+            matrix.sync_linux("root", "/tmp/linux-mt")
+            commands = [call.args[1] for call in matrix.wsl.call_args_list]
+        rsync = next(command for command in commands if command[0] == "rsync")
+        self.assertIn("--checksum", rsync)
+        self.assertIn("--delete", rsync)
+
+    @unittest.skipUnless(shutil.which("robocopy"), "requires Windows robocopy")
+    def test_windows_sync_replaces_equal_and_older_timestamps_and_deletes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "source"
+            dest = Path(temp) / "windows-mt"
+            root.mkdir()
+            dest.mkdir()
+            (root / "same.cpp").write_bytes(b"new")
+            time.sleep(1.1)  # Give NTFS change times distinct seconds.
+            (dest / "same.cpp").write_bytes(b"old")
+            timestamp = 1600000000
+            os.utime(root / "same.cpp", (timestamp, timestamp))
+            time.sleep(1.1)
+            os.utime(dest / "same.cpp", (timestamp, timestamp))
+            (root / "older.cpp").write_bytes(b"new")
+            (dest / "older.cpp").write_bytes(b"old")
+            os.utime(root / "older.cpp", (timestamp, timestamp))
+            os.utime(dest / "older.cpp", (timestamp + 100, timestamp + 100))
+            (root / "added.cpp").write_bytes(b"added")
+            (dest / "removed.cpp").write_bytes(b"removed")
+            with mock.patch.object(matrix, "ROOT", root), mock.patch.object(matrix, "git_dir", return_value=None):
+                matrix.sync_windows(dest)
+            self.assertEqual((dest / "same.cpp").read_bytes(), b"new")
+            self.assertEqual((dest / "older.cpp").read_bytes(), b"new")
+            self.assertEqual((dest / "added.cpp").read_bytes(), b"added")
+            self.assertFalse((dest / "removed.cpp").exists())
+
+    @unittest.skipUnless(shutil.which("wsl"), "requires WSL")
+    def test_linux_sync_replaces_equal_and_older_timestamps_and_deletes(self):
+        available = subprocess.run(["wsl", "-u", "root", "--exec", "sh", "-c", "command -v rsync"],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if available.returncode:
+            self.skipTest("WSL root and rsync are required")
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "source"
+            dest = Path(temp) / "linux-mt"
+            root.mkdir()
+            dest.mkdir()
+            for name, source_time, dest_time in (("same.cpp", 1600000000, 1600000000),
+                                                  ("older.cpp", 1600000000, 1600000100)):
+                (root / name).write_bytes(b"new")
+                (dest / name).write_bytes(b"old")
+                os.utime(root / name, (source_time, source_time))
+                os.utime(dest / name, (dest_time, dest_time))
+            (root / "added.cpp").write_bytes(b"added")
+            (dest / "removed.cpp").write_bytes(b"removed")
+            with mock.patch.object(matrix, "ROOT", root), mock.patch.object(matrix, "git_dir", return_value=None):
+                matrix.sync_linux("root", matrix.linux_path("root", dest))
+            self.assertEqual((dest / "same.cpp").read_bytes(), b"new")
+            self.assertEqual((dest / "older.cpp").read_bytes(), b"new")
+            self.assertEqual((dest / "added.cpp").read_bytes(), b"added")
+            self.assertFalse((dest / "removed.cpp").exists())
+
+    def test_each_lane_requests_clean_build_and_forwards_define(self):
+        with tempfile.TemporaryDirectory() as temp:
+            argv = ["parallel_matrix.py", "--windows-redis-binary", "redis.exe", "--artifacts", temp,
+                    "--lane", "windows-mt", "--lane", "linux-st", "--define", "OI_ENABLE_TEST_HOOKS=ON"]
+            process = mock.Mock()
+            process.wait.return_value = 0
+            process.poll.return_value = 0
+            with mock.patch.object(sys, "argv", argv), mock.patch.object(matrix, "lane_users", return_value=[]), \
+                    mock.patch.object(matrix, "sync_windows"), mock.patch.object(matrix, "sync_linux"), \
+                    mock.patch.object(matrix, "linux_path", return_value="/artifacts"), \
+                    mock.patch.object(matrix.subprocess, "Popen", return_value=process) as popen:
+                self.assertEqual(matrix.main(), 0)
+            self.assertEqual(popen.call_count, 2)
+            for call in popen.call_args_list:
+                command = call.args[0]
+                self.assertIn("--clean-build", command)
+                self.assertEqual(command[command.index("--define") + 1], "OI_ENABLE_TEST_HOOKS=ON")
 
 
 if __name__ == "__main__":

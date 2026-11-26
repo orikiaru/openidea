@@ -8,15 +8,23 @@ from pathlib import Path
 from regression_platform import launch, stop
 from test_process_owner import write_owner, record_process
 
+if not __debug__:
+    raise SystemExit("web stop probe requires Python assertions enabled")
+
 ROOT = Path(__file__).resolve().parents[1]
 SIZE = 9 * 1024 * 1024
 BODY = bytes(range(251)) * (SIZE // 251) + bytes(range(SIZE % 251))
 
 
-def run(binary, owner_repo, lane, mode, index):
-    with tempfile.TemporaryDirectory(prefix='oi-regression-p0-web-stop-') as tmp:
+def idle_closed(code, termination):
+    return code == 0 and (termination == 'eof' or termination.startswith('rst winerror='))
+
+
+def run(binary, owner_repo, lane, mode, index, port_offset=None):
+    offset = (0 if lane.endswith('mt') else 1000) if port_offset is None else port_offset
+    with tempfile.TemporaryDirectory(prefix=f'oi-regression-p{offset}-web-stop-') as tmp:
         root = Path(tmp)
-        write_owner(root, owner_repo, 0 if lane.endswith('mt') else 1000)
+        write_owner(root, owner_repo, offset)
         work = root / 'bin'
         work.mkdir()
         config = root / 'config'
@@ -56,7 +64,7 @@ def run(binary, owner_repo, lane, mode, index):
                     except ConnectionResetError as error:
                         termination = 'rst winerror=%s' % error.winerror
                     print(f'{lane} {mode} {index}: exit={code} termination={termination}', flush=True)
-                    assert code == 0
+                    assert idle_closed(code, termination)
                     return
                 conn.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
                 conn.sendall(('POST /test-stream HTTP/1.1\r\nHost: localhost\r\nContent-Length: %d\r\nConnection: keep-alive\r\n\r\n' % SIZE).encode() + BODY)
@@ -98,6 +106,19 @@ def run(binary, owner_repo, lane, mode, index):
                         raise RuntimeError('server required force kill')
 
 
+def run_all(binary, owner_repo, lane, port_offset=None):
+    failures = []
+    for mode in ('control', 'idle', 'stop'):
+        for index in range(2):
+            try:
+                run(binary, owner_repo, lane, mode, index, port_offset)
+            except Exception as error:
+                print(f'{lane} {mode} {index}: FAILED {error!r}', flush=True)
+                failures.append((mode, index, repr(error)))
+    if failures:
+        raise RuntimeError(f'web stop probe failed: {failures!r}')
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--lane', choices=['windows-mt', 'windows-st'], required=True)
@@ -105,16 +126,7 @@ def main():
     parser.add_argument('--owner-repo', type=Path, required=True)
     args = parser.parse_args()
     binary = args.binary.resolve()
-    failures = []
-    for mode in ('control', 'idle', 'stop'):
-        for index in range(2):
-            try:
-                run(binary, args.owner_repo.resolve(), args.lane, mode, index)
-            except Exception as error:
-                print(f'{args.lane} {mode} {index}: FAILED {error!r}', flush=True)
-                failures.append((mode, index, repr(error)))
-    if failures:
-        raise SystemExit(1)
+    run_all(binary, args.owner_repo.resolve(), args.lane)
 
 
 if __name__ == '__main__':

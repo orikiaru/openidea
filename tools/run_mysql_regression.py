@@ -12,6 +12,7 @@ import time
 
 from test_process_owner import write_owner, record_process, windows_birth, terminate_verified
 from textio import use_utf8_children
+from regression.cases import normalize_case_name
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -38,7 +39,8 @@ def quoted_path(path):
 def main():
     use_utf8_children()
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case", choices=("mysql", "mysql-wake"), default="mysql")
+    parser.add_argument("--case", type=normalize_case_name, choices=("mysql", "mysql-wake"),
+                        metavar="test-mysql|test-mysql-wake", default="mysql")
     parser.add_argument("--mysqld", help="mysqld executable in a persistent installation")
     parser.add_argument("--mysql", help="mysql client executable; defaults to the mysqld directory, then PATH")
     parser.add_argument("--bin-dir", type=Path, default=REPO / "deploy" / "bin")
@@ -138,7 +140,7 @@ def main():
             pool = [sys.executable, str(REPO / "tools" / "run_regressions.py"), "--case", "registry-static",
                     "--bin-dir", str(args.bin_dir), "--port-offset", str(args.port_offset)]
             if args.artifacts:
-                pool += ["--artifacts", str(args.artifacts)]
+                pool += ["--artifacts", str(args.artifacts / "static-route")]
             return subprocess.run(pool, cwd=REPO, env=env, check=False).returncode
         finally:
             if process is not None and process.poll() is None:

@@ -164,7 +164,7 @@ classDiagram
     ProtoSessionManager <|-- IpcUdpClient
 ```
 
-`IpcUdpServer`、`IpcUdpClient` 在代码里都叫 `IpcUdp`，分别在 `modules/ipcserver/inc/ipcudp.h` 和 `modules/ipcclient/inc/udp_mgr.h`。`HttpSessionManager` 在 `cbaselib/http/src/oi_http.cpp`，供 `Http::Client` 使用，`Client` 本身不继承管理器。`WebRpc` 在 `modules/webserver/src/web_server.cpp`。
+`IpcUdpServer`、`IpcUdpClient` 在代码里都叫 `IpcUdp`，分别在 `modules/ipcserver/inc/ipcudp.h` 和 `modules/ipcclient/inc/test_udp.h`。`HttpSessionManager` 在 `cbaselib/http/src/oi_http.cpp`，供 `Http::Client` 使用，`Client` 本身不继承管理器。`WebRpc` 在 `modules/webserver/src/web_server.cpp`。
 
 ## 一条连接上谁持有谁
 
@@ -384,11 +384,11 @@ classDiagram
 | `IpcServer` | `ProtoSessionManager` | `modules/ipcserver/inc/ipcserver.h` |
 | `IpcUdp`（ipcserver） | `ProtoSessionManager` | `modules/ipcserver/inc/ipcudp.h` |
 | `IpcClient` | `ProtoClientManager` | `modules/ipcclient/inc/ipcclient.h` |
-| `IpcUdp`（ipcclient） | `ProtoSessionManager` | `modules/ipcclient/inc/udp_mgr.h` |
+| `IpcUdp`（ipcclient） | `ProtoSessionManager` | `modules/ipcclient/inc/test_udp.h` |
 | `RedisServer` | `SessionManager` | `modules/redisserver/inc/redis_server.h` |
 | `RedisServerSession` | `NetSession` | `modules/redisserver/inc/redis_server_session.h` |
 | `WebRpc` | `ProtoClientManager` | `modules/webserver/src/web_server.cpp` |
 
 ## 不进图的探测类
 
-这些类继承管理器或会话，只为回归构造场景，不放进上面的树：`PollUdpCloseProbe`、`BlockingAccessClient`、`UdpSecondPeer`、`UdpBudgetProbe`、`ConnectMgr::ClientConnectProbe`、`AddressMgr::AddressConnectProbe`、`ListWatchProbe`、`ConnectGenerationProbe`、`DeferredRpcProbe`、`RedisFairPeer` 及其内部会话。
+这些类继承管理器或会话，只为回归构造场景，不放进上面的树：`PollUdpCloseProbe`、`BlockingAccessClient`、`UdpSecondPeer`、`UdpBudgetProbe`、`TestConnect::ClientConnectProbe`、`TestAddress::AddressConnectProbe`、`ListWatchProbe`、`ConnectGenerationProbe`、`DeferredRpcProbe`、`RedisFairPeer` 及其内部会话。

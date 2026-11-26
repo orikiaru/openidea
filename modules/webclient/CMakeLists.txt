@@ -5,6 +5,7 @@ cmake_minimum_required(VERSION 2.6)
 set(MODULE_SRCS
 	src/main.cpp
 	src/web_client.cpp
+	src/test_http_bodyless.cpp
 )
 
 add_executable(webclient ${MODULE_SRCS})

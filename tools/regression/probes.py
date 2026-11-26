@@ -74,4 +74,4 @@ def bytes_on_disk(root):
 
 
 def log_payload_on_disk(root):
-    return sum(p.stat().st_size for p in root.rglob("info") if p.is_file() and not p.is_symlink())
+    return sum(p.stat().st_size for p in root.glob("info_*.log.txt") if p.is_file() and not p.is_symlink())

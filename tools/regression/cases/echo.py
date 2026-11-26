@@ -222,6 +222,11 @@ class EchoCase(Case):
         assert re.search(r"rpc failure stage=decode_request token=0 call=424242 sid=\d+ proto=3001 ret=-?\d+ reason=ParserException", diagnostics), "RPC parse context missing from logd disk"
         print("diagnostic original errors persisted", ctx.name, "PASS", flush=True)
 
-CASES = (EchoCase("echo", "echo"), EchoCase("reset", "echo"),
-         EchoCase("registry", "echo"), EchoCase("rpc-ingress", "echo"),
-         EchoCase("tcp-error-rearm", "echo"), EchoCase("tcp-close-reclaim", "echo"))
+CASES = (
+    EchoCase("echo", "echo"),
+    EchoCase("reset", "echo"),
+    EchoCase("registry", "echo"),
+    EchoCase("rpc-ingress", "echo"),
+    EchoCase("tcp-error-rearm", "echo"),
+    EchoCase("tcp-close-reclaim", "echo"),
+)

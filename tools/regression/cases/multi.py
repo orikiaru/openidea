@@ -130,4 +130,8 @@ class MultiCase(Case):
             assert peer_stopped and peer_restarted
         return False
 
-CASES = (MultiCase("multi", "multi"), MultiCase("local", "multi"), MultiCase("registry-static", "multi"))
+CASES = (
+    MultiCase("multi", "multi"),
+    MultiCase("local", "pool"),
+    MultiCase("registry-static", "pool", targeted_reason="uses the same database fixture as mysql"),
+)

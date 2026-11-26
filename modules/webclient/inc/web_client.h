@@ -12,6 +12,7 @@ class WebClient
 	static OI::Coro::Task PoolRelease(std::string sControlUrl, OI::Http::Response& stResponse);
 	static OI::Coro::Task PoolQueue(std::string sBase, std::string sControlUrl, OI::Http::Response& stQueued, OI::Http::Response& stQueuedSuccess, OI::Http::Response& stReady, OI::Http::Response& stRelease, OI::Http::Response& stCountBusy, OI::Http::Response& stCountOther, OI::Http::Response& stBytesBusy);
 	static OI::Coro::Task RunPoolRegression(int32_t iPort, int32_t iControlPort);
+	static OI::Coro::Task RunBodylessRegression(int32_t iPort);
 	static OI::Coro::Task RunDisconnectRegression(int32_t iPort, int32_t iControlPort);
 	static OI::Coro::Task DisconnectQueue(std::string sBase, std::string sControl, OI::Http::Response& stSecond, OI::Http::Response& stReady, OI::Http::Response& stProbe, OI::Http::Response& stRelease);
 	static OI::Coro::Task DisconnectRelease(std::string sBase, std::string sControl, OI::Http::Response& stProbe, OI::Http::Response& stRelease);

@@ -10,10 +10,10 @@
 #include "oi_net.h"
 #include "oi_base.h"
 #include "ipcclient.h"
-#include "hold_mgr.h"
+#include "test_hold.h"
 #include "oi_rpc_session_manager.h"
 #include "oi_timer_manager.h"
-#include "timer_mgr.h"
+#include "test_timer.h"
 
 #ifdef _SINGLE_THREAD_
 class PollWrongThreadProbe : public ::OI::Net::Channel
@@ -195,7 +195,7 @@ int main(int iArgumentCount, char* vArguments[])
 	}
 	if (iArgumentCount == 2 && std::strcmp(vArguments[1], "--timer-backlog") == 0)
 	{
-		iCode = TimerMgr::CheckBacklog();
+		iCode = TestTimer::CheckBacklog();
 		::OI::Base::StopFramework();
 		return iCode;
 	}
@@ -227,9 +227,9 @@ int main(int iArgumentCount, char* vArguments[])
 				fprintf(stderr, "IpcClient Init failed: code=%d\n", iCode);
 				return iCode;
 			}
-			if (HoldMgr::GetInstance().RunsWithoutIpc())
+			if (TestHold::GetInstance().RunsWithoutIpc())
 			{
-				HoldMgr::GetInstance().Start(INVALID_SID);
+				TestHold::GetInstance().Start(INVALID_SID);
 			}
 			else
 			{

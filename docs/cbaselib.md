@@ -42,11 +42,13 @@
 
 `logger` 是日志客户端，类型在 `OI::Log`。业务进程用它把日志发到 `logd`。`logd` 自己的服务端在 `cbaselib/logd`。没有活动会话时 `SendLog` 把完整帧放入待发队列，额度为 4 MiB 与发送队列上限中较小者；放不下返回 `OI_ERR_BUSY`，调用方自己决定要不要再试。有活动会话时返回发送接口的结果，失败不自动回退到待发队列。`OI_OK` 只表示当前已接纳，不保证对端已经收到或落盘。格式化日志入口先写 stdout，再返回本地 sink 或客户端的结果；忽略非零返回码可能使文件缺少该条日志。
 
+日志直接写入 `[Log] root_path`，不创建日期子目录；五个级别分别使用 `trace_YYYY-MM-DD.log.txt`、`debug_YYYY-MM-DD.log.txt`、`info_YYYY-MM-DD.log.txt`、`warning_YYYY-MM-DD.log.txt` 和 `error_YYYY-MM-DD.log.txt`，日期按日志服本地时间确定。例如 `root_path = "../logs"` 时，2024 年 1 月 2 日的 info 日志写入 `../logs/info_2024-01-02.log.txt`。跨日切换到新日期文件；同日重启会追加到已有文件，保留此前内容。
+
 logd 的 `[Log] max_pending_bytes` 默认 64MiB，所有日志级别共享，包含排队和正在写入、尚未 fflush 的批次及时间前缀。满时保留完整输入帧并暂停该连接读取，写线程完成后通过 poll 恢复；连接关闭后仍排空已读取的完整帧。进程正常退出先排空等待会话，再 join 写线程。本地日志返回 `OI_ERR_BUSY` 表示当前不能接纳，仍已按原规则输出到 stdout；不能在 poll 中阻塞等待磁盘。此限额不含接收缓冲、内核缓冲及分配器开销，不是 RSS 上限。
 
-`python3 tools/run_regressions.py --case log-backpressure` 使用现有 LogMgr 发送 64MiB，在 Linux 通过临时 LD_PRELOAD、Windows 通过测试钩子延迟 logd 写盘线程，核对每条落盘正文和行数、实际字节、队列峰值不超限、发生暂停且最终 pending=0；普通日志用例继续验证 1GiB 吞吐。所有测试行正文相同，因此这些断言不能证明逐条 FIFO 或排除丢失和重复互相抵消；LogMgr 直接调用 `SendLog`，也没有逐次断言返回码或格式化入口的 stdout。断连时已接纳与被拒绝的各条日志及恢复后的落盘仍需单独验证。全套 `--case all` 包含慢盘用例，两种客户端/服务端线程模式均需运行。
+`python3 tools/run_regressions.py --case log-backpressure` 使用现有 TestLog 发送 64MiB，在 Linux 通过临时 LD_PRELOAD、Windows 通过测试钩子延迟 logd 写盘线程，核对每条落盘正文和行数、实际字节、队列峰值不超限、发生暂停且最终 pending=0；普通日志用例继续验证 1GiB 吞吐。所有测试行正文相同，因此这些断言不能证明逐条 FIFO 或排除丢失和重复互相抵消；TestLog 直接调用 `SendLog`，也没有逐次断言返回码或格式化入口的 stdout。断连时已接纳与被拒绝的各条日志及恢复后的落盘仍需单独验证。全套 `--case all` 包含慢盘用例，两种客户端/服务端线程模式均需运行。
 
-定向用例 `python3 tools/run_regressions.py --case log-contract` 停止真实 logd 并观察客户端断线，由 LogMgr 经格式化入口逐条发送带序号日志，直到 4096 字节待发额度返回 `OI_ERR_BUSY`；随后重启 logd，检查所有调用返回码、stdout 中成功和拒绝的序号，以及最终文件中成功序号按顺序各出现一次、拒绝序号不出现、恢复后的末条日志出现一次。它不覆盖活动会话发送失败的竞态，也不保证已接纳日志在任意时刻断电或断连后送达。
+定向用例 `python3 tools/run_regressions.py --case log-contract` 停止真实 logd 并观察客户端断线，由 TestLog 经格式化入口逐条发送带序号日志，直到 4096 字节待发额度返回 `OI_ERR_BUSY`；随后重启 logd，检查所有调用返回码、stdout 中成功和拒绝的序号，以及最终文件中成功序号按顺序各出现一次、拒绝序号不出现、恢复后的末条日志出现一次。它不覆盖活动会话发送失败的竞态，也不保证已接纳日志在任意时刻断电或断连后送达。
 
 `redis` 是连 `redisserver` 的客户端，类型在 `OI::Redis`，字节是 RESP，不进 proto。一条连接上的命令按发送顺序对回包。超时后这条命令仍留在队列里，等它自己的回包来认领，避免后面的应答串位。回包如果再也没来，而连接还在，后面的命令会一直顶在它后面。超时单位是毫秒，来自 `RedisClient.timeout_ms`，由 200 毫秒的周期定时器扫描。先到的那个算数。`RedisResult.iStatus` 区分 Ok、Timeout、Disconnected、InvalidArgument、SendFailed、ServerError、ProtocolError、Busy；`bTimeout` 仅在真正超时时为真。错误回执仍保留在共享 `pReply` 中，`if (result)` 只对 Ok 成立。
 
@@ -149,7 +151,7 @@ PB 每个字段只有一条 `uint32 index + uint32 bytesize + payload`，整数�
 
 HTTP 使用独立额度：客户端 `kMaxHeader + kMaxBody`（64 KiB 头部加 8 MiB 正文），不跟随普通 TCP/RPC 的接收默认值；普通缓冲正文既有 8 MiB 限制不变，服务端也保留自己的头部/正文限制。流式正文另按其接口处理，见 [HTTP](cbaselib/http.md)。
 
-Redis 超时扫描直接运行在 poll 的 200ms 周期计时器上，工人上调用同步接口不会堵住这次扫描。超时项仍保留到对应回执或断连，防止响应串位。`--case redis-queue-timeout` 通过现有 RedisMgr 的 `[Regression] redis_queue_timeout` 开关复测；`--case rpc-ingress` 注入超大声明、残包、滴流和合法边界分片后，再运行现有回声负载。这两项已纳入 `--case all`。
+Redis 超时扫描直接运行在 poll 的 200ms 周期计时器上，工人上调用同步接口不会堵住这次扫描。超时项仍保留到对应回执或断连，防止响应串位。`--case redis-queue-timeout` 通过现有 TestRedis 的 `[Regression] redis_queue_timeout` 开关复测；`--case rpc-ingress` 注入超大声明、残包、滴流和合法边界分片后，再运行现有回声负载。这两项已纳入 `--case all`。
 
 各网络组件配置段可设置 `max_send_queue_bytes`，默认每条连接 67108864（64MiB），配置必须为正数。计数包括会话和通道内尚未交给操作系统的字节，缓冲移动不恢复额度，实际写出才恢复。不是整个进程 RSS 上限，也不包含内核缓冲；大于配置上限的单条消息同样被拒绝，需要按业务大小调整配置。
 
@@ -169,13 +171,13 @@ Redis 入队、发送、解析和断连处理都在 poll 线程，等待项与�
 
 redisserver 的 `[Redis] max_pending_bytes`（默认 64MiB）和 `max_pending_commands`（默认 65536）按每条上游连接计费，字节数包含完整 RESP 请求；收到回执或上游断连时归还额度，不因客户端超时而提前归还。任一额度不足就保留未发送命令并暂停该下游读取；两项都降到各自限额一半后恢复，并先处理已有输入缓冲。恢复通过 `Poll::PostOnLoop` 排到后续事件循环，不再依赖时间轮；每轮按等待队列轮转，每个会话最多转发一条命令，未处理完的排队尾。额度不足的大请求保留队首，避免被小请求持续挤占；新到请求不能越过已有等待者。单条命令超过字节限额会关闭下游连接，解析长度时即拒绝，不能等待一个永远凑不齐的额度；格式错误或超限时记一条 `redisserver rejects malformed or oversized command sid=... limit=...` 错误日志。这是请求积压上限，并非进程 RSS 上限：分配器容量、下游输入缓冲、内核缓冲及响应内存另计。
 
-复测使用 `python3 tools/run_regressions.py --case redis-shutdown`、`redis-backpressure-bytes`、`redis-backpressure-count`；用例都在现有 RedisMgr，通过临时配置的 `[Regression] redis_shutdown / redis_pressure / redis_oversized` 启用。停服测试在同步等待时发送 SIGTERM；背压测试暂停并恢复本机 Redis，检查限额、内存增量及 64 条大响应逐条配对，还验证超大命令拒绝后的重连。`--case all` 包含这三项，需在两种线程模式分别运行。
+复测使用 `python3 tools/run_regressions.py --case redis-shutdown`、`redis-backpressure-bytes`、`redis-backpressure-count`；用例都在现有 TestRedis，通过临时配置的 `[Regression] redis_shutdown / redis_pressure / redis_oversized` 启用。停服测试在同步等待时发送 SIGTERM；背压测试暂停并恢复本机 Redis，检查限额、内存增量及 64 条大响应逐条配对，还验证超大命令拒绝后的重连。`--case all` 包含这三项，需在两种线程模式分别运行。
 
 `Poll::CallOnLoop` 在 poll 线程上可以立即执行；`PostOnLoop` 始终入队。每次只消费进入时已有的一批操作，回调中新投的操作留到下一次唤醒，防止递归执行及持续自投递饿死 IO。
 
-新增 `--case redis-fairness`：RedisMgr 建立两条真实下游连接，在上游额度为 1、服务端时间轮 tick 为 1000ms 时发送 64+1 条命令；驱动通过 Redis MONITOR 核对后者最迟第三条执行，并检查全部回复和恢复耗时。`TaskStartMgr` 覆盖不 await 即启动，以及 poll 回调里新建任务只入队。`ConnectMgr` 覆盖延迟投递不内联、首次和重复建连、32 个并发建连等待者。`TaskShareMgr` 覆盖完成后再 await。两项纳入 `--case all`，单、多线程分别复测。
+新增 `--case redis-fairness`：TestRedis 建立两条真实下游连接，在上游额度为 1、服务端时间轮 tick 为 1000ms 时发送 64+1 条命令；驱动通过 Redis MONITOR 核对后者最迟第三条执行，并检查全部回复和恢复耗时。`TestTaskStart` 覆盖不 await 即启动，以及 poll 回调里新建任务只入队。`TestConnect` 覆盖延迟投递不内联、首次和重复建连、32 个并发建连等待者。`TestTaskShare` 覆盖完成后再 await。两项纳入 `--case all`，单、多线程分别复测。
 
-共享 Redis 上游禁止 `SCRIPT DEBUG` 子命令（大小写不敏感，所有模式均拒绝；子命令内嵌 NUL 也拒绝，防止 C 字符串比较截断绕过），避免调试模式污染其他下游的 EVAL/PING；SCRIPT LOAD 和 EVALSHA 保留。普通 RedisMgr 回归强制使用一条上游，以两条下游验证调试命令被断开、另一条仍收到正常脚本结果，并验证重连后的 PING 与脚本加载/执行。
+共享 Redis 上游禁止 `SCRIPT DEBUG` 子命令（大小写不敏感，所有模式均拒绝；子命令内嵌 NUL 也拒绝，防止 C 字符串比较截断绕过），避免调试模式污染其他下游的 EVAL/PING；SCRIPT LOAD 和 EVALSHA 保留。普通 TestRedis 回归强制使用一条上游，以两条下游验证调试命令被断开、另一条仍收到正常脚本结果，并验证重连后的 PING 与脚本加载/执行。
 
 过滤同时覆盖 hiredis 自己识别的异步状态命令，包括 PMONITOR 和命令名内嵌 CRLF 的监控/订阅/退订变体；不能只依赖 Redis 返回未知命令错误，因为 hiredis 在收到回复前就已改变连接状态。这些命令按已有规则关闭发起的下游连接，共享上游及其他下游保持可用。
 

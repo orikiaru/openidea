@@ -38,6 +38,7 @@ SSH_OPTS = (
 # 顶层目录/文件名，或任意路径段名。
 EXCLUDE_NAMES = {
     ".local",
+    ".codex",
     "build-win",
     "build-win-st",
     "build",

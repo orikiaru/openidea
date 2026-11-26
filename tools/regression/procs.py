@@ -292,4 +292,4 @@ class Context:
         self.logd.wait(timeout=10)
         assert self.logd.returncode == 0
         return "\n".join(path.read_text(encoding="utf-8", errors="replace")
-                         for path in self.logs.rglob("error") if path.is_file())
+                         for path in self.logs.glob("error_*.log.txt") if path.is_file())

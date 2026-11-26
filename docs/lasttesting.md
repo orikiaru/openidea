@@ -2,6 +2,16 @@
 
 全量四组都通过时，改写下面的「全量」，只留最近一次。写明日期、平台、线程模式、通过项数，以及机器的 CPU 型号和实测频率。只跑了部分用例不要写成全量通过。操作步骤仍在 [testing.md](testing.md)。
 
+## 日志文件与测试工具复验（2026-11-26，本轮矩阵未四路通过）
+
+本轮四路业务 `all` 均通过，日志跨日、断连合同、慢盘和写满定向用例也在 Windows、远程 Linux 的单/多线程通过；不能据此把四路矩阵记为全量通过。此前「全量」记录保留。
+
+- Windows MT 矩阵通过，耗时 672.1 秒；ST 业务全量通过，但矩阵因 `parallel-lane-tests` 的真实 robocopy 同时间戳覆盖失败而失败，耗时 694.5 秒。结果在 `.local/todo8-stable-windows-mt` 和 `.local/todo8-stable-windows-st`；Windows CPU 为 Intel Core i9-11900K，测试中 CIM 3504 MHz。修复后工具单项两模式另行通过，不抹去原矩阵失败。
+- 远程 Linux MT/ST 的 26 项业务、MySQL、静态路由和 ASan/UBSan 通过，但两路 `test-safety` 在 Python 3.12 因静态嵌套层数过多而失败，矩阵 `passed=false`、`completed=false`。MT/ST 修复后 safety 单独均通过（各 48 项，3 跳过），清理通过；ST 日志为 `st-safety-retest-20261126.log`。两机 localhost 双栈回退子检查因地址族环境受限未覆盖。MT CPU Xeon Platinum 8255C 2494.140 MHz，ST CPU Xeon Gold 6271C 2593.904 MHz；结果分别为 `mt-closure-full-20261126-194746`、`st-closure-full-20261126-194801`。
+- 两平台各路归属清理通过。Windows 真 MySQL 和静态路由两模式通过，记录在 `.local/mysql-final-windows-mt`、`.local/mysql-final-windows-st`。Windows ST 的阻塞唤醒专项为 100000 样本，trace 和 native 完整，结果含 `wake-metrics.json`；本轮不以不同机器的耗时设阈值。
+- 唤醒性能单线程专项：远程 Linux 的 100000 次串行空任务三轮平均分别为 13.590、13.840、13.800 微秒；真 MySQL 的 `mysql_direct_finish_to_resume` 为 1000 样本，p50/p95/p99 分别 15.241/25.457/32.247 微秒，逐段结果在 `st-wake-20261126-200353`。Windows ST 同一轮的串行空任务平均 39.265 微秒；独立 trace 的 `trace_total` p50/p95/p99 为 36.1/69.2/96.5 微秒。串行整链与独立打点采样分别记录，不将两者相减或混为同一测量。
+- Windows `web-stop` 单/多线程各做两轮 control、idle、stop：control 每轮完整接收 9437184 字节；idle 零退出后收到 RST；活跃响应停服每轮收到 8185 字节后 RST，诊断失败。结果位于 `.local/webstop-final-windows-mt`、`.local/webstop-final-windows-st`。这是已观察行为，停服是否应排空在途响应仍待定。
+
 ## 全量（2026-11-26，配置参数改动）
 
 受测 HEAD `e2a4ef63ef0bed5323dd9d5a3e47166d13302ff8` 加启动配置参数工作区改动。Windows 为 MSVC x64 Release，Linux 为远程 GCC 13 Release。四路 `all` 通过；Linux 两路额外运行 MySQL 8.4.13 和静态注册表。启动参数矩阵步骤通过，最终补强的合法带空格路径、参数错误诊断和探针兼容检查在四路分别重跑通过。Linux 矩阵 `passed=true`、`completed=true`、`restored=false`、`restore_skipped=true`，前后归属清理成功。

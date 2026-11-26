@@ -1,4 +1,7 @@
 import io
+import json
+import importlib
+import pkgutil
 import subprocess
 import sys
 import tempfile
@@ -8,7 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import run_regressions as regression
-from regression import cases, ports, probes, web
+from regression import cases, ports, probes, web_server_checks as web
 from textio import TEXT, child_env
 
 
@@ -18,24 +21,87 @@ MULTIPART_BODY = (b"--fixture\r\nContent-Disposition: form-data; name=\"field\"\
 
 
 class RegressionChecksTest(unittest.TestCase):
+    def test_web_stop_probe_registration_and_optimized_mode(self):
+        import web_stop_probe
+        self.assertIn("web-stop", cases.TARGETED_CASES)
+        self.assertNotIn("web-stop", cases.ALL_CASES)
+        self.assertTrue(web_stop_probe.idle_closed(0, "eof"))
+        self.assertTrue(web_stop_probe.idle_closed(0, "rst winerror=10054"))
+        self.assertFalse(web_stop_probe.idle_closed(0, "b'x'"))
+        self.assertFalse(web_stop_probe.idle_closed(1, "eof"))
+        result = subprocess.run([sys.executable, "-O", str(Path(web_stop_probe.__file__))],
+                                capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("assertions enabled", result.stderr)
+
+    def test_preflight_failure_replaces_stale_results_and_keeps_full_plan(self):
+        from regression import runner
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp)
+            (output / "results.json").write_text('[{"case":"old","status":"passed"}]', encoding="utf-8")
+            (output / "plan.json").write_text('{"selected":["old"]}', encoding="utf-8")
+            argv = ["run_regressions.py", "--case", "all", "--expect-thread", "mt", "--artifacts", temp]
+            with patch.object(sys, "argv", argv), patch.object(runner.ports, "apply_port_offset"), \
+                    patch.object(runner.ports, "preflight_ports", side_effect=RuntimeError("port busy")), \
+                    patch.object(runner, "run_case") as run_case:
+                with self.assertRaisesRegex(RuntimeError, "port busy"):
+                    runner.main()
+                run_case.assert_not_called()
+            plan = json.loads((output / "plan.json").read_text(encoding="utf-8"))
+            self.assertEqual(plan["selected"], list(cases.ALL_CASES))
+            self.assertEqual(plan["targeted_only"], cases.TARGETED_CASES)
+            self.assertEqual(json.loads((output / "results.json").read_text(encoding="utf-8")), [])
+
+    def test_case_registry_covers_every_group_and_classifies_cases(self):
+        modules = [importlib.import_module(cases.__name__ + "." + item.name)
+                   for item in pkgutil.iter_modules(cases.__path__)]
+        groups = [entry for module in modules for entry in module.CASES]
+        names = [entry.name for entry in groups]
+        self.assertEqual(len(names), len(set(names)))
+        for entry in groups:
+            self.assertIs(cases.REGISTRY[entry.name], entry)
+        standalone = {name for name, entry in cases.REGISTRY.items() if entry.standalone}
+        self.assertEqual(set(cases.REGISTRY), set(names) | standalone)
+        full, targeted = set(cases.ALL_CASES), set(cases.TARGETED_CASES)
+        self.assertFalse(full & targeted)
+        self.assertEqual(full | targeted, set(cases.REGISTRY))
+        self.assertTrue(all(reason.strip() for reason in cases.TARGETED_CASES.values()))
+        self.assertTrue({"log-rotation", "log-contract"} <= full)
+
+    def test_registry_rejects_duplicate_and_reserved_names(self):
+        entry = cases.Case("fixture", "fixture")
+        for groups in (((entry,), (entry,)), ((cases.Case("all", "fixture"),),)):
+            with self.subTest(groups=groups), self.assertRaises(ValueError):
+                cases.register_cases(groups)
+
+    def test_canonical_and_legacy_case_names_select_same_case(self):
+        for name, entry in cases.REGISTRY.items():
+            with self.subTest(name=name):
+                self.assertEqual(cases.normalize_case_name("test-" + name), name)
+                self.assertEqual(cases.normalize_case_name(name), name)
+                self.assertIs(cases.get_case("test-" + name), entry)
+                self.assertIs(cases.get_case(name), entry)
+
     def test_blocking_wake_checks_actual_trace_capability(self):
-        text = "\n".join("wake benchmark " + name + " n=100000" for name in
-                         ("default_empty_serial", "native_coordinator_to_worker",
-                          "native_worker_to_coordinator", "native_roundtrip"))
-        ctx = SimpleNamespace(name="blocking-wake", text=text, work=Path("fixture"))
+        def row(name):
+            return ("wake benchmark " + name + " n=100000 p50_us=1.000 p95_us=1.000 "
+                    "p99_us=1.000 max_us=1.000 ge1000us=0 sum_us=100000.000")
+        text = "\n".join(["wake benchmark default_empty_serial n=100000 total_us=100000.000 mean_us=1.000"] +
+                         [row(name) for name in ("native_coordinator_to_worker", "native_worker_to_coordinator", "native_roundtrip")])
+        ctx = SimpleNamespace(name="blocking-wake", text=text, work=Path("fixture"), args=SimpleNamespace(artifacts=None))
         case = cases.get_case("blocking-wake")
-        with patch("regression.cases.db.test_hook_enabled", return_value=True) as query:
+        with patch("regression.cases.db.trace_enabled", return_value=True) as query:
             with self.assertRaises(AssertionError):
                 case.check(ctx)
-            query.assert_called_once_with(ctx.work, "ipcclient", "blocking_wake_trace")
-            ctx.text += "\n" + "\n".join("wake benchmark " + name + " n=100000" for name in
+            query.assert_called_once_with(ctx.work)
+            ctx.text += "\n" + "\n".join(row(name) for name in
                 ("trace_submit_to_worker", "trace_worker", "trace_done_to_post", "trace_post_to_poll",
                  "trace_poll_to_resume", "trace_finish_to_resume", "trace_total"))
             self.assertFalse(case.check(ctx))
-        ctx.text = text
-        with patch("regression.cases.db.test_hook_enabled", return_value=False):
+        ctx.text = text + "\nwake benchmark trace unavailable hooks disabled"
+        with patch("regression.cases.db.trace_enabled", return_value=False):
             self.assertFalse(case.check(ctx))
-        with patch("regression.cases.db.test_hook_enabled", side_effect=RuntimeError("unknown binary")):
+        with patch("regression.cases.db.trace_enabled", side_effect=RuntimeError("unknown binary")):
             with self.assertRaisesRegex(RuntimeError, "unknown binary"):
                 case.check(ctx)
 
@@ -242,6 +308,59 @@ class RegressionChecksTest(unittest.TestCase):
         self.assertIn("requires assertions", result.stderr)
 
 
+
+class WakeMetricsChecks(unittest.TestCase):
+    def test_blocking_metrics_and_negative_cases(self):
+        from regression.cases.db import NATIVE, TRACE, parse_wake_metrics
+        def row(name, count=100000):
+            return ("wake benchmark %s n=%d p50_us=1.000 p95_us=2.000 p99_us=3.000 "
+                    "max_us=4.000 ge1000us=0 sum_us=150000.000" % (name, count))
+        serial = "wake benchmark default_empty_serial n=100000 total_us=100000.000 mean_us=1.000"
+        rows = [row(name) for name in NATIVE + TRACE]
+        # A zero-length substage is legitimate.
+        rows[-1] = rows[-1].replace("p50_us=1.000 p95_us=2.000 p99_us=3.000 max_us=4.000 ge1000us=0 sum_us=150000.000",
+                                  "p50_us=0.000 p95_us=0.000 p99_us=0.000 max_us=0.000 ge1000us=0 sum_us=0.000")
+        valid = "\n".join([serial] + rows)
+        self.assertEqual(parse_wake_metrics(valid, "blocking-wake", True)["trace_total"]["sum_us"], 0)
+        for bad in (valid + "\n" + rows[0], valid.replace(rows[0], ""),
+                    valid.replace("n=100000 p50", "n=99999 p50", 1),
+                    valid.replace("p95_us=2.000", "p95_us=0.500", 1),
+                    valid.replace("ge1000us=0", "ge1000us=100001", 1),
+                    valid.replace("ge1000us=0", "ge1000us=1", 1),
+                    valid.replace("sum_us=150000.000", "sum_us=0.000", 1),
+                    valid.replace("mean_us=1.000", "mean_us=2.000", 1)):
+            with self.subTest(bad=bad[:70]), self.assertRaises(AssertionError):
+                parse_wake_metrics(bad, "blocking-wake", True)
+        with self.assertRaises(AssertionError):
+            parse_wake_metrics(valid, "blocking-wake", True, "native_roundtrip=2.9")
+        self.assertTrue(parse_wake_metrics(valid, "blocking-wake", True, "native_roundtrip=3.0"))
+        mt = "\n".join([serial] + [row(name) for name in NATIVE] + ["wake benchmark trace skipped multi-thread"])
+        self.assertTrue(parse_wake_metrics(mt, "blocking-wake", False))
+        with self.assertRaises(AssertionError):
+            parse_wake_metrics(mt, "blocking-wake", True)
+        unavailable = mt.replace("trace skipped multi-thread", "trace unavailable hooks disabled")
+        self.assertTrue(parse_wake_metrics(unavailable, "blocking-wake", False))
+
+    def test_trace_capability_uses_actual_trace_bit(self):
+        from regression.cases.db import trace_enabled
+        work = Path("fixture")
+        with patch("regression.cases.db.test_hook_enabled", return_value=True), \
+                patch("regression.cases.db.subprocess.run", return_value=SimpleNamespace(returncode=41, stdout="blocking_wake_trace=0\n")):
+            self.assertFalse(trace_enabled(work))
+        with patch("regression.cases.db.test_hook_enabled", return_value=True), \
+                patch("regression.cases.db.subprocess.run", return_value=SimpleNamespace(returncode=41, stdout="blocking_wake_trace=1\n")):
+            self.assertTrue(trace_enabled(work))
+        with patch("regression.cases.db.test_hook_enabled", return_value=True), \
+                patch("regression.cases.db.subprocess.run", return_value=SimpleNamespace(returncode=41, stdout="")):
+            with self.assertRaises(RuntimeError):
+                trace_enabled(work)
+
+    def test_mysql_metrics_all_required(self):
+        from regression.cases.db import MYSQL, parse_wake_metrics
+        rows = ["wake benchmark %s n=1000 p50_us=1.000 p95_us=2.000 p99_us=3.000 max_us=4.000 ge1000us=0 sum_us=1500.000" % name for name in MYSQL]
+        self.assertEqual(len(parse_wake_metrics("\n".join(rows), "mysql-wake", False)), len(MYSQL))
+        with self.assertRaises(AssertionError):
+            parse_wake_metrics("\n".join(rows[:-1]), "mysql-wake", False)
 
 class CoroResultChecks(unittest.TestCase):
     def test_coro_result_counts_and_timing(self):

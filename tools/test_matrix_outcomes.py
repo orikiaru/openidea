@@ -123,6 +123,33 @@ class MatrixOutcomeTests(unittest.TestCase):
         self.assertNotIn("config-macros", calls)
         self.assertIn("regression-checks", calls)
 
+    def test_clean_build_default_and_override(self):
+        for arguments, expected in (((), True), (("--case", "echo"), False),
+                                    (("--case", "echo", "--clean-build"), True)):
+            with self.subTest(arguments=arguments):
+                code, _, _ = self.exercise(extra_args=arguments)
+                self.assertEqual(code, 0)
+                for mode in ("mt", "st"):
+                    self.assertEqual("--clean-first" in self.commands[mode + "-build"], expected)
+
+    def test_test_hooks_policy_and_explicit_override(self):
+        for windows, case, value in ((True, "echo", "ON"), (False, "echo", "OFF"),
+                                     (False, "all", "ON"), (False, "log-rotation", "ON")):
+            with self.subTest(windows=windows, case=case):
+                code, _, _ = self.exercise(extra_args=("--case", case), windows=windows)
+                self.assertEqual(code, 0)
+                for mode in ("mt", "st"):
+                    self.assertIn("-DOI_ENABLE_TEST_HOOKS=" + value, self.commands[mode + "-configure"])
+        self.exercise(extra_args=("--case", "echo", "--define", "OI_ENABLE_TEST_HOOKS=ON"), windows=False)
+        for mode in ("mt", "st"):
+            hooks = [arg for arg in self.commands[mode + "-configure"] if arg.startswith("-DOI_ENABLE_TEST_HOOKS=")]
+            self.assertEqual(hooks, ["-DOI_ENABLE_TEST_HOOKS=ON"])
+
+    def test_tool_test_inventory_detects_new_unclassified_file(self):
+        names = [path.name for path in (matrix.ROOT / "tools").glob("test_*.py")]
+        self.assertEqual(matrix.unclassified_tool_tests(names), set())
+        self.assertEqual(matrix.unclassified_tool_tests(names + ["test_new_probe.py"]), {"test_new_probe.py"})
+
     def test_original_interrupt_is_not_swallowed(self):
         self.exercise({"mt-tests": KeyboardInterrupt()}, KeyboardInterrupt)
 
@@ -189,6 +216,20 @@ class MatrixOutcomeTests(unittest.TestCase):
                     self.assertEqual(configured[configured.index("-B") + 1],
                                      asan[asan.index("--build-dir") + 1])
                     self.assertEqual(selected, asan[asan.index("--mode") + 1])
+
+    def test_sanitizer_runs_by_default_only_for_linux_full(self):
+        for windows, case, expected in ((False, "all", True), (False, "echo", False),
+                                        (True, "all", False)):
+            with self.subTest(windows=windows, case=case):
+                code, _, calls = self.exercise(extra_args=("--case", case), windows=windows)
+                self.assertEqual(0, code)
+                for mode in ("mt", "st"):
+                    self.assertEqual(mode + "-asan" in calls, expected)
+                    if expected:
+                        self.assertIn("--asan", self.commands[mode + "-asan"])
+        code, report, _ = self.exercise({"mt-asan": 1}, windows=False)
+        self.assertEqual(1, code)
+        self.assertFalse(report["passed"])
 
     def test_windows_native_rejects_linux_fault_options(self):
         for option in ("--asan", "--clock-faults"):

@@ -15,6 +15,32 @@ from textio import TEXT, use_utf8_children
 ROOT = Path(__file__).resolve().parents[1]
 WINDOWS = os.name == "nt"
 
+# Keep standalone lightweight tests here; argument-dependent probes run after build.
+TOOL_TESTS = (
+    ("field-names", "test_field_names.py"),
+    ("inheritance-tests", "test_inheritance.py"),
+    ("agent-route-tests", "test_agent_route.py"),
+    ("process-fixtures", "test_regression_platform.py"),
+    ("test-safety", "test_test_safety.py"),
+    ("matrix-outcomes", "test_matrix_outcomes.py"),
+    ("regression-checks", "test_regression_checks.py"),
+    ("preflight-ports", "test_preflight_ports.py"),
+    ("build-tests", "test_build.py"),
+    ("linux-sync-tests", "test_sync_linux_remote.py"),
+    ("parallel-lane-tests", "test_parallel_matrix.py"),
+)
+OTHER_TOOL_TESTS = {
+    "test_matrix.py",  # This driver, not a standalone test.
+    "test_process_owner.py",  # Imported by test_test_safety.py.
+    "test_config_macros.py",  # Full matrix only; needs CMake.
+    "test_config_arguments.py",  # Needs built binaries.
+    "test_threadpool_config.py",  # Needs built MT binaries.
+}
+
+
+def unclassified_tool_tests(names):
+    return set(names) - {script for _, script in TOOL_TESTS} - OTHER_TOOL_TESTS
+
 
 def windows_install_text():
     return (
@@ -144,10 +170,12 @@ def main():
     parser.add_argument("--redis-wsl", action="store_true")
     parser.add_argument("--wsl-user", default="root")
     parser.add_argument("--artifacts", type=Path)
-    parser.add_argument("--case", default="all")
+    from regression.cases import REGISTRY, normalize_case_name
+    parser.add_argument("--case", default="all", type=normalize_case_name, choices=("all", *REGISTRY), metavar="all|test-NAME")
+    parser.add_argument("--clean-build", action="store_true", help="clean CMake targets before compilation (automatic for --case all)")
     parser.add_argument("--port-offset", type=int, default=0, help="passed to run_regressions.py; parallel work copies need distinct offsets")
     parser.add_argument("--mode", choices=("all", "mt", "st"), default="all")
-    parser.add_argument("--asan", action="store_true", help="Linux pure coroutine ASan check")
+    parser.add_argument("--asan", action="store_true", help="include the Linux coroutine ASan/UBSan probe (automatic for --case all)")
     parser.add_argument("--clock-faults", action="store_true", help="Linux optional wall-clock fault cases")
     parser.add_argument("--vs-instance", help="Optional CMake generator instance: path[,version=x.y.z.w]")
     parser.add_argument("--no-restore", action="store_true",
@@ -194,6 +222,9 @@ def main():
         linux = prefix + ["python3", translate(Path(__file__).resolve()), "--build-dir", args.linux_build_dir,
                           "--artifacts", translate(output / "linux"), "--case", args.case, "--mode", args.mode,
                           "--jobs", str(args.jobs), "--port-offset", str(args.port_offset)]
+        if args.clean_build:
+            native.append("--clean-build")
+            linux.append("--clean-build")
         if args.redis_binary:
             linux += ["--redis-binary", args.redis_binary]
         if args.asan:
@@ -261,29 +292,17 @@ def main():
             configure.append("-DOI_ENABLE_MYSQL=ON")
         configure += ["-D" + item for item in args.define]
         binary = ROOT / "deploy/bin/Release" if WINDOWS else ROOT / "deploy/bin"
-        if run("field-names", [sys.executable, ROOT / "tools/test_field_names.py"]):
+        unclassified = unclassified_tool_tests(path.name for path in (ROOT / "tools").glob("test_*.py"))
+        if unclassified:
+            print("Unclassified tools tests: " + ", ".join(sorted(unclassified)), flush=True)
             failed = True
-        if run("inheritance-tests", [sys.executable, ROOT / "tools/test_inheritance.py"]):
-            failed = True
+        for name, script in TOOL_TESTS:
+            if run(name, [sys.executable, ROOT / "tools" / script]):
+                failed = True
         if run("inheritance", [sys.executable, ROOT / "tools/check_inheritance.py"]):
-            failed = True
-        if run("agent-route-tests", [sys.executable, ROOT / "tools/test_agent_route.py"]):
             failed = True
         if run("agent-route", [sys.executable, ROOT / "tools/agent_route.py", "--check"]):
             failed = True
-        if run("process-fixtures", [sys.executable, ROOT / "tools/test_regression_platform.py"]):
-            failed = True
-        if run("test-safety", [sys.executable, ROOT / "tools/test_test_safety.py"]):
-            failed = True
-        if run("matrix-outcomes", [sys.executable, ROOT / "tools/test_matrix_outcomes.py"]):
-            failed = True
-        for name, script in (("regression-checks", "test_regression_checks.py"),
-                             ("preflight-ports", "test_preflight_ports.py"),
-                             ("build-tests", "test_build.py"),
-                             ("linux-sync-tests", "test_sync_linux_remote.py"),
-                             ("parallel-lane-tests", "test_parallel_matrix.py")):
-            if run(name, [sys.executable, ROOT / "tools" / script]):
-                failed = True
         if args.case == "all" and run("config-macros", [sys.executable, ROOT / "tools/test_config_macros.py", "--cmake", cmake]):
             failed = True
         gap = missing_toolset(WINDOWS)
@@ -296,9 +315,13 @@ def main():
             mode_build = build.with_name(build.name + "-st") if mode == "st" else build
             mode_configure = [cmake, "-S", ROOT, "-B", mode_build, *configure[5:]]
             mode_build_command = [cmake, "--build", mode_build, "--config", "Release", "-j", args.jobs]
+            if args.clean_build or args.case == "all":
+                mode_build_command.append("--clean-first")
             flags = ["-DOI_IPC_SINGLE_THREAD=" + ("ON" if mode == "st" else "OFF"),
-                     "-DOI_WEBCLIENT_SINGLE_THREAD=" + ("ON" if mode == "st" else "OFF"),
-                     "-DOI_ENABLE_TEST_HOOKS=" + ("ON" if WINDOWS else "OFF")]
+                     "-DOI_WEBCLIENT_SINGLE_THREAD=" + ("ON" if mode == "st" else "OFF")]
+            if not any(item.split("=", 1)[0].split(":")[0] == "OI_ENABLE_TEST_HOOKS" for item in args.define):
+                enable_hooks = WINDOWS or args.case in ("all", "log-rotation")
+                flags.append("-DOI_ENABLE_TEST_HOOKS=" + ("ON" if enable_hooks else "OFF"))
             if run(mode + "-configure", mode_configure + flags) or run(mode + "-build", mode_build_command):
                 failed = True
                 break
@@ -329,7 +352,7 @@ def main():
                         fault[fault.index("--artifacts") + 1] = output / mode / case
                         fault += ["--clock-fault-so", library]
                         failed |= bool(run(mode + "-" + case, fault))
-            if args.asan and not WINDOWS:
+            if not WINDOWS and (args.asan or args.case == "all"):
                 failed |= bool(run(mode + "-asan", [sys.executable, ROOT / "tools/check_coro_runtime.py",
                                                      "--build-dir", mode_build, "--mode", mode, "--asan"]))
         completed = not failed

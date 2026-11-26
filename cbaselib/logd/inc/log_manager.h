@@ -11,7 +11,6 @@ class LogManager : public ::OI::Timer::BaseTimer
 {
 	DECLARE_SINGLETON(LogManager)
 	LogManager() = default;
-	//root_path + year_month_day
 	//12:09:08 service_type-service_id:
 	enum
 	{
@@ -43,9 +42,7 @@ class LogManager : public ::OI::Timer::BaseTimer
 	bool m_bResumePosted = false;
 	bool m_bStopping = false;
 
-	//日志文件根目录
-	std::string m_sLogRootPath;    //日志根目录
-	std::string m_sCurrentLogPath; //当天的日志目录 _log_root_path/year_month_day
+	std::string m_sLogRootPath;
 
   public:
 	~LogManager()
@@ -69,7 +66,8 @@ class LogManager : public ::OI::Timer::BaseTimer
 	static void ResumeOnLoop(void* pArgument);
 	void ResumeWaiting(bool bShutdown);
 	int32_t StartLogInstanceWork();
-	void UpdateLogPath();
+	static time_t ReadLogTime(tm& stCalendarTime);
+	std::string LogFilePath(LOG_LEVEL iLevel) const;
 	void OnCrossDay();
 	bool OnTimer() override;
 	std::string GetLogTitle();

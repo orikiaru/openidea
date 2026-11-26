@@ -149,7 +149,12 @@ class RedisCase(Case):
         assert re.search(r"redis upstream disconnect index=0 host=127\.0\.0\.1 port=" + str(ports.REDIS_PORT) + r" status=-1 error=[1-9]\d* reason=.+ truncated=0", diagnostics), "original hiredis disconnect error missing from logd disk"
         print("diagnostic original errors persisted", ctx.name, "PASS", flush=True)
 
-CASES = (RedisCase("redis", "redis"), RedisCase("redis-limit", "redis"),
-         RedisCase("redis-shutdown", "redis"), RedisCase("redis-queue-timeout", "redis"),
-         RedisCase("redis-backpressure-bytes", "redis"), RedisCase("redis-backpressure-count", "redis"),
-         RedisCase("redis-fairness", "redis"))
+CASES = (
+    RedisCase("redis", "redis"),
+    RedisCase("redis-limit", "redis"),
+    RedisCase("redis-shutdown", "redis"),
+    RedisCase("redis-queue-timeout", "redis"),
+    RedisCase("redis-backpressure-bytes", "redis"),
+    RedisCase("redis-backpressure-count", "redis"),
+    RedisCase("redis-fairness", "redis"),
+)

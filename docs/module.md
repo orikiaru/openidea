@@ -79,13 +79,15 @@ RPC 帧在 IO 线程按读取上限原地解码；嵌套结构和容器复用同
 
 `deploy/config/ipcclient.toml` 的 `[Test]` 里 `echo`、`log`、`redis`、`hold` 各管一个测试，默认只开回声。一次只开一个。`coro` 是协程压力，默认关掉，不进 `--case all`。
 
-`log = true` 时日志服必须已经在听，`ipcserver` 也要起：`LogMgr` 是在连上 `ipcserver` 之后才开始发的，连不上就一直不发，CPU 是 0。`SendLog` 失败后测试会立刻再排一次发送，字节数加了又减，到不了目标，进程也不会退出。
+`log = true` 时日志服必须已经在听，`ipcserver` 也要起：`TestLog` 是在连上 `ipcserver` 之后才开始发的，连不上就一直不发，CPU 是 0。`SendLog` 失败后测试会立刻再排一次发送，字节数加了又减，到不了目标，进程也不会退出。
 
 ## Web
 
 `webserver` 和 `webclient` 是两个独立进程。服务端提供 HTTP，客户端支持 HTTP 和 HTTPS。JSON 用 JsonCpp。body 若是 `rpcdata`，用它自己的 `FromJson` / `ToJson`。
 
 `webserver` 使用框架 HTTP 服务端，监听 `WebServer.ip`（默认 127.0.0.1）和整数 `WebServer.port`（默认 18080）。五个路由分别是：`GET /health` 返回正文 `ok`；`GET /query` 回解码后的 query，缺少 `text` 返回 400；`POST /json` 给 JSON 对象加 `ok`，`POST /rpcjson` 用 `JsonAll` 的 `FromJson` / `ToJson` 走一遍全量字段并把 `gap` 加一，JSON 无效时返回 400；`POST /bin` 把 body 原样写回。请求由框架 poll 接收并启动处理协程，同一连接按请求顺序返回响应；请求头和 body 上限分别为 64 KiB 和 8 MiB，支持 Content-Length 和 chunked 请求体。可选 `[WebRpc]` 配置字符串 `port`、`ip`、`type` 和整数 `delay_ms` 后，`/query` 先等待直连 Hold RPC；可选 `[RedisClient]` 配置字符串 `port`、`ip`、`type` 及 `timeout_ms` 后，再等待 Redis PING。上游失败返回 502。它是示例 HTTP 服务，不提供 HTTPS 或生产环境的认证和访问控制。`c`、`gap` 这些是别名。`iPlain` 这些写了 `[json]` 但不改名。`iDefault`、`sDefault`、`vDefault`、`mDefault`、`stDefault` 连 `[json]` 都不写，结构标了 `json` 就默认参加，键名仍是字段名。`stDefault` 里的 `iNumber`、`sText` 同样不写标记。`iSkip` 和 `stDefault.iSkip` 标了 `[nojson]`，不进 JSON，读入时即使带了这个键也不改原值。客户端同时核对这几类。
+
+`webclient` 的无正文及中间响应专项位于独立的 `test_http_bodyless.cpp`，由同一个客户端入口按测试配置分派；配套服务端夹具验证持久连接复用和请求顺序。
 
 `webclient` 走基础库 `OI::Http::Client`：`Start` 用 `StartTask` 拉起 `Run`，九次请求都是 `co_await`：先请求无参数的 `/query` 并检查 400，再用同一客户端请求 `/health` 并检查 200 和正文；四次 GET 覆盖普通路径、已有查询、尾问号和尾 `&`，另外三次 POST 覆盖 JSON、rpcdata 和二进制。GET 追加参数时保留路径已有查询，按需使用 `?` 或 `&` 分隔；参数名和值会做 URL 编码。完成时 poll 线程 `Schedule` 协程句柄，不在回调里 `resume`。默认单线程模块链 `http_static`；将 `OI_WEBCLIENT_SINGLE_THREAD` 设为 OFF 可编译多线程客户端，链 `http_m_static` 并读取线程池配置。退出码 0 表示所有检查都通过。从 `deploy/bin` 先运行 `webserver`，等监听成功后运行 `webclient`，两者读取同级 `config` 下各自的 TOML；`WebClient` 可选 `timeout_ms`、`reuse`、`https` 和 `ca_file`，默认分别为 5000、true、false 和空字符串。启用 `https` 后客户端校验证书链和主机名；`ca_file` 可指定可信 CA 文件，空字符串在 Linux 使用 OpenSSL 默认信任路径，在 Windows 使用系统证书存储。以后换 Go 或其他语言的 HTTP 服务时，仍用这个客户端，只改地址。
 

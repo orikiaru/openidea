@@ -11,7 +11,7 @@
 id = "coroutine"
 doc = "docs/coroutine.md"
 section = "硬性约束"
-example = "`modules/ipcserver/src/ipcserver.cpp` 的 `RegisterRpcHandler`；`modules/ipcclient/src/echo_mgr.cpp` 的 `StartTask`；空等用 `modules/ipcclient/src/log_mgr.cpp` 的 `Pump` 里 `co_await OI::Coro::yield`"
+example = "`modules/ipcserver/src/ipcserver.cpp` 的 `RegisterRpcHandler`；`modules/ipcclient/src/test_echo.cpp` 的 `StartTask`；空等用 `modules/ipcclient/src/test_log.cpp` 的 `Pump` 里 `co_await OI::Coro::yield`"
 keywords = ["协程", "Task", "StartTask", "TaskScope", "co_await", "yield", "让出", "挂起", "睡眠", "sleep", "sleep_for", "RunBlocking", "lambda", "捕获", "WhenAll"]
 paths = ["cbaselib/base/inc/oi_coro*.h", "cbaselib/base/src/oi_coro*.cpp"]
 content = ['\bco_await\b', '\bco_return\b', '\bStartTask\b', '\bTaskScope\b', '\bRunBlocking\b', 'Coro::yield', '\[\s*[&=]\s*[,\]]', '\bsleep_for\b', '\busleep\s*\(', '\bSleep\s*\(']
@@ -38,9 +38,9 @@ content = ['\bRegisterNotifyHandler\b', '\bNotify(All|Many)?\s*\(']
 id = "redis"
 doc = "docs/cbaselib.md"
 section = "redis 段"
-example = "`modules/ipcclient/src/redis_mgr.cpp` 的 `Check`"
+example = "`modules/ipcclient/src/test_redis.cpp` 的 `Check`"
 keywords = ["Redis", "redisserver", "RESP", "CallRedis"]
-paths = ["cbaselib/redis/**", "modules/redisserver/**", "modules/ipcclient/src/redis_mgr.cpp"]
+paths = ["cbaselib/redis/**", "modules/redisserver/**", "modules/ipcclient/src/test_redis.cpp"]
 content = ['\bCallRedis\b', 'OI::Redis::']
 
 [[route]]
@@ -56,7 +56,7 @@ content = ['\bAddTimer\b', '\bBaseTimer\b']
 id = "update"
 doc = "docs/timer.md"
 section = "单例更新段"
-example = "`cbaselib/proto/src/oi_registry_client.cpp` 的 `RegistryClient::OnSecondUpdate`；`modules/ipcclient/src/timer_mgr.cpp` 的 `OnTickUpdate`"
+example = "`cbaselib/proto/src/oi_registry_client.cpp` 的 `RegistryClient::OnSecondUpdate`；`modules/ipcclient/src/test_timer.cpp` 的 `OnTickUpdate`"
 keywords = ["周期任务", "Update", "心跳", "定时拉取", "单例循环", "OnSecondUpdate", "OnTickUpdate"]
 paths = []
 content = ['\bOnSecondUpdate\b', '\bOnTickUpdate\b', '\bCallOnLoop\b']
@@ -128,8 +128,8 @@ content = []
 id = "testing"
 doc = "docs/testing.md"
 section = "硬性约束"
-example = "`modules/ipcclient/src/udp_mgr.cpp` 的 `UdpMgr`；另见 `docs/develop.md` 第 7 节，远程 Linux 另读 `.agents/skills/linux-remote-test/SKILL.md`"
-keywords = ["测试", "回归", "补用例", "全量", "矩阵", "验收", "clangd", "logd", "EchoMgr", "LogMgr", "RedisMgr", "HoldMgr", "run_regressions", "test_matrix"]
+example = "`modules/ipcclient/src/test_udp.cpp` 的 `TestUdp`；另见 `docs/develop.md` 第 7 节，远程 Linux 另读 `.agents/skills/linux-remote-test/SKILL.md`"
+keywords = ["测试", "回归", "补用例", "全量", "矩阵", "验收", "clangd", "logd", "TestEcho", "TestLog", "TestRedis", "TestHold", "run_regressions", "test_matrix"]
 paths = ["tools/regression/**", "tools/run_regressions.py", "tools/test_matrix.py", "tools/parallel_matrix.py", "tools/kill_test_procs.py", "deploy/config/**", "modules/ipcclient/src/*_mgr.cpp"]
 content = []
 

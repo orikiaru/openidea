@@ -7,6 +7,7 @@ Windows 侧 Redis 用原生 redis-server.exe；WSL 转发在大流量下会卡�
 import argparse
 import json
 import os
+import posixpath
 import subprocess
 import sys
 import time
@@ -17,7 +18,8 @@ from textio import use_utf8_children
 ROOT = Path(__file__).resolve().parents[1]
 # 互不重叠：基准端口 16379-19995，每份平移 1000。
 LANES = (("windows", "mt", 0), ("windows", "st", 1000), ("linux", "mt", 2000), ("linux", "st", 3000))
-EXCLUDED_DIRS = ("build-win", "build-win-st", "build", "build-clangd-win", "build-clangd-linux", ".vs", "deploy/bin")
+EXCLUDED_DIRS = ("build-win", "build-win-st", "build", "build-clangd-win", "build-clangd-linux",
+                 ".vs", ".local", ".codex", "deploy/bin")
 EXCLUDED_FILES = ("*.tar.gz",)
 
 
@@ -39,8 +41,16 @@ def git_dir():
 
 
 def sync_windows(destination):
+    source = os.path.normcase(str(ROOT.resolve()))
+    target = os.path.normcase(str(Path(destination).resolve()))
+    try:
+        common = os.path.commonpath((source, target))
+    except ValueError:  # Different Windows drives cannot overlap.
+        common = None
+    if common in (source, target):
+        raise ValueError("source and destination directories overlap")
     excluded = [str(ROOT / name) for name in EXCLUDED_DIRS] + [str(destination / name) for name in EXCLUDED_DIRS]
-    code = subprocess.run(["robocopy", str(ROOT), str(destination), "/MIR", "/NFL", "/NDL", "/NJH", "/NJS", "/NP",
+    code = subprocess.run(["robocopy", str(ROOT), str(destination), "/MIR", "/IS", "/IT", "/IM", "/NFL", "/NDL", "/NJH", "/NJS", "/NP",
                            "/XD"] + excluded + ["/XF"] + list(EXCLUDED_FILES)).returncode
     # robocopy 0-7 表示成功，8 及以上才是失败。
     if code >= 8:
@@ -52,11 +62,19 @@ def sync_windows(destination):
 
 
 def sync_linux(user, destination):
-    command = ["rsync", "-a", "--delete"]
+    source = linux_path(user, ROOT)
+    resolved = wsl(user, ["realpath", "-m", source, destination], capture_output=True, text=True,
+                   encoding="utf-8", errors="replace", check=True).stdout.splitlines()
+    if len(resolved) != 2:
+        raise RuntimeError("cannot resolve Linux source and destination")
+    source_real, target_real = (path.rstrip("/") or "/" for path in resolved)
+    if posixpath.commonpath((source_real, target_real)) in (source_real, target_real):
+        raise ValueError("source and destination directories overlap")
+    command = ["rsync", "-a", "--checksum", "--delete"]
     for name in EXCLUDED_DIRS + EXCLUDED_FILES:
         command += ["--exclude", name if name.startswith("*") else "/" + name]
     wsl(user, ["mkdir", "-p", destination], check=True)
-    wsl(user, command + [linux_path(user, ROOT) + "/", destination + "/"], check=True)
+    wsl(user, command + [source + "/", destination + "/"], check=True)
     # 从 Windows 盘拷过去会留下原用户属主。这里的 git 2.25.1 不认 safe.directory，属主对不上就拒绝读。
     wsl(user, ["chown", "-R", user + ":" + user, destination], check=True)
     if git_dir() is not None:
@@ -106,7 +124,7 @@ def main():
     parser.add_argument("--case", default="all")
     parser.add_argument("--mysqld", help="Linux lanes: build with MySQL and run the mysql case before each lane's tests")
     parser.add_argument("--define", action="append", default=[], metavar="NAME=VALUE",
-                        help="Linux lanes: extra CMake cache entry passed to test_matrix.py")
+                        help="extra CMake cache entry passed to each lane test_matrix.py")
     parser.add_argument("--jobs", type=int, default=8)
     parser.add_argument("--artifacts", type=Path, required=True)
     parser.add_argument("--lane", action="append", choices=["%s-%s" % (platform, mode) for platform, mode, _ in LANES],
@@ -133,12 +151,14 @@ def main():
             lane = "%s-%s" % (platform, mode)
             output = artifacts / lane
             log = (artifacts / (lane + ".log")).open("w", encoding="utf-8")
-            common = ["--mode", mode, "--case", args.case, "--jobs", str(args.jobs), "--port-offset", str(offset)]
+            common = ["--mode", mode, "--case", args.case, "--jobs", str(args.jobs), "--port-offset", str(offset), "--clean-build"]
             copy = lane_copy(args, platform, lane)
             if platform == "windows":
                 sync_windows(copy)
                 command = [sys.executable, str(copy / "tools/test_matrix.py"), "--build-dir", str(copy / "build-win"),
                            "--redis-binary", args.windows_redis_binary, "--artifacts", str(output)] + common
+                for item in args.define:
+                    command += ["--define", item]
                 cwd = copy
             else:
                 sync_linux(args.wsl_user, copy)

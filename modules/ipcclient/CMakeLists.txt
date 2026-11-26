@@ -6,39 +6,39 @@ cmake_minimum_required(VERSION 2.6)
 set(MODULE_SRCS
         src/main.cpp
         src/ipcclient.cpp
-        src/db_mgr.cpp
+        src/test_db.cpp
         src/wake_bench.cpp
         src/test_board.cpp
-        src/echo_mgr.cpp
-        src/coro_mgr.cpp
-        src/empty_mgr.cpp
-        src/log_mgr.cpp
-        src/redis_mgr.cpp
-        src/hold_mgr.cpp
-        src/timer_mgr.cpp
-        src/nested_result_mgr.cpp
-        src/task_start_mgr.cpp
-        src/task_share_mgr.cpp
-        src/blocking_mgr.cpp
-        src/connect_mgr.cpp
-        src/address_mgr.cpp
-        src/isolation_mgr.cpp
-        src/backpressure_mgr.cpp
-        src/rpc_output_mgr.cpp
-        src/rpc_await_mgr.cpp
-        src/rpc_admission_mgr.cpp
-        src/route_mgr.cpp
-        src/registry_mgr.cpp
-        src/rpc_service_mgr.cpp
-        src/json_mgr.cpp
-        src/binary_mgr.cpp
-        src/encode_mgr.cpp
-        src/http_mgr.cpp
-        src/budget_mgr.cpp
-        src/schedule_mgr.cpp
-        src/rpc_pending_mgr.cpp
-        src/udp_mgr.cpp
-        src/multi_mgr.cpp
+        src/test_echo.cpp
+        src/test_coro.cpp
+        src/test_empty.cpp
+        src/test_log.cpp
+        src/test_redis.cpp
+        src/test_hold.cpp
+        src/test_timer.cpp
+        src/test_nested_result.cpp
+        src/test_task_start.cpp
+        src/test_task_share.cpp
+        src/test_blocking.cpp
+        src/test_connect.cpp
+        src/test_address.cpp
+        src/test_isolation.cpp
+        src/test_backpressure.cpp
+        src/test_rpc_output.cpp
+        src/test_rpc_await.cpp
+        src/test_rpc_admission.cpp
+        src/test_route.cpp
+        src/test_registry.cpp
+        src/test_rpc_service.cpp
+        src/test_json.cpp
+        src/test_binary.cpp
+        src/test_encode.cpp
+        src/test_http.cpp
+        src/test_budget.cpp
+        src/test_schedule.cpp
+        src/test_rpc_pending.cpp
+        src/test_udp.cpp
+        src/test_multi.cpp
     )
 #可执行程序
 add_executable(ipcclient ${MODULE_SRCS})

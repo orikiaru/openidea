@@ -35,6 +35,10 @@ class LogCase(Case):
         return text
 
     def client_env(self, ctx, env):
+        if ctx.name == "log-rotation":
+            ctx.rotation_gate = ctx.root / "log-rotation"
+            ctx.rotation_state = 0
+            env["OI_TEST_LOG_ROTATION_GATE"] = str(ctx.rotation_gate)
         if ctx.name == "log-contract":
             ctx.contract_state = 0
             ctx.contract_gate = ctx.root / "log-contract"
@@ -42,6 +46,42 @@ class LogCase(Case):
         return env
 
     def on_poll(self, ctx):
+        if ctx.name == "log-rotation":
+            output = ctx.clientpath.read_text(encoding="utf-8", errors="replace")
+            first = ctx.logs / "info_2024-01-01.log.txt"
+            second = ctx.logs / "info_2024-01-02.log.txt"
+            def phase_bytes(phase):
+                return sum(len("00:00:00 ipcclient-1:log-rotation phase=%d seq=%d\n" % (phase, seq))
+                           for seq in range(10))
+            def drained(path, phase):
+                return ("log-rotation phase=%d bad=0" % phase in output and path.exists()
+                        and path.stat().st_size >= ctx.rotation_baseline + phase_bytes(phase))
+            if ctx.rotation_state == 0 and "LogClient::OnClientConnect" in output:
+                ctx.rotation_baseline = first.stat().st_size if first.exists() else 0
+                ctx.rotation_gate.with_suffix(".0").touch()
+                ctx.rotation_state = 1
+            if ctx.rotation_state == 1 and drained(first, 0):
+                self.set_rotation_clock(ctx, 2)
+                ctx.rotation_state = 2
+            if ctx.rotation_state == 2 and second.exists():
+                ctx.rotation_baseline = second.stat().st_size
+                ctx.rotation_gate.with_suffix(".1").touch()
+                ctx.rotation_state = 3
+            if ctx.rotation_state == 3 and drained(second, 1):
+                ctx.stop(ctx.logd)
+                ctx.logd.wait(timeout=10)
+                assert ctx.logd.returncode == 0
+                ctx.procs.remove(ctx.logd)
+                ctx.rotation_baseline = second.stat().st_size
+                ctx.start_logd()
+                ctx.rotation_state = 4
+            if ctx.rotation_state == 4 and output.count("LogClient::OnClientConnect") >= 2:
+                ctx.rotation_gate.with_suffix(".2").touch()
+                ctx.rotation_state = 5
+            if ctx.rotation_state == 5 and drained(second, 2):
+                ctx.rotation_gate.with_suffix(".done").touch()
+                ctx.rotation_state = 6
+            return
         if ctx.name != "log-contract":
             return
         output = ctx.clientpath.read_text(encoding="utf-8", errors="replace")
@@ -50,7 +90,7 @@ class LogCase(Case):
             ctx.logd.wait(timeout=10)
             assert ctx.logd.returncode == 0
             ctx.procs.remove(ctx.logd)
-            ctx.contract_baseline = sum(path.stat().st_size for path in ctx.logs.rglob("info"))
+            ctx.contract_baseline = sum(path.stat().st_size for path in ctx.logs.glob("info_*.log.txt"))
             ctx.contract_state = 1
         if ctx.contract_state == 1 and "LogClient::OnClientDisconnect" in output:
             ctx.contract_gate.with_suffix(".disconnected").touch()
@@ -66,18 +106,30 @@ class LogCase(Case):
             assert match
             expected = sum(len("00:00:00 ipcclient-1:log-contract seq=%d\n" % i) for i in range(int(match.group(1))))
             expected += len("00:00:00 ipcclient-1:log-contract final\n")
-            if sum(path.stat().st_size for path in ctx.logs.rglob("info")) >= ctx.contract_baseline + expected:
+            if sum(path.stat().st_size for path in ctx.logs.glob("info_*.log.txt")) >= ctx.contract_baseline + expected:
                 ctx.contract_gate.with_suffix(".drained").touch()
                 ctx.contract_state = 5
 
     def prepare_directory(self, ctx):
         if ctx.name == "disk-full" and not WINDOWS:
-            dated = ctx.logs / datetime.datetime.now().strftime("%y_%m_%d")
-            dated.mkdir()
+            date = datetime.datetime.now().strftime("%Y-%m-%d")
             for level in ("trace", "debug", "info", "warning", "error"):
-                (dated / level).symlink_to("/dev/full")
+                (ctx.logs / f"{level}_{date}.log.txt").symlink_to("/dev/full")
+
+    @staticmethod
+    def set_rotation_clock(ctx, day):
+        timestamp = int(datetime.datetime(2024, 1, day, 12).timestamp())
+        temporary = ctx.rotation_clock.with_suffix(".tmp")
+        temporary.write_text(str(timestamp), encoding="ascii")
+        os.replace(temporary, ctx.rotation_clock)
 
     def prepare(self, ctx):
+        if ctx.name == "log-rotation":
+            if not test_hook_enabled(ctx.work, "logd", "log_fault"):
+                raise RuntimeError("log-rotation requires logd built with -DOI_ENABLE_TEST_HOOKS=ON")
+            ctx.rotation_clock = ctx.root / "rotation-clock"
+            self.set_rotation_clock(ctx, 1)
+            ctx.log_env = dict(os.environ, OI_TEST_LOG_CLOCK_FILE=str(ctx.rotation_clock))
         case = ctx.name
         if case == "log-backpressure" and not WINDOWS:
             slow_write = ctx.root / "slow-write.so"
@@ -114,7 +166,7 @@ FILE *fopen(const char *path, const char *mode)
     FILE *(*next_fopen)(const char *, const char *) = dlsym(RTLD_NEXT, "fopen");
     const char *marker = getenv("OI_TEST_ROTATION_OPEN_MARKER");
     const char *release = getenv("OI_TEST_ROTATION_OPEN_RELEASE");
-    if (marker && release && strstr(path, "/24_01_02/"))
+    if (marker && release && strstr(path, "_2024-01-02.log.txt"))
     {
         int fd = open(marker, O_WRONLY | O_CREAT, 0600);
         if (fd >= 0) close(fd);
@@ -168,6 +220,24 @@ int gettimeofday(struct timeval *tv, void *tz)
         logd, logpath, logs = ctx.logd, ctx.logpath, ctx.logs
         stop = ctx.stop
         last_log_bytes, last_growth, started = ctx.last_log_bytes, ctx.last_growth, ctx.started
+        if case == "log-rotation":
+            assert ctx.rotation_state == 6, ctx.rotation_state
+            stop(logd)
+            logd.wait(timeout=10)
+            assert logd.returncode == 0
+            assert all(path.is_file() for path in logs.iterdir()), list(logs.iterdir())
+            assert {path.name for path in logs.iterdir()} == {
+                "%s_2024-01-%02d.log.txt" % (level, day)
+                for level in ("trace", "debug", "info", "warning", "error") for day in (1, 2)
+            }, list(logs.iterdir())
+            for day, phases in ((1, (0,)), (2, (1, 2))):
+                path = logs / ("info_2024-01-%02d.log.txt" % day)
+                rows = re.findall(r"log-rotation phase=(\d+) seq=(\d+)", path.read_text(encoding="utf-8", errors="replace"))
+                assert rows == [(str(phase), str(seq)) for phase in phases for seq in range(10)], rows
+            assert all("log-rotation phase=" not in path.read_text(encoding="utf-8", errors="replace")
+                       for path in logs.glob("*.log.txt") if path.name not in ("info_2024-01-01.log.txt", "info_2024-01-02.log.txt"))
+            print("log rotation dates=2 unique=30 restart=append directories=0 PASS", flush=True)
+            return False
         if case == "log-contract":
             assert ctx.contract_state == 5, ctx.contract_state
             stop(logd)
@@ -180,7 +250,7 @@ int gettimeofday(struct timeval *tv, void *tz)
             assert stdout_rows == list(range(len(results))), stdout_rows
             final_codes = [int(code) for code in re.findall(r"log-contract final code=(-?\d+)", text)]
             assert final_codes and final_codes[-1] == 0 and all(code == -5 for code in final_codes[:-1]), final_codes
-            disk = "".join(path.read_text(encoding="utf-8", errors="replace") for path in sorted(logs.rglob("info")))
+            disk = "".join(path.read_text(encoding="utf-8", errors="replace") for path in sorted(logs.glob("info_*.log.txt")))
             rows = re.findall(r"(?m)^\d\d:\d\d:\d\d ipcclient-1:log-contract (seq=\d+|final)$", disk)
             assert rows == ["seq=%d" % i for i in range(len(results) - 1)] + ["final"], rows
             print("log contract accepted=%d busy=1 stdout=all disk=fifo final=1 PASS" % (len(results) - 1), flush=True)
@@ -201,19 +271,19 @@ int gettimeofday(struct timeval *tv, void *tz)
             assert target_bytes <= size < CAP, size
             rows = 0
             day_rows = {}
-            for info in logs.rglob("info"):
+            for info in logs.glob("info_*.log.txt"):
                 with info.open("rb") as stream:
                     for line in stream:
                         assert re.match(rb"\d{2}:\d{2}:\d{2} ", line), line[:40]
                         assert len(line) == line_bytes + 9 and line[9:-1] == b"L" * (line_bytes - 1)
                         rows += 1
                         if case == "log-backpressure" and not WINDOWS:
-                            day = info.parent.name
-                            assert day in ("24_01_01", "24_01_02"), day
-                            assert line.startswith(b"12:" if day == "24_01_01" else b"13:"), (day, line[:9])
+                            day = info.name
+                            assert day in ("info_2024-01-01.log.txt", "info_2024-01-02.log.txt"), day
+                            assert line.startswith(b"12:" if day == "info_2024-01-01.log.txt" else b"13:"), (day, line[:9])
                             day_rows[day] = day_rows.get(day, 0) + 1
             if case == "log-backpressure" and not WINDOWS:
-                assert all(day_rows.get(day, 0) > 0 for day in ("24_01_01", "24_01_02")), day_rows
+                assert all(day_rows.get(day, 0) > 0 for day in ("info_2024-01-01.log.txt", "info_2024-01-02.log.txt")), day_rows
                 print("log rotation ordered", day_rows, "PASS", flush=True)
             assert rows == target_bytes // line_bytes, rows
             written_payload = rows * (line_bytes + 9)
@@ -229,11 +299,11 @@ int gettimeofday(struct timeval *tv, void *tz)
                 assert peak <= limit == 8 * 1024**2 + 8 and pauses > 0 and pending == 0, backlog.group(0)
                 print(backlog.group(0), flush=True)
                 if not WINDOWS:
-                    # A regular file blocks the next day's directory. The same
+                    # A directory blocks the next day's log file. The same
                     # accelerated clock forces a real rotation in a new logd.
                     failure_root = ctx.root / "rotation-failure"
                     failure_root.mkdir()
-                    (failure_root / "24_01_02").write_text("block", encoding="utf-8")
+                    (failure_root / "info_2024-01-02.log.txt").mkdir()
                     config = ctx.cfg / "logd.toml"
                     config.write_text(replace(config.read_text(encoding="utf-8"), "root_path",
                                               '"' + failure_root.as_posix() + '"'), encoding="utf-8")
@@ -242,18 +312,18 @@ int gettimeofday(struct timeval *tv, void *tz)
                     failure = ""
                     while time.monotonic() < deadline:
                         failure = failed_path.read_text(encoding="utf-8", errors="replace")
-                        if "logd mkdir failed:" in failure and "logd rotate open failed:" in failure:
+                        if "logd rotate open failed:" in failure:
                             break
                         if failed_logd.poll() is not None:
                             break
                         time.sleep(0.05)
                     assert failed_logd.poll() is None, failure
-                    assert "logd mkdir failed:" in failure and "logd rotate open failed:" in failure, failure
+                    assert "logd rotate open failed:" in failure, failure
                     ctx.stop(failed_logd)
                     failed_logd.wait(timeout=10)
                     ctx.procs.remove(failed_logd)
                     assert failed_logd.returncode == 0, failure
-                    print("log rotation mkdir failure kept process PASS", flush=True)
+                    print("log rotation open failure kept process PASS", flush=True)
 
                     # Pause only the writer's new-day fopen, then make the
                     # log server accept and reject a malformed frame.
@@ -280,9 +350,15 @@ int gettimeofday(struct timeval *tv, void *tz)
                     ctx.stop(gate_logd)
                     gate_logd.wait(timeout=10)
                     assert gate_logd.returncode == 0, gate_path.read_text(encoding="utf-8", errors="replace")
-                    trace = (gate_root / "24_01_02" / "trace").read_text(encoding="utf-8", errors="replace")
+                    trace = (gate_root / "trace_2024-01-02.log.txt").read_text(encoding="utf-8", errors="replace")
                     assert "LogServer::OnAddSession" in trace, trace
                     print("log rotation blocked open poll responsive persisted PASS", flush=True)
         return False
 
-CASES = (LogCase("log", "log"), LogCase("log-backpressure", "log"), LogCase("log-contract", "log"), LogCase("disk-full", "log"))
+CASES = (
+    LogCase("log-rotation", "log"),
+    LogCase("log", "log"),
+    LogCase("log-backpressure", "log"),
+    LogCase("log-contract", "log"),
+    LogCase("disk-full", "log"),
+)

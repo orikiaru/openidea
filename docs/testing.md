@@ -18,9 +18,9 @@
 
 单线程和多线程指 `ipcclient` 和 `ipcserver`。`logd` 只能多线程。`redisserver` 按它自己的编译选项是单线程。Linux 优先用本机 `.local/linux-hosts.json` 里的远程机器，这个文件不进仓库：4 核那台编译 Release 并跑多线程，2 核那台跑单线程，用户名以文件为准，只走公钥，不把密码写进代码或命令。文件不存在，或里面缺 IP、用户名时，先问用户。用户选择不提供，就改用 WSL，构建目录 `~/openidea-build-gcc13`；之后一直用 WSL，直到用户再次明确说用远程机器。Windows 用 `build-win`（Visual Studio 17 2022，x64），同样两种线程模式各编一次。两边的可执行文件都在 `deploy/bin`，换平台或换线程模式之前先编出要跑的那一套。单线程和多线程各用各的构建目录：多线程是 `build-win` 或 `~/openidea-build-gcc13`，单线程是同级的 `build-win-st`、`~/openidea-build-gcc13-st`。不要把同一目录改回另一种线程模式再编一遍。回归入口是 `python3 tools/run_regressions.py --case all`。Linux 无论在远程还是 WSL，都用 `-DOI_IPC_SINGLE_THREAD=ON` 和 `OFF` 各编一次。
 
-`ipcclient` 里四个 Mgr 都要跑到：`EchoMgr`、`LogMgr`、`RedisMgr`、`HoldMgr`。开关在 `deploy/config/ipcclient.toml` 的 `[Test]`：`echo`、`log`、`redis`、`hold`。一次只开一个。`CoroMgr` 的 `coro` 和 `tools/gen_dispatch_bench.py` 的序列化压力不进 `--case all`。一个月测一次，同一台机器上一次只跑一个，不要并排占满 CPU。结果写进 `docs/lasttesting.md`。
+`ipcclient` 里四个测试入口都要跑到：`TestEcho`、`TestLog`、`TestRedis`、`TestHold`。开关在 `deploy/config/ipcclient.toml` 的 `[Test]`：`echo`、`log`、`redis`、`hold`。一次只开一个。`TestCoro` 的 `coro` 和 `tools/gen_dispatch_bench.py` 的序列化压力不进 `--case all`。一个月测一次，同一台机器上一次只跑一个，不要并排占满 CPU。结果写进 `docs/lasttesting.md`。
 
-测的是 `logd`、`ipcserver`、`ipcclient` 这三个进程。不要另写一个日志客户端。日志从 `LogMgr` 发出，回声从 `EchoMgr` 发出。
+测的是 `logd`、`ipcserver`、`ipcclient` 这三个进程。不要另写一个日志客户端。日志从 `TestLog` 发出，回声从 `TestEcho` 发出。
 
 Linux 产物在 `.local/linux-hosts.json` 指定的远程机器上编、在那台机器上跑；用户没提供地址时改在 WSL 里编、在 WSL 里跑。构建目录是 `~/openidea-build-gcc13`，可执行文件在 `deploy/bin`。进程的当前目录必须是某层 `bin`，配置在同级的 `config`。`logd` 读 `../config/logd.toml`，另外两个读 `../config/<名字>.toml`。
 
@@ -34,7 +34,24 @@ Linux 产物在 `.local/linux-hosts.json` 指定的远程机器上编、在那�
 
 Redis 也单独测。开关是 `[Test] redis`。先起本机 Redis（`maxmemory 1536mb`），再起 `redisserver`（等到 `redis server listen`，端口 16379），最后 `ipcclient`。客户端连的是 redisserver，不是 Redis。看退出码，以及 `redis integrity ok` 和 `redis stress` 那一行里 `bad=0`。测完停掉 `redisserver`。
 
-`HoldMgr` 的开关是 `[Test] hold`。要同时起 `ipcserver` 和 `redisserver`。看退出码，以及 `hold done bad=0`。
+`TestHold` 的开关是 `[Test] hold`。要同时起 `ipcserver` 和 `redisserver`。看退出码，以及 `hold done bad=0`。
+
+`test_matrix.py --case all` 自动使用 CMake `--clean-first`；定向用 `--clean-build` 可主动清理后编译。`parallel_matrix.py` 的各隔离路始终传 `--clean-build`，同步时 Windows 强制重拷相同时间戳文件，WSL 通过校验和检测内容变化。两种入口的 `--define` 均传给对应平台。`python tools/run_regressions.py --list-cases` 无需启动服务即可列出全量和定向用例及其分类。测试用例名接受 `test-` 前缀，例如 `--case test-log-rotation` 和原有 `--case log-rotation` 等价，旧调用保持可用。
+
+只定向运行的入口为 `web-stop`、`mysql`、`registry-static`、`mysql-wake`、`blocking-wake`、`coro`、`empty`、`hold-blocking`、`hold-timer`、`hold-redis`、`clock-forward`、`clock-back`；三个 hold 子场景已包含在完整 hold，clock 注入通过 Linux `--clock-faults` 运行；`web-stop` 是 Windows 慢读停服诊断，运行 control、idle、stop 各两次，不进全量。全量列表从注册表排除这些明确列出的专项生成。
+
+### 风险覆盖索引
+
+下表描述脚本已有断言，不代表每次运行都覆盖；以各路结果和钩子能力为准。
+
+| 风险 | 入口与可观察断言 | 尚未覆盖或仪器边界 |
+| --- | --- | --- |
+| 对象跨挂起 | `hold` 检查输出 RPC 16 个等待者、单次提交，以及保留已完成请求时 20 个请求均销毁；迟到回包要求屏障后仍有一个等待并收到自己的标记。 | 仅覆盖构造的交错，不证明任意业务捕获、引用或容器跨挂起安全。 |
+| 异常释放 | `hold` 检查 peer finish 异常的 8 个回调、guard 归零及接收异常后的关闭；`web-coro` 等待旧 sink 的取消和释放标记。 | 普通协程 handler 允许断连后完成；这些断言不覆盖所有异常注入位置和资源类型。 |
+| 重复回调、错配 | `hold` 的 RPC race 核对每个标记一次及超时/回复配对；`udp` 检查 1000 条收发、duplicate=0。 | 固定测试时序和数据集无法证明所有网络事件排列。 |
+| 停服收尾 | `redis-shutdown` 检查两个等待结果和迟到结果；`web` 检查 keep-alive 停服退出及 EOF/RST、重启健康；Windows 定向 `web-stop` 对正常、空闲、慢读停止各跑两次，慢读核对 9 MiB 正文完整、顺序、无读取错误及进程零退出。 | `web-stop` 当前仅 Windows；真实断电、强杀和所有内核缓冲状态未覆盖，正常重启不能替代原请求结果。 |
+| 背压与恢复 | `log-backpressure` 检查落盘内容、峰值限额、暂停和 pending=0；`log-contract` 检查每条接纳/拒绝及恢复后文件 FIFO；Redis 字节/数量限流各有定向断言。 | 慢盘同文正文无法单独证明逐条不丢不重；日志活动会话发送失败与断连竞态、断电持久性未覆盖。 |
+| 计时与性能 | `blocking-wake` / `mysql-wake` 用单调时钟采样，同一次请求记录分位、总量和慢样本并校验数值；可选同机 p99 预算。 | 无默认机器阈值；分段依赖测试钩子及单线程构建，多线程可跳过，不同请求或轮次不能相减推算延迟，性能专项默认不进全量。 |
 
 ## 1. 范围与通过条件
 
@@ -42,8 +59,8 @@ Redis 也单独测。开关是 `[Test] redis`。先起本机 Redis（`maxmemory 
 
 - Windows 原生 MSVC x64 Release、Linux WSL GCC 13，各运行多线程 MT 和单线程 ST，共四组。
 - ST/MT 只切换 ipcclient、ipcserver；logd 固定多线程，redisserver/registry 按各自配置单线程。
-- `all` 包含 22 项：echo、log、log-backpressure、redis、redis-limit、redis-shutdown、redis-queue-timeout、rpc-ingress、redis-backpressure-bytes、redis-backpressure-count、redis-fairness、hold、rpc-admission-count、rpc-admission-bytes、reset、disk-full、registry、udp、multi、local、web、web-coro。`local` 不起 registry，用 `[Registry] instances` 的两台地址，`CallAny` 两台都命中，`CallAll` 按实例号返回两份。`multi` 仍走动态配置，业务进程上报后登记，同样要求 `CallAny` 两台都命中。`--mysqld` 在数据库用例之后再跑 `registry-static`：registry 的 `config=static`，名单由表提供，业务进程不上报，`CallAny` 同样打到两台。
-- Linux 可额外运行 clock-forward、clock-back，以及纯协程 ASan。校时故障只影响测试子进程，绝不调整宿主机时钟。
+- `all` 包含 26 项：echo、reset、registry、rpc-ingress、tcp-error-rearm、tcp-close-reclaim、log-rotation、log、log-backpressure、log-contract、disk-full、redis、redis-limit、redis-shutdown、redis-queue-timeout、redis-backpressure-bytes、redis-backpressure-count、redis-fairness、hold、multi、local、udp、rpc-admission-count、rpc-admission-bytes、web、web-coro。`local` 使用静态实例配置，`multi` 使用动态注册。数据库场景需另传 `--mysqld`。
+- Linux 全量默认运行纯协程 ASan/UBSan 探针；定向矩阵可用 `--asan` 显式运行，探针和其编译到的头文件受插桩，已有静态库不因此重编。探针核对具名值捕获在创建作用域结束及挂起后保持有效，异常完成后调用方观察异常、执行一次且最后引用释放一次。Linux 可额外运行 clock-forward、clock-back；校时故障只影响测试子进程，绝不调整宿主机时钟。
 - 必须全部返回 0；不能用删除断言、扩大超时、提高容量或重试掩盖失败。偶发失败保留日志，记录复测结果及根因是否确认。 Windows 单线程 admission 的一次旧产物崩溃及证据边界见 [故障记录](windows-st-admission-20261121.md)。
 - 本次源码正在变化时不要声称覆盖了最新版本；核对结果目录的 environment.json、Git HEAD、diff 摘要后再报告。
 
@@ -56,6 +73,8 @@ Redis 也单独测。开关是 `[Test] redis`。先起本机 Redis（`maxmemory 
 协程压力和序列化压力不包含在 `all`。一个月测一次，同一台机器上一次只跑一个，不要并排，它们会占满 CPU。协程压力是 `python3 tools/run_regressions.py --case coro`，开关是 `ipcclient` 的 `[Test] coro`，量级在 `[TestCoro]`，默认 10 万条同时挂起、100 万条创建后立即结束。序列化压力是 `python3 tools/gen_dispatch_bench.py array` 或 `switch`，不进回归进程。程序输出实际 held、wake、done 计数；脚本要求它们分别等于 live、live、churn，工作量和三段单项耗时均大于零，且 bad=0，异常以非零状态退出。结果写进 [lasttesting.md](lasttesting.md)，不要写进本文件。
 
 数据库功能用例 `mysql` 显式运行，不包含在 `all`。标准入口是矩阵参数 `--mysqld <mysqld>`（`tools/test_matrix.py`，或 `tools/parallel_matrix.py` 的 Linux 路）：每种线程模式编译完成后先跑 `<mode>-mysql`，再跑全量，不额外编译。自测默认使用仓库预置的 x64 客户端动态 SDK；MySQL 服务端单独提供。自行接入客户端 SDK 的配置见 [数据库构建与初始化](database.md#构建与初始化)。单独复现仍可直接用 `tools/run_mysql_regression.py`。WSL 的 MySQL 来自 apt 包 `mysql-server-core-8.0`、`mysql-client-core-8.0`、`libmysqlclient-dev`，不起系统服务，`mysqld` 用 `/usr/sbin/mysqld`。需提供可用的客户端库；缺少依赖或配置时记录环境阻塞，不能算通过。Linux 上 `mysqld` 缺 `libaio.so.1` 时，把已有兼容库目录放进 `LD_LIBRARY_PATH`。用例先不连库检查 `DbSample` 的行映射：字段表、按成员指针取列、按列名的参数和单元格、拒绝 NULL 和坏值、生成的建表和增删改查语句逐字比对、坏表名和主键列拒绝、PB 往返和固定小端字节、JSON，输出 `mysql row mapping bad=0`；再用生成的语句建真表，整行写入读回、主键重复拒绝、按成员指针部分更新和部分读取、upsert 已有行和新行、改全部非主键列、按主键删，并用手写 SQL 注入 NULL 和坏 blob 验证读回拒绝，输出 `mysql rows bad=0`；最后是客户端本身的参数、连接复用、会话清理、事务回滚和结果上限，三项都通过才输出 `mysql done bad=0`。
+
+唤醒专项按完整输出行解析每个必需指标，核对样本数、分位数次序、慢样本数与总和的可行范围，以及串行总耗时和均值（允许 0.001 微秒的打印舍入）；零时长子阶段合法。使用 `--artifacts` 时解析值写入对应用例的 `wake-metrics.json`。默认不设机器延迟阈值；同机对照可设置环境变量 `OI_WAKE_P99_LIMIT_US=指标名=上限`，多个指标用逗号分隔，例如 `native_roundtrip=50,trace_total=100`，上限单位为微秒，超限失败。多线程或未启用分段钩子时不生成分段指标，也不能为不存在的指标设预算。
 
 唤醒路径专项只记录单线程结果，连续独立运行三轮并逐轮报告，不合并样本。每轮使用默认阻塞线程池，预热 100 次，再由单个父协程顺序 `co_await` 100000 个空回调；未打点整链仅在循环前后计时，报告总耗时和平均耗时。不能用不同轮次或链长的总耗时相减推算延迟。
 
@@ -75,9 +94,9 @@ python3 tools/run_mysql_regression.py --case mysql-wake --mysqld <mysqld> --bin-
 
 数据库测量以直接执行真实 SQL、完成 `Reset` 到协程恢复的时间为主要指标；实际 `Db::Client::Call` 的 Reset 后界到协程恢复时间作为上界，分别报告，不混作同一指标。
 
-阻塞函数回归由 `BlockingMgr` 覆盖：128 个后台工作及 64 个共享等待者，核对结果和单次执行。阻塞池按类型隔离，Default 默认 4 个线程、1024 个排队项、1024 个在途。在途上限由 `ConfigureBlockingPool` 的 `iInFlightLimit` 配置，默认 1024，实际取它和线程数加队列的较小值。其他类型须显式配置，各自的队列和在途上限独立。容量检查应区分在途工作与排队项，并覆盖超限拒绝、启动后配置拒绝及停止时排空已接纳工作。新增检查以实际矩阵结果为准，不代表四种构建模式已经通过。
+阻塞函数回归由 `TestBlocking` 覆盖：128 个后台工作及 64 个共享等待者，核对结果和单次执行。阻塞池按类型隔离，Default 默认 4 个线程、1024 个排队项、1024 个在途。在途上限由 `ConfigureBlockingPool` 的 `iInFlightLimit` 配置，默认 1024，实际取它和线程数加队列的较小值。其他类型须显式配置，各自的队列和在途上限独立。容量检查应区分在途工作与排队项，并覆盖超限拒绝、启动后配置拒绝及停止时排空已接纳工作。新增检查以实际矩阵结果为准，不代表四种构建模式已经通过。
 
-输出引用 RPC 的日常压力由 EchoMgr 使用 `Call(req, res)` 覆盖。`RpcOutputMgr` 验证输出任务的请求保活、16 个等待者只提交一次、重复等待不重写响应、固定会话、业务错误保留原响应、超时后迟到回包不覆盖新响应。`RpcServiceMgr` 验证命名和分区调用。正常 Hold 必须输出 `hold output rpc shared waiters=16 submissions=1 bad=0`、`hold output rpc direct pinned error late bad=0`、`hold output rpc named any zone shared=8 bad=0`；它们已纳入脚本断言。底层单次等待器的重复等待和异常注入用例仍保留，与输出 Task 可重复等待的语义分开验证。
+输出引用 RPC 的日常压力由 TestEcho 使用 `Call(req, res)` 覆盖。`TestRpcOutput` 验证输出任务的请求保活、16 个等待者只提交一次、重复等待不重写响应、固定会话、业务错误保留原响应、超时后迟到回包不覆盖新响应。`TestRpcService` 验证命名和分区调用。正常 Hold 必须输出 `hold output rpc shared waiters=16 submissions=1 bad=0`、`hold output rpc direct pinned error late bad=0`、`hold output rpc named any zone shared=8 bad=0`；它们已纳入脚本断言。底层单次等待器的重复等待和异常注入用例仍保留，与输出 Task 可重复等待的语义分开验证。
 
 Hold 的迟到回包检查先让标记 802 的调用超时，再保持标记 803 的调用在途，使用同连接的快速调用标记 804 作为收包屏障。屏障成功后检查仍有一个调用等待，并验证后续回包标记为 803；驱动要求 `hold rpc late overlap barrier=0/804 pending=1 follow=0/803 bad=0`。
 
@@ -95,9 +114,9 @@ Hold 的迟到回包检查先让标记 802 的调用超时，再保持标记 803
 
 暂停期间已缓存路由要求 `hold registry pause cached many=3/3 call=0 mark=831 bad=0`。未缓存名字要求 `hold registry pause missing snapshot=0 code=-2 elapsed_ms=` 小于 450 且 `mark=-731 bad=0`。恢复后空名单要求 `hold registry resume missing snapshot=1 empty=1 code=-3 bad=0`（`OI_ERR_CONNECT`）。短暂停预算要求 `hold registry budget miss code=-3 elapsed_ms=` 落在 [500, 2450) 且 `cached=0 mark=841 bad=0`。
 
-`[Test] hold` 仍是一个开关、一次进程。`HoldMgr::Pump` 按固定顺序调用各主题 mgr，日志标记不变，不另开用例。代码在 `modules/ipcclient`：`TimerMgr`、`NestedResultMgr`、`TaskStartMgr`、`TaskShareMgr`、`BlockingMgr`、`ScheduleMgr`、`ConnectMgr`、`AddressMgr`、`IsolationMgr`、`BackpressureMgr`、`RpcOutputMgr`、`RpcAwaitMgr`、`RpcAdmissionMgr`、`RpcPendingMgr`、`RpcServiceMgr`、`RouteMgr`、`RegistryMgr`、`JsonMgr`、`BinaryMgr`、`EncodeMgr`、`HttpMgr`、`BudgetMgr`。超时、回包撞车和 Redis 迟到回包留在 `HoldMgr`。
+`[Test] hold` 仍是一个开关、一次进程。`TestHold::Pump` 按固定顺序调用各主题 mgr，日志标记不变，不另开用例。代码在 `modules/ipcclient`：`TestTimer`、`TestNestedResult`、`TestTaskStart`、`TestTaskShare`、`TestBlocking`、`TestSchedule`、`TestConnect`、`TestAddress`、`TestIsolation`、`TestBackpressure`、`TestRpcOutput`、`TestRpcAwait`、`TestRpcAdmission`、`TestRpcPending`、`TestRpcService`、`TestRoute`、`TestRegistry`、`TestJson`、`TestBinary`、`TestEncode`、`TestHttp`、`TestBudget`。超时、回包撞车和 Redis 迟到回包留在 `TestHold`。
 
-`RouteMgr` 覆盖同一池连接断线后连续四次按需重连、出站租约释放时反向 RPC 挂起及成功回包、批量指定分区在整体超时、限流或非法分区时仍返回等长结果。`RpcPendingMgr` 覆盖 4096 条不同剩余时长的绝对截止时间归桶、乱序短超时不提前触发、极大时长不溢出。脚本强制检查对应标记，反向回包还核对服务端日志。矩阵同时执行禁止多继承扫描及检查器用例；安全测试自动使用矩阵指定的原生 Redis 可执行文件。
+`TestRoute` 覆盖同一池连接断线后连续四次按需重连、出站租约释放时反向 RPC 挂起及成功回包、批量指定分区在整体超时、限流或非法分区时仍返回等长结果。`TestRpcPending` 覆盖 4096 条不同剩余时长的绝对截止时间归桶、乱序短超时不提前触发、极大时长不溢出。脚本强制检查对应标记，反向回包还核对服务端日志。矩阵同时执行禁止多继承扫描及检查器用例；安全测试自动使用矩阵指定的原生 Redis 可执行文件。
 
 ## 2. 环境预检
 
@@ -105,7 +124,7 @@ Hold 的迟到回包检查先让标记 802 的调用超时，再保持标记 803
 
 Windows：Python 3.10+、Visual Studio 2022 的“使用 C++ 的桌面开发”（MSVC v143 x64、MSBuild、Windows SDK）、CMake。仅有 cl.exe 不够，还要有 MSVC include/lib 与 SDK include/lib。脚本会寻找 PATH 中的 CMake，也能找到 VS 附带的 CMake。配置前检查这几项；缺 CMake、MSVC、MSBuild 或 Windows SDK 时，终端写明缺哪一项和安装步骤，并停止编译。CMake 配置或编译日志里出现找不到生成器、编译器或 v143 工具集时，同样把这段说明打到终端并追加进该步日志。
 
-Linux：优先用仓库根目录 `.local/linux-hosts.json` 里的远程机器。该文件只留在本机，不进仓库，记录每台机器的 IP、用户名、核数和职责。4 核机器编译 Release 并跑多线程，2 核机器跑单线程，登录只用公钥，不把密码写进代码或命令。文件不存在，或缺少 IP、用户名时，先问用户。用户选择不提供，就改用 WSL，直到用户再次明确说用远程机器。从 Windows 同步源码只用 `python tools/sync_linux_remote.py --role mt|st|all`，不要手写 tar/scp；远程登录与矩阵步骤见 `.agents/skills/linux-remote-test/SKILL.md`。WSL 和远程都要有 Python 3.8+、cmake、gcc-13/g++-13、make、已编译的 Redis 服务端，以及 OpenSSL 3.0+ 开发库（TLS 目标需要）。Ubuntu 20.04 自带的是 1.1.1，要源码编到持久目录（本机 WSL 为 `/root/opt/openssl-3.0.18`），矩阵加 `--define OPENSSL_ROOT_DIR=<目录> --define OPENSSL_USE_STATIC_LIBS=ON`；`parallel_matrix.py` 的 `--define` 只传给 Linux 路。缺 CMake、gcc-13 或 g++-13 时，终端写明缺哪一个以及 apt 安装命令，并停止编译。源码编译 Redis 应使用持久外部依赖目录（例如 `~/opt/redis-7.4.12`），通过 `/usr/local/bin/redis-server` 安装入口复用；默认路径为该入口。禁止把工具装到 `/tmp` 或测试临时目录，停止测试进程时不删除工具安装或源码。路径不存在必须提供 `--redis-binary`，脚本不会下载不明 Redis 二进制。
+Linux：优先用仓库根目录 `.local/linux-hosts.json` 里的远程机器。该文件只留在本机，不进仓库，记录每台机器的 IP、用户名、核数和职责。4 核机器编译 Release 并跑多线程，2 核机器跑单线程，登录只用公钥，不把密码写进代码或命令。文件不存在，或缺少 IP、用户名时，先问用户。用户选择不提供，就改用 WSL，直到用户再次明确说用远程机器。从 Windows 同步源码只用 `python tools/sync_linux_remote.py --role mt|st|all`，不要手写 tar/scp；远程登录与矩阵步骤见 `.agents/skills/linux-remote-test/SKILL.md`。WSL 和远程都要有 Python 3.8+、cmake、gcc-13/g++-13、make、已编译的 Redis 服务端，以及 OpenSSL 3.0+ 开发库（TLS 目标需要）。Ubuntu 20.04 自带的是 1.1.1，要源码编到持久目录（本机 WSL 为 `/root/opt/openssl-3.0.18`），矩阵加 `--define OPENSSL_ROOT_DIR=<目录> --define OPENSSL_USE_STATIC_LIBS=ON`；`parallel_matrix.py` 的 `--define` 传给两平台各路。缺 CMake、gcc-13 或 g++-13 时，终端写明缺哪一个以及 apt 安装命令，并停止编译。源码编译 Redis 应使用持久外部依赖目录（例如 `~/opt/redis-7.4.12`），通过 `/usr/local/bin/redis-server` 安装入口复用；默认路径为该入口。禁止把工具装到 `/tmp` 或测试临时目录，停止测试进程时不删除工具安装或源码。路径不存在必须提供 `--redis-binary`，脚本不会下载不明 Redis 二进制。
 
 测试占用本机端口 19995、17981、16379、16380、17990、17992、17993，另有 UDP 17983。测试 Redis 用 16380，不用 6379：Windows 动态端口段可能被 Hyper-V/WinNAT 保留，本机已有的 6379 Redis 也不会和测试冲突。复制出的 `redisserver.toml`、`registry.toml` 由脚本改到 16380，仓库里的配置仍是 6379。运行前脚本探测占用；不杀其他人的服务。同一份工作目录内不要并行；要并行就用 `tools/parallel_matrix.py`，它把工作目录同步成四份（Windows 在 `F:/oi-par`，Linux 在 WSL 的 `/root/oi-par`），Windows MT/ST、Linux MT/ST 各用一份，`--port-offset` 依次为 0、1000、2000、3000，所有测试端口整体平移，互不抢占。同一路副本不能同时被两次 `parallel_matrix.py` 使用：启动前只要所选任一路副本下还有进程，就整次拒绝并列出这些进程，不同步也不杀进程，先用 `python tools/kill_test_procs.py --lane <路>` 清掉再跑：
 
@@ -220,7 +239,7 @@ Windows 原生直接运行时，要选择带 exe 的 Release 目录：
 python tools/run_regressions.py --case all --expect-thread mt --bin-dir deploy/bin/Release --redis-binary C:/tools/redis/redis-server.exe --artifacts C:/Users/Admin/openidea-test-results/direct
 ```
 
-Windows 的日志故障测试要求该产物以 `-DOI_ENABLE_TEST_HOOKS=ON` 构建；矩阵配置 Windows 为 ON、Linux 为 OFF，不会自动恢复构建选项。回归夹具直接对实际运行的 `ipcclient` 和 `logd` 执行 `--test-hooks` 查询，而不是依赖 configure 时生成的标记文件：退出码 40 表示关闭，41 表示启用，其他退出码视为查询失败；标准输出仅供诊断。`blocking-wake` 在 ipcclient 启用钩子且为单线程时要求所有 trace 行，关闭钩子或多线程时不要求分段。更改构建选项后须完整构建再运行。
+Windows 的日志故障测试和跨日测试要求产物以 `-DOI_ENABLE_TEST_HOOKS=ON` 构建；矩阵默认 Windows 全部开启，Linux 的 `all` 和 `log-rotation` 开启、其他定向项关闭。`--define OI_ENABLE_TEST_HOOKS=ON|OFF` 显式覆盖默认值，生产构建默认关闭。回归夹具直接对实际运行的 `ipcclient` 和 `logd` 执行 `--test-hooks` 查询，而不是依赖 configure 时生成的标记文件：退出码 40 表示关闭，41 表示启用，其他退出码视为查询失败；标准输出仅供诊断。`blocking-wake` 在 ipcclient 启用钩子且为单线程时要求所有 trace 行，关闭钩子或多线程时不要求分段。更改构建选项后须完整构建再运行。
 
 主要成功标记：
 
@@ -231,11 +250,13 @@ Windows 的日志故障测试要求该产物以 `-DOI_ENABLE_TEST_HOOKS=ON` 构�
 - log：逐条核对实际磁盘记录、字节数和内容；端到端速度以落盘字节除以客户端开始到文件最后增长的时间，不能拿 enqueue_rate 代替。
 - redis：`redis integrity ok`、压力统计 `bad=0`；同时验证毫秒 TTL、单次请求等待、脚本隔离、断线、队列超时及限流。
 - hold：`hold done bad=0`；覆盖多等待者、异常、RPC 接纳上限、请求生命周期、服务名/分区路由及批量调用。测试脚本额外启动两个 gameserver 分区（1001/1002），不能只起默认 ipcserver 就冒充全量。路由通知和直连 `Notify` 都用 `PeerNote` 的标记让服务端计数，再用 `PeerProbe` 的 `iNoteCount` 查回来：任选、指定分区、负分区、全部、夹未登记分区 1003、不存在的服务名，以及路由断线后不让出立刻再发。直连没连上先发、已连上再发；断线后立刻再发只表示任务已启动，任务报 `code=-3` 且服务端计数不变，重连后再发才送到。
-- udp：ipcserver 的 `[IpcUdp]` 和 ipcclient 的 UdpMgr，`udp done bad=0`。覆盖系统分配端口、同地址 `OpenPeer` 去重、对端地址、1000 次 RPC、1000 条单向消息不丢不重、60000 字节单个数据报、坏包不断会话（服务端会话数仍为 1）及客户端空闲关闭后重开新会话。回归的临时配置启用 `TestUdp.check_server_idle`，服务端空闲时限设为 1 秒、客户端设为 4 秒：持续收发超过服务端时限检查会话不重复创建，再等待服务端先回收，确认客户端仍打开且下次收发重建服务端会话。标准配置手动运行不启用这项检查。gameserver 分区的 UDP 口改为 0，不和主服抢。
-- multi：ipcclient 的 MultiMgr，`multi done bad=0`。`[IpcMultiFixed]` 不配 service，写死地址只连一台，实例号 0，没连上就发的调用连上后补发。`[IpcMulti]` 配 service=peerserver，脚本用 17992、17993 起两台同名全局 ipcserver，实例号 1、2，客户端起来前都已登记。覆盖每台各一条连接和建连回调、按实例号调用打到对应服务端、名单外实例号回 CONNECT、CallAny 两台都命中、CallAll 两个结果按实例号排列、CallMany 夹一个不存在的实例号时那一格是 CONNECT、服务端顺着连接反推（请求和 NotifyPeer 各触发一次，核对推送进的是这台的会话）、写死地址 UseAddress 换到 2 号再换回（配了 service 的拒绝，地址没变不断开，IsConnect 为真）。随后脚本杀掉 2 号：断开回调触发，注册表撤掉后名单只剩 1，调 2 回 CONNECT，1 照常；再重启 2 号：名单恢复，自动重连，调 2 成功。`NotifyAll` 按名单每台各收 1 次，`NotifyMany` 跳过实例号 99；2 号回来后关掉会话并立刻再发，重连后送达。不起 redisserver。
+- udp：ipcserver 的 `[IpcUdp]` 和 ipcclient 的 TestUdp，`udp done bad=0`。覆盖系统分配端口、同地址 `OpenPeer` 去重、对端地址、1000 次 RPC、1000 条单向消息不丢不重、60000 字节单个数据报、坏包不断会话（服务端会话数仍为 1）及客户端空闲关闭后重开新会话。回归的临时配置启用 `TestUdp.check_server_idle`，服务端空闲时限设为 1 秒、客户端设为 4 秒：持续收发超过服务端时限检查会话不重复创建，再等待服务端先回收，确认客户端仍打开且下次收发重建服务端会话。标准配置手动运行不启用这项检查。gameserver 分区的 UDP 口改为 0，不和主服抢。
+- multi：ipcclient 的 TestMulti，`multi done bad=0`。`[IpcMultiFixed]` 不配 service，写死地址只连一台，实例号 0，没连上就发的调用连上后补发。`[IpcMulti]` 配 service=peerserver，脚本用 17992、17993 起两台同名全局 ipcserver，实例号 1、2，客户端起来前都已登记。覆盖每台各一条连接和建连回调、按实例号调用打到对应服务端、名单外实例号回 CONNECT、CallAny 两台都命中、CallAll 两个结果按实例号排列、CallMany 夹一个不存在的实例号时那一格是 CONNECT、服务端顺着连接反推（请求和 NotifyPeer 各触发一次，核对推送进的是这台的会话）、写死地址 UseAddress 换到 2 号再换回（配了 service 的拒绝，地址没变不断开，IsConnect 为真）。随后脚本杀掉 2 号：断开回调触发，注册表撤掉后名单只剩 1，调 2 回 CONNECT，1 照常；再重启 2 号：名单恢复，自动重连，调 2 成功。`NotifyAll` 按名单每台各收 1 次，`NotifyMany` 跳过实例号 99；2 号回来后关掉会话并立刻再发，重连后送达。不起 redisserver。
 - 正常退出必须完成排空和 join。清理超过时限需要强杀，算失败。
 
 ## 5. 平台故障注入与清理
+
+日志文件直接位于 `Log.root_path`，文件名为 `<级别>_YYYY-MM-DD.log.txt`。`--case log-rotation`（也纳入全量）需要开启 `OI_ENABLE_TEST_HOOKS`：使用独立日志服的受控时钟跨越两天，逐条验证 30 条业务标记在对应日期恰好一次，第二天重启后追加，且根目录只有两天的五级文件、没有子目录。
 
 Linux 的日志慢写使用 LD_PRELOAD，写满使用 `/dev/full`；Windows 使用仅测试构建启用的日志写线程钩子，分别延迟写入和注入 ENOSPC，实际网络、队列与错误处理仍走真实进程。注入不运行在 poll 线程。生产构建默认关闭 `OI_ENABLE_TEST_HOOKS`。
 
@@ -254,7 +275,7 @@ git diff --check
 
 脚本级回归另含 `python tools/test_regression_checks.py`、`python tools/test_preflight_ports.py` 和 `python tools/test_test_safety.py`，矩阵会自动执行。矩阵还执行规范路由的 `agent-route-tests`（`python tools/test_agent_route.py`）和 `agent-route`（`python tools/agent_route.py --check`）两步；Python 低于 3.11 且没有 tomli 时两步打印「跳过」并返回 0，矩阵仍记 PASS，是否真的检查过看该步日志，跳过的一路不算已检查。回归驱动实现在 `tools/regression/`：`runner.py` 是通用流程，`cases/` 是按用例的配置、启动和断言，`ports.py` 持有会被 `--port-offset` 重新绑定的端口常量；命令行入口仍是 `tools/run_regressions.py`。
 
-结果目录包含：environment.json（环境、HEAD、diff 摘要）、matrix.json（每一步命令和退出码）、每一步日志、每个用例的进程输出、results.json（逐例通过/失败）、summary.json（整体结果）。同时运行两端时还有 platforms.json。
+结果目录包含：environment.json（环境、HEAD、diff 摘要）、matrix.json（每一步命令和退出码）、每一步日志及 summary.json（整体结果）。回归子目录的 plan.json 在端口预检前记录选中用例和全量时的定向清单；results.json 从空列表开始，逐项记录通过、失败或跳过，预检失败不会保留上次的绿色结果。数据库附带静态路由验证的结果位于 `static-route/results.json`；应分别核对它与数据库用例结果。同时运行两端时还有 platforms.json。
 
 矩阵启动时先使旧汇总失效；只有本次所有步骤完成，`summary.json` 才能标记 `passed: true`。中断和配置失败算未通过，检查 `completed` 和异常字段。单线程和多线程各用各的构建目录，不再编回另一种模式；`restore_skipped` 为 true，`restored` 为 false。`--no-restore` 保留但不起作用。`tools/test_matrix_outcomes.py` 用模拟子进程覆盖这些分支，矩阵自动执行。
 
@@ -304,20 +325,20 @@ python tools/parallel_matrix.py --lane <LANE> --jobs 4 --windows-redis-binary <W
 
 ## 8. 断连与背压边界回归
 
-- `RouteMgr` 的 `hold pooled reconnect bad=0` 必须在主动断开后不 yield、不等待清理，立即向同一个 `RpcSender` 发 RPC，验证排队重连后回包标记正确。
-- `hold route backpressure status bad=0` 按这条路由连接的 `RpcRoute` 发送预算构造刚好超预算的包：已连接发送，以及断开后先暂存、建连后再补发，都返回 BUSY，背压不换会话，随后的小请求仍可成功。`BudgetMgr` 同时检查满载返回 BUSY、关闭返回 CONNECT。
-- `RpcPendingMgr` 的 `hold disconnect drain calls=4096 bad=0` 跨 64 个分片及固定大小批次清理 4096 项，首个完成回调注入 bad_alloc，验证其他回调继续、结果全部为 CONNECT、保护计数归零、等待索引恢复基线。清理本身不动态扩容；该注入发生在完成回调，不是全局内存耗尽模拟。
+- `TestRoute` 的 `hold pooled reconnect bad=0` 必须在主动断开后不 yield、不等待清理，立即向同一个 `RpcSender` 发 RPC，验证排队重连后回包标记正确。
+- `hold route backpressure status bad=0` 按这条路由连接的 `RpcRoute` 发送预算构造刚好超预算的包：已连接发送，以及断开后先暂存、建连后再补发，都返回 BUSY，背压不换会话，随后的小请求仍可成功。`TestBudget` 同时检查满载返回 BUSY、关闭返回 CONNECT。
+- `TestRpcPending` 的 `hold disconnect drain calls=4096 bad=0` 跨 64 个分片及固定大小批次清理 4096 项，首个完成回调注入 bad_alloc，验证其他回调继续、结果全部为 CONNECT、保护计数归零、等待索引恢复基线。清理本身不动态扩容；该注入发生在完成回调，不是全局内存耗尽模拟。
 - 以上均由常规 `--case all` 的 Hold 触发，并由回归脚本断言。
 
 
 ## 9. Redis 类型化单 key 命令回归
 
-常规 RedisMgr 完整性测试及压力测试使用标准命令接口，原生 CallRedis 保留给 PING、Lua 和协议/状态隔离探针。强制标记为 `redis typed commands string rpcdata zset bad=0`，覆盖二进制 key/value、空字符串/缺失值、WRONGTYPE、rpcdata 正常/损坏、集合中途解码失败不覆盖原输出、hash rpcdata、排序集合正反序/分数/更新计数、NaN 拒绝和共享 Task 重复等待。同步压力线程同时覆盖 string 与 rpcdata 存取。所有标准命令只使用一个 key，不以批量多 key 指令代替逐条调用。
+常规 TestRedis 完整性测试及压力测试使用标准命令接口，原生 CallRedis 保留给 PING、Lua 和协议/状态隔离探针。强制标记为 `redis typed commands string rpcdata zset bad=0`，覆盖二进制 key/value、空字符串/缺失值、WRONGTYPE、rpcdata 正常/损坏、集合中途解码失败不覆盖原输出、hash rpcdata、排序集合正反序/分数/更新计数、NaN 拒绝和共享 Task 重复等待。同步压力线程同时覆盖 string 与 rpcdata 存取。所有标准命令只使用一个 key，不以批量多 key 指令代替逐条调用。
 
 
 Redis 类型回归还必须确认 `redis typed collections string rpcdata bad=0`、`redis typed native ping lua scalar array rpcdata bad=0` 和两个 `redis typed sync id=0/1 bad=0` 标记。覆盖 string/hash/list/set/zset 常用读写/计数/删除，空值与错误类型，Lua 返回整数/布尔/字符串/数字字符串/数组/rpcdata、Lua 错误与 nil、整数溢出和结果形状不匹配；所有失败保持原输出。同步线程覆盖 PING、Lua、字符串、rpcdata、列表、hash、set、zset 与分数。Lua 脚本若需访问存储，只显式声明一个 key；不新增隐式多 key 用例。
 
-新增五类单 key 命令的 RedisMgr 回归要求 `redis expanded five types bad=0`，覆盖条件写、增减、批量与空参数、二进制字符串、rpcdata、带 nil 的 HMGET/ZMSCORE、正反范围及弹出删除。HSCAN、SSCAN、ZSCAN 累积到游标为零，不假定 COUNT 指定返回数量；同步压力线程也检查 optional 及三种扫描的 rpcdata 解码。
+新增五类单 key 命令的 TestRedis 回归要求 `redis expanded five types bad=0`，覆盖条件写、增减、批量与空参数、二进制字符串、rpcdata、带 nil 的 HMGET/ZMSCORE、正反范围及弹出删除。HSCAN、SSCAN、ZSCAN 累积到游标为零，不假定 COUNT 指定返回数量；同步压力线程也检查 optional 及三种扫描的 rpcdata 解码。
 
 Redis 断言按每条命令分别等待、检查返回值和输出，失败日志包含检查行号。GCC13 下复合多 await 条件复用输出曾造成 6 个集合断言失败，布尔位数组代理曾在读取时崩溃；不要通过减少断言或跳过 Linux 消除此类失败。成员批量判断使用 0/1 整数数组，原生类型化调用也拒绝 vector<bool>，布尔标量仍支持。
 
@@ -343,9 +364,9 @@ Hold 二进制容器检查还覆盖嵌套结构、结构数组和结构字典的
 
 `redis-shutdown` 临时配置的请求超时为 10 秒，避免 Windows 启动控制台通知辅助进程时先触发原来的 300ms 请求超时；仍要求停服唤醒为 Disconnected、停止后新调用立即失败、等待项清零，并保留通知后的 3 秒退出时限。短超时正确性由独立 `redis-queue-timeout` 用例验证，不把 Timeout 当作停服成功。
 
-- `BackpressureMgr` 输出 `hold direct backpressure queued=... direct=... pinned=... closed=... bad=0`：常驻测试管理器使用 256 字节真实会话发送预算，超过预算的请求分别在建连前排队、已连接直发和显式 sid 路径返回 BUSY，输出保持原值；小请求正常完成，关闭后的显式 sid 调用返回 CONNECT。
-- `Regression.encoding_failure` 的现有服务端注入同时支持合法外层回执中的损坏字段体。`EncodeMgr` 检查客户端返回 FAIL、输出不被半包覆盖、后续正常请求成功，并输出 `hold client malformed response sid=... bad=0`。驱动核对日志服 error 文件中的 `decode_response`、实际来源 sid、调用号、协议号和原始 ParserException。
-- 普通 Redis 用例的临时配置启用 `Regression.redis_upstream_disconnect`。RedisMgr 启动阻塞请求并通知既有驱动，驱动仅通过自己持有的进程句柄终止本次 Redis，然后复用持久可执行文件重启；不按进程名或端口杀服务、不删除安装。等待请求失败且输出不变，代理自动重连后 PING 返回 PONG，输出 `redis upstream disconnect recovery bad=0`。驱动还核对日志服落盘记录的上游地址、非零错误状态和原始 hiredis 原因。
+- `TestBackpressure` 输出 `hold direct backpressure queued=... direct=... pinned=... closed=... bad=0`：常驻测试管理器使用 256 字节真实会话发送预算，超过预算的请求分别在建连前排队、已连接直发和显式 sid 路径返回 BUSY，输出保持原值；小请求正常完成，关闭后的显式 sid 调用返回 CONNECT。
+- `Regression.encoding_failure` 的现有服务端注入同时支持合法外层回执中的损坏字段体。`TestEncode` 检查客户端返回 FAIL、输出不被半包覆盖、后续正常请求成功，并输出 `hold client malformed response sid=... bad=0`。驱动核对日志服 error 文件中的 `decode_response`、实际来源 sid、调用号、协议号和原始 ParserException。
+- 普通 Redis 用例的临时配置启用 `Regression.redis_upstream_disconnect`。TestRedis 启动阻塞请求并通知既有驱动，驱动仅通过自己持有的进程句柄终止本次 Redis，然后复用持久可执行文件重启；不按进程名或端口杀服务、不删除安装。等待请求失败且输出不变，代理自动重连后 PING 返回 PONG，输出 `redis upstream disconnect recovery bad=0`。驱动还核对日志服落盘记录的上游地址、非零错误状态和原始 hiredis 原因。
 
 全部纳入现有 `--case all` 的 Hold / Redis，用已有模块及开关复测，不新增独立客户端。Windows/Linux 单、多线程各跑完整矩阵；故障注入只影响本次独立 Redis，不操作用户 6379 服务。
 
@@ -353,13 +374,15 @@ Hold 二进制容器检查还覆盖嵌套结构、结构数组和结构字典的
 
 阻塞池线程访问回归用同步具名函数调用会话管理器发送、会话发送及发送许可入口：单线程构建要求发送、连接启动、监听、UDP 对端创建、重连、路由通知、会话关闭、注册发现、Redis 同步调用及定时器操作返回 `OI_ERR_WRONG_THREAD`，并检查 UDP 对端输出参数、发送队列、事件掩码和已登记定时器不变、被拒绝的定时器闭包已释放；多线程构建核对空路由、空负载发送及入队行为。正常线程检查发送和定时器返回 `OI_OK`，未登记定时器返回 `OI_ERR_NOT_FOUND`。Redis 单线程模式还从阻塞池工作线程检查同步调用被拒绝，保留 poll 线程同步收发验证。随后原有管道、定时器与 RPC 检查继续验证 poll 活性。驱动检查 `hold blocking access bad=0`。
 
-`BlockingMgr` 通过 `uv_pipe` 创建阻塞管道，在后台普通同步函数中调用 `uv_fs_read`；后台回调只执行普通同步代码，不调用 `co_await`、`StartTask` 或其他框架协程接口。空管道读开始后，前台协程计时 200 毫秒并完成真实 RPC，确认写入前读尚未结束；随后向管道写入 `pipe-ok`，等待读取结束并检查内容与返回码。异常和写入失败路径也要释放读端并等待后台结束。另以固定种子 20261110 在前台生成 1–20 毫秒延迟，128 个后台任务分别同步等待并返回不同值，按提交顺序核对 WhenAll 结果，不要求实际完成顺序必须变化。驱动强制检查 `hold blocking delay seed=20261110 min_ms=1 max_ms=20`、`hold blocking read started=1 timer=1 rpc=1 early=0 content=1 bad=0`，以及 `hold blocking tasks=128 waiters=64 runs=1 bad=0`。
+`TestBlocking` 通过 `uv_pipe` 创建阻塞管道，在后台普通同步函数中调用 `uv_fs_read`；后台回调只执行普通同步代码，不调用 `co_await`、`StartTask` 或其他框架协程接口。空管道读开始后，前台协程计时 200 毫秒并完成真实 RPC，确认写入前读尚未结束；随后向管道写入 `pipe-ok`，等待读取结束并检查内容与返回码。异常和写入失败路径也要释放读端并等待后台结束。另以固定种子 20261110 在前台生成 1–20 毫秒延迟，128 个后台任务分别同步等待并返回不同值，按提交顺序核对 WhenAll 结果，不要求实际完成顺序必须变化。驱动强制检查 `hold blocking delay seed=20261110 min_ms=1 max_ms=20`、`hold blocking read started=1 timer=1 rpc=1 early=0 content=1 bad=0`，以及 `hold blocking tasks=128 waiters=64 runs=1 bad=0`。
 
 回归脚本必须使用未启用 `-O` 的 Python 运行，避免跳过断言。`disk-full` 仅在日志服非零退出且记录 `fwrite`、`fflush` 或注入的写盘失败时通过；RPC admission 分别核对第 0、1、2 轮的结果。
 
 矩阵执行脚本级回归检查、构建命令和远程同步测试；配置宏编译探针仅在 `--case all` 时执行，定向用例不重复编译探针。
 
 `web-coro` 使用独立临时配置启动专属 Redis、redisserver、ipcserver 和 webserver，不连接注册表。慢查询等待真实 Hold RPC 与 Redis PING 时检查 health 先返回，再检查同连接流水线的响应顺序和请求断开后新连接的响应，并等待旧处理协程完成。各查询成功必须返回原请求文本。
+
+`web` 的持久连接还按顺序验证 204 空正文、带非零 Content-Length 的 304 空正文、103 后的 200 正文以及下一次 200 的不同正文；夹具核对四个请求顺序及同一真实连接。
 
 `web` 另检查分段请求头、同连接连续请求、二进制 chunked 上传及大响应完整刷新后关闭连接，以及 HTTP 错误后新连接仍可用。
 

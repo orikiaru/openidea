@@ -21,10 +21,11 @@ from regression.procs import (Context, cleanup_owned, copy_runtime_libraries,
                               regression_directory)
 from regression.rpc_faults import reset_connections, rpc_ingress_faults
 from regression.runner import main as _run_main, run, run_case
-from regression.web import (check_http_disconnect, check_http_pool, check_https,
-                            check_multipart_response, check_url_client, check_web_bind_restart,
-                            check_web_json, check_web_stream_length, check_web_transport,
-                            run_web, run_web_coro)
+from regression.web import run_web
+from regression.web_coro import run_web_coro
+from regression.web_client_fixtures import check_http_disconnect, check_http_pool, check_https, check_url_client
+from regression.web_server_checks import (check_multipart_response, check_web_bind_restart,
+                                         check_web_json, check_web_stream_length, check_web_transport)
 from regression_platform import SUFFIX, WINDOWS, launch, pause, rss_kib, stop
 
 _PORT_NAMES = ("REDIS_PORT", "LOGD_PORT", "IPC_PORT", "IPC_FALLBACK_PORT", "REDIS_SERVER_PORT",

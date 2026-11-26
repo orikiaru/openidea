@@ -289,9 +289,9 @@ class IndexTests(unittest.TestCase):
         self.assertTrue(stRegex.match('a.proto'))
         self.assertTrue(stRegex.match('a/b/c.proto'))
         self.assertFalse(stRegex.match('a/b/c.proto.bak'))
-        stRegex = agent_route.GlobToRegex('modules/ipcclient/src/*_mgr.cpp')
-        self.assertTrue(stRegex.match('modules/ipcclient/src/echo_mgr.cpp'))
-        self.assertFalse(stRegex.match('modules/ipcclient/src/sub/echo_mgr.cpp'))
+        stRegex = agent_route.GlobToRegex('modules/ipcclient/src/test_*.cpp')
+        self.assertTrue(stRegex.match('modules/ipcclient/src/test_echo.cpp'))
+        self.assertFalse(stRegex.match('modules/ipcclient/src/sub/test_echo.cpp'))
 
     def test_keyword(self):
         self.assertTrue(agent_route.KeywordToRegex('Task').search('一个task'))

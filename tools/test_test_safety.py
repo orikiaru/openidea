@@ -610,13 +610,9 @@ class RegressionCleanupTests(unittest.TestCase):
              patch.object(self.web, "IPv6HttpServer", return_value=fixture), \
              patch.object(self.web.http.server, "ThreadingHTTPServer", return_value=fixture), \
              patch.object(self.web, "stream_response_fixture", return_value=contextlib.nullcontext(12345)), \
-             patch.object(self.web, "check_http_pool"), \
-             patch.object(self.web, "check_http_disconnect"), \
-             patch.object(self.web, "check_url_client"), \
-             patch.object(self.web, "check_https"), \
-             patch.object(self.web, "check_web_transport"), \
-             patch.object(self.web, "check_web_json"), \
-             patch.object(self.web, "check_web_stream_length"), \
+             patch.multiple(self.web, check_http_pool=Mock(), check_http_disconnect=Mock(),
+                            check_http_bodyless=Mock(), check_url_client=Mock(), check_https=Mock(),
+                            check_web_transport=Mock(), check_web_json=Mock(), check_web_stream_length=Mock()), \
              patch.object(self.web.threading, "Thread") as thread, \
              patch.object(self.web.subprocess, "run", side_effect=run_client), \
              contextlib.redirect_stdout(io.StringIO()):

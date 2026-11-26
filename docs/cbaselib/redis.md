@@ -1,6 +1,6 @@
 # Redis
 
-客户端连的是 `redisserver`，不是 Redis 本身。常用命令在 `oi_redis_cmd.h`，字符串这一类的声明在 `oi_redis_string.h`。命令表见 [基础库](../cbaselib.md) 的 redis 段。标准例子是 [`redis_mgr.cpp` 的 `Check`](../../modules/ipcclient/src/redis_mgr.cpp#L565)。
+客户端连的是 `redisserver`，不是 Redis 本身。常用命令在 `oi_redis_cmd.h`，字符串这一类的声明在 `oi_redis_string.h`。命令表见 [基础库](../cbaselib.md) 的 redis 段。标准例子是 [`test_redis.cpp` 的 `Check`](../../modules/ipcclient/src/test_redis.cpp#L565)。
 
 ## 接口
 

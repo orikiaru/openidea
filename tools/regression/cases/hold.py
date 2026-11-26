@@ -1,4 +1,4 @@
-"""hold 组：HoldMgr 场景、阻塞、定时器和时间平移。"""
+"""hold 组：TestHold 场景、阻塞、定时器和时间平移。"""
 import re
 import socket
 import socketserver
@@ -365,6 +365,11 @@ class HoldCase(Case):
         assert re.search(r"rpc failure stage=decode_response token=\d+ call=[1-9]\d* sid=" + source.group(1) + r" proto=3002 ret=-?\d+ reason=ParserException", diagnostics), "client reply decode source missing from logd disk"
         print("diagnostic original errors persisted", ctx.name, "PASS", flush=True)
 
-CASES = (HoldCase("hold", "hold"), HoldCase("hold-blocking", "hold"),
-         HoldCase("hold-timer", "hold"), HoldCase("hold-redis", "hold"),
-         HoldCase("clock-forward", "hold"), HoldCase("clock-back", "hold"))
+CASES = (
+    HoldCase("hold", "hold"),
+    HoldCase("hold-blocking", "hold", scene="blocking", targeted_reason="also exercised by hold"),
+    HoldCase("hold-timer", "hold", scene="timer", targeted_reason="also exercised by hold"),
+    HoldCase("hold-redis", "hold", scene="redis", targeted_reason="also exercised by hold"),
+    HoldCase("clock-forward", "hold", targeted_reason="Linux clock injection; run with --clock-faults"),
+    HoldCase("clock-back", "hold", targeted_reason="Linux clock injection; run with --clock-faults"),
+)

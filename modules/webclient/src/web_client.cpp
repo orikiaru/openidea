@@ -472,10 +472,12 @@ OI::Coro::Task WebClient::Run()
 	bool bUrlCase = false;
 	bool bPoolCase = false;
 	bool bDisconnectCase = false;
+	bool bBodylessCase = false;
 	bool bCheckEchoHeader = false;
 	int32_t iStreamFixturePort = 0;
 	TryGetConfig("WebClient.pool_case", bPoolCase);
 	TryGetConfig("WebClient.disconnect_case", bDisconnectCase);
+	TryGetConfig("WebClient.bodyless_case", bBodylessCase);
 	TryGetConfig("WebClient.pool_control_port", iPoolControlPort);
 	TryGetConfig("WebClient.url_case", bUrlCase);
 	TryGetConfig("WebClient.url_tls_port", iUrlTlsPort);
@@ -496,6 +498,11 @@ OI::Coro::Task WebClient::Run()
 		co_return;
 	}
 
+	if (bBodylessCase)
+	{
+		co_await RunBodylessRegression(iPortLocal);
+		co_return;
+	}
 	if (bDisconnectCase)
 	{
 		co_await RunDisconnectRegression(iPortLocal, iPoolControlPort);

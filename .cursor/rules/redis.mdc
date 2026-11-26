@@ -1,5 +1,5 @@
 ---
-description: Redis、redisserver、RESP、CallRedis、RedisCall。改 Redis 客户端前先读 docs/cbaselib.md 的 redis 段，对照 redis_mgr 的 Check。
+description: Redis、redisserver、RESP、CallRedis、RedisCall。改 Redis 客户端前先读 docs/cbaselib.md 的 redis 段，对照 test_redis 的 Check。
 alwaysApply: false
 ---
 
@@ -9,7 +9,7 @@ alwaysApply: false
 
 超时后命令仍留在队列里，等自己的回包来认领。回包再也没来而连接还在时，后面的命令会顶在它后面。超时单位是毫秒，配置键 `RedisClient.timeout_ms`，200 毫秒扫一次。`timeout` 为真是超时，`reply` 非空是回执，先到的那个算数。
 
-标准用例是先放进具名 `RedisCall` 再 `co_await`，见 `modules/ipcclient/src/redis_mgr.cpp` 的 `Check`：
+标准用例是先放进具名 `RedisCall` 再 `co_await`，见 `modules/ipcclient/src/test_redis.cpp` 的 `Check`：
 
 ```cpp
 RedisResult set;

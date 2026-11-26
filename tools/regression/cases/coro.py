@@ -30,4 +30,7 @@ class CoroCase(Case):
             assert re.search(r"empty mode=\S+ total=1000000 ms=\d+ rate=\d+/s rpc_fail=0", text)
         return False
 
-CASES = (CoroCase("coro", "coro"), CoroCase("empty", "coro"))
+CASES = (
+    CoroCase("coro", "coro", targeted_reason="monthly coroutine benchmark"),
+    CoroCase("empty", "empty", targeted_reason="dedicated empty RPC benchmark"),
+)

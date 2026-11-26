@@ -1,9 +1,54 @@
 """build.py 只检查命令，不真的调用 cmake。"""
+import re
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 import build
+
+
+def ipc_test_source_errors(root):
+    """Check test source registration and reject reintroduced test Mgr classes."""
+    root = Path(root)
+    cmake = (root / "CMakeLists.txt").read_text(encoding="utf-8")
+    match = re.search(r"(?is)\bset\s*\(\s*MODULE_SRCS\b(.*?)\)", cmake)
+    if not match:
+        return ["missing MODULE_SRCS"]
+    listed = re.findall(r"(?m)^\s*(src/test_[A-Za-z0-9_]+\.cpp)\s*$", match.group(1))
+    actual = {"src/" + path.name for path in (root / "src").glob("test_*.cpp")}
+    errors = ["test sources missing from MODULE_SRCS: " + ", ".join(sorted(actual - set(listed)))] if actual - set(listed) else []
+    if set(listed) - actual:
+        errors.append("registered test sources absent: " + ", ".join(sorted(set(listed) - actual)))
+    if len(listed) != len(set(listed)):
+        errors.append("duplicate registered test source")
+    for directory in ("inc", "src"):
+        for path in (root / directory).glob("*"):
+            if path.suffix not in (".h", ".cpp"):
+                continue
+            if re.search(r"(?m)^\s*(?:class|struct)\s+\w+Mgr\b", path.read_text(encoding="utf-8")):
+                errors.append("legacy test Mgr declaration: " + str(path))
+            if path.stem.endswith("_mgr"):
+                errors.append("legacy test Mgr file: " + str(path))
+    return errors
+
+
+class IpcTestSourceTests(unittest.TestCase):
+    def test_repository_sources(self):
+        self.assertEqual(ipc_test_source_errors(build.ROOT / "modules/ipcclient"), [])
+
+    def test_missing_and_duplicate_sources_and_old_mgr_fail(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "src").mkdir()
+            (root / "inc").mkdir()
+            (root / "src/test_example.cpp").write_text("class TestExample {};", encoding="utf-8")
+            (root / "inc/example_mgr.h").write_text("class ExampleMgr {};", encoding="utf-8")
+            (root / "CMakeLists.txt").write_text("set(MODULE_SRCS\n src/test_board.cpp\n src/test_board.cpp\n)\n", encoding="utf-8")
+            errors = "\n".join(ipc_test_source_errors(root))
+            for expected in ("missing from MODULE_SRCS", "registered test sources absent", "duplicate", "Mgr declaration", "Mgr file"):
+                self.assertIn(expected, errors)
+
 
 
 class BuildCommandTests(unittest.TestCase):

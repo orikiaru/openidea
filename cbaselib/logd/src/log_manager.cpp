@@ -4,12 +4,33 @@
 #include <string.h>
 #include <cstdlib>
 #include <algorithm>
+#ifdef OI_ENABLE_TEST_HOOKS
+#include <fstream>
+#endif
 #include "oi_timer_helper.h"
 #include "oi_file.h"
 #include "log_file_instance.h"
 #include "oi_config.h"
 #include "oi_log_frame.h"
 #include "log_server_session.h"
+
+time_t LogManager::ReadLogTime(tm& stCalendarTime)
+{
+	time_t iTimestamp = ::OI::Timer::GetTime();
+#ifdef OI_ENABLE_TEST_HOOKS
+	if (const char* pClockFile = std::getenv("OI_TEST_LOG_CLOCK_FILE"))
+	{
+		std::ifstream stClock(pClockFile);
+		if (!(stClock >> iTimestamp))
+		{
+			fprintf(stderr, "logd test clock read failed\n");
+			std::abort();
+		}
+	}
+#endif
+	localtime_r(&iTimestamp, &stCalendarTime);
+	return iTimestamp;
+}
 
 int32_t LogManager::Init()
 {
@@ -21,8 +42,7 @@ int32_t LogManager::Init()
 		return OI_ERR_INVALID_ARGUMENT;
 	}
 	m_iMaxPendingBytes = static_cast<size_t>(iLimit);
-	m_iLastTimestamp = ::OI::Timer::GetTime();
-	m_stLastCalendarTime = ::OI::Timer::GetLocalTime();
+	m_iLastTimestamp = ReadLogTime(m_stLastCalendarTime);
 	char vInitialTitle[LOG_TITLE_BUFF_SIZE];
 	const size_t iTitleSize = strftime(vInitialTitle, sizeof(vInitialTitle), "%T ", &m_stLastCalendarTime);
 	m_sLogTitle.assign(vInitialTitle, iTitleSize);
@@ -31,7 +51,6 @@ int32_t LogManager::Init()
 	TryGetConfig("Log.root_path", sLogRootPath);
 	m_sLogRootPath = sLogRootPath;
 
-	UpdateLogPath();
 	int32_t iStatus = StartLogInstanceWork();
 	if (iStatus != OI_OK)
 	{
@@ -78,8 +97,8 @@ void LogManager::Stop()
 
 bool LogManager::OnTimer()
 {
-	tm stNowCalendarTime = ::OI::Timer::GetLocalTime();
-	time_t iNowTimestamp = ::OI::Timer::GetTime();
+	tm stNowCalendarTime{};
+	const time_t iNowTimestamp = ReadLogTime(stNowCalendarTime);
 
 	bool bIsCrossDay = ::OI::Timer::CrossDay(m_iLastTimestamp, iNowTimestamp);
 	m_stLastCalendarTime = stNowCalendarTime;
@@ -101,17 +120,14 @@ bool LogManager::OnTimer()
 	return true;
 }
 
-static std::string GetLogLvName(LOG_LEVEL iLevel);
-
 void LogManager::OnCrossDay()
 {
 	// 与 WriteLog 的入队共用积压锁，轮转标记不会越过已接纳的日志。
 	try
 	{
-		UpdateLogPath();
 		for (const auto& [iLevel, pLogFile] : m_mLogFileMap)
 		{
-			pLogFile->Rotate(m_sCurrentLogPath + "/" + GetLogLvName(iLevel));
+			pLogFile->Rotate(LogFilePath(iLevel));
 		}
 	}
 	catch (...)
@@ -149,7 +165,7 @@ int32_t LogManager::StartLogInstanceWork()
 		const LOG_LEVEL iLogLevel = static_cast<LOG_LEVEL>(iLevel);
 		LogFileInstance* pLogFile = new LogFileInstance(this);
 		m_mLogFileMap[iLogLevel] = pLogFile;
-		const int32_t iStatus = pLogFile->StartWriteThread(m_sCurrentLogPath + "/" + GetLogLvName(iLogLevel));
+		const int32_t iStatus = pLogFile->StartWriteThread(LogFilePath(iLogLevel));
 		if (iStatus != OI_OK)
 		{
 			return iStatus;
@@ -158,13 +174,11 @@ int32_t LogManager::StartLogInstanceWork()
 	return OI_OK;
 }
 
-void LogManager::UpdateLogPath()
+std::string LogManager::LogFilePath(LOG_LEVEL iLevel) const
 {
-	char vCurrentPath[64];
-	const size_t iLength = strftime(vCurrentPath, sizeof(vCurrentPath), "%y_%m_%d", &m_stLastCalendarTime);
-	assert(iLength > 0 && iLength < sizeof(vCurrentPath));
-	(void)iLength;
-	m_sCurrentLogPath = m_sLogRootPath + "/" + vCurrentPath;
+	char vDate[32];
+	const size_t iLength = strftime(vDate, sizeof(vDate), "%Y-%m-%d", &m_stLastCalendarTime);
+	return m_sLogRootPath + "/" + GetLogLvName(iLevel) + "_" + std::string(vDate, iLength) + ".log.txt";
 }
 
 int32_t LogManager::WriteLog(LOG_LEVEL iLevel, const char* pText, size_t iLength,

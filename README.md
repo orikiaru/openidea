@@ -20,7 +20,7 @@ C++20 网络进程框架。业务写协议和协程，收发、回包配对、�
 
 ## 一条调用链
 
-平时按服务名调用，不拿着某条连接。服务端登记看 `modules/ipcserver/src/ipcserver.cpp` 的 `AllEcho`。`modules/ipcclient/src/echo_mgr.cpp` 里的 `IpcClient::Call` 是回归用的固定直连，业务不要照抄。直连只用于有状态的对端，例如玩家连接。
+平时按服务名调用，不拿着某条连接。服务端登记看 `modules/ipcserver/src/ipcserver.cpp` 的 `AllEcho`。`modules/ipcclient/src/test_echo.cpp` 里的 `IpcClient::Call` 是回归用的固定直连，业务不要照抄。直连只用于有状态的对端，例如玩家连接。
 
 1. `rpc.proto` 写请求、回复和一条 `rpc`。字段号手写，生成器不补号。
 2. 进程 `StartFramework` 读 toml，拉起 poll、定时器和协程。

@@ -44,4 +44,7 @@ class AdmissionCase(Case):
             check_admission_rounds(text)
         return False
 
-CASES = (AdmissionCase("rpc-admission-count", "admission"), AdmissionCase("rpc-admission-bytes", "admission"))
+CASES = (
+    AdmissionCase("rpc-admission-count", "hold"),
+    AdmissionCase("rpc-admission-bytes", "hold"),
+)
