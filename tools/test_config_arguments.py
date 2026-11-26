@@ -6,6 +6,9 @@ import tempfile
 
 from regression_platform import SUFFIX
 
+if not __debug__:
+    raise SystemExit("config arguments regression requires Python assertions enabled")
+
 NAMES = ("ipcserver", "ipcclient", "logd", "redisserver", "registry", "webserver", "webclient")
 
 

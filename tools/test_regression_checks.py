@@ -21,6 +21,15 @@ MULTIPART_BODY = (b"--fixture\r\nContent-Disposition: form-data; name=\"field\"\
 
 
 class RegressionChecksTest(unittest.TestCase):
+    def test_config_arguments_rejects_optimized_mode(self):
+        script = Path(__file__).with_name("test_config_arguments.py")
+        with tempfile.TemporaryDirectory() as temp:
+            result = subprocess.run([sys.executable, "-O", str(script), "--bin-dir", temp],
+                                    capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("assertions enabled", result.stdout + result.stderr)
+        self.assertNotIn("config arguments PASS", result.stdout + result.stderr)
+
     def test_web_stop_probe_registration_and_optimized_mode(self):
         import web_stop_probe
         self.assertIn("web-stop", cases.TARGETED_CASES)
