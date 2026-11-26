@@ -240,7 +240,7 @@ OI::Coro::TaskResult<int32_t> TestDb::RunWakeBenchmark(bool bBlockingOnly)
 				co_return 1;
 			}
 			const int64_t iSum = (stTrace.iWorkerStart - iSubmit) + (stTrace.iWorkerDone - stTrace.iWorkerStart) +
-			    (stTrace.iPost - stTrace.iWorkerDone) + (stTrace.iPoll - stTrace.iPost) + (iResume - stTrace.iPoll);
+			                     (stTrace.iPost - stTrace.iWorkerDone) + (stTrace.iPoll - stTrace.iPost) + (iResume - stTrace.iPoll);
 			if (iSum != iResume - iSubmit)
 			{
 				std::printf("wake benchmark trace sum failed round=%d\n", iRound);

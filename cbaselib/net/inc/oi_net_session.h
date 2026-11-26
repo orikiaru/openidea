@@ -10,6 +10,7 @@ class NetSession : public Session
   protected:
 	// poll 线程内部关闭。调用方已经在合适的上下文里，这里不再加会话锁。
 	void Close(int iError) override;
+
   public:
 	NetSession(SessionManager* pMgr)
 	    : Session(pMgr)

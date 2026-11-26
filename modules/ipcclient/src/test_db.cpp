@@ -6,6 +6,7 @@
 #include "oi_errno.h"
 #include "oi_rpcdata_dbsample.h"
 #include "oi_mysql.h"
+#include "oi_thread.h"
 #include "oi_log.h"
 #include "test_board.h"
 #include <charconv>
@@ -14,7 +15,6 @@
 #include <variant>
 #include <limits>
 #include <random>
-#include <stdexcept>
 
 void TestDb::Load()
 {
@@ -113,22 +113,21 @@ std::optional<::OI::Db::Blob> TestDb::CellOf(const ::OI::Db::Parameter& stParame
 bool TestDb::SameRow(const ::OI::RpcData::DbSample& stFirst, const ::OI::RpcData::DbSample& stSecond)
 {
 	const std::pair<const char*, bool> vFields[] = {
-		{"iId", stFirst.iId == stSecond.iId},
-		{"sName", stFirst.sName == stSecond.sName},
-		{"iSecret", stFirst.iSecret == stSecond.iSecret},
-		{"iToken", stFirst.iToken == stSecond.iToken},
-		{"dScore", stFirst.dScore == stSecond.dScore},
-		{"fRatio", stFirst.fRatio == stSecond.fRatio},
-		{"stPayload", stFirst.stPayload.Size() == stSecond.stPayload.Size()
-				&& std::memcmp(stFirst.stPayload.Data(), stSecond.stPayload.Data(), stFirst.stPayload.Size()) == 0},
-		{"vNumbers", stFirst.vNumbers == stSecond.vNumbers},
-		{"mFlags", stFirst.mFlags == stSecond.mFlags},
-		{"stChild", stFirst.stChild.iNumber == stSecond.stChild.iNumber && stFirst.stChild.sText == stSecond.stChild.sText},
-		{"iFlag", stFirst.iFlag == stSecond.iFlag},
-		{"bActive", stFirst.bActive == stSecond.bActive},
-		{"vJsonNumbers", stFirst.vJsonNumbers == stSecond.vJsonNumbers},
-		{"mJsonFlags", stFirst.mJsonFlags == stSecond.mJsonFlags},
-		{"stJsonChild", stFirst.stJsonChild.iNumber == stSecond.stJsonChild.iNumber && stFirst.stJsonChild.sText == stSecond.stJsonChild.sText},
+	    {"iId", stFirst.iId == stSecond.iId},
+	    {"sName", stFirst.sName == stSecond.sName},
+	    {"iSecret", stFirst.iSecret == stSecond.iSecret},
+	    {"iToken", stFirst.iToken == stSecond.iToken},
+	    {"dScore", stFirst.dScore == stSecond.dScore},
+	    {"fRatio", stFirst.fRatio == stSecond.fRatio},
+	    {"stPayload", stFirst.stPayload.Size() == stSecond.stPayload.Size() && std::memcmp(stFirst.stPayload.Data(), stSecond.stPayload.Data(), stFirst.stPayload.Size()) == 0},
+	    {"vNumbers", stFirst.vNumbers == stSecond.vNumbers},
+	    {"mFlags", stFirst.mFlags == stSecond.mFlags},
+	    {"stChild", stFirst.stChild.iNumber == stSecond.stChild.iNumber && stFirst.stChild.sText == stSecond.stChild.sText},
+	    {"iFlag", stFirst.iFlag == stSecond.iFlag},
+	    {"bActive", stFirst.bActive == stSecond.bActive},
+	    {"vJsonNumbers", stFirst.vJsonNumbers == stSecond.vJsonNumbers},
+	    {"mJsonFlags", stFirst.mJsonFlags == stSecond.mJsonFlags},
+	    {"stJsonChild", stFirst.stJsonChild.iNumber == stSecond.stJsonChild.iNumber && stFirst.stJsonChild.sText == stSecond.stJsonChild.sText},
 	};
 	bool bSame = true;
 	for (const auto& [pName, bEqual] : vFields)
@@ -165,38 +164,18 @@ int32_t TestDb::CheckRowMapping()
 		const DbSample stEdge = MakeEdgeRow();
 
 		Expect(iBad, std::string(DbSample::DbColumnList()) == "`id`,`sName`,`iSecret`,`iToken`,`dScore`,`fRatio`,`stPayload`,"
-				"`vNumbers`,`mFlags`,`stChild`,`iFlag`,`bActive`,`vJsonNumbers`,`notes`,`stJsonChild`"
-				&& std::string(DbSample::DbPlaceholders()) == "?,?,?,?,?,?,?,?,?,?,?,?,?,?,?"
-				&& ::OI::Db::FieldCount<DbSample>() == 15,
-			"column list");
+		                                                      "`vNumbers`,`mFlags`,`stChild`,`iFlag`,`bActive`,`vJsonNumbers`,`notes`,`stJsonChild`" &&
+		                 std::string(DbSample::DbPlaceholders()) == "?,?,?,?,?,?,?,?,?,?,?,?,?,?,?" && ::OI::Db::FieldCount<DbSample>() == 15,
+		    "column list");
 
 		// 按列名取参数：标量按字段类型绑定，[dbjson] 是 JSON 文本，其余复杂字段是 PB blob，[nodb] 不出现。
 		const ::OI::Db::ParameterMap mParameters = stFull.ToDbMap();
 		Expect(iBad, mParameters.size() == 15 && mParameters.count("sCache") == 0 && mParameters.count("iId") == 0, "parameter map columns");
-		Expect(iBad, std::get<int64_t>(mParameters.at("id")) == 1
-				&& std::get<std::string>(mParameters.at("sName")) == stFull.sName
-				&& std::get<int64_t>(mParameters.at("iSecret")) == -7
-				&& std::get<uint64_t>(mParameters.at("iToken")) == stFull.iToken
-				&& std::get<double>(mParameters.at("dScore")) == 1.5
-				&& std::get<double>(mParameters.at("fRatio")) == 0.75
-				&& std::get<::OI::Db::Blob>(mParameters.at("stPayload")) == ::OI::Db::Blob({0x00, 0xff, 'x'})
-				&& std::get<int64_t>(mParameters.at("iFlag")) == -128
-				&& std::get<int64_t>(mParameters.at("bActive")) == 1,
-			"parameter map scalars");
+		Expect(iBad, std::get<int64_t>(mParameters.at("id")) == 1 && std::get<std::string>(mParameters.at("sName")) == stFull.sName && std::get<int64_t>(mParameters.at("iSecret")) == -7 && std::get<uint64_t>(mParameters.at("iToken")) == stFull.iToken && std::get<double>(mParameters.at("dScore")) == 1.5 && std::get<double>(mParameters.at("fRatio")) == 0.75 && std::get<::OI::Db::Blob>(mParameters.at("stPayload")) == ::OI::Db::Blob({0x00, 0xff, 'x'}) && std::get<int64_t>(mParameters.at("iFlag")) == -128 && std::get<int64_t>(mParameters.at("bActive")) == 1,
+		    "parameter map scalars");
 		DbSample stDecoded;
-		Expect(iBad, ::OI::Db::FromDbBlob(std::get<::OI::Db::Blob>(mParameters.at("vNumbers")), stDecoded.vNumbers)
-				&& ::OI::Db::FromDbBlob(std::get<::OI::Db::Blob>(mParameters.at("mFlags")), stDecoded.mFlags)
-				&& ::OI::Db::FromDbBlob(std::get<::OI::Db::Blob>(mParameters.at("stChild")), stDecoded.stChild)
-				&& ::OI::Rpc::FromJsonText(std::get<std::string>(mParameters.at("vJsonNumbers")), stDecoded.vJsonNumbers)
-				&& ::OI::Rpc::FromJsonText(std::get<std::string>(mParameters.at("notes")), stDecoded.mJsonFlags)
-				&& ::OI::Rpc::FromJsonText(std::get<std::string>(mParameters.at("stJsonChild")), stDecoded.stJsonChild)
-				&& stDecoded.vNumbers == stFull.vNumbers
-				&& stDecoded.mFlags == stFull.mFlags
-				&& stDecoded.stChild.sText == stFull.stChild.sText
-				&& stDecoded.vJsonNumbers == stFull.vJsonNumbers
-				&& stDecoded.mJsonFlags == stFull.mJsonFlags
-				&& stDecoded.stJsonChild.sText == stFull.stJsonChild.sText,
-			"parameter map complex values");
+		Expect(iBad, ::OI::Db::FromDbBlob(std::get<::OI::Db::Blob>(mParameters.at("vNumbers")), stDecoded.vNumbers) && ::OI::Db::FromDbBlob(std::get<::OI::Db::Blob>(mParameters.at("mFlags")), stDecoded.mFlags) && ::OI::Db::FromDbBlob(std::get<::OI::Db::Blob>(mParameters.at("stChild")), stDecoded.stChild) && ::OI::Rpc::FromJsonText(std::get<std::string>(mParameters.at("vJsonNumbers")), stDecoded.vJsonNumbers) && ::OI::Rpc::FromJsonText(std::get<std::string>(mParameters.at("notes")), stDecoded.mJsonFlags) && ::OI::Rpc::FromJsonText(std::get<std::string>(mParameters.at("stJsonChild")), stDecoded.stJsonChild) && stDecoded.vNumbers == stFull.vNumbers && stDecoded.mFlags == stFull.mFlags && stDecoded.stChild.sText == stFull.stChild.sText && stDecoded.vJsonNumbers == stFull.vJsonNumbers && stDecoded.mJsonFlags == stFull.mJsonFlags && stDecoded.stJsonChild.sText == stFull.stJsonChild.sText,
+		    "parameter map complex values");
 
 		// 整行参数的顺序就是 DbColumnList 的顺序。
 		std::vector<std::string> vNames;
@@ -231,7 +210,7 @@ int32_t TestDb::CheckRowMapping()
 			DbSample stLoaded;
 			stLoaded.sCache = "keep";
 			Expect(iBad, stLoaded.FromDbMap(mCells) && SameRow(stLoaded, *pSource) && stLoaded.sCache == "keep",
-				pSource == &stFull ? "cell map full row" : "cell map edge row");
+			    pSource == &stFull ? "cell map full row" : "cell map edge row");
 		}
 
 		// 查询结果的列顺序和协议无关，按列名对上；列名重复整行拒绝。
@@ -246,61 +225,44 @@ int32_t TestDb::CheckRowMapping()
 		::OI::Db::CellMap mFromResult;
 		DbSample stByMap;
 		DbSample stByRow;
-		Expect(iBad, ::OI::Db::RowCells(stResult, 0, mFromResult)
-				&& stByMap.FromDbMap(mFromResult)
-				&& stByRow.FromDbRow(stResult.vColumns, stResult.vRows[0])
-				&& SameRow(stByMap, stFull)
-				&& SameRow(stByRow, stFull),
-			"result row by column name");
+		Expect(iBad, ::OI::Db::RowCells(stResult, 0, mFromResult) && stByMap.FromDbMap(mFromResult) && stByRow.FromDbRow(stResult.vColumns, stResult.vRows[0]) && SameRow(stByMap, stFull) && SameRow(stByRow, stFull),
+		    "result row by column name");
 		::OI::Db::Result stMany = stResult;
 		stMany.vRows.push_back(stMany.vRows[0]);
 		std::vector<DbSample> vDecoded;
-		Expect(iBad, ::OI::Db::FromRows(stMany, vDecoded) == OI_OK
-				&& vDecoded.size() == 2
-				&& SameRow(vDecoded[0], stFull)
-				&& SameRow(vDecoded[1], stFull),
-			"result rows");
+		Expect(iBad, ::OI::Db::FromRows(stMany, vDecoded) == OI_OK && vDecoded.size() == 2 && SameRow(vDecoded[0], stFull) && SameRow(vDecoded[1], stFull),
+		    "result rows");
 		stMany.vColumns.push_back(stMany.vColumns[0]);
 		stMany.vRows[1].push_back(stMany.vRows[1][0]);
 		std::vector<DbSample> vKept{stEdge};
-		Expect(iBad, ::OI::Db::FromRows(stMany, vKept) == OI_ERR_DECODE
-				&& vKept.size() == 1
-				&& SameRow(vKept[0], stEdge),
-			"result rows reject");
+		Expect(iBad, ::OI::Db::FromRows(stMany, vKept) == OI_ERR_DECODE && vKept.size() == 1 && SameRow(vKept[0], stEdge),
+		    "result rows reject");
 		::OI::Db::CellMap mUntouched = mFromResult;
 		Expect(iBad, !::OI::Db::RowCells(stResult, 1, mUntouched) && mUntouched == mFromResult, "result row out of range");
 		stResult.vColumns.push_back("id");
 		stResult.vRows[0].push_back(TextBlob("2"));
 		DbSample stDuplicate = stFull;
-		Expect(iBad, !::OI::Db::RowCells(stResult, 0, mUntouched)
-				&& mUntouched == mFromResult
-				&& !stDuplicate.FromDbRow(stResult.vColumns, stResult.vRows[0])
-				&& SameRow(stDuplicate, stFull),
-			"result duplicate column");
+		Expect(iBad, !::OI::Db::RowCells(stResult, 0, mUntouched) && mUntouched == mFromResult && !stDuplicate.FromDbRow(stResult.vColumns, stResult.vRows[0]) && SameRow(stDuplicate, stFull),
+		    "result duplicate column");
 
 		// 只给部分列，只改这几个字段。
 		DbSample stPartial = stFull;
 		stPartial.sCache = "keep";
-		Expect(iBad, stPartial.FromDbMap({{"sName", TextBlob("z")}, {"notes", TextBlob("{\"n\":5}")}})
-				&& stPartial.sName == "z"
-				&& stPartial.mJsonFlags == std::map<std::string, int32_t>{{"n", 5}}
-				&& stPartial.iId == stFull.iId
-				&& stPartial.vNumbers == stFull.vNumbers
-				&& stPartial.sCache == "keep",
-			"partial cell map");
+		Expect(iBad, stPartial.FromDbMap({{"sName", TextBlob("z")}, {"notes", TextBlob("{\"n\":5}")}}) && stPartial.sName == "z" && stPartial.mJsonFlags == std::map<std::string, int32_t>{{"n", 5}} && stPartial.iId == stFull.iId && stPartial.vNumbers == stFull.vNumbers && stPartial.sCache == "keep",
+		    "partial cell map");
 
 		// 任一列解不开都整行拒绝，对象保持原值。
 		const std::vector<std::pair<std::string, ::OI::Db::CellMap>> vRejected = {
-			{"reject null", {{"sName", TextBlob("y")}, {"id", std::nullopt}}},
-			{"reject int8 range", {{"iFlag", TextBlob("128")}}},
-			{"reject uint64 sign", {{"iToken", TextBlob("-1")}}},
-			{"reject integer text", {{"iSecret", TextBlob("1x")}}},
-			{"reject bool", {{"bActive", TextBlob("2")}}},
-			{"reject real", {{"dScore", TextBlob("nan")}}},
-			{"reject pb blob", {{"vNumbers", ::OI::Db::Blob({0xff})}}},
-			{"reject child blob", {{"stChild", ::OI::Db::Blob({0x01, 0x00, 0x00, 0x00})}}},
-			{"reject json", {{"notes", TextBlob("{bad")}}},
-			{"reject json shape", {{"vJsonNumbers", TextBlob("{}")}}},
+		    {"reject null", {{"sName", TextBlob("y")}, {"id", std::nullopt}}},
+		    {"reject int8 range", {{"iFlag", TextBlob("128")}}},
+		    {"reject uint64 sign", {{"iToken", TextBlob("-1")}}},
+		    {"reject integer text", {{"iSecret", TextBlob("1x")}}},
+		    {"reject bool", {{"bActive", TextBlob("2")}}},
+		    {"reject real", {{"dScore", TextBlob("nan")}}},
+		    {"reject pb blob", {{"vNumbers", ::OI::Db::Blob({0xff})}}},
+		    {"reject child blob", {{"stChild", ::OI::Db::Blob({0x01, 0x00, 0x00, 0x00})}}},
+		    {"reject json", {{"notes", TextBlob("{bad")}}},
+		    {"reject json shape", {{"vJsonNumbers", TextBlob("{}")}}},
 		};
 		for (const auto& [sLabel, mCells] : vRejected)
 		{
@@ -314,81 +276,53 @@ int32_t TestDb::CheckRowMapping()
 		Expect(iBad, pId && std::string(pId) == "id" && pNotes && std::string(pNotes) == "notes", "column of member");
 		Expect(iBad, ::OI::Db::ColumnOf(&DbSample::sCache) == nullptr, "nodb member has no column");
 		::OI::Db::Picked stPicked;
-		Expect(iBad, ::OI::Db::Pick(stFull, stPicked, &DbSample::sName, &DbSample::mJsonFlags, &DbSample::vNumbers, &DbSample::bActive) == OI_OK
-				&& stPicked.vColumns == std::vector<std::string>{"sName", "notes", "vNumbers", "bActive"}
-				&& stPicked.sColumns == "`sName`,`notes`,`vNumbers`,`bActive`"
-				&& stPicked.sMarks == "?,?,?,?"
-				&& stPicked.sAssignments == "`sName`=?,`notes`=?,`vNumbers`=?,`bActive`=?"
-				&& stPicked.sConditions == "`sName`=? AND `notes`=? AND `vNumbers`=? AND `bActive`=?"
-				&& stPicked.vParameters.size() == 4
-				&& stPicked.vParameters[0] == mParameters.at("sName")
-				&& stPicked.vParameters[1] == mParameters.at("notes")
-				&& stPicked.vParameters[2] == mParameters.at("vNumbers")
-				&& stPicked.vParameters[3] == mParameters.at("bActive"),
-			"pick members");
+		Expect(iBad, ::OI::Db::Pick(stFull, stPicked, &DbSample::sName, &DbSample::mJsonFlags, &DbSample::vNumbers, &DbSample::bActive) == OI_OK && stPicked.vColumns == std::vector<std::string>{"sName", "notes", "vNumbers", "bActive"} && stPicked.sColumns == "`sName`,`notes`,`vNumbers`,`bActive`" && stPicked.sMarks == "?,?,?,?" && stPicked.sAssignments == "`sName`=?,`notes`=?,`vNumbers`=?,`bActive`=?" && stPicked.sConditions == "`sName`=? AND `notes`=? AND `vNumbers`=? AND `bActive`=?" && stPicked.vParameters.size() == 4 && stPicked.vParameters[0] == mParameters.at("sName") && stPicked.vParameters[1] == mParameters.at("notes") && stPicked.vParameters[2] == mParameters.at("vNumbers") && stPicked.vParameters[3] == mParameters.at("bActive"),
+		    "pick members");
 		::OI::Db::Picked stKept = stPicked;
-		Expect(iBad, ::OI::Db::Pick(stFull, stKept, &DbSample::iId, &DbSample::sCache) == OI_ERR_INVALID_ARGUMENT
-				&& stKept.sColumns == stPicked.sColumns
-				&& stKept.vParameters == stPicked.vParameters,
-			"pick nodb rejected");
-		Expect(iBad, ::OI::Db::Pick(stFull, stKept, &DbSample::iId, &DbSample::iId) == OI_ERR_INVALID_ARGUMENT
-				&& stKept.sColumns == stPicked.sColumns,
-			"pick duplicate rejected");
+		Expect(iBad, ::OI::Db::Pick(stFull, stKept, &DbSample::iId, &DbSample::sCache) == OI_ERR_INVALID_ARGUMENT && stKept.sColumns == stPicked.sColumns && stKept.vParameters == stPicked.vParameters,
+		    "pick nodb rejected");
+		Expect(iBad, ::OI::Db::Pick(stFull, stKept, &DbSample::iId, &DbSample::iId) == OI_ERR_INVALID_ARGUMENT && stKept.sColumns == stPicked.sColumns,
+		    "pick duplicate rejected");
 
 		// 生成的语句逐字比对：列类型来自字段类型和 [dbtype]，主键来自 [dbkey]，参数和问号一一对应。
 		const std::string sColumnList = DbSample::DbColumnList();
 		const std::string sNonKeyAssignments = "`sName`=?,`iSecret`=?,`iToken`=?,`dScore`=?,`fRatio`=?,`stPayload`=?,`vNumbers`=?,"
-			"`mFlags`=?,`stChild`=?,`iFlag`=?,`bActive`=?,`vJsonNumbers`=?,`notes`=?,`stJsonChild`=?";
+		                                       "`mFlags`=?,`stChild`=?,`iFlag`=?,`bActive`=?,`vJsonNumbers`=?,`notes`=?,`stJsonChild`=?";
 		std::vector<::OI::Db::Parameter> vNonKey(vWhole.begin() + 1, vWhole.end());
 		::OI::Db::Statement stCreate;
-		Expect(iBad, ::OI::Db::BuildCreateTable<DbSample>("t_1", stCreate) == OI_OK
-				&& stCreate.sSql == "CREATE TABLE IF NOT EXISTS `t_1` (`id` BIGINT NOT NULL, `sName` VARBINARY(64) NOT NULL, `iSecret` INT NOT NULL, "
-					"`iToken` BIGINT UNSIGNED NOT NULL, `dScore` DOUBLE NOT NULL, `fRatio` DOUBLE NOT NULL, `stPayload` LONGBLOB NOT NULL, "
-					"`vNumbers` LONGBLOB NOT NULL, `mFlags` LONGBLOB NOT NULL, `stChild` LONGBLOB NOT NULL, `iFlag` TINYINT NOT NULL, "
-					"`bActive` TINYINT NOT NULL, `vJsonNumbers` LONGTEXT NOT NULL, `notes` TEXT NOT NULL, `stJsonChild` LONGTEXT NOT NULL, "
-					"PRIMARY KEY (`id`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
-				&& stCreate.vParameters.empty(),
-			"build create table");
+		Expect(iBad, ::OI::Db::BuildCreateTable<DbSample>("t_1", stCreate) == OI_OK && stCreate.sSql == "CREATE TABLE IF NOT EXISTS `t_1` (`id` BIGINT NOT NULL, `sName` VARBINARY(64) NOT NULL, `iSecret` INT NOT NULL, "
+		                                                                                                "`iToken` BIGINT UNSIGNED NOT NULL, `dScore` DOUBLE NOT NULL, `fRatio` DOUBLE NOT NULL, `stPayload` LONGBLOB NOT NULL, "
+		                                                                                                "`vNumbers` LONGBLOB NOT NULL, `mFlags` LONGBLOB NOT NULL, `stChild` LONGBLOB NOT NULL, `iFlag` TINYINT NOT NULL, "
+		                                                                                                "`bActive` TINYINT NOT NULL, `vJsonNumbers` LONGTEXT NOT NULL, `notes` TEXT NOT NULL, `stJsonChild` LONGTEXT NOT NULL, "
+		                                                                                                "PRIMARY KEY (`id`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4" &&
+		                 stCreate.vParameters.empty(),
+		    "build create table");
 		::OI::Db::Statement stInsert;
-		Expect(iBad, ::OI::Db::BuildInsert("t_1", stFull, stInsert) == OI_OK
-				&& stInsert.sSql == "INSERT INTO `t_1` (" + sColumnList + ") VALUES (" + DbSample::DbPlaceholders() + ")"
-				&& stInsert.vParameters == vWhole,
-			"build insert");
+		Expect(iBad, ::OI::Db::BuildInsert("t_1", stFull, stInsert) == OI_OK && stInsert.sSql == "INSERT INTO `t_1` (" + sColumnList + ") VALUES (" + DbSample::DbPlaceholders() + ")" && stInsert.vParameters == vWhole,
+		    "build insert");
 		::OI::Db::Statement stUpsert;
 		std::vector<::OI::Db::Parameter> vUpsertParameters = vWhole;
 		vUpsertParameters.insert(vUpsertParameters.end(), vNonKey.begin(), vNonKey.end());
-		Expect(iBad, ::OI::Db::BuildUpsert("t_1", stFull, stUpsert) == OI_OK
-				&& stUpsert.sSql == "INSERT INTO `t_1` (" + sColumnList + ") VALUES (" + DbSample::DbPlaceholders() + ") ON DUPLICATE KEY UPDATE " + sNonKeyAssignments
-				&& stUpsert.vParameters == vUpsertParameters,
-			"build upsert");
+		Expect(iBad, ::OI::Db::BuildUpsert("t_1", stFull, stUpsert) == OI_OK && stUpsert.sSql == "INSERT INTO `t_1` (" + sColumnList + ") VALUES (" + DbSample::DbPlaceholders() + ") ON DUPLICATE KEY UPDATE " + sNonKeyAssignments && stUpsert.vParameters == vUpsertParameters,
+		    "build upsert");
 		const std::vector<::OI::Db::Parameter> vKey{mParameters.at("id")};
 		::OI::Db::Statement stSelect;
-		Expect(iBad, ::OI::Db::BuildSelectByKey("t_1", stFull, stSelect) == OI_OK
-				&& stSelect.sSql == "SELECT " + sColumnList + " FROM `t_1` WHERE `id`=?"
-				&& stSelect.vParameters == vKey,
-			"build select by key");
+		Expect(iBad, ::OI::Db::BuildSelectByKey("t_1", stFull, stSelect) == OI_OK && stSelect.sSql == "SELECT " + sColumnList + " FROM `t_1` WHERE `id`=?" && stSelect.vParameters == vKey,
+		    "build select by key");
 		::OI::Db::Statement stSelectSome;
-		Expect(iBad, ::OI::Db::BuildSelectByKey("t_1", stFull, stSelectSome, &DbSample::mJsonFlags, &DbSample::sName) == OI_OK
-				&& stSelectSome.sSql == "SELECT `notes`,`sName` FROM `t_1` WHERE `id`=?"
-				&& stSelectSome.vParameters == vKey,
-			"build select picked columns");
+		Expect(iBad, ::OI::Db::BuildSelectByKey("t_1", stFull, stSelectSome, &DbSample::mJsonFlags, &DbSample::sName) == OI_OK && stSelectSome.sSql == "SELECT `notes`,`sName` FROM `t_1` WHERE `id`=?" && stSelectSome.vParameters == vKey,
+		    "build select picked columns");
 		::OI::Db::Statement stUpdateSome;
-		Expect(iBad, ::OI::Db::BuildUpdateByKey("t_1", stFull, stUpdateSome, &DbSample::sName, &DbSample::dScore) == OI_OK
-				&& stUpdateSome.sSql == "UPDATE `t_1` SET `sName`=?,`dScore`=? WHERE `id`=?"
-				&& stUpdateSome.vParameters == std::vector<::OI::Db::Parameter>{mParameters.at("sName"), mParameters.at("dScore"), mParameters.at("id")},
-			"build update picked columns");
+		Expect(iBad, ::OI::Db::BuildUpdateByKey("t_1", stFull, stUpdateSome, &DbSample::sName, &DbSample::dScore) == OI_OK && stUpdateSome.sSql == "UPDATE `t_1` SET `sName`=?,`dScore`=? WHERE `id`=?" && stUpdateSome.vParameters == std::vector<::OI::Db::Parameter>{mParameters.at("sName"), mParameters.at("dScore"), mParameters.at("id")},
+		    "build update picked columns");
 		::OI::Db::Statement stUpdateAll;
 		std::vector<::OI::Db::Parameter> vUpdateAllParameters = vNonKey;
 		vUpdateAllParameters.push_back(mParameters.at("id"));
-		Expect(iBad, ::OI::Db::BuildUpdateByKey("t_1", stFull, stUpdateAll) == OI_OK
-				&& stUpdateAll.sSql == "UPDATE `t_1` SET " + sNonKeyAssignments + " WHERE `id`=?"
-				&& stUpdateAll.vParameters == vUpdateAllParameters,
-			"build update all columns");
+		Expect(iBad, ::OI::Db::BuildUpdateByKey("t_1", stFull, stUpdateAll) == OI_OK && stUpdateAll.sSql == "UPDATE `t_1` SET " + sNonKeyAssignments + " WHERE `id`=?" && stUpdateAll.vParameters == vUpdateAllParameters,
+		    "build update all columns");
 		::OI::Db::Statement stDelete;
-		Expect(iBad, ::OI::Db::BuildDeleteByKey("t_1", stFull, stDelete) == OI_OK
-				&& stDelete.sSql == "DELETE FROM `t_1` WHERE `id`=?"
-				&& stDelete.vParameters == vKey,
-			"build delete by key");
+		Expect(iBad, ::OI::Db::BuildDeleteByKey("t_1", stFull, stDelete) == OI_OK && stDelete.sSql == "DELETE FROM `t_1` WHERE `id`=?" && stDelete.vParameters == vKey,
+		    "build delete by key");
 
 		// 表名只认字母、数字、下划线；主键不能改；[nodb] 和重复成员拒绝。失败时语句不变。
 		const ::OI::Db::Statement stOriginal = stDelete;
@@ -399,22 +333,16 @@ int32_t TestDb::CheckRowMapping()
 		for (const std::string& sBadTable : {std::string(""), std::string("t-1"), std::string("a`b"), std::string("t 1"), std::string(65, 't')})
 		{
 			::OI::Db::Statement stRejected = stOriginal;
-			Expect(iBad, ::OI::Db::BuildCreateTable<DbSample>(sBadTable, stRejected) == OI_ERR_INVALID_ARGUMENT
-					&& ::OI::Db::BuildInsert(sBadTable, stFull, stRejected) == OI_ERR_INVALID_ARGUMENT
-					&& ::OI::Db::BuildUpsert(sBadTable, stFull, stRejected) == OI_ERR_INVALID_ARGUMENT
-					&& ::OI::Db::BuildSelectByKey(sBadTable, stFull, stRejected) == OI_ERR_INVALID_ARGUMENT
-					&& ::OI::Db::BuildUpdateByKey(sBadTable, stFull, stRejected) == OI_ERR_INVALID_ARGUMENT
-					&& ::OI::Db::BuildDeleteByKey(sBadTable, stFull, stRejected) == OI_ERR_INVALID_ARGUMENT
-					&& fnUnchanged(stRejected),
-				"build rejects bad table name");
+			Expect(iBad, ::OI::Db::BuildCreateTable<DbSample>(sBadTable, stRejected) == OI_ERR_INVALID_ARGUMENT && ::OI::Db::BuildInsert(sBadTable, stFull, stRejected) == OI_ERR_INVALID_ARGUMENT && ::OI::Db::BuildUpsert(sBadTable, stFull, stRejected) == OI_ERR_INVALID_ARGUMENT && ::OI::Db::BuildSelectByKey(sBadTable, stFull, stRejected) == OI_ERR_INVALID_ARGUMENT && ::OI::Db::BuildUpdateByKey(sBadTable, stFull, stRejected) == OI_ERR_INVALID_ARGUMENT && ::OI::Db::BuildDeleteByKey(sBadTable, stFull, stRejected) == OI_ERR_INVALID_ARGUMENT && fnUnchanged(stRejected),
+			    "build rejects bad table name");
 		}
 		::OI::Db::Statement stRejected = stOriginal;
 		Expect(iBad, ::OI::Db::BuildUpdateByKey("t_1", stFull, stRejected, &DbSample::iId) == OI_ERR_INVALID_ARGUMENT && fnUnchanged(stRejected),
-			"build update rejects key column");
+		    "build update rejects key column");
 		Expect(iBad, ::OI::Db::BuildUpdateByKey("t_1", stFull, stRejected, &DbSample::sName, &DbSample::sCache) == OI_ERR_INVALID_ARGUMENT && fnUnchanged(stRejected),
-			"build update rejects nodb member");
+		    "build update rejects nodb member");
 		Expect(iBad, ::OI::Db::BuildSelectByKey("t_1", stFull, stRejected, &DbSample::sName, &DbSample::sName) == OI_ERR_INVALID_ARGUMENT && fnUnchanged(stRejected),
-			"build select rejects duplicate member");
+		    "build select rejects duplicate member");
 
 		// PB 整结构往返，包括 [nodb] 和 [nojson] 字段；不认识的字段号按长度跳过。
 		::OI::Base::BytesStream stStream;
@@ -448,17 +376,17 @@ int32_t TestDb::CheckRowMapping()
 		stChild.serialize(stChildBytes);
 		const unsigned char vChildExpect[] = {0, 0, 0, 0, 4, 0, 0, 0, 4, 3, 2, 1, 1, 0, 0, 0, 2, 0, 0, 0, 'a', 'b'};
 		Expect(iBad, stChildBytes.Size() == sizeof(vChildExpect) && std::memcmp(stChildBytes.Data(), vChildExpect, sizeof(vChildExpect)) == 0,
-			"pb little endian struct");
+		    "pb little endian struct");
 		::OI::Base::BytesStream stFixed;
 		stFixed.WritePb(1, int64_t{0x0102030405060708LL});
 		stFixed.WritePb(2, 1.0);
 		stFixed.WritePb(3, -2.0f);
 		const unsigned char vFixedExpect[] = {
-			1, 0, 0, 0, 8, 0, 0, 0, 8, 7, 6, 5, 4, 3, 2, 1,
-			2, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xf0, 0x3f,
-			3, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0xc0};
+		    1, 0, 0, 0, 8, 0, 0, 0, 8, 7, 6, 5, 4, 3, 2, 1,
+		    2, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xf0, 0x3f,
+		    3, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0xc0};
 		Expect(iBad, stFixed.Size() == sizeof(vFixedExpect) && std::memcmp(stFixed.Data(), vFixedExpect, sizeof(vFixedExpect)) == 0,
-			"pb little endian fixed");
+		    "pb little endian fixed");
 
 		// JSON 跳过 [nojson]，按 [json] 列名以外的字段名输出；读入不改 [nojson] 字段。
 		DbSample stJsonSource = stFull;
@@ -466,17 +394,8 @@ int32_t TestDb::CheckRowMapping()
 		stJsonSource.stChild.sText = "child";
 		const std::string sJson = stJsonSource.ToJson();
 		DbSample stJson;
-		Expect(iBad, sJson.find("\"iSecret\"") == std::string::npos
-				&& sJson.find("\"notes\"") == std::string::npos
-				&& sJson.find("\"mJsonFlags\"") != std::string::npos
-				&& sJson.find("\"sCache\"") != std::string::npos
-				&& stJson.FromJson(sJson)
-				&& stJson.iSecret == 0
-				&& stJson.sCache == stJsonSource.sCache
-				&& stJson.vNumbers == stJsonSource.vNumbers
-				&& stJson.mJsonFlags == stJsonSource.mJsonFlags
-				&& stJson.stJsonChild.iNumber == stJsonSource.stJsonChild.iNumber,
-			"json skips nojson");
+		Expect(iBad, sJson.find("\"iSecret\"") == std::string::npos && sJson.find("\"notes\"") == std::string::npos && sJson.find("\"mJsonFlags\"") != std::string::npos && sJson.find("\"sCache\"") != std::string::npos && stJson.FromJson(sJson) && stJson.iSecret == 0 && stJson.sCache == stJsonSource.sCache && stJson.vNumbers == stJsonSource.vNumbers && stJson.mJsonFlags == stJsonSource.mJsonFlags && stJson.stJsonChild.iNumber == stJsonSource.stJsonChild.iNumber,
+		    "json skips nojson");
 		stJson.iSecret = 3;
 		Expect(iBad, stJson.FromJson(std::string("{\"iSecret\":8}")) && stJson.iSecret == 3, "json keeps nojson field");
 	}
@@ -574,7 +493,7 @@ OI::Coro::TaskResult<int32_t> TestDb::CheckMysqlRows(OI::Db::Client& stMysql, co
 			stLoaded.sCache = "keep";
 			const int32_t iLoad = co_await LoadRow(stMysql, sTable, stLoaded);
 			Expect(iBad, iLoad == OI_OK && SameRow(stLoaded, stRow) && stLoaded.sCache == "keep",
-				stRow.iId == 1 ? "mysql full row roundtrip" : "mysql edge row roundtrip");
+			    stRow.iId == 1 ? "mysql full row roundtrip" : "mysql edge row roundtrip");
 		}
 
 		// 按成员指针只改几列：没挑的字段即使对象里改了也不写，另一行不变。
@@ -596,7 +515,7 @@ OI::Coro::TaskResult<int32_t> TestDb::CheckMysqlRows(OI::Db::Client& stMysql, co
 		stEdgeLoaded.iId = vRows[1].iId;
 		const int32_t iEdgeLoad = co_await LoadRow(stMysql, sTable, stEdgeLoaded);
 		Expect(iBad, iChangedLoad == OI_OK && iEdgeLoad == OI_OK && SameRow(stChangedLoaded, stChanged) && SameRow(stEdgeLoaded, vRows[1]),
-			"mysql pick update keeps other columns");
+		    "mysql pick update keeps other columns");
 
 		// 非法 JSON 不得生成写语句；未选中该列时，其他列仍可正常写入。
 		DbSample stInvalidJson = stChanged;
@@ -613,9 +532,7 @@ OI::Coro::TaskResult<int32_t> TestDb::CheckMysqlRows(OI::Db::Client& stMysql, co
 		DbSample stAfterRejected;
 		stAfterRejected.iId = stChanged.iId;
 		const int32_t iRejectedLoad = co_await LoadRow(stMysql, sTable, stAfterRejected);
-		Expect(iBad, iInvalidAll == OI_ERR_INVALID_ARGUMENT && iInvalidPicked == OI_ERR_INVALID_ARGUMENT
-				&& iInvalidInsert == OI_ERR_INVALID_ARGUMENT && iInvalidUpsert == OI_ERR_INVALID_ARGUMENT
-				&& iRejectedLoad == OI_OK && SameRow(stAfterRejected, stChanged), "mysql invalid json rejected keeps row");
+		Expect(iBad, iInvalidAll == OI_ERR_INVALID_ARGUMENT && iInvalidPicked == OI_ERR_INVALID_ARGUMENT && iInvalidInsert == OI_ERR_INVALID_ARGUMENT && iInvalidUpsert == OI_ERR_INVALID_ARGUMENT && iRejectedLoad == OI_OK && SameRow(stAfterRejected, stChanged), "mysql invalid json rejected keeps row");
 		OI::Db::Statement stValidPicked;
 		const int32_t iValidPicked = ::OI::Db::BuildUpdateByKey(sTable, stInvalidJson, stValidPicked, &DbSample::sName);
 		if (iValidPicked == OI_OK)
@@ -631,8 +548,7 @@ OI::Coro::TaskResult<int32_t> TestDb::CheckMysqlRows(OI::Db::Client& stMysql, co
 		DbSample stAfterPicked;
 		stAfterPicked.iId = stChanged.iId;
 		const int32_t iPickedLoad = co_await LoadRow(stMysql, sTable, stAfterPicked);
-		Expect(iBad, iValidPicked == OI_OK && iStatus == OI_OK && iPickedAffected == 1
-				&& iPickedLoad == OI_OK && SameRow(stAfterPicked, stChanged), "mysql unpicked invalid json update roundtrip");
+		Expect(iBad, iValidPicked == OI_OK && iStatus == OI_OK && iPickedAffected == 1 && iPickedLoad == OI_OK && SameRow(stAfterPicked, stChanged), "mysql unpicked invalid json update roundtrip");
 
 		// 按成员指针只读几列，写回只改这几个字段。
 		OI::Db::Statement stPartial;
@@ -640,15 +556,8 @@ OI::Coro::TaskResult<int32_t> TestDb::CheckMysqlRows(OI::Db::Client& stMysql, co
 		iStatus = co_await stMysql.Call(std::move(stPartial), stResult, stError);
 		::OI::Db::CellMap mPartialCells;
 		DbSample stMixed = vRows[1];
-		Expect(iBad, iPartial == OI_OK && iStatus == OI_OK
-				&& ::OI::Db::RowCells(stResult, 0, mPartialCells)
-				&& mPartialCells.size() == 2
-				&& stMixed.FromDbMap(mPartialCells)
-				&& stMixed.sName == stChanged.sName
-				&& stMixed.mJsonFlags == stChanged.mJsonFlags
-				&& stMixed.iId == vRows[1].iId
-				&& stMixed.vJsonNumbers == vRows[1].vJsonNumbers,
-			"mysql pick select");
+		Expect(iBad, iPartial == OI_OK && iStatus == OI_OK && ::OI::Db::RowCells(stResult, 0, mPartialCells) && mPartialCells.size() == 2 && stMixed.FromDbMap(mPartialCells) && stMixed.sName == stChanged.sName && stMixed.mJsonFlags == stChanged.mJsonFlags && stMixed.iId == vRows[1].iId && stMixed.vJsonNumbers == vRows[1].vJsonNumbers,
+		    "mysql pick select");
 
 		// upsert：主键已存在改写其余列，不存在就插入。
 		DbSample stUpserted = stChanged;
@@ -674,7 +583,7 @@ OI::Coro::TaskResult<int32_t> TestDb::CheckMysqlRows(OI::Db::Client& stMysql, co
 		stFreshLoaded.iId = stFresh.iId;
 		const int32_t iFreshLoad = co_await LoadRow(stMysql, sTable, stFreshLoaded);
 		Expect(iBad, iUpsertFresh == OI_OK && iStatus == OI_OK && iFreshAffected == 1 && iFreshLoad == OI_OK && SameRow(stFreshLoaded, stFresh),
-			"mysql upsert new row");
+		    "mysql upsert new row");
 
 		// 不挑成员就改全部非主键列。
 		DbSample stWhole = MakeFullRow();
@@ -688,7 +597,7 @@ OI::Coro::TaskResult<int32_t> TestDb::CheckMysqlRows(OI::Db::Client& stMysql, co
 		stWholeLoaded.iId = stWhole.iId;
 		const int32_t iWholeLoad = co_await LoadRow(stMysql, sTable, stWholeLoaded);
 		Expect(iBad, iUpdateAll == OI_OK && iStatus == OI_OK && iWholeAffected == 1 && iWholeLoad == OI_OK && SameRow(stWholeLoaded, stWhole),
-			"mysql update all columns");
+		    "mysql update all columns");
 
 		// 按主键删，删完读不到。
 		OI::Db::Statement stDelete;

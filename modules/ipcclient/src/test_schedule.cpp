@@ -36,7 +36,6 @@
 #include <thread>
 #include <vector>
 
-
 // 64 个协程不停 yield(0) 时，新协程仍能在 1.5 秒内跑到。
 OI::Coro::TaskResult<int> TestSchedule::CheckSchedulerFairness()
 {

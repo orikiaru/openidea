@@ -28,7 +28,7 @@ inline bool ValidFieldLine(std::string_view sLine)
 	for (const unsigned char iByte : sLine.substr(0, iColon))
 	{
 		if (!((iByte >= 'A' && iByte <= 'Z') || (iByte >= 'a' && iByte <= 'z') ||
-		      (iByte >= '0' && iByte <= '9') || std::string_view("!#$%&'*+-.^_`|~").find(iByte) != sLine.npos))
+		        (iByte >= '0' && iByte <= '9') || std::string_view("!#$%&'*+-.^_`|~").find(iByte) != sLine.npos))
 		{
 			return false;
 		}

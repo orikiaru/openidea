@@ -41,7 +41,6 @@
 #include <thread>
 #include <vector>
 
-
 // Run with the existing Test.hold switch in both thread modes.
 template <typename T>
 int TestJson::CheckJsonInteger()
@@ -90,14 +89,7 @@ int TestJson::CheckJsonInteger()
 
 int TestJson::CheckJsonDecoding()
 {
-	int iBad = CheckJsonInteger<int8_t>()
-		+ CheckJsonInteger<uint8_t>()
-		+ CheckJsonInteger<int16_t>()
-		+ CheckJsonInteger<uint16_t>()
-		+ CheckJsonInteger<int32_t>()
-		+ CheckJsonInteger<uint32_t>()
-		+ CheckJsonInteger<int64_t>()
-		+ CheckJsonInteger<uint64_t>();
+	int iBad = CheckJsonInteger<int8_t>() + CheckJsonInteger<uint8_t>() + CheckJsonInteger<int16_t>() + CheckJsonInteger<uint16_t>() + CheckJsonInteger<int32_t>() + CheckJsonInteger<uint32_t>() + CheckJsonInteger<int64_t>() + CheckJsonInteger<uint64_t>();
 	Json::Value stInput(Json::objectValue);
 	stInput[std::string(40, '0') + "1"] = 1;
 	std::map<int32_t, int32_t> mSigned;

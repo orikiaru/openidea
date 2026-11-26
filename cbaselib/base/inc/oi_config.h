@@ -131,7 +131,7 @@ struct ConfigReadFailure
 	{                                                              \
 		if (!::OI::Base::Config::GlobalConfig().GetAs(KEY, VALUE)) \
 		{                                                          \
-			assert(false && "GetConfigAndAssert: " #KEY);           \
+			assert(false && "GetConfigAndAssert: " #KEY);          \
 		}                                                          \
 	} while (false)
 #define TryGetConfigNoReturn(KEY, VALUE)                      \
@@ -143,7 +143,7 @@ struct ConfigReadFailure
 	{                                                              \
 		if (!::OI::Base::Config::GlobalConfig().GetAs(KEY, VALUE)) \
 		{                                                          \
-			return ::OI::Base::Detail::ConfigReadFailure{};         \
+			return ::OI::Base::Detail::ConfigReadFailure{};        \
 		}                                                          \
 	} while (false)
 //可以拿取返回值

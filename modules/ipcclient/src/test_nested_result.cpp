@@ -36,7 +36,6 @@
 #include <thread>
 #include <vector>
 
-
 OI::Coro::TaskResult<int> TestNestedResult::ResultStressChild(int iValue)
 {
 	if (iValue & 1)

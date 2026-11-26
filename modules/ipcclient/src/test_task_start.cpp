@@ -36,7 +36,6 @@
 #include <thread>
 #include <vector>
 
-
 static thread_local bool g_bInHotStartCallback = false;
 OI::Coro::Task TestTaskStart::HotStartChild(std::shared_ptr<std::atomic<int>> pStep, std::shared_ptr<std::atomic<bool>> pInCallback)
 {

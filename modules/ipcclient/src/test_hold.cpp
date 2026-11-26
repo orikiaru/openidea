@@ -272,7 +272,7 @@ OI::Coro::TaskResult<int> TestHold::CheckRpcLateReply()
 	const size_t iPending = ::OI::Rpc::RpcCallManager::GetInstance().SessionCalls(&IpcClient::GetInstance(), m_iSessionId);
 	const int32_t iFollowRet = co_await stPending;
 	const bool bValid = iBarrierRet == OI_OK && stBarrierResponse.iMark == 804 && iPending == 1 &&
-	    iFollowRet == OI_OK && stPendingResponse.iMark == 803;
+	                    iFollowRet == OI_OK && stPendingResponse.iMark == 803;
 	LOG_TRACE("hold rpc late overlap barrier=%d/%d pending=%zu follow=%d/%d bad=%d",
 	    iBarrierRet, stBarrierResponse.iMark, iPending, iFollowRet, stPendingResponse.iMark, bValid ? 0 : 1);
 	if (!bValid)

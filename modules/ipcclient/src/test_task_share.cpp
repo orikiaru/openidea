@@ -36,7 +36,6 @@
 #include <thread>
 #include <vector>
 
-
 OI::Coro::TaskResult<std::string> TestTaskShare::SharedResultChild(std::shared_ptr<std::atomic<int>> pRuns, bool bThrow)
 {
 	++*pRuns;

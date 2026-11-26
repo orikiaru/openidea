@@ -483,8 +483,7 @@ class BytesStream : public Bytes
 // 和 OI_PB_FIELD 同一条读函数，收进按字段号索引的 map。没人调用就不会实例化到调用方里。
 #define OI_PB_MAP_FIELD(Type, Sequence, Member)                                         \
 	{                                                                                   \
-		Sequence, +[](::OI::Base::BytesStream& stStream, uint32_t iSize, void* pObject) \
-		{                                                                               \
-			stStream.ReadPb(iSize, static_cast<Type*>(pObject)->Member);                \
-		}                                                                               \
-	}
+	    Sequence, +[](::OI::Base::BytesStream& stStream, uint32_t iSize, void* pObject) \
+	{                                                                                   \
+		stStream.ReadPb(iSize, static_cast<Type*>(pObject)->Member);                    \
+	}}
