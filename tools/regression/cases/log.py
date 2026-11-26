@@ -48,8 +48,9 @@ class LogCase(Case):
     def on_poll(self, ctx):
         if ctx.name == "log-rotation":
             output = ctx.clientpath.read_text(encoding="utf-8", errors="replace")
-            first = ctx.logs / "info_2024-01-01.log.txt"
-            second = ctx.logs / "info_2024-01-02.log.txt"
+            first = ctx.logs / "info_2024-01-02.log.txt"
+            second = ctx.logs / "info_2024-01-03.log.txt"
+            previous = ctx.logs / "info_2024-01-01.log.txt"
             def phase_bytes(phase):
                 return sum(len("00:00:00 ipcclient-1:log-rotation phase=%d seq=%d\n" % (phase, seq))
                            for seq in range(10))
@@ -61,7 +62,7 @@ class LogCase(Case):
                 ctx.rotation_gate.with_suffix(".0").touch()
                 ctx.rotation_state = 1
             if ctx.rotation_state == 1 and drained(first, 0):
-                self.set_rotation_clock(ctx, 2)
+                self.set_rotation_clock(ctx, 3)
                 ctx.rotation_state = 2
             if ctx.rotation_state == 2 and second.exists():
                 ctx.rotation_baseline = second.stat().st_size
@@ -79,8 +80,15 @@ class LogCase(Case):
                 ctx.rotation_gate.with_suffix(".2").touch()
                 ctx.rotation_state = 5
             if ctx.rotation_state == 5 and drained(second, 2):
-                ctx.rotation_gate.with_suffix(".done").touch()
+                self.set_rotation_clock(ctx, 1)
                 ctx.rotation_state = 6
+            if ctx.rotation_state == 6 and previous.exists():
+                ctx.rotation_baseline = previous.stat().st_size
+                ctx.rotation_gate.with_suffix(".3").touch()
+                ctx.rotation_state = 7
+            if ctx.rotation_state == 7 and drained(previous, 3):
+                ctx.rotation_gate.with_suffix(".done").touch()
+                ctx.rotation_state = 8
             return
         if ctx.name != "log-contract":
             return
@@ -128,7 +136,7 @@ class LogCase(Case):
             if not test_hook_enabled(ctx.work, "logd", "log_fault"):
                 raise RuntimeError("log-rotation requires logd built with -DOI_ENABLE_TEST_HOOKS=ON")
             ctx.rotation_clock = ctx.root / "rotation-clock"
-            self.set_rotation_clock(ctx, 1)
+            self.set_rotation_clock(ctx, 2)
             ctx.log_env = dict(os.environ, OI_TEST_LOG_CLOCK_FILE=str(ctx.rotation_clock))
         case = ctx.name
         if case == "log-backpressure" and not WINDOWS:
@@ -221,22 +229,22 @@ int gettimeofday(struct timeval *tv, void *tz)
         stop = ctx.stop
         last_log_bytes, last_growth, started = ctx.last_log_bytes, ctx.last_growth, ctx.started
         if case == "log-rotation":
-            assert ctx.rotation_state == 6, ctx.rotation_state
+            assert ctx.rotation_state == 8, ctx.rotation_state
             stop(logd)
             logd.wait(timeout=10)
             assert logd.returncode == 0
             assert all(path.is_file() for path in logs.iterdir()), list(logs.iterdir())
             assert {path.name for path in logs.iterdir()} == {
                 "%s_2024-01-%02d.log.txt" % (level, day)
-                for level in ("trace", "debug", "info", "warning", "error") for day in (1, 2)
+                for level in ("trace", "debug", "info", "warning", "error") for day in (1, 2, 3)
             }, list(logs.iterdir())
-            for day, phases in ((1, (0,)), (2, (1, 2))):
+            for day, phases in ((1, (3,)), (2, (0,)), (3, (1, 2))):
                 path = logs / ("info_2024-01-%02d.log.txt" % day)
                 rows = re.findall(r"log-rotation phase=(\d+) seq=(\d+)", path.read_text(encoding="utf-8", errors="replace"))
                 assert rows == [(str(phase), str(seq)) for phase in phases for seq in range(10)], rows
             assert all("log-rotation phase=" not in path.read_text(encoding="utf-8", errors="replace")
-                       for path in logs.glob("*.log.txt") if path.name not in ("info_2024-01-01.log.txt", "info_2024-01-02.log.txt"))
-            print("log rotation dates=2 unique=30 restart=append directories=0 PASS", flush=True)
+                       for path in logs.glob("*.log.txt") if path.name not in ("info_2024-01-01.log.txt", "info_2024-01-02.log.txt", "info_2024-01-03.log.txt"))
+            print("log rotation dates=3 unique=40 restart=append rollback=previous directories=0 PASS", flush=True)
             return False
         if case == "log-contract":
             assert ctx.contract_state == 5, ctx.contract_state

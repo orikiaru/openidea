@@ -44,7 +44,7 @@ OI::Coro::Task TestLog::Run()
 	{
 		std::string sGate(pRotationGate);
 		int32_t iBad = 0;
-		for (int iPhase = 0; iPhase < 3; ++iPhase)
+		for (int iPhase = 0; iPhase < 4; ++iPhase)
 		{
 			for (;;)
 			{

@@ -100,7 +100,7 @@ bool LogManager::OnTimer()
 	tm stNowCalendarTime{};
 	const time_t iNowTimestamp = ReadLogTime(stNowCalendarTime);
 
-	bool bIsCrossDay = ::OI::Timer::CrossDay(m_iLastTimestamp, iNowTimestamp);
+	const bool bIsCrossDay = !::OI::Timer::SameDay(m_iLastTimestamp, iNowTimestamp);
 	m_stLastCalendarTime = stNowCalendarTime;
 	m_iLastTimestamp = iNowTimestamp;
 

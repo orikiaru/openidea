@@ -256,7 +256,7 @@ Windows 的日志故障测试和跨日测试要求产物以 `-DOI_ENABLE_TEST_HO
 
 ## 5. 平台故障注入与清理
 
-日志文件直接位于 `Log.root_path`，文件名为 `<级别>_YYYY-MM-DD.log.txt`。`--case log-rotation`（也纳入全量）需要开启 `OI_ENABLE_TEST_HOOKS`：使用独立日志服的受控时钟跨越两天，逐条验证 30 条业务标记在对应日期恰好一次，第二天重启后追加，且根目录只有两天的五级文件、没有子目录。
+日志文件直接位于 `Log.root_path`，文件名为 `<级别>_YYYY-MM-DD.log.txt`。`--case log-rotation`（也纳入全量）需要开启 `OI_ENABLE_TEST_HOOKS`：使用独立日志服的受控时钟从 1 月 2 日前进到 3 日，重启后继续追加，再回拨到尚未创建文件的 1 日；等待对应文件出现后发送，逐条验证 40 条业务标记在对应日期恰好一次，且根目录只有三天的五级文件、没有子目录。
 
 Linux 的日志慢写使用 LD_PRELOAD，写满使用 `/dev/full`；Windows 使用仅测试构建启用的日志写线程钩子，分别延迟写入和注入 ENOSPC，实际网络、队列与错误处理仍走真实进程。注入不运行在 poll 线程。生产构建默认关闭 `OI_ENABLE_TEST_HOOKS`。
 
