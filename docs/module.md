@@ -17,7 +17,7 @@ module IpcClient {
 }
 ```
 
-生成器读完列表里的全部文件后，再检查类型引用、枚举和比较器。`rpcdata`、`enum`、`errordef`、`rpc` 的名字不能重复，协议号也不能重复。一份文件里的 `rpcdata` 可以被其他文件引用，不要求定义写在前面。`rpc` 的请求和回复也要能在这些文件里找到。
+生成器读完列表里的全部文件后，再检查类型引用、枚举和比较器。`rpcdata`、`enum`、`errordef`、`rpc` 的名字不能重复，协议号也不能重复。一份文件里的 `rpcdata` 可以被其他文件引用，不要求定义写在前面。`rpc` 的请求和回复也要能在这些文件里找到。`rpcdata` 生成的头文件名按类型名转小写，因此类型名即使大小写不同，只要对应文件名相同也会被拒绝；头文件依赖按字段实际类型及容器内类型生成。
 
 字段号写在每一行前面，这就是线上的序号。缺了、重了，生成失败，不会按出现顺序补号。跳号直接写下一个数字，例如 `20 [json gap] int32_t iGap;`。
 
@@ -128,3 +128,5 @@ errordef UdpError {
 - `errordef` 是业务错误码，取值范围为 1..2147483647，所有 `errordef` 之间值不能重；普通 `enum` 的取值规则不变。框架错误码在 `oi_errno.h`，是负数，0 是成功。处理函数直接 `co_return ::OI::RpcData::UDP_ERR_REJECTED;`，客户端 `RpcCall` 原样拿到这个值。
 - `rpcdata` 字段不能写枚举类型，用定宽整数（通常是 `int32_t`），比较和赋值时用枚举常量。
 - 只有文本协议支持，XML 协议不支持。用例是 `modules/protoconfig/rpc.proto` 的 `UdpProbe`、`UdpError`，由 `udp` 回归覆盖。
+
+HTTP 服务端按注册的方法和路径匹配路由；HEAD 需单独注册。HEAD 响应不发送正文：普通正文可用于确定 Content-Length，流式源不读取并会取消。
