@@ -181,6 +181,14 @@ int TestBinary::CheckBinaryContainers()
 			}
 			const std::string sSuffix(iErasedBytes, '!');
 			const std::string sExpected = sOriginal.substr(iErasedBytes) + sSuffix;
+			OI::Base::Bytes stForward("abcdef", 6);
+			const size_t iForward = stForward.Replace(2, stForward.Data(), 4);
+			fnCheck(iForward == 4 && stForward.Size() == 6 && std::memcmp(stForward.Data(), "ababcd", 6) == 0,
+				"bytes replace overlapping source towards end");
+			OI::Base::Bytes stBackward("abcdef", 6);
+			const size_t iBackward = stBackward.Replace(0, stBackward.Data() + 2, 4);
+			fnCheck(iBackward == 4 && stBackward.Size() == 6 && std::memcmp(stBackward.Data(), "cdefef", 6) == 0,
+				"bytes replace overlapping source towards beginning");
 			OI::Base::Bytes stLimitedBytes;
 			stLimitedBytes.Reserve(iCapacityLimit, iCapacityLimit);
 			stLimitedBytes.Append(sOriginal.data(), sOriginal.size());

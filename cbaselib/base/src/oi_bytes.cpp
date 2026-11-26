@@ -305,7 +305,7 @@ size_t Bytes::Replace(size_t iOffset, const void* pData, size_t iLength)
 		return 0;
 	}
 	assert(pData);
-	memcpy(Mutable() + iOffset, pData, iLength);
+	memmove(Mutable() + iOffset, pData, iLength);
 	return iLength;
 }
 }
