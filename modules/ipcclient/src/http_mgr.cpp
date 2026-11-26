@@ -106,19 +106,26 @@ OI::Coro::TaskResult<int> HttpMgr::CheckHttpFraming(int32_t iHttpPort)
 	co_return iBadLocal;
 }
 
-// 不复用时每条请求都重新连。服务端看到同一条连接上的后续请求会回 reused。
+// 不复用时每条请求都重新连。夹具按 TCP 连接编号回包，两次编号必须不同，不看客户端写的 Connection 头。
 OI::Coro::TaskResult<int> HttpMgr::CheckHttpNoReuse(int32_t iHttpPort)
 {
 	int iBadLocal = 0;
 	OI::Http::Client stHttp("127.0.0.1", iHttpPort, 1000, false);
+	std::vector<std::string> vConnections;
 	for (int iIndex = 0; iIndex < 2; ++iIndex)
 	{
-		auto stResult = co_await stHttp.Get("/good", {});
-		if (stResult.iCode != OI_OK || stResult.iStatus != 200 || stResult.sBody != "ok")
+		auto stResult = co_await stHttp.Get("/connection-id", {});
+		if (stResult.iCode != OI_OK || stResult.iStatus != 200 || stResult.sBody.empty())
 		{
 			++iBadLocal;
 			LOG_TRACE("http no reuse index=%d status=%d code=%d error=%s", iIndex, stResult.iStatus, stResult.iCode, stResult.sError.c_str());
 		}
+		vConnections.push_back(stResult.sBody);
+	}
+	if (vConnections[0] == vConnections[1])
+	{
+		++iBadLocal;
+		LOG_TRACE("http no reuse same connection=%s", vConnections[0].c_str());
 	}
 	LOG_TRACE("hold http no reuse bad=%d", iBadLocal);
 	co_return iBadLocal;

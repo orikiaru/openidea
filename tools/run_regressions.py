@@ -17,7 +17,7 @@ from regression.config import replace, shift_ports
 from regression.probes import (CAP, EnvironmentBlocked, bytes_on_disk, check_admission_rounds,
                                check_echo, check_hold_blocking, check_hold_timer, disk_failure,
                                echo_total, log_payload_on_disk, set_echo_total)
-from regression.procs import (Context, cleanup_owned, copy_runtime_dlls,
+from regression.procs import (Context, cleanup_owned, copy_runtime_libraries,
                               regression_directory)
 from regression.rpc_faults import reset_connections, rpc_ingress_faults
 from regression.runner import main as _run_main, run, run_case

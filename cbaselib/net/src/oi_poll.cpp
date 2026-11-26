@@ -14,6 +14,7 @@
 #include <unordered_map>
 #include <memory>
 #include "oi_lock.h"
+#include "oi_timer_manager.h"
 #ifndef _WIN32
 #include <chrono>
 #include <thread>
@@ -44,6 +45,8 @@ struct IoWatch
 	uv_poll_t stPoll{};
 	uv_timer_t* pTimer = nullptr;
 	uv_timer_t* pResumeTimer = nullptr;
+	// 会话已关但迟迟等不到 IO 事件时，到点强制 TryClose。
+	bool bCloseReclaimArmed = false;
 	int32_t iPausedMask = 0;
 	std::atomic<Channel*> pChannel{nullptr};
 	net_socket_t iDescriptor = INVALID_SOCKET_ID;
@@ -102,6 +105,42 @@ void OnPoll(uv_poll_t* pHandle, int iStatus, int iEvents)
 	{
 		pChannel->TryClose();
 	}
+	// Unix 的 libuv 遇 POLLERR 会自己停掉监听，只回调这一次。DataIn 可能因额度或单轮上限没读到错误就返回，
+	// 这里按原掩码重开，下一轮继续读到错误为止。读被关着时不重开，等 SetEvents 恢复读时再开，免得满额时空转。
+	if (iStatus < 0 && !uv_is_active(reinterpret_cast<uv_handle_t*>(pHandle)) && pWatch->pChannel.load() && (pWatch->iMask & IO_EV_READ))
+	{
+		const int iRestart = uv_poll_start(pHandle, MaskToUv(pWatch->iMask), OnPoll);
+		if (iRestart != 0)
+		{
+			fprintf(stderr, "poll restart after error failed mask=%d: %s (%d)\n", pWatch->iMask, uv_strerror(iRestart), iRestart);
+		}
+	}
+}
+
+// 关闭会话只打开写关注，靠下一次 IO 事件进 TryClose。对端零窗口又不发数据时一直等不到事件，到点兜底回收。
+constexpr uint64_t kCloseReclaimMilliseconds = 10000;
+
+void ArmCloseReclaim(const std::shared_ptr<IoWatch>& pWatch, Channel& stChannel)
+{
+	if (pWatch->bCloseReclaimArmed || !stChannel.SessionClosed())
+	{
+		return;
+	}
+	const int32_t iStatus = ::OI::Timer::BaseTimerManager::GetInstance().AddTimer([pWeakWatch = std::weak_ptr<IoWatch>(pWatch)]()
+	{
+		if (auto pCurrent = pWeakWatch.lock())
+		{
+			if (auto* pLive = pCurrent->pChannel.load())
+			{
+				pLive->TryClose();
+			}
+		}
+	}, kCloseReclaimMilliseconds);
+	pWatch->bCloseReclaimArmed = iStatus == OI_OK;
+	if (iStatus != OI_OK)
+	{
+		fprintf(stderr, "poll close reclaim timer failed code=%d\n", iStatus);
+	}
 }
 
 void CloseWatchOnLoop(const std::shared_ptr<IoWatch>& pWatch, bool bCloseDescriptor)
@@ -130,10 +169,18 @@ void CloseWatchOnLoop(const std::shared_ptr<IoWatch>& pWatch, bool bCloseDescrip
 }
 
 // 只在 IO 线程改当前 mask 和 libuv 监听。
-void SetEvents(IoWatch& stWatch, int32_t iMask)
+void SetEvents(const std::shared_ptr<IoWatch>& pWatch, int32_t iMask)
 {
+	auto& stWatch = *pWatch;
 	auto* pChannel = stWatch.pChannel.load();
-	if (!pChannel || iMask == stWatch.iMask)
+	if (!pChannel)
+	{
+		return;
+	}
+	// 会话关闭走 AllowSend 到这里。写关注可能早已打开、掩码不变，所以在提前返回之前挂兜底回收。
+	ArmCloseReclaim(pWatch, *pChannel);
+	// libuv 出错后自停时掩码没变，也要重新 start。
+	if (iMask == stWatch.iMask && (iMask == 0 || uv_is_active(reinterpret_cast<uv_handle_t*>(&stWatch.stPoll))))
 	{
 		return;
 	}
@@ -247,8 +294,9 @@ struct Poll::State
 
 #ifndef _SINGLE_THREAD_
 	// 先取走已入队的开关请求，再在 IO 线程按提交顺序执行。loop 本轮的请求排在它们后面。
-	void ApplyPending(IoWatch& stWatch)
+	void ApplyPending(const std::shared_ptr<IoWatch>& pWatch)
 	{
+		auto& stWatch = *pWatch;
 		std::vector<EventChange> vRequests;
 		{
 			::OI::Thread::NativeMutexGuard stGuard(stWatchLock);
@@ -259,7 +307,7 @@ struct Poll::State
 		{
 			iMask = (iMask | stRequest.iEnable) & ~stRequest.iDisable;
 		}
-		SetEvents(stWatch, iMask);
+		SetEvents(pWatch, iMask);
 	}
 
 	void RemoveOnLoop(const IoOp& stOperation)
@@ -304,7 +352,7 @@ struct Poll::State
 				break;
 #ifndef _SINGLE_THREAD_
 			case IO_OP_MOD:
-				ApplyPending(*stOperation.pWatch);
+				ApplyPending(stOperation.pWatch);
 				break;
 			case IO_OP_DEL:
 				RemoveOnLoop(stOperation);
@@ -677,9 +725,9 @@ void Poll::ChangeEvents(Channel* pChannel, int32_t iEnable, int32_t iDisable)
 	{
 		auto& stWatch = *it->second;
 #ifndef _SINGLE_THREAD_
-		m_pState->ApplyPending(stWatch);
+		m_pState->ApplyPending(it->second);
 #endif
-		SetEvents(stWatch, (stWatch.iMask | iEnable) & ~iDisable);
+		SetEvents(it->second, (stWatch.iMask | iEnable) & ~iDisable);
 	}
 }
 

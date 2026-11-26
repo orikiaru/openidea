@@ -58,10 +58,10 @@ class RawHttpRegression(socketserver.BaseRequestHandler):
             self.server.connection_id += 1
             connection_id = str(self.server.connection_id).encode()
         # 正常响应留着这条连接，让客户端按 keep-alive 接着发。畸形包和必须靠 EOF 结束的包写完就关。
+        # /connection-id 回这条 TCP 连接的编号，是否复用由客户端比较编号判断，不看它写的 Connection 头。
         reuse = {b"good", b"large", b"interim", b"204", b"304", b"chunk-good", b"fragmented", b"size-1023", b"size-1024"}
         # 响应后面粘了下一条报文。客户端若丢掉尾部再复用，后续请求不再回包，用来抓住错位。
         glued = {b"tail", b"chunk-tail", b"empty-tail"}
-        refused_reuse = False
         try:
             while True:
                 request = b""
@@ -70,11 +70,6 @@ class RawHttpRegression(socketserver.BaseRequestHandler):
                     if not part:
                         return
                     request += part
-                if refused_reuse:
-                    self.request.sendall(b"HTTP/1.1 500 Reused\r\nContent-Length: 6\r\nConnection: close\r\n\r\nreused")
-                    return
-                if b"\r\nConnection: close\r\n" in request:
-                    refused_reuse = True
                 path = request.split(b" ")[1].split(b"?")[0].strip(b"/")
                 ok = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"
                 chunk = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
@@ -274,7 +269,7 @@ class HoldCase(Case):
                 for label in ("", "late ", "race "):
                     assert re.search(r"hold redis " + label + r"ping ok=1 status=0 reply_type=\d+ wall_ms=\d+", text)
                 assert re.search(r"hold redis late timeout=1 cpu_ms=\d+ wall_ms=\d+", text)
-                assert re.search(r"hold redis race (?:timeout=1 nil=[01]|timeout=0 nil=1) cpu_ms=\d+ wall_ms=\d+", text)
+                assert re.search(r"hold redis race (?:timeout=1 nil=0|timeout=0 nil=1) cpu_ms=\d+ wall_ms=\d+", text)
         elif ctx.mode == "hold":
             assert "hold rpc session index calls=4096 bad=0" in text
             check_hold_timer(text)
@@ -299,7 +294,7 @@ class HoldCase(Case):
             assert "hold receive limit server reply=1048576" in server_text
             assert "hold receive limit server reply=1048577" in server_text
             assert "hold receive limit configured receive=1048576 frame=1048568 load=0" in text, text
-            assert re.search(r"hold receive limit exact=1048576 exact_code=0 over_code=-\d+ preserved=1 bad=0", text), text
+            assert re.search(r"hold receive limit exact=1048576 exact_code=0 over_code=-3 preserved=1 bad=0", text), text
             budget_scaled = re.search(r"hold decode budget scaled words=(\d+) charged=(\d+) frame=(\d+) code=0 bad=0", text)
             assert budget_scaled, "missing decode budget scaled marker"
             charged, frame = int(budget_scaled.group(2)), int(budget_scaled.group(3))

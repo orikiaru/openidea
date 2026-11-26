@@ -126,7 +126,8 @@ OI::Coro::TaskResult<int> RpcOutputMgr::CheckReceiveLimit()
 	stOutput.stData.sMessage = "preserved";
 	stOutput.iCode = 713;
 	const int32_t iOver = co_await OI::Rpc::RpcCall(stClient, stRequest, stOutput, OI::Timer::Seconds(10));
-	if (iOverSize != iLimit + 1 || iOver == OI_OK || stOutput.stData.sMessage != "preserved" || stOutput.iCode != 713)
+	// 回包超过本端接收额度：客户端断开连接，在途调用以连接错误结束，不能等到超时。
+	if (iOverSize != iLimit + 1 || iOver != OI_ERR_CONNECT || stOutput.stData.sMessage != "preserved" || stOutput.iCode != 713)
 	{
 		++iBad;
 	}

@@ -407,6 +407,61 @@ class MysqlConnection final : public OI::Db::Connection
 		stResult = std::move(stOutput);
 		return OI_OK;
 	}
+	// MySQL 不支持用预处理协议发 BEGIN（原生错误 1295，8.0 和 8.4 实测），事务控制统一走文本协议。
+	int32_t ExecuteControl(std::string_view sSql, OI::Db::Error& stError) override
+	{
+		auto& stThread = GetThreadState(m_pRuntime);
+		if (!stThread.bReady)
+		{
+			m_bHealthy = false;
+			SetError(stError, "thread_init", 0, nullptr);
+			return OI_ERR_FAIL;
+		}
+		m_pRuntime->Drain();
+		auto fnFail = [this, pError = &stError](const char* pStage) -> int32_t
+		{
+			SetError(*pError, pStage, mysql_errno(m_pMysql), mysql_sqlstate(m_pMysql));
+			// Discard on any SDK failure; never retry an operation with uncertain outcome.
+			m_bHealthy = false;
+			return OI_ERR_FAIL;
+		};
+		if (sSql.empty() || sSql.size() > std::numeric_limits<unsigned long>::max())
+		{
+			SetError(stError, "control", 0, nullptr);
+			return OI_ERR_INVALID_ARGUMENT;
+		}
+		if (mysql_real_query(m_pMysql, sSql.data(), static_cast<unsigned long>(sSql.size())) != 0)
+		{
+			return fnFail("control");
+		}
+		// 事务控制只回 OK 包。文本协议下要把结果取干净，否则这条连接的下一条语句会报命令不同步。
+		for (;;)
+		{
+			MYSQL_RES* pResult = mysql_store_result(m_pMysql);
+			if (pResult)
+			{
+				// 事务控制不该带结果集；带了说明这条语句不是我们以为的那种，丢弃连接。
+				mysql_free_result(pResult);
+				m_bHealthy = false;
+				SetError(stError, "control_result", 0, nullptr);
+				return OI_ERR_FAIL;
+			}
+			else if (mysql_errno(m_pMysql) != 0 || mysql_field_count(m_pMysql) != 0)
+			{
+				return fnFail("control_result");
+			}
+			const int iNext = mysql_next_result(m_pMysql);
+			if (iNext == -1)
+			{
+				break;
+			}
+			if (iNext != 0)
+			{
+				return fnFail("control_result");
+			}
+		}
+		return OI_OK;
+	}
 };
 
 class MysqlDriver final : public OI::Db::Driver

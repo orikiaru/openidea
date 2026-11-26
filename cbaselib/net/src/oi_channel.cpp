@@ -75,5 +75,10 @@ int32_t Channel::ForbidRead()
 	}
 	return OI_OK;
 }
+
+bool Channel::SessionClosed()
+{
+	return pSession && pSession->IsClosed();
+}
 }
 }

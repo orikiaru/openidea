@@ -51,6 +51,8 @@ class Channel
 	virtual int32_t AllowRead();
 	// 关掉读事件。会话已经关闭时不动。
 	virtual int32_t ForbidRead();
+	// 挂着会话且会话已关闭。poll 据此给等不到 IO 的关闭连接挂兜底回收。
+	bool SessionClosed();
 };
 }
 }

@@ -24,7 +24,7 @@ from test_process_owner import record_process, write_owner
 from . import ports
 from .config import replace, shift_ports
 from .probes import EnvironmentBlocked
-from .procs import REPO, cleanup_owned, copy_runtime_dlls, regression_directory
+from .procs import REPO, cleanup_owned, copy_runtime_libraries, regression_directory
 
 
 class HostHttpRegression(http.server.BaseHTTPRequestHandler):
@@ -378,7 +378,7 @@ def check_web_small_send_queue(args):
         work, cfg = root / "bin", root / "config"
         work.mkdir()
         cfg.mkdir()
-        copy_runtime_dlls(args.bin_dir, work)
+        copy_runtime_libraries(args.bin_dir, work)
         shutil.copy2(args.bin_dir / ("webserver" + SUFFIX), work / ("webserver" + SUFFIX))
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", 0))
@@ -899,7 +899,7 @@ def check_web_bind_restart(args):
         procs, handles = [], []
         runtime = root / "runtime"
         runtime.mkdir()
-        copy_runtime_dlls(args.bin_dir, runtime)
+        copy_runtime_libraries(args.bin_dir, runtime)
         executable = runtime / ("webserver" + SUFFIX)
         shutil.copy2(args.bin_dir / executable.name, executable)
         expected_failures = []
@@ -1013,7 +1013,7 @@ def run_web(args):
         work, cfg = root / "bin", root / "config"
         work.mkdir()
         cfg.mkdir()
-        copy_runtime_dlls(args.bin_dir, work)
+        copy_runtime_libraries(args.bin_dir, work)
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", 0))
             port = probe.getsockname()[1]
@@ -1144,7 +1144,7 @@ def run_web_coro(args):
         work, cfg = root / "bin", root / "config"
         work.mkdir()
         cfg.mkdir()
-        copy_runtime_dlls(args.bin_dir, work)
+        copy_runtime_libraries(args.bin_dir, work)
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", 0))
             web_port = probe.getsockname()[1]

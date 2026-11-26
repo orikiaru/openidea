@@ -6,8 +6,11 @@ from regression_platform import SUFFIX, WINDOWS
 from .. import ports
 from ..config import replace, set_test_flags
 from ..probes import check_echo, echo_total, set_echo_total
-from ..rpc_faults import reset_connections, rpc_ingress_faults, rpc_receive_boundary
+from ..rpc_faults import reset_connections, rpc_ingress_faults, rpc_receive_boundary, tcp_close_reclaim, tcp_error_rearm
 from . import Case
+
+# tcp-close-reclaim 的服务端发送额度：第一条回包取它的 3/4，远超内核能吸收的量；第二条超过它。
+TCP_CLOSE_QUEUE_LIMIT = 32 * 1024 * 1024
 
 
 class EchoCase(Case):
@@ -21,8 +24,19 @@ class EchoCase(Case):
             text = replace(text, "incomplete_frame_timeout_ms", "250")
             text = replace(text, "session_max_inflight_count", "1")
             text += "\n[Regression]\nrpc_read_limit = true\n"
+        if name == "ipcserver" and case == "tcp-error-rearm":
+            # 接收额度 16000 = 400 个 40 字节帧，DataIn 每次读满额度就返回；残包时限放长，排除残包计时关会话。
+            text = replace(text, "max_frame_bytes", "15992")
+            text = replace(text, "max_receive_buffer_bytes", "16000")
+            text = replace(text, "incomplete_frame_timeout_ms", "120000")
+        if name == "ipcserver" and case == "tcp-close-reclaim":
+            # 第二条回包要超过发送额度；两条请求都得先被接纳，执行中字节额度放大。
+            assert "[IpcServer]\n" in text
+            text = text.replace("[IpcServer]\n", "[IpcServer]\nmax_send_queue_bytes = %d\n" % TCP_CLOSE_QUEUE_LIMIT, 1)
+            text = replace(text, "max_inflight_bytes", "268435456")
+            text = replace(text, "session_max_inflight_bytes", "134217728")
         if name == "ipcclient":
-            if case in ("reset", "registry", "rpc-ingress"):
+            if case in ("reset", "registry", "rpc-ingress", "tcp-error-rearm", "tcp-close-reclaim"):
                 text = set_echo_total(text, 100)
             if ctx.mode == "echo":
                 ctx.expected_echo_total = echo_total(text)
@@ -160,6 +174,10 @@ class EchoCase(Case):
         case = ctx.name
         if case == "reset":
             reset_connections()
+        if case == "tcp-error-rearm":
+            tcp_error_rearm(ctx)
+        if case == "tcp-close-reclaim":
+            tcp_close_reclaim(ctx, TCP_CLOSE_QUEUE_LIMIT)
         if case == "rpc-ingress":
             rpc_ingress_faults()
             ctx.stop(ctx.server)
@@ -205,4 +223,5 @@ class EchoCase(Case):
         print("diagnostic original errors persisted", ctx.name, "PASS", flush=True)
 
 CASES = (EchoCase("echo", "echo"), EchoCase("reset", "echo"),
-         EchoCase("registry", "echo"), EchoCase("rpc-ingress", "echo"))
+         EchoCase("registry", "echo"), EchoCase("rpc-ingress", "echo"),
+         EchoCase("tcp-error-rearm", "echo"), EchoCase("tcp-close-reclaim", "echo"))

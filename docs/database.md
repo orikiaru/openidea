@@ -4,7 +4,25 @@
 
 ## 构建与初始化
 
-基础数据库库随框架构建，MySQL 驱动默认关闭。启用时设置 `-DOI_ENABLE_MYSQL=ON`；CMake 会查找 MySQL 或 MariaDB 客户端头文件和库，也可用 `-DOI_MYSQL_INCLUDE_DIR=<头文件目录>`、`-DOI_MYSQL_LIBRARY=<库文件路径>` 明确指定。缺少依赖时配置失败。启用后包含 `oi_mysql.h`，通过 `OI::Mysql::MakeDriver(Config)` 创建驱动，再用驱动和连接数上限构造 `OI::Db::Client`。连接参数和凭据从应用的安全配置来源取得，不写入源码或日志；按部署需要配置 TLS CA，设置后驱动要求 TLS 并验证服务端身份。
+基础数据库库随框架构建，MySQL 驱动默认关闭，启用时设置 `-DOI_ENABLE_MYSQL=ON`。仓库为 Windows 和 Linux x64 预置 OpenSSL 与 MariaDB 客户端动态 SDK，项目自测默认使用这些 SDK，无需指定头文件和库路径；MySQL 服务端需另行提供。缺少依赖时配置失败。
+
+使用自行提供的 SDK 时可关闭预置 SDK 并明确指定依赖。例如 Linux 下，以下路径应替换为本机实际文件；分号列表包含运行时需要随程序部署的库：
+
+```sh
+cmake -S . -B build-external \
+  -DOI_USE_BUNDLED_SDK=OFF -DOI_ENABLE_MYSQL=ON \
+  -DOPENSSL_INCLUDE_DIR=/opt/sdk/include \
+  -DOPENSSL_SSL_LIBRARY=/opt/sdk/lib/libssl.so \
+  -DOPENSSL_CRYPTO_LIBRARY=/opt/sdk/lib/libcrypto.so \
+  -DOI_MYSQL_INCLUDE_DIR=/opt/mysql/include \
+  -DOI_MYSQL_LIBRARY=/opt/mysql/lib/libmysqlclient.so \
+  '-DOI_SDK_RUNTIME_FILES=/opt/sdk/lib/libssl.so.3;/opt/sdk/lib/libcrypto.so.3;/opt/mysql/lib/libmysqlclient.so.24'
+cmake --build build-external
+```
+
+Windows 同样提供头文件路径、OpenSSL 和 MySQL 导入库路径，并在 `OI_SDK_RUNTIME_FILES` 中列出对应 DLL。运行库文件及其依赖须与目标平台和 SDK 匹配。
+
+启用后包含 `oi_mysql.h`，通过 `OI::Mysql::MakeDriver(Config)` 创建驱动，再用驱动和连接数上限构造 `OI::Db::Client`。连接参数和凭据从应用的安全配置来源取得，不写入源码或日志；按部署需要配置 TLS CA，设置后驱动要求 TLS 并验证服务端身份。
 
 MySQL 配置必须指定非空数据库名、1 至 65535 的有效端口，以及大于零的连接、读取和写入超时秒数；参数无效时 `MakeDriver` 抛出 `std::invalid_argument`。
 

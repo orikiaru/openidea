@@ -158,10 +158,9 @@ struct Client::State
 				return OI_ERR_CONNECT;
 			}
 		}
-		Result stControl;
 		if (bTransaction)
 		{
-			const int32_t iStatus = pConnection->Execute({"BEGIN", {}}, stControl, stError);
+			const int32_t iStatus = pConnection->ExecuteControl("BEGIN", stError);
 			if (iStatus != OI_OK)
 			{
 				return iStatus;
@@ -179,7 +178,7 @@ struct Client::State
 					{
 						Result stIgnored;
 						Error stIgnoredError;
-						stConnection.Execute({"ROLLBACK", {}}, stIgnored, stIgnoredError);
+						stConnection.ExecuteControl("ROLLBACK", stIgnoredError);
 					}
 					catch (...)
 					{
@@ -193,7 +192,7 @@ struct Client::State
 			{
 				Result stIgnored;
 				Error stRollbackError;
-				if (pConnectionLocal->Execute({"ROLLBACK", {}}, stIgnored, stRollbackError) == OI_OK)
+				if (pConnectionLocal->ExecuteControl("ROLLBACK", stRollbackError) == OI_OK)
 				{
 					return true;
 				}
@@ -232,7 +231,7 @@ struct Client::State
 		}
 		if (bTransaction)
 		{
-			const int32_t iStatus = pConnection->Execute({"COMMIT", {}}, stControl, stError);
+			const int32_t iStatus = pConnection->ExecuteControl("COMMIT", stError);
 			if (iStatus != OI_OK)
 			{
 				(void)fnRollback();

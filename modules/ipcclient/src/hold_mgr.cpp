@@ -435,7 +435,8 @@ OI::Coro::TaskResult<int> HoldMgr::CheckRedisLateReply(int32_t iRedisTimeoutMill
 	LOG_TRACE("hold redis late timeout=%d cpu_ms=%lld wall_ms=%lld",
 	    stLate.bTimeout ? 1 : 0, HoldTest::CpuMs(iCpuBegin), HoldTest::WallMs(iWallBegin));
 	fflush(stdout);
-	if (!stLate.bTimeout)
+	// 超时由框架以空回执结算，迟到的回复不能再挂到这次结果上。
+	if (!stLate.bTimeout || stLate.pReply != nullptr)
 	{
 		iBadLocal += 1;
 	}
@@ -449,7 +450,8 @@ OI::Coro::TaskResult<int> HoldMgr::CheckRedisLateReply(int32_t iRedisTimeoutMill
 	LOG_TRACE("hold redis race timeout=%d nil=%d cpu_ms=%lld wall_ms=%lld",
 	    stRace.bTimeout ? 1 : 0, iNil, HoldTest::CpuMs(iCpuBegin), HoldTest::WallMs(iWallBegin));
 	fflush(stdout);
-	if (!stRace.bTimeout && !iNil)
+	// 超时和 nil 回复恰好取其一：都没有是丢结果，超时还带着回执是两边都生效了。
+	if ((!stRace.bTimeout && !iNil) || (stRace.bTimeout && stRace.pReply != nullptr))
 	{
 		iBadLocal += 1;
 	}

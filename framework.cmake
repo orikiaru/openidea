@@ -46,6 +46,7 @@ endif()
 set(BASE_M_LIBS db_m_static timer_m_static logger_m_static redis_m_static net_m_static proto_m_static base_m_static net_m_static timer_m_static hiredis_static db_m_static)
 set(BASE_LIBS db_static timer_static logger_static redis_static net_static proto_static base_static net_static timer_static hiredis_static db_static)
 option(OI_ENABLE_MYSQL "Build the MySQL database driver" OFF)
+include("${BASE_LIB_PATH}/prebuilt.cmake")
 
 # libuv 只编静态库，跟工程一起编译
 set(LIBUV_BUILD_SHARED OFF CACHE BOOL "" FORCE)
@@ -135,7 +136,20 @@ function(oi_add_framework_programs runtime_dir)
 	set_target_properties(logd registry PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${runtime_dir}")
 
 	# Windows 的 MySQL 客户端是动态库，exe 启动时要在同目录找到它；MySQL 的还依赖同一发行包 bin 里的 OpenSSL。
-	if(WIN32 AND OI_ENABLE_MYSQL)
+	if(OI_SDK_RUNTIME)
+		get_property(oi_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+		set(oi_sdk_output "${runtime_dir}")
+		if(oi_multi_config)
+			set(oi_sdk_output "${runtime_dir}/$<CONFIG>")
+		endif()
+		add_custom_target(oi_sdk_runtime
+			COMMAND ${CMAKE_COMMAND} -E make_directory "${oi_sdk_output}"
+			COMMAND ${CMAKE_COMMAND} -E copy_if_different ${OI_SDK_RUNTIME} "${oi_sdk_output}"
+			VERBATIM)
+		foreach(oi_target tls_static tls_m_static db_static db_m_static)
+			add_dependencies(${oi_target} oi_sdk_runtime)
+		endforeach()
+	elseif(WIN32 AND OI_ENABLE_MYSQL)
 		get_filename_component(oi_mysql_library_dir "${OI_MYSQL_LIBRARY}" DIRECTORY)
 		find_file(OI_MYSQL_RUNTIME NAMES libmysql.dll libmariadb.dll
 			HINTS "${oi_mysql_library_dir}" "${oi_mysql_library_dir}/../bin" NO_DEFAULT_PATH)
@@ -216,7 +230,7 @@ if(OI_CLANGD_REFRESH AND NOT TARGET oi_clangd_db)
 	if(OI_NINJA)
 		# 和主构建共用 deploy 下的产物，开关要一致。
 		set(oi_clangd_options)
-		foreach(oi_option OPENSSL_ROOT_DIR OPENSSL_USE_STATIC_LIBS CMAKE_TOOLCHAIN_FILE VCPKG_TARGET_TRIPLET OI_WEBCLIENT_SINGLE_THREAD OI_IPC_SINGLE_THREAD OI_ENABLE_TEST_HOOKS OI_ENABLE_MYSQL OI_MYSQL_INCLUDE_DIR OI_MYSQL_LIBRARY)
+		foreach(oi_option OI_USE_BUNDLED_SDK OPENSSL_INCLUDE_DIR OPENSSL_SSL_LIBRARY OPENSSL_CRYPTO_LIBRARY OPENSSL_ROOT_DIR OPENSSL_USE_STATIC_LIBS CMAKE_TOOLCHAIN_FILE VCPKG_TARGET_TRIPLET OI_WEBCLIENT_SINGLE_THREAD OI_IPC_SINGLE_THREAD OI_ENABLE_TEST_HOOKS OI_ENABLE_MYSQL OI_MYSQL_INCLUDE_DIR OI_MYSQL_LIBRARY)
 			if(DEFINED ${oi_option})
 				list(APPEND oi_clangd_options "-D${oi_option}=${${oi_option}}")
 			endif()

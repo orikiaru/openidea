@@ -215,7 +215,7 @@ def run_case(case, args):
 
 def main(doc=None):
     parser = argparse.ArgumentParser(description=__doc__ if doc is None else doc)
-    parser.add_argument("--case", default="all", choices=("all", "mysql", "mysql-wake", "blocking-wake", "coro", "echo", "empty", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "hold-blocking", "hold-timer", "hold-redis", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "clock-forward", "clock-back", "registry", "udp", "multi", "local", "registry-static", "web", "web-coro"))
+    parser.add_argument("--case", default="all", choices=("all", "mysql", "mysql-wake", "blocking-wake", "coro", "echo", "empty", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "hold-blocking", "hold-timer", "hold-redis", "rpc-admission-count", "rpc-admission-bytes", "reset", "tcp-error-rearm", "tcp-close-reclaim", "disk-full", "clock-forward", "clock-back", "registry", "udp", "multi", "local", "registry-static", "web", "web-coro"))
     parser.add_argument("--bin-dir", type=Path, default=REPO / "deploy/bin")
     parser.add_argument("--redis-binary", type=Path, help="default: redis-server on PATH")
     parser.add_argument("--clock-fault-so", type=Path)

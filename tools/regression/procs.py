@@ -81,10 +81,12 @@ def regression_directory(**kwargs):
             print("temporary directory cleanup failed:", repr(error), file=sys.stderr, flush=True)
 
 
-def copy_runtime_dlls(bin_dir, work):
-    # Windows 只在 exe 同目录找依赖库，例如 MySQL 客户端和它带的 OpenSSL。
-    for dll in Path(bin_dir).glob("*.dll"):
-        shutil.copy2(dll, work / dll.name)
+def copy_runtime_libraries(bin_dir, work):
+    # 临时副本需带上可执行文件同目录的动态库，包括 Linux SONAME 链接。
+    pattern = "*.dll" if WINDOWS else "*.so*"
+    for library in Path(bin_dir).glob(pattern):
+        if library.is_file():
+            shutil.copy2(library, work / library.name)
 
 
 def cleanup_owned(procs, handles, root, args, case, *, db=None, db_paused=False,
@@ -231,7 +233,7 @@ class Context:
     def prepare_paths(self):
         for path in (self.work, self.cfg, self.logs):
             path.mkdir()
-        copy_runtime_dlls(self.args.bin_dir, self.work)
+        copy_runtime_libraries(self.args.bin_dir, self.work)
 
     def start(self, name, command=None, env=None):
         output = self.root / (name + ".out")

@@ -393,7 +393,12 @@ OI::Coro::TaskResult<int> RpcServiceMgr::CheckNamedServiceRpc()
 			++iBad;
 		}
 	}
-	for (const auto& stItem : co_await stDeferredMany)
+	auto vDeferredMany = co_await stDeferredMany;
+	if (vDeferredMany.size() != 2)
+	{
+		++iBad;
+	}
+	for (const auto& stItem : vDeferredMany)
 	{
 		if (stItem.GetRet() != 0 || stItem.GetRes().iMark != 914)
 		{

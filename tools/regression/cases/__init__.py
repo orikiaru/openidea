@@ -4,7 +4,7 @@
 """
 CLIENT_SECONDS = {"hold": 120, "coro": 180, "empty": 180}
 
-ALL_CASES = ("echo", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "rpc-admission-count", "rpc-admission-bytes", "reset", "disk-full", "registry", "udp", "multi", "local", "web", "web-coro")
+ALL_CASES = ("echo", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "rpc-admission-count", "rpc-admission-bytes", "reset", "tcp-error-rearm", "tcp-close-reclaim", "disk-full", "registry", "udp", "multi", "local", "web", "web-coro")
 
 # 只在定向运行时使用、不进 --case all 的用例。
 TARGETED_CASES = ("mysql", "mysql-wake", "blocking-wake", "coro", "empty", "hold-blocking", "hold-timer", "hold-redis", "clock-forward", "clock-back", "registry-static")
@@ -16,7 +16,7 @@ def case_scene(case):
 
 def case_mode(case):
     scene = case_scene(case)
-    mode = "hold" if scene or case.startswith(("clock-", "rpc-admission-")) else ("echo" if case in ("reset", "registry", "rpc-ingress") else case)
+    mode = "hold" if scene or case.startswith(("clock-", "rpc-admission-")) else ("echo" if case in ("reset", "registry", "rpc-ingress", "tcp-error-rearm", "tcp-close-reclaim") else case)
     mode = "db" if case in ("mysql", "mysql-wake", "blocking-wake") else mode
     mode = "pool" if case in ("local", "registry-static") else mode
     mode = "log" if case in ("disk-full", "log-backpressure") else mode

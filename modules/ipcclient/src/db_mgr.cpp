@@ -556,11 +556,15 @@ OI::Coro::TaskResult<int32_t> DbMgr::CheckMysqlRows(OI::Db::Client& stMysql, con
 			}
 		}
 
-		// 主键重复的 INSERT 由库拒绝。
+		// 主键重复的 INSERT 由库拒绝，原生错误必须是 ER_DUP_ENTRY（1062），连接错误等别的失败不算。
 		OI::Db::Statement stDuplicate;
 		const int32_t iDuplicate = ::OI::Db::BuildInsert(sTable, vRows[0], stDuplicate);
 		iStatus = co_await stMysql.Call(std::move(stDuplicate), stResult, stError);
-		Expect(iBad, iDuplicate == OI_OK && iStatus != OI_OK, "mysql duplicate key rejected");
+		if (iStatus == OI_OK || stError.iNativeCode != 1062)
+		{
+			LOG_TRACE("mysql duplicate key status=%d stage=%s native=%u", iStatus, stError.sStage.c_str(), stError.iNativeCode);
+		}
+		Expect(iBad, iDuplicate == OI_OK && iStatus != OI_OK && stError.iNativeCode == 1062, "mysql duplicate key rejected");
 
 		// 按主键读回，[nodb] 字段不被覆盖。
 		for (const DbSample& stRow : vRows)
@@ -862,7 +866,8 @@ OI::Coro::Task DbMgr::Run()
 				LOG_TRACE("mysql schema reset failed status=%d stage=%s native=%u", iStatus, stError.sStage.c_str(), stError.iNativeCode);
 				++iBad;
 			}
-			OI::Db::Statement stCreate{"CREATE TABLE " + sQuotedTable + " (id BIGINT PRIMARY KEY) ENGINE=InnoDB", {}};
+			// 自增主键：回滚不退还已分配的自增值，回滚后再插入拿到的编号能证明事务里第一条 INSERT 真的执行过。
+			OI::Db::Statement stCreate{"CREATE TABLE " + sQuotedTable + " (id BIGINT AUTO_INCREMENT PRIMARY KEY, v INT NOT NULL) ENGINE=InnoDB", {}};
 			iStatus = co_await stMysql.Call(std::move(stCreate), stResult, stError);
 			if (iStatus != OI_OK)
 			{
@@ -873,13 +878,17 @@ OI::Coro::Task DbMgr::Run()
 			{
 				bTableCreated = true;
 				std::vector<OI::Db::Statement> vStatements;
-				vStatements.push_back({"INSERT INTO " + sQuotedTable + " (id) VALUES (1)", {}});
+				vStatements.push_back({"INSERT INTO " + sQuotedTable + " (v) VALUES (1)", {}});
 				vStatements.push_back({"INSERT INTO " + sQuotedTable + " (missing_column) VALUES (2)", {}});
-				std::vector<OI::Db::Result> vResults;
+				// 失败时不写输出，哨兵必须原样保留。
+				std::vector<OI::Db::Result> vResults(1);
+				vResults[0].iAffected = 321;
 				iStatus = co_await stMysql.Transaction(std::move(vStatements), vResults, stError);
-				if (iStatus == OI_OK)
+				// 失败必须来自第二条的未知列（ER_BAD_FIELD_ERROR 1054），BEGIN 或连接失败不算。
+				if (iStatus == OI_OK || stError.iNativeCode != 1054 || vResults.size() != 1 || vResults[0].iAffected != 321)
 				{
-					LOG_TRACE("mysql transaction bad SQL unexpectedly succeeded");
+					LOG_TRACE("mysql transaction bad SQL status=%d stage=%s native=%u results=%zu", iStatus, stError.sStage.c_str(),
+					    stError.iNativeCode, vResults.size());
 					++iBad;
 				}
 				OI::Db::Statement stCount{"SELECT COUNT(*) FROM " + sQuotedTable, {}};
@@ -890,12 +899,44 @@ OI::Coro::Task DbMgr::Run()
 					LOG_TRACE("mysql transaction rollback or recovery failed status=%d stage=%s native=%u", iStatus, stError.sStage.c_str(), stError.iNativeCode);
 					++iBad;
 				}
+				// 第一条已执行并被回滚，占掉了自增值 1；第一条没执行的话这里会拿到 1。
+				OI::Db::Statement stAfter{"INSERT INTO " + sQuotedTable + " (v) VALUES (3)", {}};
+				iStatus = co_await stMysql.Call(std::move(stAfter), stResult, stError);
+				if (iStatus != OI_OK || stResult.iAffected != 1 || stResult.iInsertId != 2)
+				{
+					LOG_TRACE("mysql transaction first insert evidence status=%d affected=%llu insert_id=%llu native=%u", iStatus,
+					    static_cast<unsigned long long>(stResult.iAffected), static_cast<unsigned long long>(stResult.iInsertId), stError.iNativeCode);
+					++iBad;
+				}
+				std::vector<OI::Db::Statement> vCommitStatements;
+				vCommitStatements.push_back({"INSERT INTO " + sQuotedTable + " (v) VALUES (10)", {}});
+				vCommitStatements.push_back({"INSERT INTO " + sQuotedTable + " (v) VALUES (11)", {}});
+				std::vector<OI::Db::Result> vCommitResults(1);
+				vCommitResults[0].iAffected = 321;
+				iStatus = co_await stMysql.Transaction(std::move(vCommitStatements), vCommitResults, stError);
+				if (iStatus != OI_OK || vCommitResults.size() != 2 || vCommitResults[0].iAffected != 1 ||
+				    vCommitResults[1].iAffected != 1 || vCommitResults[0].iInsertId != 3 || vCommitResults[1].iInsertId != 4)
+				{
+					LOG_TRACE("mysql transaction commit results failed status=%d stage=%s native=%u results=%zu", iStatus,
+					    stError.sStage.c_str(), stError.iNativeCode, vCommitResults.size());
+					++iBad;
+				}
+				OI::Db::Client stObserver(OI::Mysql::MakeDriver(stConfig), 1);
+				OI::Db::Statement stCommitted{"SELECT COUNT(*) FROM " + sQuotedTable + " WHERE v IN (10, 11)", {}};
+				iStatus = co_await stObserver.Call(std::move(stCommitted), stResult, stError);
+				if (iStatus != OI_OK || stResult.vRows.size() != 1 || stResult.vRows[0].size() != 1 ||
+				    !fnValue(stResult.vRows[0][0], "2"))
+				{
+					LOG_TRACE("mysql transaction commit persistence failed status=%d stage=%s native=%u", iStatus,
+					    stError.sStage.c_str(), stError.iNativeCode);
+					++iBad;
+				}
 			}
 			OI::Db::Statement stBad{"SELECT missing_column", {}};
 			iStatus = co_await stMysql.Call(std::move(stBad), stResult, stError);
-			if (iStatus == OI_OK)
+			if (iStatus == OI_OK || stError.iNativeCode != 1054)
 			{
-				LOG_TRACE("mysql bad SQL unexpectedly succeeded");
+				LOG_TRACE("mysql bad SQL status=%d stage=%s native=%u", iStatus, stError.sStage.c_str(), stError.iNativeCode);
 				++iBad;
 			}
 			OI::Db::Statement stRecover{"SELECT 1", {}};

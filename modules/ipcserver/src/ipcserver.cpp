@@ -250,7 +250,9 @@ void IpcServer::OnAddSession(::OI::Net::Session* pSession)
 	fflush(stdout);
 }
 
+// 回归按这一行判定会话真的回收了（通道销毁时才回调），error 是关闭原因。
 void IpcServer::OnDelSession(const ::OI::Net::Session* pSession)
 {
-	(void)pSession;
+	printf("ipc server session del %d error=%d\n", pSession->GetSessionID(), pSession->GetError());
+	fflush(stdout);
 }
