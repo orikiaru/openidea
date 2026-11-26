@@ -7,7 +7,7 @@ from module_file_gen import ModuleFileGen
 from serialize_data_parse import SerializeDataType
 from serialize_data_parse import SerializeData
 from serialize_data_file_gen import SerializeDataFileGen
-from proto_parse import ProtocolGen
+from proto_parse import ParseType, ProtocolGen, TypeNames
 
 class GenFile:
     def __init__(self, module_parse:ModuleGen, proto_parse:ProtocolGen, module_include_path:str, module_path:str, module_depoly_path:str, pb_dispatch:str) -> None:
@@ -53,13 +53,12 @@ class GenFile:
 
             if(data_file and p.GetType() == SerializeDataType.RPC_DATA):
                 extra = ""
+                dependencies = {name for member in p.members for name in TypeNames(ParseType(member.GetType()))}
                 for other in self.proto_parse.serialize_datas:
                     if(other.GetType() != SerializeDataType.RPC_DATA or other.GetName() == p.GetName()):
                         continue
-                    for member in p.members:
-                        if(other.GetName() in member.GetType()):
-                            extra += '#include "%s"\n' % other.GetDataName()
-                            break
+                    if other.GetName() in dependencies:
+                        extra += '#include "%s"\n' % other.GetDataName()
                 if(extra):
                     data_file = data_file.replace('#include "oi_rpc.h"\n', '#include "oi_rpc.h"\n' + extra, 1)
             if(data_file):

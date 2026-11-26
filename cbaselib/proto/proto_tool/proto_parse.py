@@ -97,9 +97,18 @@ def IterMapKeys(parsed):
 
 
 
+def TypeNames(parsed):
+    if parsed[0] == "name":
+        yield parsed[1]
+    elif parsed[0] in ("map", "vector"):
+        for child in parsed[1:]:
+            yield from TypeNames(child)
+
+
 class ProtocolGen:
     def __init__(self, xml_path):
         self.proto_id_map = {}      #type:Dict[str,SerializeData] 
+        self.output_names = {}
         self.type_name_map = {}     #type:Dict[str,SerializeData]
         if isinstance(xml_path, (str, os.PathLike)):
             self.xml_paths = [os.fspath(xml_path)]
@@ -415,6 +424,12 @@ class ProtocolGen:
             loginfo("CheckRpcData name repeat old_name=", data.GetName())
             return False
         
+        if serialize_type == SerializeDataType.RPC_DATA:
+            filename = data.GetDataName()
+            if filename in self.output_names:
+                loginfo("rpcdata output collision:", filename, self.output_names[filename], data.GetName())
+                return False
+            self.output_names[filename] = data.GetName()
         if(serialize_type == SerializeDataType.PROTOCOL or serialize_type == SerializeDataType.RPC):
             #排除同协议号。请求和回复共用这一个号。
             if(data.GetID() in self.proto_id_map):

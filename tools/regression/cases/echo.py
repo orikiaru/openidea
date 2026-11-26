@@ -115,6 +115,21 @@ class EchoCase(Case):
             assert "key=Timer." + key in output and "function=Init" in output and "oi_timer_manager.cpp" in output, output
             assert re.search(r"line=[1-9][0-9]*\b", output) and "code=-6" in output, output
             assert "ipc server listen" not in output, output
+        for key in ("max_inflight_count", "max_inflight_bytes",
+                    "session_max_inflight_count", "session_max_inflight_bytes"):
+            invalid_config = ctx.cfg / ("ipcserver-invalid-rpc-" + key + ".toml")
+            invalid_text = replace(timer_text, key, '"bad"')
+            assert invalid_text != timer_text, key
+            invalid_config.write_text(invalid_text, encoding="utf-8")
+            invalid, invalid_path = ctx.start("ipcserver-invalid-rpc-" + key,
+                                              [str(ctx.work / ("ipcserver" + SUFFIX)), str(invalid_config)])
+            invalid.wait(timeout=15)
+            ctx.procs.remove(invalid)
+            output = invalid_path.read_text(encoding="utf-8", errors="replace")
+            assert invalid.returncode == expected_publish, (key, invalid.returncode, output)
+            assert "Rpc." + key in output, (key, output)
+            assert "ipc server listen" not in output, (key, output)
+        print("rpc invalid admission types rejected PASS", flush=True)
         missing_text = re.sub(r"(?m)^(?:offset_ms|timer_lv_count)\s*=.*\n", "", timer_text)
         missing_config = ctx.cfg / "ipcserver-timer-default.toml"
         missing_config.write_text(missing_text, encoding="utf-8")

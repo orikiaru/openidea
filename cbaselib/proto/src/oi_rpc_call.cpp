@@ -54,8 +54,8 @@ void RpcCallManager::LoadAdmissionLocked()
 	const auto fnRead = [](const char* pKey, size_t& iLimit)
 	{
 		int64_t iValue = static_cast<int64_t>(iLimit);
-		TryGetConfig(pKey, iValue);
-		if (iValue <= 0 || static_cast<uint64_t>(iValue) > SIZE_MAX)
+		const auto& stConfig = ::OI::Base::Config::GlobalConfig();
+		if ((stConfig.Contains(pKey) && !stConfig.GetAs(pKey, iValue)) || iValue <= 0 || static_cast<uint64_t>(iValue) > SIZE_MAX)
 		{
 			throw std::invalid_argument(pKey);
 		}

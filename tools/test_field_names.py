@@ -497,6 +497,51 @@ class ModuleGeneratorTest(unittest.TestCase):
             self.assertIn('#include "oi_rpcdata_child.h"', (output / "oi_rpcdata_row.h").read_text(encoding="utf-8"))
             self.assertIn("::OI::RpcData::Req", (output / "rpc_ids.h").read_text(encoding="utf-8"))
 
+    def test_generator_uses_actual_type_dependencies(self):
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as directory:
+            temp = Path(directory)
+            proto = temp / "types.proto"
+            proto.write_text("rpcdata Foo { 0 BarExtra stValue; }\n"
+                             "rpcdata Bar { 0 Foo stValue; }\n"
+                             "rpcdata BarExtra { 0 int32_t iValue; }\n"
+                             "rpcdata Container { 0 vector<BarExtra> vItems; }\n", encoding="utf-8")
+            output = temp / "out"
+            result = subprocess.run([sys.executable, str(root / "cbaselib/proto/proto_tool/main.py"),
+                                     "--data-only", str(proto), str(output)], cwd=root,
+                                    capture_output=True, text=True, encoding="utf-8", errors="replace")
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            foo = (output / "oi_rpcdata_foo.h").read_text(encoding="utf-8")
+            bar = (output / "oi_rpcdata_bar.h").read_text(encoding="utf-8")
+            container = (output / "oi_rpcdata_container.h").read_text(encoding="utf-8")
+            self.assertIn('#include "oi_rpcdata_barextra.h"', foo)
+            self.assertNotIn('#include "oi_rpcdata_bar.h"', foo)
+            self.assertIn('#include "oi_rpcdata_foo.h"', bar)
+            self.assertIn('#include "oi_rpcdata_barextra.h"', container)
+            self.assertNotIn('#include "oi_rpcdata_bar.h"', container)
+
+    def test_generator_rejects_case_insensitive_output_collision(self):
+        root = Path(__file__).resolve().parents[1]
+        for split in (False, True):
+            with self.subTest(split=split), tempfile.TemporaryDirectory() as directory:
+                temp = Path(directory)
+                left = temp / "left.proto"
+                right = temp / "right.proto"
+                first = "rpcdata UserID { 0 int32_t iFirst; }\n"
+                second = "rpcdata UserId { 0 int32_t iSecond; }\n"
+                left.write_text(first if split else first + second, encoding="utf-8")
+                right.write_text(second, encoding="utf-8")
+                command = [sys.executable, str(root / "cbaselib/proto/proto_tool/main.py"),
+                           "--data-only", str(temp / "out"), "--", str(left)]
+                if split:
+                    command.append(str(right))
+                result = subprocess.run(command, cwd=root, capture_output=True, text=True,
+                                        encoding="utf-8", errors="replace")
+                output = result.stdout + result.stderr
+                self.assertNotEqual(result.returncode, 0, output)
+                for expected in ("UserID", "UserId", "oi_rpcdata_userid.h"):
+                    self.assertIn(expected, output)
+
     def test_plain_json_keeps_field_name(self):
         root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as temp:
