@@ -10,6 +10,7 @@ import os
 import posixpath
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -113,6 +114,20 @@ def lane_users(platform, copy, user):
     return [line for line in result.stdout.splitlines() if line.strip()]
 
 
+def write_results(path, results):
+    # Write alongside the destination so replace is atomic on the same filesystem.
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                         prefix=path.name + ".", suffix=".tmp", delete=False) as output:
+            temporary = Path(output.name)
+            json.dump(results, output, indent=2)
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
 def main():
     use_utf8_children()
     parser = argparse.ArgumentParser(description=__doc__)
@@ -132,25 +147,39 @@ def main():
     args = parser.parse_args()
     selected = [(platform, mode, offset) for platform, mode, offset in LANES
                 if not args.lane or "%s-%s" % (platform, mode) in args.lane]
-    busy = []
-    for platform, mode, offset in selected:
-        lane = "%s-%s" % (platform, mode)
-        users = lane_users(platform, lane_copy(args, platform, lane), args.wsl_user)
-        if users:
-            busy.append("%s in use:\n  %s" % (lane, "\n  ".join(users)))
-    if busy:
-        print("\n".join(busy), file=sys.stderr, flush=True)
-        print("refuse to start; clean with: python tools/kill_test_procs.py --lane <lane>", file=sys.stderr, flush=True)
-        return 2
     artifacts = args.artifacts.resolve()
     artifacts.mkdir(parents=True, exist_ok=True)
+    results_path = artifacts / "parallel.json"
+    results = {"%s-%s" % (platform, mode): {"exit_code": 1, "error": "not completed"}
+               for platform, mode, _ in selected}
+    write_results(results_path, results)
+
+    try:
+        busy = []
+        for platform, mode, offset in selected:
+            lane = "%s-%s" % (platform, mode)
+            users = lane_users(platform, lane_copy(args, platform, lane), args.wsl_user)
+            if users:
+                busy.append("%s in use:\n  %s" % (lane, "\n  ".join(users)))
+        if busy:
+            message = "\n".join(busy)
+            print(message, file=sys.stderr, flush=True)
+            print("refuse to start; clean with: python tools/kill_test_procs.py --lane <lane>", file=sys.stderr, flush=True)
+            for result in results.values():
+                result["error"] = message
+            write_results(results_path, results)
+            return 2
+    except BaseException as error:
+        for result in results.values():
+            result["error"] = repr(error)
+        write_results(results_path, results)
+        raise
 
     processes = []
     try:
         for platform, mode, offset in selected:
             lane = "%s-%s" % (platform, mode)
             output = artifacts / lane
-            log = (artifacts / (lane + ".log")).open("w", encoding="utf-8")
             common = ["--mode", mode, "--case", args.case, "--jobs", str(args.jobs), "--port-offset", str(offset), "--clean-build"]
             copy = lane_copy(args, platform, lane)
             if platform == "windows":
@@ -172,17 +201,25 @@ def main():
                     command += ["--define", item]
                 cwd = ROOT
             print("START", lane, "port_offset=%d" % offset, flush=True)
-            processes.append((lane, subprocess.Popen(command, cwd=cwd, stdout=log, stderr=subprocess.STDOUT), log, time.monotonic()))
+            log = (artifacts / (lane + ".log")).open("w", encoding="utf-8")
+            try:
+                process = subprocess.Popen(command, cwd=cwd, stdout=log, stderr=subprocess.STDOUT)
+            except BaseException:
+                log.close()
+                raise
+            processes.append((lane, process, log, time.monotonic()))
 
-        results = {}
         for lane, process, log, started in processes:
             code = process.wait()
             log.close()
             results[lane] = {"exit_code": code, "seconds": round(time.monotonic() - started, 1)}
             print("PASS" if code == 0 else "FAIL", lane, "seconds=%.1f" % results[lane]["seconds"],
                   "log=", artifacts / (lane + ".log"), flush=True)
-        (artifacts / "parallel.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
-        return int(any(item["exit_code"] for item in results.values()))
+    except BaseException as error:
+        for result in results.values():
+            if result.get("error") == "not completed":
+                result["error"] = repr(error)
+        raise
     finally:
         # 启动或等待中出错时，只回收本进程已经拉起的 lane，不碰别人的。
         for lane, process, log, started in processes:
@@ -195,6 +232,8 @@ def main():
                     process.wait(timeout=10)
             if not log.closed:
                 log.close()
+        write_results(results_path, results)
+    return int(any(item["exit_code"] for item in results.values()))
 
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
 """parallel_matrix 的本地单测：同一路副本已有进程在用时拒绝启动。"""
+import json
 import os
 import subprocess
 import tempfile
@@ -45,20 +46,54 @@ class LaneBusyTests(unittest.TestCase):
         def users(platform, copy, user):
             return ["5 python3 %s/tools/test_matrix.py" % copy] if str(copy).endswith("linux-st") else []
 
-        argv = ["parallel_matrix.py", "--windows-redis-binary", "redis-server.exe", "--artifacts", "unused",
-                "--lane", "linux-mt", "--lane", "linux-st"]
-        with mock.patch.object(sys, "argv", argv), \
-                mock.patch.object(matrix, "lane_users", side_effect=users), \
-                mock.patch.object(matrix, "sync_linux") as sync_linux, \
-                mock.patch.object(matrix, "sync_windows") as sync_windows, \
-                mock.patch.object(matrix.subprocess, "Popen") as popen, \
-                mock.patch.object(Path, "mkdir") as mkdir:
-            code = matrix.main()
-        self.assertEqual(code, 2)
-        sync_linux.assert_not_called()
-        sync_windows.assert_not_called()
-        popen.assert_not_called()
-        mkdir.assert_not_called()
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "parallel.json"
+            path.write_text('{"linux-st": {"exit_code": 0}}', encoding="utf-8")
+            argv = ["parallel_matrix.py", "--windows-redis-binary", "redis-server.exe", "--artifacts", temp,
+                    "--lane", "linux-mt", "--lane", "linux-st"]
+            with mock.patch.object(sys, "argv", argv), \
+                    mock.patch.object(matrix, "lane_users", side_effect=users), \
+                    mock.patch.object(matrix, "sync_linux") as sync_linux, \
+                    mock.patch.object(matrix, "sync_windows") as sync_windows, \
+                    mock.patch.object(matrix.subprocess, "Popen") as popen:
+                code = matrix.main()
+            self.assertEqual(code, 2)
+            report = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(set(report), {"linux-mt", "linux-st"})
+            self.assertTrue(all(item["exit_code"] != 0 for item in report.values()))
+            self.assertIn("in use", report["linux-st"]["error"])
+            sync_linux.assert_not_called()
+            sync_windows.assert_not_called()
+            popen.assert_not_called()
+
+    def test_preflight_and_start_exceptions_invalidate_old_success(self):
+        for phase in ("preflight", "start"):
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as temp:
+                path = Path(temp) / "parallel.json"
+                path.write_text('{"windows-mt": {"exit_code": 0}}', encoding="utf-8")
+                argv = ["parallel_matrix.py", "--windows-redis-binary", "redis.exe", "--artifacts", temp,
+                        "--lane", "windows-mt"]
+                with mock.patch.object(sys, "argv", argv), \
+                        mock.patch.object(matrix, "lane_users", side_effect=RuntimeError("preflight failed")
+                                          if phase == "preflight" else None, return_value=[]), \
+                        mock.patch.object(matrix, "sync_windows", side_effect=RuntimeError("start failed")
+                                          if phase == "start" else None):
+                    with self.assertRaises(RuntimeError):
+                        matrix.main()
+                result = json.loads(path.read_text(encoding="utf-8"))["windows-mt"]
+                self.assertNotEqual(result["exit_code"], 0)
+                self.assertIn(phase + " failed", result["error"])
+
+    def test_atomic_replace_failure_preserves_previous_json(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "parallel.json"
+            path.write_text('{"old": true}', encoding="utf-8")
+            with mock.patch.object(matrix.os, "replace", side_effect=OSError("replace failed")):
+                with self.assertRaises(OSError):
+                    matrix.write_results(path, {"new": True})
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), {"old": True})
+            self.assertEqual(list(Path(temp).iterdir()), [path])
+
 
 
 class SyncAndBuildTests(unittest.TestCase):
@@ -158,6 +193,9 @@ class SyncAndBuildTests(unittest.TestCase):
                     mock.patch.object(matrix, "linux_path", return_value="/artifacts"), \
                     mock.patch.object(matrix.subprocess, "Popen", return_value=process) as popen:
                 self.assertEqual(matrix.main(), 0)
+            report = json.loads((Path(temp) / "parallel.json").read_text(encoding="utf-8"))
+            self.assertEqual(set(report), {"windows-mt", "linux-st"})
+            self.assertTrue(all(item["exit_code"] == 0 and "seconds" in item for item in report.values()))
             self.assertEqual(popen.call_count, 2)
             for call in popen.call_args_list:
                 command = call.args[0]
