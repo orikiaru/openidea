@@ -24,11 +24,13 @@
 #include <uv.h>
 #include "test_board.h"
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <fstream>
+#include <future>
 #include <memory>
 #include <optional>
 #include <random>
@@ -80,6 +82,10 @@ class TestAddress::AddressConnectProbe : public OI::Net::SessionManager
 	int Connections() const
 	{
 		return m_iConnections.load();
+	}
+	bool EndpointUnchanged() const
+	{
+		return sEndpoint == OI::Net::NetAddr::Endpoint(sIpAddress, sPort);
 	}
 };
 
@@ -140,6 +146,51 @@ OI::Coro::TaskResult<int32_t> TestAddress::AwaitAddressConnect(AddressConnectPro
 	co_return co_await pProbe->StartClient();
 }
 
+OI::Coro::TaskResult<int> TestAddress::CheckResolveFailure(const std::string& sPort)
+{
+	// 两个平台的 libuv 均先将主机名转换到 256 字节缓冲区（含结束符）。
+	// 256 个 ASCII 字符在此处就会失败；端口仍用前面已成功连接的服务端口。
+	static const std::string sHost(256, 'a');
+	struct Lookup
+	{
+		std::string sServicePort;
+		std::promise<size_t> stCount;
+	};
+	auto pLookup = std::make_unique<Lookup>();
+	pLookup->sServicePort = sPort;
+	auto stCount = pLookup->stCount.get_future();
+	OI::Net::Poll::GetInstance().CallOnLoop([](void* pArgument)
+	{
+		auto* pPending = static_cast<Lookup*>(pArgument);
+		// 解析可能立即回调并释放 pPending；端口在整个 ResolveAll 调用期间有效。
+		const auto sServicePort = std::move(pPending->sServicePort);
+		OI::Net::NetAddr::ResolveAll(sHost, sServicePort, [](void* pContext, std::vector<OI::Net::NetAddr> vAddresses)
+		{
+			std::unique_ptr<Lookup> pCompleted(static_cast<Lookup*>(pContext));
+			pCompleted->stCount.set_value(vAddresses.size());
+		}, pPending);
+	}, pLookup.release());
+	const auto iDeadlineMilliseconds = OI::Timer::SteadyMilliseconds() + 5000;
+	while (stCount.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+	{
+		if (OI::Timer::SteadyMilliseconds() >= iDeadlineMilliseconds)
+		{
+			LOG_ERROR("hold address resolve failure: resolver callback timed out");
+			co_return 1;
+		}
+		co_await OI::Coro::yield(1);
+	}
+	const size_t iAddresses = stCount.get();
+	static AddressConnectProbe stMissing(sHost, sPort);
+	const int32_t iCode = co_await stMissing.StartClient();
+	const int iConnections = stMissing.Connections();
+	const bool bUnresolved = stMissing.EndpointUnchanged();
+	stMissing.CloseAllSessions();
+	LOG_TRACE("hold address resolve failure addresses=%zu code=%d connections=%d unresolved=%d", iAddresses, iCode, iConnections, bUnresolved ? 1 : 0);
+	const bool bPassed = iAddresses == 0 && iCode == OI_ERR_CONNECT && iConnections == 0 && bUnresolved;
+	co_return bPassed ? 0 : 1;
+}
+
 OI::Coro::TaskResult<int> TestAddress::CheckAddressConnect()
 {
 	const std::string sPort = HoldTest::IpcServerPort();
@@ -194,12 +245,7 @@ OI::Coro::TaskResult<int> TestAddress::CheckAddressConnect()
 	}
 	stV6.CloseAllSessions();
 	stBracket.CloseAllSessions();
-	static AddressConnectProbe stMissing("no-such-host.invalid", sPort);
-	if ((co_await stMissing.StartClient()) == OI_OK)
-	{
-		++iBad;
-	}
-	stMissing.CloseAllSessions();
+	iBad += co_await CheckResolveFailure(sPort);
 	LOG_TRACE("hold address connect bad=%d", iBad);
 	static AddressConnectProbe stStress("localhost", sPort);
 	std::vector<OI::Coro::TaskResult<int32_t>> vConnects;

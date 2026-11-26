@@ -319,6 +319,7 @@ class HoldCase(Case):
             assert "hold connect register failure code=-14 empty=1 added=0 failed=1 bad=0" in text
             assert "hold coroutine connect bad=0" in text
             assert "hold address connect bad=0" in text
+            assert re.search(r"hold address resolve failure addresses=0 code=-3 connections=0 unresolved=1$", text, re.M)
             assert "hold address failure init=-6 bind=-15 bad=0" in text
             assert "hold address configured name preserved=1 bad=0" in text
             assert "hold address stress waiters=64 rounds=20 bad=0" in text
