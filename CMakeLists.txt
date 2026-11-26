@@ -10,7 +10,7 @@ endif()
 option(OI_IPC_SINGLE_THREAD "Build ipcclient and ipcserver with single-thread scheduling" OFF)
 option(OI_ENABLE_TEST_HOOKS "Enable isolated regression fault injection (never enable in production)" OFF)
 
-# 给 clangd 用。Ninja 直接写 compile_commands.json；其它生成器编译时刷 build-clangd-win 或 build-clangd-linux。
+# Ninja 直接导出编译数据库；Visual Studio 构建时在本构建目录的 clangd 子目录刷新索引。
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON CACHE BOOL "Write compile_commands.json for clangd" FORCE)
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/framework.cmake")
