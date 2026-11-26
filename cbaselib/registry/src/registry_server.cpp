@@ -38,16 +38,18 @@ namespace
 const char* kRegisterLua =
     "local v = redis.call('GET', KEYS[1]) "
     "if v and v ~= ARGV[1] then return 0 end "
-    "if v and ARGV[6] == '1' and redis.call('GET', KEYS[4]) ~= ARGV[5] then return 0 end "
+    "local owner = redis.call('GET', KEYS[4]) "
+    "if ARGV[6] == '1' and owner and owner ~= ARGV[5] then return 0 end "
     "redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2]) redis.call('SET', KEYS[4], ARGV[5], 'PX', ARGV[2]) "
     "redis.call('SADD', KEYS[2], ARGV[3]) redis.call('SADD', KEYS[3], ARGV[4]) return 1";
 
 // 还是自己的就延长。过期了没人占就重新占上。被别人占了不动它。
 const char* kRefreshLua =
     "local v = redis.call('GET', KEYS[1]) "
-    "if v == ARGV[1] and redis.call('GET', KEYS[4]) == ARGV[5] then redis.call('PEXPIRE', KEYS[1], ARGV[2]) redis.call('PEXPIRE', KEYS[4], ARGV[2]) "
+    "local owner = redis.call('GET', KEYS[4]) "
+    "if (v and v ~= ARGV[1]) or (owner and owner ~= ARGV[5]) then return 0 end "
+    "if v and owner then redis.call('PEXPIRE', KEYS[1], ARGV[2]) redis.call('PEXPIRE', KEYS[4], ARGV[2]) "
     "  redis.call('SADD', KEYS[2], ARGV[3]) redis.call('SADD', KEYS[3], ARGV[4]) return 1 end "
-    "if v then return 0 end "
     "redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2]) redis.call('SET', KEYS[4], ARGV[5], 'PX', ARGV[2]) "
     "redis.call('SADD', KEYS[2], ARGV[3]) redis.call('SADD', KEYS[3], ARGV[4]) return 2";
 
@@ -64,7 +66,10 @@ const char* kListAllLua =
     "  local alive = 0 "
     "  for _, id in ipairs(redis.call('SMEMBERS', set)) do "
     "    local v = redis.call('GET', set .. ':' .. id) "
-    "    if v then table.insert(out, n) table.insert(out, id) table.insert(out, v) table.insert(out, redis.call('GET', ARGV[2] .. n .. ':' .. id) or '') alive = alive + 1 "
+    "    if v then "
+    "      alive = alive + 1 "
+    "      local owner = redis.call('GET', ARGV[2] .. n .. ':' .. id) "
+    "      if owner then table.insert(out, n) table.insert(out, id) table.insert(out, v) table.insert(out, owner) end "
     "    else redis.call('SREM', set, id) end "
     "  end "
     "  if alive == 0 then redis.call('SREM', KEYS[1], n) end "

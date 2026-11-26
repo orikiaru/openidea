@@ -116,6 +116,18 @@ def check(registry_port, redis_port):
         rpc(new, -1004, request(name, 77), 3)
         new_owner = redis_get(redis_port, owner_key)
         assert new_owner and new_owner != old_owner, "replacement did not acquire a new owner"
+        # Lose only the owner key while the service lease and current session survive.
+        redis_command(redis_port, b"DEL", owner_key)
+        assert redis_get(redis_port, owner_key) is None and redis_get(redis_port, key) == value
+        rpc(old, -1006, heartbeat, 40, expected_code=-4)
+        rpc(old, -1004, request(name, 77), 41, expected_code=-4)
+        assert redis_get(redis_port, owner_key) is None, "superseded session reclaimed missing owner"
+        rpc(new, -1006, heartbeat, 42)
+        assert redis_get(redis_port, owner_key) == new_owner, "current heartbeat did not restore owner"
+        redis_command(redis_port, b"DEL", owner_key)
+        rpc(new, -1004, request(name, 77), 43)
+        assert redis_get(redis_port, owner_key) == new_owner, "current registration did not restore owner"
+        assert redis_get(redis_port, key) == value, "owner recovery changed service lease"
         rpc(old, -1006, heartbeat, 5, expected_code=-4)
         rpc(old, -1004, request(name, 77), 6, expected_code=-4)
         rpc(new, -1006, heartbeat, 7)
@@ -240,3 +252,56 @@ def check_reload_race(registry_port, redis_port, proxy):
             assert contains(observer, name, 91), "same-address new owner was hidden"
             assert contains(observer, sentinel, 92), "replacement hid unrelated owner"
         print("registry reload stale and failed withdraw PASS", flush=True)
+
+
+def check_owner_loss_disconnect(registry_port, redis_port):
+    """An ownerless lease cannot reappear after its current session disconnects."""
+    name, sentinel = b"owner_lost_disconnect", b"owner_lost_sentinel"
+    prefix = b"oi:{openidea.dev}:"
+    key = prefix + b"svc:" + name + b":71"
+    owner = prefix + b"owner:" + name + b":71"
+    sentinel_key = prefix + b"svc:" + sentinel + b":72"
+
+    def request(service, ident):
+        return b"".join((field(0, service), field(1, struct.pack("<i", ident)),
+                         field(2, b"127.0.0.1"), field(3, b"43210"), field(4, b"")))
+
+    def contains(stream, service, ident):
+        return any(item.get(0) == service and item.get(1) == struct.pack("<i", ident)
+                   for item in snapshot(stream, service))
+
+    def add_external(service, ident):
+        instance = service + b":" + str(ident).encode("ascii")
+        redis_command(redis_port, b"SET", prefix + b"svc:" + instance, b"127.0.0.2 43211")
+        redis_command(redis_port, b"SET", prefix + b"owner:" + instance, b"external-" + service)
+        redis_command(redis_port, b"SADD", prefix + b"svc:" + service, str(ident).encode("ascii"))
+        redis_command(redis_port, b"SADD", prefix + b"svc", service)
+
+    with socket.create_connection(("127.0.0.1", registry_port), timeout=2) as client, \
+         socket.create_connection(("127.0.0.1", registry_port), timeout=2) as observer:
+        rpc(client, -1004, request(name, 71), 101)
+        rpc(client, -1004, request(sentinel, 72), 102)
+        assert contains(observer, name, 71) and redis_get(redis_port, owner)
+        redis_command(redis_port, b"DEL", owner)
+        assert redis_get(redis_port, owner) is None and redis_get(redis_port, key) == b"127.0.0.1 43210"
+        client.close()
+        deadline = time.monotonic() + 2
+        while redis_get(redis_port, sentinel_key) is not None:
+            assert time.monotonic() < deadline, "disconnect sentinel was not withdrawn"
+            time.sleep(0.02)
+        assert not contains(observer, name, 71), "disconnected service remained in snapshot"
+        for service, ident in ((b"owner_loss_reload_one", 73), (b"owner_loss_reload_two", 74)):
+            add_external(service, ident)
+            deadline = time.monotonic() + 5
+            while not contains(observer, service, ident):
+                assert time.monotonic() < deadline, "reload barrier was not published"
+                assert not contains(observer, name, 71), "ownerless disconnected service reappeared"
+                time.sleep(0.02)
+            assert not contains(observer, name, 71), "reload restored ownerless disconnected service"
+        with socket.create_connection(("127.0.0.1", registry_port), timeout=2) as replacement:
+            rpc(replacement, -1004, request(name, 71), 103)
+            new_owner = redis_get(redis_port, owner)
+            assert new_owner and redis_get(redis_port, key) == b"127.0.0.1 43210"
+            rpc(replacement, -1006, field(0, name) + field(1, struct.pack("<i", 71)), 104)
+            assert redis_get(redis_port, owner) == new_owner and contains(observer, name, 71)
+        print("registry owner loss disconnect and replacement PASS", flush=True)

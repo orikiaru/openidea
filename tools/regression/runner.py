@@ -16,7 +16,7 @@ import time
 import traceback
 
 from regression_platform import WINDOWS, SUFFIX, pause, rss_kib
-from registry_replacement_check import check as check_registry_replacement, check_reload_race
+from registry_replacement_check import check as check_registry_replacement, check_reload_race, check_owner_loss_disconnect
 from registry_fault_proxy import RegistryRedisProxy
 
 from . import ports
@@ -126,6 +126,7 @@ def run_case(case, args):
                     if ctx.name == "registry":
                         check_registry_replacement(ports.REGISTRY_PORT, ports.REDIS_PORT)
                         check_reload_race(ports.REGISTRY_PORT, ports.REDIS_PORT, ctx.registry_proxy)
+                        check_owner_loss_disconnect(ports.REGISTRY_PORT, ports.REDIS_PORT)
                 if ctx.name not in ("registry", "multi", "local", "registry-static"):
                     ctx.rs, ctx.rsp = ctx.start("redisserver")
                     ctx.ready(ctx.rs, ctx.rsp, "redis server listen")
