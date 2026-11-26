@@ -6,10 +6,11 @@ from pathlib import Path
 import re
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import time
-from regression_platform import SUFFIX, launch, WslRedis
+from regression_platform import SUFFIX, WINDOWS, launch, WslRedis
 from test_process_owner import record_process, write_owner
 from . import ports
 from .config import replace, shift_ports
@@ -52,6 +53,7 @@ def run_web_coro(args):
                 config = config.replace('port = "6379"', 'port = "%d"' % ports.REDIS_PORT)
             if name == "webserver":
                 config = replace(config, "port", str(web_port))
+                config += "\nform_regression = true\n"
                 config += ('\n[WebRpc]\nip = "127.0.0.1"\nport = "%d"\ntype = "tcp"\ndelay_ms = 1200\n'
                            '\n[RedisClient]\nip = "127.0.0.1"\nport = "%d"\ntype = "tcp"\ntimeout_ms = 5000\n' % (ports.IPC_PORT, ports.REDIS_SERVER_PORT))
             (cfg / (name + ".toml")).write_text(config, encoding="utf-8")
@@ -141,6 +143,19 @@ def run_web_coro(args):
                 response(fresh.makefile("rb"), "fresh")
             wait_marker(web, webpath, "web handler complete", 5)
             assert webpath.read_text(encoding="utf-8", errors="replace").count("web rpc begin") == 5
-            print("web-coro PASS: health, RPC, Redis, pipeline, disconnected handler", flush=True)
+            with socket.create_connection(("127.0.0.1", web_port), timeout=5) as abandoned:
+                abandoned.sendall(b"GET /test-late-stream HTTP/1.1\r\nHost: localhost\r\n\r\n")
+                wait_marker(web, webpath, "web late stream begin")
+                abandoned.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("HH" if WINDOWS else "ii", 1, 0))
+            health = http.client.HTTPConnection("127.0.0.1", web_port, timeout=2)
+            try:
+                health.request("GET", "/health")
+                res = health.getresponse()
+                assert res.status == 200 and res.read() == b"ok"
+            finally:
+                health.close()
+            wait_marker(web, webpath, "web late source created")
+            wait_marker(web, webpath, "web late source released cancelled=1")
+            print("web-coro PASS: health, RPC, Redis, pipeline, disconnected handler and late source", flush=True)
         finally:
             cleanup_owned(procs, handles, root, args, "web-coro", db=db, primary=sys.exc_info()[1])

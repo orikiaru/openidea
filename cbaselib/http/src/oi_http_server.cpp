@@ -445,7 +445,15 @@ class ServerSession final : public Net::NetSession
 		Response stReply;
 		bool bClose;
 		bool bHttp10;
+		bool bHead;
 		Net::Poll::QueuedCall stCall;
+		~Completion()
+		{
+			if (stReply.pBodySource)
+			{
+				stReply.pBodySource->Cancel();
+			}
+		}
 	};
 
 	static Coro::Task Dispatch(std::unique_ptr<Completion> pDone, ServerManager::Handler fnHandler, Request stRequest)
@@ -464,6 +472,10 @@ class ServerSession final : public Net::NetSession
 		catch (...)
 		{
 			std::fprintf(stderr, "web handler exception\n");
+			if (pDone->stReply.pBodySource)
+			{
+				pDone->stReply.pBodySource->Cancel();
+			}
 			pDone->stReply = {};
 			pDone->stReply.iStatus = 500;
 		}
@@ -471,7 +483,7 @@ class ServerSession final : public Net::NetSession
 		Net::Poll::GetInstance().PostOnLoop(pPending->stCall);
 	}
 
-	void Reply(const Response& stReply, bool bClose, bool bHttp10)
+	void Reply(Response& stReply, bool bClose, bool bHttp10, bool bHead)
 	{
 		if (IsClosed())
 		{
@@ -488,11 +500,11 @@ class ServerSession final : public Net::NetSession
 		{
 			if (bValid && stReply.pBodySource)
 			{
-				if (bHttp10)
+				if (!bHead && bHttp10)
 				{
 					bClose = true;
 				}
-				else
+				else if (!bHead)
 				{
 					sWire += "Transfer-Encoding: chunked\r\n";
 				}
@@ -514,11 +526,12 @@ class ServerSession final : public Net::NetSession
 			}
 		}
 		sWire += bClose ? "Connection: close\r\n\r\n" : "Connection: keep-alive\r\n\r\n";
-		if (bBody && bValid)
+		const bool bSendBody = bBody && bValid && !bHead;
+		if (bSendBody)
 		{
 			sWire += stReply.sBody;
 		}
-		m_pSource = bBody && bValid ? stReply.pBodySource : nullptr;
+		m_pSource = bSendBody ? std::move(stReply.pBodySource) : nullptr;
 		m_stOutputBody.ResetOutput();
 		m_bStreamClose = bClose;
 		m_bStreamChunked = !bHttp10;
@@ -623,7 +636,7 @@ class ServerSession final : public Net::NetSession
 		{
 			Response stReply;
 			stReply.iStatus = iCode;
-			Reply(stReply, true, m_stFrame.bHttp10);
+			Reply(stReply, true, m_stFrame.bHttp10, m_stFrame.stRequest.sMethod == "HEAD");
 			return;
 		}
 		m_bBusy = true;
@@ -636,12 +649,13 @@ class ServerSession final : public Net::NetSession
 		pDone->iSessionId = GetSessionID();
 		pDone->bClose = m_stFrame.bClose;
 		pDone->bHttp10 = m_stFrame.bHttp10;
+		pDone->bHead = m_stFrame.stRequest.sMethod == "HEAD";
 		pDone->stCall.fnCall = [](void* pArg)
 		{
 			std::unique_ptr<Completion> pFinished(static_cast<Completion*>(pArg));
-			pFinished->pServer->UseSession(pFinished->iSessionId, [&](Net::Session& stSession)
+			pFinished->pServer->UseSession(pFinished->iSessionId, [&pFinished](Net::Session& stSession)
 			{
-				static_cast<ServerSession&>(stSession).Reply(pFinished->stReply, pFinished->bClose, pFinished->bHttp10);
+				static_cast<ServerSession&>(stSession).Reply(pFinished->stReply, pFinished->bClose, pFinished->bHttp10, pFinished->bHead);
 			});
 		};
 		pDone->stCall.pArgument = pDone.get();

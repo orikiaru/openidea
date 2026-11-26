@@ -89,6 +89,58 @@ class DisconnectTestSink : public WebTestSink
 	}
 };
 
+class DisconnectTestSource : public WebTestSource
+{
+  public:
+	DisconnectTestSource()
+	    : WebTestSource(1024)
+	{
+	}
+	~DisconnectTestSource() override
+	{
+		std::printf("web late source released cancelled=%d\n", IsCancelled() ? 1 : 0);
+		std::fflush(stdout);
+	}
+};
+
+class HeadTestSource : public WebTestSource
+{
+  public:
+	HeadTestSource()
+	    : WebTestSource(1024)
+	{
+	}
+	~HeadTestSource() override
+	{
+		std::printf("web head source released cancelled=%d read=%d\n", IsCancelled() ? 1 : 0, m_bRead ? 1 : 0);
+		std::fflush(stdout);
+	}
+	int32_t Read(std::span<char> vBuffer, size_t& iSize) override
+	{
+		m_bRead = true;
+		return WebTestSource::Read(vBuffer, iSize);
+	}
+
+  private:
+	bool m_bRead = false;
+};
+
+OI::Coro::Task HeadStream(const Request&, Response& stReply)
+{
+	stReply.pBodySource = std::make_shared<HeadTestSource>();
+	co_return;
+}
+
+OI::Coro::Task LateStream(const Request&, Response& stReply)
+{
+	std::puts("web late stream begin");
+	std::fflush(stdout);
+	co_await OI::Coro::yield(1200);
+	stReply.pBodySource = std::make_shared<DisconnectTestSource>();
+	std::puts("web late source created");
+	std::fflush(stdout);
+}
+
 std::shared_ptr<OI::Http::BodySink> MakeStreamSink(const Request& stRequest)
 {
 	if (stRequest.GetHeader("x-disconnect-check"))
@@ -258,6 +310,9 @@ int32_t WebServer::Init()
 		Register("POST", "/test-form", FormEcho);
 		Register("POST", "/test-multipart", MultipartEcho);
 		RegisterStream("POST", "/test-stream", MakeStreamSink, StreamEcho);
+		Register("GET", "/test-late-stream", LateStream);
+		Register("HEAD", "/test-head", Health);
+		Register("HEAD", "/test-head-stream", HeadStream);
 	}
 	std::string sPort;
 	m_bRpc = TryGetConfig("WebRpc.port", sPort);

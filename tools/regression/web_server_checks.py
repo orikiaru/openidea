@@ -71,6 +71,31 @@ def check_web_transport(port, output_path):
             body = reader.read(int(headers["content-length"]))
         return status, headers, body
 
+    for path in (b"/test-head", b"/test-head-stream"):
+        with socket.create_connection(("127.0.0.1", port), timeout=10) as conn:
+            conn.settimeout(8)
+            with conn.makefile("rb") as reader:
+                conn.sendall(b"HEAD " + path + b" HTTP/1.1\r\nHost: localhost\r\n\r\n"
+                             b"GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n")
+                status = reader.readline()
+                assert status.startswith(b"HTTP/1.1 200 "), (path, status)
+                headers = {}
+                while True:
+                    line = reader.readline()
+                    assert line, "truncated HEAD headers"
+                    if line == b"\r\n":
+                        break
+                    key, value = line.decode("ascii").split(":", 1)
+                    headers[key.lower()] = value.strip()
+                if path == b"/test-head":
+                    assert headers.get("content-length") == "2", headers
+                else:
+                    assert "content-length" not in headers and "transfer-encoding" not in headers, headers
+                status, _, body = read_response(reader)
+                assert status.startswith("HTTP/1.1 200 ") and body == b"ok", (path, status, body)
+    wait_web_marker(output_path, "web head source released cancelled=1 read=0")
+    print("web HEAD PASS: no body before next response, source cancelled and released", flush=True)
+
     with socket.create_connection(("127.0.0.1", port), timeout=10) as conn:
         conn.settimeout(8)
         started = time.monotonic()

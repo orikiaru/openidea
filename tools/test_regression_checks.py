@@ -221,6 +221,11 @@ class RegressionChecksTest(unittest.TestCase):
         ok = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"
         binary = (b"HTTP/1.1 200 OK\r\nContent-Length: 524288\r\n"
                   b"Connection: close\r\n\r\n" + payload)
+        head, head_stream = MagicMock(), MagicMock()
+        for conn in (head, head_stream):
+            conn.__enter__.return_value = conn
+        head.makefile.return_value = io.BytesIO(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n" + ok)
+        head_stream.makefile.return_value = io.BytesIO(b"HTTP/1.1 200 OK\r\n\r\n" + ok)
         idle_first, idle_keep = MagicMock(), MagicMock()
         expect_continue, expect_unknown = MagicMock(), MagicMock()
         fixed_large, chunk_large, fixed_over, chunk_over = (MagicMock() for _ in range(4))
@@ -262,7 +267,7 @@ class RegressionChecksTest(unittest.TestCase):
         bad.getresponse.return_value.status = 400
         healthy.getresponse.return_value.status = 200
         healthy.getresponse.return_value.read.return_value = b"ok"
-        with patch.object(web.socket, "create_connection", side_effect=[idle_first, idle_keep, expect_continue, expect_unknown, keep, half,
+        with patch.object(web.socket, "create_connection", side_effect=[head, head_stream, idle_first, idle_keep, expect_continue, expect_unknown, keep, half,
                                                                           fixed_large, chunk_large, fixed_over,
                                                                           chunk_over, chunk] + boundary + closing + [multipart, abandoned]), \
              patch.object(web.http.client, "HTTPConnection", side_effect=[bad, healthy]), \
@@ -270,13 +275,15 @@ class RegressionChecksTest(unittest.TestCase):
              patch.object(web.time, "monotonic", side_effect=[0, 3, 0, 3]), \
              patch.object(web, "wait_web_marker") as wait_marker:
             web.check_web_transport(18080, Path("server.out"))
+        self.assertIn(b"HEAD /test-head HTTP/1.1", head.sendall.call_args.args[0])
+        self.assertIn(b"HEAD /test-head-stream HTTP/1.1", head_stream.sendall.call_args.args[0])
         self.assertEqual(keep.sendall.call_count, 3)
         half.shutdown.assert_called_once_with(web.socket.SHUT_WR)
         self.assertEqual(chunk.sendall.call_count, 18)
         self.assertGreater(multipart.sendall.call_count, 2)
         abandoned.sendall.assert_called_once()
         self.assertEqual([call.args[1] for call in wait_marker.call_args_list],
-                         ["web disconnect sink created", "web disconnect sink released cancelled=1"])
+                         ["web head source released cancelled=1 read=0", "web disconnect sink created", "web disconnect sink released cancelled=1"])
         bad.request.assert_called_once_with("GET", "/query")
         healthy.request.assert_called_once_with("GET", "/health")
         bad.close.assert_called_once_with()
