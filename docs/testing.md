@@ -38,6 +38,8 @@ Redis 也单独测。开关是 `[Test] redis`。先起本机 Redis（`maxmemory 
 
 ## 1. 范围与通过条件
 
+配置命令行参数检查随矩阵每种线程模式运行，也可定向执行 `python3 tools/test_config_arguments.py --bin-dir deploy/bin`，成功输出 `config arguments PASS`。检查七个程序默认路径和带空格的显式路径实际进入配置解析，检查 ipcserver 旧位置参数及显式配置优先级、缺值与重复参数拒绝，并检查 ipcclient 和 logd 的初始化前探针在配置参数前后均保持原结果。选中路径用无效 TOML 的解析失败消息核验；另在默认配置不存在时用合法配置运行 ipcclient 的 UDP 关闭探针，验证两种参数顺序均能成功初始化和执行。该检查不需要测试钩子。
+
 - Windows 原生 MSVC x64 Release、Linux WSL GCC 13，各运行多线程 MT 和单线程 ST，共四组。
 - ST/MT 只切换 ipcclient、ipcserver；logd 固定多线程，redisserver/registry 按各自配置单线程。
 - `all` 包含 22 项：echo、log、log-backpressure、redis、redis-limit、redis-shutdown、redis-queue-timeout、rpc-ingress、redis-backpressure-bytes、redis-backpressure-count、redis-fairness、hold、rpc-admission-count、rpc-admission-bytes、reset、disk-full、registry、udp、multi、local、web、web-coro。`local` 不起 registry，用 `[Registry] instances` 的两台地址，`CallAny` 两台都命中，`CallAll` 按实例号返回两份。`multi` 仍走动态配置，业务进程上报后登记，同样要求 `CallAny` 两台都命中。`--mysqld` 在数据库用例之后再跑 `registry-static`：registry 的 `config=static`，名单由表提供，业务进程不上报，`CallAny` 同样打到两台。

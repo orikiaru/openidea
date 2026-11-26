@@ -156,7 +156,7 @@ class ModuleFileGen:
 int main(int argc, char* argv[])
 {
     //加载模块配置，初始化线程池、定时器、IO复用
-    int32_t iCode = ::OI::Base::StartFramework("__MODULE_CONFIG_RELATIVE_PATH__");
+    int32_t iCode = ::OI::Base::StartFramework("__MODULE_CONFIG_RELATIVE_PATH__", argc, argv);
     if (iCode != OI_OK)
     {
         fprintf(stderr, "StartFramework failed: code=%d\n", iCode);

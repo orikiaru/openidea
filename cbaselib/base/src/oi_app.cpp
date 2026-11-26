@@ -1,5 +1,6 @@
 #include "oi_app.h"
 #include <stdio.h>
+#include <cstring>
 #include "oi_config.h"
 #include "oi_thread.h"
 #include "oi_timer_manager.h"
@@ -10,6 +11,43 @@ namespace OI
 {
 namespace Base
 {
+int32_t ParseConfigArgument(int& iArgumentCount, char* vArguments[], const char*& pConfigPath)
+{
+	int iOption = 0;
+	for (int iIndex = 1; iIndex < iArgumentCount; ++iIndex)
+	{
+		if (std::strcmp(vArguments[iIndex], "--config") != 0)
+		{
+			continue;
+		}
+		if (iOption || iIndex + 1 >= iArgumentCount || !vArguments[iIndex + 1][0] ||
+		    std::strncmp(vArguments[iIndex + 1], "--", 2) == 0)
+		{
+			fprintf(stderr, "--config requires one nonempty path and may only be specified once\n");
+			return OI_ERR_INVALID_ARGUMENT;
+		}
+		iOption = iIndex;
+		++iIndex;
+	}
+	if (iOption)
+	{
+		pConfigPath = vArguments[iOption + 1];
+		iArgumentCount -= 2;
+		for (int iIndex = iOption; iIndex < iArgumentCount; ++iIndex)
+		{
+			vArguments[iIndex] = vArguments[iIndex + 2];
+		}
+		vArguments[iArgumentCount] = nullptr;
+	}
+	return OI_OK;
+}
+
+int32_t StartFramework(const char* pDefaultConfigPath, int& iArgumentCount, char* vArguments[])
+{
+	const int32_t iStatus = ParseConfigArgument(iArgumentCount, vArguments, pDefaultConfigPath);
+	return iStatus == OI_OK ? StartFramework(pDefaultConfigPath) : iStatus;
+}
+
 int32_t StartFramework(const char* pConfigPath)
 {
 	if (!pConfigPath)

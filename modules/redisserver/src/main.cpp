@@ -6,9 +6,7 @@
 
 int main(int iArgumentCount, char* vArguments[])
 {
-	(void)iArgumentCount;
-	(void)vArguments;
-	int32_t iCode = ::OI::Base::StartFramework("../config/redisserver.toml");
+	int32_t iCode = ::OI::Base::StartFramework("../config/redisserver.toml", iArgumentCount, vArguments);
 	if (iCode != OI_OK)
 	{
 		fprintf(stderr, "StartFramework failed: code=%d\n", iCode);

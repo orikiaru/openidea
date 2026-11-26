@@ -2,20 +2,20 @@
 
 全量四组都通过时，改写下面的「全量」，只留最近一次。写明日期、平台、线程模式、通过项数，以及机器的 CPU 型号和实测频率。只跑了部分用例不要写成全量通过。操作步骤仍在 [testing.md](testing.md)。
 
-## 全量（2026-11-26，四路通过）
+## 全量（2026-11-26，配置参数改动）
 
-受测 HEAD `15cdbacb68969349ebb5bdf15bee47ea7cf6239c` 加工作区改动，包含断连回收、poll 重臂、数据库修复及 x64 随包动态 SDK。Linux 为远程 GCC 13 Release，测试钩子关闭；Windows 为 MSVC x64 Release。四路均运行 `all`，另用 MySQL 8.4.13 真服务端验证数据库；Linux 两路还通过静态注册表用例。各矩阵的步骤退出码均为 0，Linux 汇总 `passed=true`、`completed=true`、`restore_skipped=true`、`restored=false`，测试前后归属清理成功。
+受测 HEAD `e2a4ef63ef0bed5323dd9d5a3e47166d13302ff8` 加启动配置参数工作区改动。Windows 为 MSVC x64 Release，Linux 为远程 GCC 13 Release。四路 `all` 通过；Linux 两路额外运行 MySQL 8.4.13 和静态注册表。启动参数矩阵步骤通过，最终补强的合法带空格路径、参数错误诊断和探针兼容检查在四路分别重跑通过。Linux 矩阵 `passed=true`、`completed=true`、`restored=false`、`restore_skipped=true`，前后归属清理成功。
 
-| 平台 | 线程 | CPU | 实测频率 MHz | `all` 结果 | 额外用例 | 耗时 |
+| 平台 | 线程 | CPU | 频率 MHz | `all` 结果 | 额外检查 | 耗时 |
 | --- | --- | --- | ---: | --- | --- | --- |
-| Windows | 多线程 | Intel Core i9-11900K | 3504（测后采样） | 23 通过、1 Unix 专项跳过 | mysql 通过 | 590.4 秒 |
-| Windows | 单线程 | Intel Core i9-11900K | 3504（测后采样） | 23 通过、1 Unix 专项跳过 | mysql 通过 | 617.0 秒 |
-| 远程 Linux | 多线程 | Intel Xeon Platinum 8255C | 2494.140（测后采样） | 24/24 | mysql、registry-static 通过 | 未记录总耗时 |
-| 远程 Linux | 单线程 | Intel Xeon Gold 6271C | 2593.904（测后采样） | 24/24 | mysql、registry-static 通过 | 未记录总耗时 |
+| Windows | 多线程 | Intel Core i9-11900K | 3504（测后 CIM） | 23 通过、1 Unix 专项跳过 | 配置参数通过 | 496.8 秒 |
+| Windows | 单线程 | Intel Core i9-11900K | 3504（测后 CIM） | 23 通过、1 Unix 专项跳过 | 配置参数通过 | 548.4 秒 |
+| 远程 Linux | 多线程 | Intel Xeon Platinum 8255C | 2494.140（上轮测后采样） | 24/24 | mysql、registry-static、配置参数通过 | 未记录总耗时 |
+| 远程 Linux | 单线程 | Intel Xeon Gold 6271C | 2593.904（上轮测后采样） | 24/24 | mysql、registry-static、配置参数通过 | 未记录总耗时 |
 
-Linux 两路均输出 `mysql row mapping bad=0`、`mysql rows bad=0`、`mysql done bad=0`。POLLERR 重臂均为 `frames=1200/1200 error=104 elapsed_ms=20 PASS`；零窗口关闭回收多线程为 `elapsed_ms=10290 PASS`、单线程为 `elapsed_ms=10261 PASS`。多线程额外单独重跑两专项也通过。Linux 两台的 localhost 双栈回退子检查均因只解析出一种地址族标记环境阻塞，不能视为覆盖该子检查；其他 Web 检查通过。
+Linux 两路均输出 `mysql row mapping bad=0`、`mysql rows bad=0`、`mysql done bad=0`；两台 localhost 双栈回退子检查因只解析出一种地址族标记环境阻塞，其他 Web 检查通过。Linux 全量目录为 `~/openidea-test-results/mt-configargs-20261126-183553`、`~/openidea-test-results/st-configargs-20261126-183617`。启动参数最终补强在全量同步后落盘，故同步新版脚本并重编对应产物后单独通过，不把新增断言称作全量中已执行。
 
-默认随包库在未设置 `LD_LIBRARY_PATH` 时由部署目录解析；另用外部 OpenSSL 与 MySQL SDK、关闭随包 SDK 并以分号列表指定运行库，独立构建、真 MySQL 和 echo 均通过，运行库同样由部署目录加载。Linux 结果目录分别为 `~/openidea-test-results/mt-20261126-sdk-fix-170029`、`~/openidea-test-results/st-20261126-sdk-redisfix-171333`，外部 SDK 为 `~/openidea-test-results/mt-20261126-external-170845`。此前测试入口导入遗漏和 ST Redis 路径错误各导致一次失败，已修正并保留原日志；本轮未跑 ASan、coro。
+Windows 多线程首轮耗时 511.8 秒，hold 在 `timer uninitialized probe update` 后以 `0xC0000094` 退出，判为失败；隔离副本中发现未在该轮重编的旧 timer 对象，源码哈希一致，旧 exe 和对象留在 `.local/config-final-windows-mt`，尚未反汇编验证对象内容。随后 clean-first 全重编，重跑全量通过，结果位于 `.local/config-clean-windows-mt`；单线程结果位于 `.local/config-final-windows-st`。这次复测不抹去首轮失败。本轮未跑 ASan、coro，Windows 未运行 MySQL 专项。
 
 ## 收包额度与解码预算复验（2026-11-25 晚，历史记录）
 

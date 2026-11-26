@@ -3,9 +3,9 @@
 #include <cstdio>
 #include <exception>
 
-int main()
+int main(int iArgumentCount, char* vArguments[])
 {
-	int32_t iCode = OI::Base::StartFramework("../config/webserver.toml");
+	int32_t iCode = OI::Base::StartFramework("../config/webserver.toml", iArgumentCount, vArguments);
 	if (iCode != OI_OK)
 	{
 		return iCode;

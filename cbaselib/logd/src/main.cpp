@@ -14,6 +14,12 @@ static int32_t WriteSelfLog(LOG_LEVEL iLevel, const char* pText, size_t iLength)
 
 int main(int iArgumentCount, char* vArguments[])
 {
+	const char* pConfigPath = "../config/logd.toml";
+	int32_t iCode = ::OI::Base::ParseConfigArgument(iArgumentCount, vArguments, pConfigPath);
+	if (iCode != OI_OK)
+	{
+		return iCode;
+	}
 	if (iArgumentCount == 2 && std::strcmp(vArguments[1], "--test-hooks") == 0)
 	{
 #ifdef OI_ENABLE_TEST_HOOKS
@@ -24,7 +30,7 @@ int main(int iArgumentCount, char* vArguments[])
 		return 40;
 #endif
 	}
-	int32_t iCode = ::OI::Base::StartFramework("../config/logd.toml");
+	iCode = ::OI::Base::StartFramework(pConfigPath);
 	if (iCode != OI_OK)
 	{
 		fprintf(stderr, "StartFramework failed: code=%d\n", iCode);

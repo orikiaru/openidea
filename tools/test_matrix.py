@@ -302,6 +302,8 @@ def main():
             if run(mode + "-configure", mode_configure + flags) or run(mode + "-build", mode_build_command):
                 failed = True
                 break
+            failed |= bool(run(mode + "-config-arguments", [sys.executable, ROOT / "tools/test_config_arguments.py",
+                                                               "--bin-dir", binary]))
             if mode == "mt":
                 failed |= bool(run("mt-threadpool-config", [sys.executable, ROOT / "tools/test_threadpool_config.py",
                                                             "--bin-dir", binary]))

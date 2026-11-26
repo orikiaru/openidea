@@ -141,6 +141,12 @@ static int32_t CheckPollLoopBusy()
 
 int main(int iArgumentCount, char* vArguments[])
 {
+	const char* pConfigPath = "../config/ipcclient.toml";
+	int32_t iCode = ::OI::Base::ParseConfigArgument(iArgumentCount, vArguments, pConfigPath);
+	if (iCode != OI_OK)
+	{
+		return iCode;
+	}
 	if (iArgumentCount == 2 && std::strcmp(vArguments[1], "--thread-mode") == 0)
 	{
 #ifdef _SINGLE_THREAD_
@@ -172,7 +178,7 @@ int main(int iArgumentCount, char* vArguments[])
 		std::fflush(stdout);
 		return bPassed ? 0 : 1;
 	}
-	int32_t iCode = ::OI::Base::StartFramework("../config/ipcclient.toml");
+	iCode = ::OI::Base::StartFramework(pConfigPath);
 	if (iCode != OI_OK)
 	{
 		fprintf(stderr, "StartFramework failed: code=%d\n", iCode);

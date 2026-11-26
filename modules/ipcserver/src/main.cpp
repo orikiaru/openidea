@@ -7,12 +7,17 @@
 
 int main(int iArgumentCount, char* vArguments[])
 {
-	const char* pConfigPath = "../config/ipcserver.toml";
-	if (iArgumentCount > 1 && vArguments[1] != NULL && vArguments[1][0] != '\0')
+	const char* pConfigPath = nullptr;
+	int32_t iCode = ::OI::Base::ParseConfigArgument(iArgumentCount, vArguments, pConfigPath);
+	if (iCode != OI_OK)
 	{
-		pConfigPath = vArguments[1];
+		return iCode;
 	}
-	int32_t iCode = ::OI::Base::StartFramework(pConfigPath);
+	if (!pConfigPath)
+	{
+		pConfigPath = iArgumentCount > 1 && vArguments[1][0] ? vArguments[1] : "../config/ipcserver.toml";
+	}
+	iCode = ::OI::Base::StartFramework(pConfigPath);
 	if (iCode != OI_OK)
 	{
 		fprintf(stderr, "StartFramework failed: code=%d\n", iCode);

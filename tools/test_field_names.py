@@ -377,6 +377,7 @@ class ModuleGeneratorTest(unittest.TestCase):
             generator = ModuleFileGen(module, str(root), str(root))
             self.assertTrue(generator.GenModuleFile())
             main = (root / "example/src/main.cpp").read_text(encoding="utf-8")
+            self.assertRegex(main, r'StartFramework\("\.\./config/example\.toml",\s*\w+,\s*\w+\)')
             self.assertIn("#include <exception>", main)
             start = main.index("    iCode = [&]() -> int32_t\n    {")
             init = main.index("            iCode = Worker::GetInstance().Init();")
