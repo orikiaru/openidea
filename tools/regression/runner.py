@@ -162,7 +162,8 @@ def run_case(case, args):
                     ctx.last_growth, ctx.last_log_bytes = time.monotonic(), payload_bytes
                 if log_bytes > CAP:
                     raise RuntimeError("test log exceeds 2GiB limit")
-                if ctx.logd.poll() is not None and entry.logd_poll_failure(ctx, ctx.logd):
+                logd_intentionally_stopped = ctx.name == "log-contract" and getattr(ctx, "contract_state", 0) in (1, 2)
+                if not logd_intentionally_stopped and ctx.logd.poll() is not None and entry.logd_poll_failure(ctx, ctx.logd):
                     return
                 for proc in ctx.procs:
                     if proc is not ctx.client and proc.poll() is not None:
@@ -215,7 +216,7 @@ def run_case(case, args):
 
 def main(doc=None):
     parser = argparse.ArgumentParser(description=__doc__ if doc is None else doc)
-    parser.add_argument("--case", default="all", choices=("all", "mysql", "mysql-wake", "blocking-wake", "coro", "echo", "empty", "log", "log-backpressure", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "hold-blocking", "hold-timer", "hold-redis", "rpc-admission-count", "rpc-admission-bytes", "reset", "tcp-error-rearm", "tcp-close-reclaim", "disk-full", "clock-forward", "clock-back", "registry", "udp", "multi", "local", "registry-static", "web", "web-coro"))
+    parser.add_argument("--case", default="all", choices=("all", "mysql", "mysql-wake", "blocking-wake", "coro", "echo", "empty", "log", "log-backpressure", "log-contract", "redis", "redis-limit", "redis-shutdown", "redis-queue-timeout", "rpc-ingress", "redis-backpressure-bytes", "redis-backpressure-count", "redis-fairness", "hold", "hold-blocking", "hold-timer", "hold-redis", "rpc-admission-count", "rpc-admission-bytes", "reset", "tcp-error-rearm", "tcp-close-reclaim", "disk-full", "clock-forward", "clock-back", "registry", "udp", "multi", "local", "registry-static", "web", "web-coro"))
     parser.add_argument("--bin-dir", type=Path, default=REPO / "deploy/bin")
     parser.add_argument("--redis-binary", type=Path, help="default: redis-server on PATH")
     parser.add_argument("--clock-fault-so", type=Path)

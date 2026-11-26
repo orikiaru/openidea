@@ -4,6 +4,8 @@
 #include "oi_log_client.h"
 #include "test_board.h"
 #include <cstdio>
+#include <cstdlib>
+#include <string>
 #include <vector>
 
 LogMgr::LogMgr()
@@ -37,6 +39,69 @@ void LogMgr::Start()
 
 OI::Coro::Task LogMgr::Run()
 {
+	const char* pContractGate = std::getenv("OI_TEST_LOG_CONTRACT_GATE");
+	if (pContractGate)
+	{
+		std::string sGate(pContractGate);
+		for (;;)
+		{
+			fflush(stdout);
+			FILE* pGate = fopen((sGate + ".disconnected").c_str(), "rb");
+			if (pGate)
+			{
+				fclose(pGate);
+				break;
+			}
+			co_await OI::Coro::yield(10);
+		}
+		int iBusySequence = -1;
+		for (int iSequence = 0; iSequence < 10000; ++iSequence)
+		{
+			int32_t iReturnCode = ::OI::Log::Log(LOG_INFO, "log-contract seq=%d", iSequence);
+			printf("log-contract result seq=%d code=%d\n", iSequence, iReturnCode);
+			if (iReturnCode != OI_OK)
+			{
+				iBusySequence = iSequence;
+				break;
+			}
+		}
+		printf("log-contract pending complete busy=%d\n", iBusySequence);
+		fflush(stdout);
+		for (;;)
+		{
+			fflush(stdout);
+			FILE* pGate = fopen((sGate + ".connected").c_str(), "rb");
+			if (pGate)
+			{
+				fclose(pGate);
+				break;
+			}
+			co_await OI::Coro::yield(10);
+		}
+		int32_t iReturnCode = OI_ERR_BUSY;
+		for (int iAttempt = 0; iAttempt < 1000 && iReturnCode == OI_ERR_BUSY; ++iAttempt)
+		{
+			iReturnCode = ::OI::Log::Log(LOG_INFO, "log-contract final");
+			printf("log-contract final code=%d\n", iReturnCode);
+			if (iReturnCode == OI_ERR_BUSY)
+			{
+				co_await OI::Coro::yield(10);
+			}
+		}
+		fflush(stdout);
+		for (;;)
+		{
+			FILE* pGate = fopen((sGate + ".drained").c_str(), "rb");
+			if (pGate)
+			{
+				fclose(pGate);
+				break;
+			}
+			co_await OI::Coro::yield(10);
+		}
+		TestBoard::GetInstance().Done(iBusySequence < 0 || iReturnCode != OI_OK ? 1 : 0);
+		co_return;
+	}
 	std::vector<OI::Coro::Task> vPumps;
 	for (int iIndexLocal = 0; iIndexLocal < m_iTaskCount; ++iIndexLocal)
 	{

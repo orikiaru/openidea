@@ -106,6 +106,10 @@ class BaseTimerManager
 
 	uint32_t milling2tick(int iMillisecond)
 	{
+		if (!m_iTickOffsetMilliseconds)
+		{
+			return 0;
+		}
 		int iOffset = iMillisecond / m_iTickOffsetMilliseconds;
 		//定时器时间向tick时间修正取整
 		iOffset += iMillisecond % m_iTickOffsetMilliseconds > 0 ? 1 : 0;

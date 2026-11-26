@@ -24,7 +24,8 @@ class LogCase(Case):
         if name == "ipcclient":
             text = set_test_flags(text, ctx.mode)
             if ctx.mode == "log":
-                text = text.replace("[LogClient]", "[LogClient]\nmax_send_queue_bytes = 262144")
+                limit = 4096 if case == "log-contract" else 262144
+                text = text.replace("[LogClient]", "[LogClient]\nmax_send_queue_bytes = %d" % limit)
             if case == "disk-full":
                 text = replace(text, "bytes", "131072")
             if case == "log-backpressure":
@@ -32,6 +33,42 @@ class LogCase(Case):
                 text = replace(text, "bytes", str(64 * 1024**2))
                 text = replace(text, "drain_sec", "2")
         return text
+
+    def client_env(self, ctx, env):
+        if ctx.name == "log-contract":
+            ctx.contract_state = 0
+            ctx.contract_gate = ctx.root / "log-contract"
+            env["OI_TEST_LOG_CONTRACT_GATE"] = str(ctx.contract_gate)
+        return env
+
+    def on_poll(self, ctx):
+        if ctx.name != "log-contract":
+            return
+        output = ctx.clientpath.read_text(encoding="utf-8", errors="replace")
+        if ctx.contract_state == 0 and "LogClient::OnClientConnect" in output:
+            ctx.stop(ctx.logd)
+            ctx.logd.wait(timeout=10)
+            assert ctx.logd.returncode == 0
+            ctx.procs.remove(ctx.logd)
+            ctx.contract_baseline = sum(path.stat().st_size for path in ctx.logs.rglob("info"))
+            ctx.contract_state = 1
+        if ctx.contract_state == 1 and "LogClient::OnClientDisconnect" in output:
+            ctx.contract_gate.with_suffix(".disconnected").touch()
+            ctx.contract_state = 2
+        if ctx.contract_state == 2 and "log-contract pending complete" in output:
+            ctx.start_logd()
+            ctx.contract_state = 3
+        if ctx.contract_state == 3 and output.count("LogClient::OnClientConnect") >= 2:
+            ctx.contract_gate.with_suffix(".connected").touch()
+            ctx.contract_state = 4
+        if ctx.contract_state == 4 and "log-contract final code=0" in output:
+            match = re.search(r"log-contract pending complete busy=(\d+)", output)
+            assert match
+            expected = sum(len("00:00:00 ipcclient-1:log-contract seq=%d\n" % i) for i in range(int(match.group(1))))
+            expected += len("00:00:00 ipcclient-1:log-contract final\n")
+            if sum(path.stat().st_size for path in ctx.logs.rglob("info")) >= ctx.contract_baseline + expected:
+                ctx.contract_gate.with_suffix(".drained").touch()
+                ctx.contract_state = 5
 
     def prepare_directory(self, ctx):
         if ctx.name == "disk-full" and not WINDOWS:
@@ -131,6 +168,23 @@ int gettimeofday(struct timeval *tv, void *tz)
         logd, logpath, logs = ctx.logd, ctx.logpath, ctx.logs
         stop = ctx.stop
         last_log_bytes, last_growth, started = ctx.last_log_bytes, ctx.last_growth, ctx.started
+        if case == "log-contract":
+            assert ctx.contract_state == 5, ctx.contract_state
+            stop(logd)
+            logd.wait(timeout=10)
+            assert logd.returncode == 0
+            results = [(int(seq), int(code)) for seq, code in re.findall(r"log-contract result seq=(\d+) code=(-?\d+)", text)]
+            assert len(results) > 1 and results[-1][1] == -5, results
+            assert results == [(i, 0) for i in range(len(results) - 1)] + [(len(results) - 1, -5)], results
+            stdout_rows = [int(seq) for seq in re.findall(r"(?m)^ipcclient-1:log-contract seq=(\d+)$", text)]
+            assert stdout_rows == list(range(len(results))), stdout_rows
+            final_codes = [int(code) for code in re.findall(r"log-contract final code=(-?\d+)", text)]
+            assert final_codes and final_codes[-1] == 0 and all(code == -5 for code in final_codes[:-1]), final_codes
+            disk = "".join(path.read_text(encoding="utf-8", errors="replace") for path in sorted(logs.rglob("info")))
+            rows = re.findall(r"(?m)^\d\d:\d\d:\d\d ipcclient-1:log-contract (seq=\d+|final)$", disk)
+            assert rows == ["seq=%d" % i for i in range(len(results) - 1)] + ["final"], rows
+            print("log contract accepted=%d busy=1 stdout=all disk=fifo final=1 PASS" % (len(results) - 1), flush=True)
+            return False
         if ctx.mode == "log":
             # Stop drains accepted batches; inspect actual files and the final backlog accounting.
             stop(logd)
@@ -231,4 +285,4 @@ int gettimeofday(struct timeval *tv, void *tz)
                     print("log rotation blocked open poll responsive persisted PASS", flush=True)
         return False
 
-CASES = (LogCase("log", "log"), LogCase("log-backpressure", "log"), LogCase("disk-full", "log"))
+CASES = (LogCase("log", "log"), LogCase("log-backpressure", "log"), LogCase("log-contract", "log"), LogCase("disk-full", "log"))

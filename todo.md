@@ -24,6 +24,7 @@
   - 正常 [框架顺序先 Init](<cbaselib/base/src/oi_app.cpp#L26-L46>)不触发，[AddTimer 已有保护](<cbaselib/timer/src/oi_timer_manager.cpp#L196-L215>)，不是正常启动必崩。
 - **最小方向**：分别定义两个入口未初始化时返回/错误语义，最小守卫后再换算，不改正常 tick/级联算法。
 - **验收**：两个入口各自 Init 前直接调用探针不崩且符合约定，Init 后正常换算与定时派发不变；现 AddTimer-before-init 断言不能替代这两个入口的覆盖。
+- **本轮结果**：两个入口已加未初始化守卫；Windows 与远程 Linux 的单线程、多线程 `hold-timer` 四路定向用例通过。Linux 两路均输出 `hold timer uninitialized update=1 convert=1 tick=0 ticks=0 unchanged=1 bad=0`、`hold timer conversion offset=50 bad=0` 和 `hold timer boundaries phase=3 calls=18 bad=0`，分别耗时 5.103 秒、5.407 秒，测试前后清理成功。旧版两个入口在 Windows MT 分别触发整数除零（客户端退出 0xC0000094）。这是定向验收，不替代完整矩阵。
 
 ## 4. 日志失败交付语义与证据
 
@@ -34,6 +35,7 @@
 - **最小方向**：明确接受丢弃/拒绝与有限重试合同，核对调用方处理和已有诊断；不擅改 [既定直连断线不暂存策略](<docs/fixed.md#2026-11-21-已定策略>)，不无限缓存，不无端新增大型诊断系统。
 - **若合同要求补发**：仅对确定未接纳帧有界排队，防重复；必须处理健康连接 BUSY 后恢复排空。[现 pending 只在 OnAddSession 排](<cbaselib/proto/src/oi_rpc_session_manager.cpp#L95-L113>)，不能光 push pending 就称修好。
 - **验收**：真实背压/断连，分别核对调用返回码、stdout 与文件/远端实际落盘，验证容量、FIFO、恢复排空和无重复，不能只看 enqueue_rate 或后续日志恢复。
+- **本轮定向结果**：Windows 与远程 Linux 的单线程、多线程 `log-contract` 四路通过。真实停止日志服并观察断线后，填满有界待发队列、恢复日志服，检查接纳与 BUSY 返回、stdout、停服后的真实文件顺序、拒绝项不落盘和最终项不重复。Linux 两路均输出 `log contract accepted=57 busy=1 stdout=all disk=fifo final=1 PASS`，定向耗时分别 2.768 秒、2.927 秒，前后清理成功。该场景在观察到断线后发送，**尚未覆盖活动会话发送与断连交错竞态**，不能由此推断该竞态的交付结果；本轮未跑完整矩阵。
 
 ## 5. UDP EAGAIN 写关注：先可控拥塞验证，再最小退避
 

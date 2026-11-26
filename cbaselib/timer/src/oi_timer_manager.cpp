@@ -139,6 +139,10 @@ void BaseTimerManager::Update()
 	int64_t iTicks = 0;
 	{
 		::OI::Thread::MutexGuard stLock(m_stWheelMutex);
+		if (!m_iTickOffsetMilliseconds)
+		{
+			return;
+		}
 		gettimeofday(&m_stCurrentTimeValue, 0);
 		m_iCurrentTime = m_stCurrentTimeValue.tv_sec;
 		localtime_r(&m_iCurrentTime, &m_stCurrentCalendarTime);

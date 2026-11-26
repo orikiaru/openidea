@@ -170,6 +170,33 @@ namespace OI::Timer
 class TimerTestAccess
 {
   public:
+	static int32_t CheckUninitialized()
+	{
+		BaseTimerManager stManager;
+		const char* pProbe = std::getenv("OI_TIMER_UNINIT_PROBE");
+		const bool bCheckUpdate = !pProbe || std::strcmp(pProbe, "convert") != 0;
+		const bool bCheckConvert = !pProbe || std::strcmp(pProbe, "update") != 0;
+		const auto stBefore = stManager.GetCurTickTime();
+		if (bCheckUpdate)
+		{
+			std::printf("timer uninitialized probe update\n");
+			std::fflush(stdout);
+			stManager.Update();
+		}
+		const auto stAfter = stManager.GetCurTickTime();
+		if (bCheckConvert)
+		{
+			std::printf("timer uninitialized probe convert\n");
+			std::fflush(stdout);
+		}
+		const uint32_t iTicks = bCheckConvert ? stManager.milling2tick(1) : 0;
+		const bool bPassed = stManager.GetCurTick() == 0 && stAfter.tv_sec == stBefore.tv_sec &&
+		    stAfter.tv_usec == stBefore.tv_usec && iTicks == 0;
+		std::printf("hold timer uninitialized update=%d convert=%d tick=%lld ticks=%u unchanged=%d bad=%d\n",
+		    bCheckUpdate, bCheckConvert, static_cast<long long>(stManager.GetCurTick()), iTicks,
+		    stAfter.tv_sec == stBefore.tv_sec && stAfter.tv_usec == stBefore.tv_usec, bPassed ? 0 : 1);
+		return bPassed ? 0 : 1;
+	}
 	static void Backdate(BaseTimerManager& stManager, int32_t iMilliseconds)
 	{
 		OI::Thread::MutexGuard stLock(stManager.m_stWheelMutex);
@@ -307,6 +334,11 @@ struct TimerClosureProbe
 
 OI::Coro::TaskResult<int> TimerMgr::CheckTimerExceptions()
 {
+	const int32_t iUninitializedBad = OI::Timer::TimerTestAccess::CheckUninitialized();
+	auto& stInitialized = OI::Timer::BaseTimerManager::GetInstance();
+	const int32_t iOffset = stInitialized.GetTickOffsetMS();
+	const int32_t iConversionBad = iOffset > 0 && stInitialized.milling2tick(iOffset) == 1 && stInitialized.milling2tick(iOffset + 1) == 2 ? 0 : 1;
+	LOG_TRACE("hold timer conversion offset=%d bad=%d", iOffset, iConversionBad);
 	auto pFrameworkProbe = std::make_shared<FrameworkTimerProbeState>();
 	auto* pZeroTimer = new FrameworkTimerProbe(pFrameworkProbe, true);
 	auto* pNegativeTimer = new FrameworkTimerProbe(pFrameworkProbe, true);
@@ -539,7 +571,7 @@ OI::Coro::TaskResult<int> TimerMgr::CheckTimerExceptions()
 	LOG_TRACE("hold timer repeat calls=%d throws=%d zero_count=%d negative_count=%d zero_interval=%d negative_interval=%d bad=%d", pRepeat->iCalls.load(), pRepeat->iThrows.load(), iZeroCount, iNegativeCount, iZeroInterval, iNegativeInterval, iRepeatBad);
 	const int32_t iContextBad = (iStop == OI_OK && iExtend == OI_OK && iSetZero == OI_OK && iSetNegative == OI_OK && pRepeat->iStopped == 1 && pRepeat->iExtended == 3 && pRepeat->iSetZero == 1 && pRepeat->iSetNegative == 1 && pRepeat->vRemaining[0] == 0 && pRepeat->vRemaining[1] == 1 && pRepeat->vRemaining[2] == 0) ? 0 : 1;
 	LOG_TRACE("hold timer context stopped=%d extended=%d remaining=%d/%d/%d zero=%d negative=%d bad=%d", pRepeat->iStopped.load(), pRepeat->iExtended.load(), pRepeat->vRemaining[0].load(), pRepeat->vRemaining[1].load(), pRepeat->vRemaining[2].load(), pRepeat->iSetZero.load(), pRepeat->iSetNegative.load(), iContextBad);
-	int iBad = (pState->bPassed ? 0 : 1) + iOnceBad + iBoundaryBad + iFrameworkBad;
+	int iBad = (pState->bPassed ? 0 : 1) + iOnceBad + iBoundaryBad + iFrameworkBad + iUninitializedBad + iConversionBad;
 	iBad += iRepeatBad + iContextBad;
 	if (pState->vTicks[0] != pState->vTicks[1].load() || pState->vTicks[2] != pState->vTicks[3].load() || pState->vTicks[4] <= pState->vTicks[3].load())
 	{

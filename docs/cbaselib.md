@@ -40,11 +40,13 @@
 
 `timer` 是分层时间轮，类型在 `OI::Timer`，见 [定时器](timer.md)。应用层时长是 `MS`，由 `Milliseconds`、`Seconds`、`Minutes`、`Hours`、`Days` 构造。
 
-`logger` 是日志客户端，类型在 `OI::Log`。业务进程用它把日志发到 `logd`。`logd` 自己的服务端在 `cbaselib/logd`。`SendLog` 在日志服还没连上时先攒着，待发超过 4MB 就返回 `OI_ERR_BUSY`，调用方自己决定要不要再试。
+`logger` 是日志客户端，类型在 `OI::Log`。业务进程用它把日志发到 `logd`。`logd` 自己的服务端在 `cbaselib/logd`。没有活动会话时 `SendLog` 把完整帧放入待发队列，额度为 4 MiB 与发送队列上限中较小者；放不下返回 `OI_ERR_BUSY`，调用方自己决定要不要再试。有活动会话时返回发送接口的结果，失败不自动回退到待发队列。`OI_OK` 只表示当前已接纳，不保证对端已经收到或落盘。格式化日志入口先写 stdout，再返回本地 sink 或客户端的结果；忽略非零返回码可能使文件缺少该条日志。
 
 logd 的 `[Log] max_pending_bytes` 默认 64MiB，所有日志级别共享，包含排队和正在写入、尚未 fflush 的批次及时间前缀。满时保留完整输入帧并暂停该连接读取，写线程完成后通过 poll 恢复；连接关闭后仍排空已读取的完整帧。进程正常退出先排空等待会话，再 join 写线程。本地日志返回 `OI_ERR_BUSY` 表示当前不能接纳，仍已按原规则输出到 stdout；不能在 poll 中阻塞等待磁盘。此限额不含接收缓冲、内核缓冲及分配器开销，不是 RSS 上限。
 
-`python3 tools/run_regressions.py --case log-backpressure` 使用现有 LogMgr 发送 64MiB、通过临时 LD_PRELOAD 只延迟 logd 写盘线程，核对每条落盘正文、实际字节、队列峰值不超限、发生暂停且最终 pending=0；普通日志用例继续验证 1GiB 吞吐。全套 `--case all` 包含慢盘用例，两种客户端/服务端线程模式均需运行。
+`python3 tools/run_regressions.py --case log-backpressure` 使用现有 LogMgr 发送 64MiB，在 Linux 通过临时 LD_PRELOAD、Windows 通过测试钩子延迟 logd 写盘线程，核对每条落盘正文和行数、实际字节、队列峰值不超限、发生暂停且最终 pending=0；普通日志用例继续验证 1GiB 吞吐。所有测试行正文相同，因此这些断言不能证明逐条 FIFO 或排除丢失和重复互相抵消；LogMgr 直接调用 `SendLog`，也没有逐次断言返回码或格式化入口的 stdout。断连时已接纳与被拒绝的各条日志及恢复后的落盘仍需单独验证。全套 `--case all` 包含慢盘用例，两种客户端/服务端线程模式均需运行。
+
+定向用例 `python3 tools/run_regressions.py --case log-contract` 停止真实 logd 并观察客户端断线，由 LogMgr 经格式化入口逐条发送带序号日志，直到 4096 字节待发额度返回 `OI_ERR_BUSY`；随后重启 logd，检查所有调用返回码、stdout 中成功和拒绝的序号，以及最终文件中成功序号按顺序各出现一次、拒绝序号不出现、恢复后的末条日志出现一次。它不覆盖活动会话发送失败的竞态，也不保证已接纳日志在任意时刻断电或断连后送达。
 
 `redis` 是连 `redisserver` 的客户端，类型在 `OI::Redis`，字节是 RESP，不进 proto。一条连接上的命令按发送顺序对回包。超时后这条命令仍留在队列里，等它自己的回包来认领，避免后面的应答串位。回包如果再也没来，而连接还在，后面的命令会一直顶在它后面。超时单位是毫秒，来自 `RedisClient.timeout_ms`，由 200 毫秒的周期定时器扫描。先到的那个算数。`RedisResult.iStatus` 区分 Ok、Timeout、Disconnected、InvalidArgument、SendFailed、ServerError、ProtocolError、Busy；`bTimeout` 仅在真正超时时为真。错误回执仍保留在共享 `pReply` 中，`if (result)` 只对 Ok 成立。
 

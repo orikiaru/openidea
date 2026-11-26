@@ -202,6 +202,8 @@ python3 tools/run_regressions.py --case all --expect-thread mt --artifacts /tmp/
 
 可定向运行 `--case hold-blocking`、`--case hold-timer` 或 `--case hold-redis`。三项分别只执行阻塞、定时器或 Redis 迟到回包检查；阻塞场景启动 ipcserver，定时器场景不启动其他业务服务，Redis 场景只启动 redisserver 和临时 Redis，三项均启动日志服。端口预检只检查对应服务端口。完整 `hold` 和 `all` 的覆盖保持不变。定向用例检查各自的完成标记和真实结果，Redis 场景也支持 `--redis-timeline --artifacts <目录>`。
 
+定时器定向用例另创建未初始化的独立管理器，检查 `Update` 不改变 tick 和日历快照、`milling2tick(1)` 返回 0；已初始化单例检查整跳和跨跳向上取整，既有回调断言验证实际派发。驱动要求 `hold timer uninitialized update=1 convert=1 tick=0 ticks=0 unchanged=1 bad=0` 和 `hold timer conversion offset=... bad=0`。
+
 排查 Hold 的 Redis 迟到回包时，可对本次测试启动的 Redis 开启只读 MONITOR：
 
 ```sh
