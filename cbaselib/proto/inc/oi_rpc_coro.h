@@ -172,11 +172,12 @@ class RpcHandlerBuilder
 				}
 				return;
 			}
-			OI::Coro::StartTask([fnFunction, iResponseId, stDelivery = std::move(stDelivery), stRequest = std::move(*stRequest)](OI::Coro::Token iToken) mutable
+			auto fnDispatch = [fnFunction, iResponseId, stDelivery = std::move(stDelivery), stRequest = std::move(*stRequest)](OI::Coro::Token iToken) mutable
 			{
 				return Run<Req, Res>(fnFunction, iResponseId, iToken, stDelivery.pManager,
 				    stDelivery.iSessionId, stDelivery.iRawCallId, std::move(stRequest));
-			});
+			};
+			OI::Coro::StartTask(std::move(fnDispatch));
 		};
 	}
 };

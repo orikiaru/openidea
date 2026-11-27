@@ -1047,11 +1047,12 @@ void HttpSessionManager::EnqueueOnLoop(const Pending& pCall)
 	{
 		if (auto pHeld = pWeak.lock(); pHeld && !pHeld->iDone.load(std::memory_order_acquire))
 		{
-			Net::Poll::GetInstance().CallOnLoop([](void* pArg)
+			auto fnTimeout = [](void* pArg)
 			{
 				std::unique_ptr<Pending> pCallLocal(static_cast<Pending*>(pArg));
 				GetInstance().Finish(*pCallLocal, OI_ERR_TIMEOUT, "timeout");
-			}, new Pending(std::move(pHeld)));
+			};
+			Net::Poll::GetInstance().CallOnLoop(fnTimeout, new Pending(std::move(pHeld)));
 		}
 	}, iTimeout);
 	if (iTimerCode != OI_OK)

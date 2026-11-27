@@ -23,7 +23,11 @@ struct RpcOutputWait
 	{
 		try
 		{
-			co_return (co_await stTask) == 0 ? 0 : 1;
+			if ((co_await stTask) == 0)
+			{
+				co_return 0;
+			}
+			co_return 1;
 		}
 		catch (const std::exception&)
 		{

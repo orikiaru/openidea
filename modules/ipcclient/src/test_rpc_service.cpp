@@ -92,7 +92,11 @@ OI::Coro::TaskResult<TestRpcService::NamedOutcome> TestRpcService::AwaitNamedHol
 	try
 	{
 		const int32_t iCode = co_await stCall;
-		co_return iCode == 0 && stOutput.iMark == 77 ? NamedOutcome::Success : NamedOutcome::Failed;
+		if (iCode == 0 && stOutput.iMark == 77)
+		{
+			co_return NamedOutcome::Success;
+		}
+		co_return NamedOutcome::Failed;
 	}
 	catch (const std::logic_error&)
 	{
@@ -158,7 +162,19 @@ OI::Coro::TaskResult<int> TestRpcService::CheckCompletedRpcRequests(sid_t iSessi
 		for (int iIndex = 0; iIndex < 20; ++iIndex)
 		{
 			const bool bExpectedException = iIndex < 18 && iIndex % 3 == 2;
-			const int32_t iExpected = iIndex == 18 ? OI_ERR_TIMEOUT : (iIndex == 19 ? OI_ERR_CONNECT : (iIndex % 3 == 1 ? 1001 : 0));
+			int32_t iExpected = OI_OK;
+			if (iIndex == 18)
+			{
+				iExpected = OI_ERR_TIMEOUT;
+			}
+			else if (iIndex == 19)
+			{
+				iExpected = OI_ERR_CONNECT;
+			}
+			else if (iIndex % 3 == 1)
+			{
+				iExpected = 1001;
+			}
 			bool bCaught = false;
 			try
 			{
@@ -235,10 +251,12 @@ OI::Coro::TaskResult<int> TestRpcService::CheckNamedOutputRpcTask()
 	std::vector<OI::Coro::TaskResult<int>> vWaiters;
 	for (int iIndex = 0; iIndex < 8; ++iIndex)
 	{
-		vWaiters.push_back(OI::Coro::StartTask([stNamed]()
+		auto fnWaitForNamedCall = [stNamed]()
 		{
 			return RpcOutputWait::Await(stNamed);
-		}));
+		};
+		auto stWaiter = OI::Coro::StartTask(std::move(fnWaitForNamedCall));
+		vWaiters.push_back(std::move(stWaiter));
 	}
 	for (const auto& stWaiter : vWaiters)
 	{
@@ -500,14 +518,26 @@ OI::Coro::TaskResult<int32_t> TestRpcService::WaitGameserverNotes(int32_t iTag, 
 	{
 		iZone1001 = co_await QueryZoneNotes(1001, iTag);
 		iZone1002 = co_await QueryZoneNotes(1002, iTag);
-		const int32_t iSum = (iZone1001 < 0 || iZone1002 < 0) ? -1 : iZone1001 + iZone1002;
+		int32_t iSum = -1;
+		if (iZone1001 >= 0 && iZone1002 >= 0)
+		{
+			iSum = iZone1001 + iZone1002;
+		}
 		if (iSum == iExpected)
 		{
 			co_return iSum;
 		}
 		if (::OI::Timer::SteadyMilliseconds() >= iDeadlineMilliseconds)
 		{
-			co_return iSum < 0 ? (iZone1001 < 0 ? iZone1001 : iZone1002) : iSum;
+			if (iZone1001 < 0)
+			{
+				co_return iZone1001;
+			}
+			if (iZone1002 < 0)
+			{
+				co_return iZone1002;
+			}
+			co_return iSum;
 		}
 		co_await OI::Coro::yield(20);
 	}

@@ -21,7 +21,11 @@ class HeaderFields
 	{
 		auto fnLower = [](char iChar)
 		{
-			return iChar >= 'A' && iChar <= 'Z' ? iChar + ('a' - 'A') : static_cast<int>(iChar);
+			if (iChar >= 'A' && iChar <= 'Z')
+			{
+				return iChar + ('a' - 'A');
+			}
+			return static_cast<int>(iChar);
 		};
 		return sLeft.size() == sRight.size() && std::equal(sLeft.begin(), sLeft.end(), sRight.begin(), [fnLower](char iLeft, char iRight)
 		{

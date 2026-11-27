@@ -211,7 +211,11 @@ bool PeerConnection::HasLease()
 std::shared_ptr<RpcSender> PeerConnection::SharedSender()
 {
 	auto pConnection = pSelf.lock();
-	return pConnection ? std::shared_ptr<RpcSender>(pConnection, &pConnection->stSender) : nullptr;
+	if (pConnection)
+	{
+		return std::shared_ptr<RpcSender>(pConnection, &pConnection->stSender);
+	}
+	return nullptr;
 }
 
 sid_t PeerConnection::SessionId()

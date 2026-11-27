@@ -46,7 +46,11 @@ int32_t ParseConfigArgument(int& iArgumentCount, char* vArguments[], const char*
 int32_t StartFramework(const char* pDefaultConfigPath, int& iArgumentCount, char* vArguments[])
 {
 	const int32_t iStatus = ParseConfigArgument(iArgumentCount, vArguments, pDefaultConfigPath);
-	return iStatus == OI_OK ? StartFramework(pDefaultConfigPath) : iStatus;
+	if (iStatus != OI_OK)
+	{
+		return iStatus;
+	}
+	return StartFramework(pDefaultConfigPath);
 }
 
 int32_t StartFramework(const char* pConfigPath)

@@ -170,7 +170,11 @@ static OI::Coro::TaskResult<std::string> Diagnose(sid_t iSessionId, int32_t iSeq
 	stRequest.iSeq = iSeq;
 	::OI::RpcData::UdpEchoRes stResponse;
 	const int32_t iRet = co_await ::OI::Rpc::RpcCall(IpcUdp::GetInstance(), iSessionId, stRequest, stResponse, ::OI::Timer::Seconds(3));
-	co_return iRet == OI_OK ? stResponse.sData : std::string("ret=") + std::to_string(iRet);
+	if (iRet == OI_OK)
+	{
+		co_return stResponse.sData;
+	}
+	co_return std::string("ret=") + std::to_string(iRet);
 }
 
 OI::Coro::Task TestUdp::Pump(sid_t iSessionId)
@@ -425,7 +429,11 @@ static OI::Coro::TaskResult<int> CheckUdpQueue()
 		const int32_t iB1 = UdpQueueSend(*stLocal.pManager, stLocal.vSessionIds[1], "B1");
 		const int32_t iA2 = UdpQueueSend(*stLocal.pManager, stLocal.vSessionIds[0], "A222");
 		const int32_t iB2 = UdpQueueSend(*stLocal.pManager, stLocal.vSessionIds[1], "B22222");
-		return iA1 == OI_OK && iB1 == OI_OK && iA2 == OI_OK && iB2 == OI_OK ? OI_OK : OI_ERR_FAIL;
+		if (iA1 == OI_OK && iB1 == OI_OK && iA2 == OI_OK && iB2 == OI_OK)
+		{
+			return OI_OK;
+		}
+		return OI_ERR_FAIL;
 	}, &stProbe);
 	std::vector<std::string> vReceived[2];
 	for (int32_t iWait = 0; iWait < 300 && (vReceived[0].size() < 2 || vReceived[1].size() < 2); ++iWait)
@@ -453,10 +461,12 @@ static OI::Coro::TaskResult<int> CheckUdpQueue()
 		const int32_t iOpen = stLocal.pManager->OpenPeer("127.0.0.1", std::to_string(stLocal.vPorts[0]), stLocal.iReopened);
 		stLocal.iOldSend = UdpQueueSend(*stLocal.pManager, stLocal.vSessionIds[0], "LATE");
 		const int32_t iNew = UdpQueueSend(*stLocal.pManager, stLocal.iReopened, "NEW");
-		return iQueuedOld == OI_OK && iClosed == OI_OK && iOpen == OI_OK &&
-		               stLocal.iReopened != stLocal.vSessionIds[0] && stLocal.iOldSend != OI_OK && iNew == OI_OK
-		           ? OI_OK
-		           : OI_ERR_FAIL;
+		if (iQueuedOld == OI_OK && iClosed == OI_OK && iOpen == OI_OK &&
+		    stLocal.iReopened != stLocal.vSessionIds[0] && stLocal.iOldSend != OI_OK && iNew == OI_OK)
+		{
+			return OI_OK;
+		}
+		return OI_ERR_FAIL;
 	}, &stProbe);
 	std::vector<std::string> vAfter;
 	const auto stObserveStart = std::chrono::steady_clock::now();

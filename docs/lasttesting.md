@@ -23,20 +23,20 @@
 - 唤醒性能单线程专项：远程 Linux 的 100000 次串行空任务三轮平均分别为 13.590、13.840、13.800 微秒；真 MySQL 的 `mysql_direct_finish_to_resume` 为 1000 样本，p50/p95/p99 分别 15.241/25.457/32.247 微秒，逐段结果在 `st-wake-20261126-200353`。Windows ST 同一轮的串行空任务平均 39.265 微秒；独立 trace 的 `trace_total` p50/p95/p99 为 36.1/69.2/96.5 微秒。串行整链与独立打点采样分别记录，不将两者相减或混为同一测量。
 - Windows `web-stop` 单/多线程各做两轮 control、idle、stop：control 每轮完整接收 9437184 字节；idle 零退出后收到 RST；活跃响应停服每轮收到 8185 字节后 RST，诊断失败。结果位于 `.local/webstop-final-windows-mt`、`.local/webstop-final-windows-st`。这是已观察行为，停服是否应排空在途响应仍待定。
 
-## 全量（2026-11-27，StartTask 无参入口）
+## 全量（2026-11-27，可读性与任务标识寿命）
 
-受测 HEAD `e89f17068216aed3d5cc1ac818a34c4f4c3a75a7` 加工作区改动。四路 `all` 均通过，25 个修改的非文档文件按路径排序、行尾归一后的摘要均为 `8d328ccd655e5573d79335a921fd2527dce8aac5b674a333ce50d0c85a97c37d`。两路 Linux 的 ASan/UBSan 探针通过；四路测试前后归属清理均通过。
+受测 HEAD `d007edd3c0cbd2aea8fbccbc6c35191cc8842c82` 加工作区改动。四路 `all` 均通过；40 个修改源码文件的 LF 归一化清单 SHA256 为 `e4543448f11ea78702b2c7dd332c1da11bb7c07892d568261955ec62355823b4`，四路隔离树逐项匹配。两路 Linux ASan/UBSan 通过，四路测试前后归属清理通过。
 
 | 平台 | 线程 | CPU | 频率 MHz | `all` 结果 | 耗时 |
 | --- | --- | --- | ---: | --- | --- |
-| Windows MSVC x64 Release | 多线程 | AMD Ryzen 7 9800X3D | 4700（测后） | 25 通过、1 Unix 专项跳过 | 527.5 秒 |
-| Windows MSVC x64 Release | 单线程 | AMD Ryzen 7 9800X3D | 4700（测后） | 25 通过、1 Unix 专项跳过 | 564.8 秒 |
-| 远程 Linux GCC 13 Release | 多线程 | Intel Xeon Platinum 8255C | 2494.140 | 26/26，20 步骤全通过 | 557 秒 |
-| 本地 WSL Ubuntu 24.04 GCC 13.3 Release | 单线程 | AMD Ryzen 7 9800X3D | 4699.888 | 26/26，19 步骤全通过 | 277.3 秒 |
+| Windows MSVC x64 Release | 多线程 | AMD Ryzen 7 9800X3D | 4700（测后） | 25 通过、1 Unix 专项跳过 | 605.5 秒 |
+| Windows MSVC x64 Release | 单线程 | AMD Ryzen 7 9800X3D | 4700（测后） | 25 通过、1 Unix 专项跳过 | 642.2 秒 |
+| WSL Ubuntu 24.04 GCC 13 Release | 多线程 | AMD Ryzen 7 9800X3D | 4699.888 | 26/26 | 432.0 秒 |
+| WSL Ubuntu 24.04 GCC 13 Release | 单线程 | AMD Ryzen 7 9800X3D | 4699.888 | 26/26 | 348.5 秒 |
 
-Windows 跳过项为仅适用于 Unix libuv POLLERR 的 `tcp-error-rearm`。两路 Windows 均输出 `hold captured tasks done=32 bad=0`，启动任务的 2、8、64、256 个等待者在三种模式下均为 `runs=1`、全部唤醒、`bad=0`，以及 `hold hot start inline=1 queued=1 bad=0`；`web`、`web-coro` 均通过。WSL clang++-18 对无参静态函数和带 Token lambda 的 `StartTask` 实例化执行 `-Wunused-lambda-capture -Werror -fsyntax-only`，退出 0。
+Windows 跳过项为 Unix libuv POLLERR 专项 `tcp-error-rearm`；两路均有 `hold captured tasks done=32 bad=0`、`web PASS` 和 `web-coro PASS`。WSL ST 的三类内嵌解码 bench 均为 `ok=1`；Clang 双签名语法检查退出 0。结果目录为 `.local/readability-final-windows`、`.local/readability-final-linux-mt/linux-mt` 和 `.local/readability-final-linux-st/linux-st`。
 
-Windows 结果目录为 `.local/starttask-e89f170-final-windows`；远程 Linux MT 为 `~/openidea-test-results/mt-e89f170-final-20261127`，WSL ST 为 `.local/starttask-e89f170-final-linux-st/linux-st`。
+独立真 MySQL 专项四路通过，均输出 `mysql row mapping bad=0`、`mysql rows bad=0`、`mysql done bad=0`。Windows 两路和 WSL ST 的静态路由也通过，WSL MT 的 empty 对照通过；结果分别在 `.local/readability-final-win-mt-mysql-retry`、`.local/readability-final-win-st-mysql-retry`、`.local/readability-final-linux-mt-mysql`、`.local/readability-final-linux-st-mysql-direct-verified`。Windows 首次专项误指定 `deploy/bin` 而非 `deploy/bin/Release`，两路均因找不到 `logd.exe` 退出 1，未进入业务；WSL ST 首次同时传 `--mysqld` 和 `--case mysql`，真库通过后又按普通用例执行并因缺环境退出 1。上述失败保留在无 `-retry` 的 Windows 目录及 `.local/readability-final-linux-st-mysql`，与四路 `all` 结果分开记录。
 
 ## 收包额度与解码预算复验（2026-11-25 晚，历史记录）
 

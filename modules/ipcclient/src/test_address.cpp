@@ -164,11 +164,12 @@ OI::Coro::TaskResult<int> TestAddress::CheckResolveFailure(const std::string& sP
 		auto* pPending = static_cast<Lookup*>(pArgument);
 		// 解析可能立即回调并释放 pPending；端口在整个 ResolveAll 调用期间有效。
 		const auto sServicePort = std::move(pPending->sServicePort);
-		OI::Net::NetAddr::ResolveAll(sHost, sServicePort, [](void* pContext, std::vector<OI::Net::NetAddr> vAddresses)
+		auto fnCompleteLookup = [](void* pContext, std::vector<OI::Net::NetAddr> vAddresses)
 		{
 			std::unique_ptr<Lookup> pCompleted(static_cast<Lookup*>(pContext));
 			pCompleted->stCount.set_value(vAddresses.size());
-		}, pPending);
+		};
+		OI::Net::NetAddr::ResolveAll(sHost, sServicePort, fnCompleteLookup, pPending);
 	}, pLookup.release());
 	const auto iDeadlineMilliseconds = OI::Timer::SteadyMilliseconds() + 5000;
 	while (stCount.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)

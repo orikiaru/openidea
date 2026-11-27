@@ -479,10 +479,20 @@ void RedisClient::Enqueue(RedisCall::State* pSt)
 				break;
 			}
 		}
-		const RedisStatus iStatus = iSendRet == OI_ERR_BUSY ? RedisStatus::Busy : (iSendRet == OI_ERR_CONNECT ? RedisStatus::Disconnected : RedisStatus::SendFailed);
+		RedisStatus iStatus = RedisStatus::SendFailed;
+		const char* pReason = "send failed";
+		if (iSendRet == OI_ERR_BUSY)
+		{
+			iStatus = RedisStatus::Busy;
+			pReason = "send queue capacity exceeded";
+		}
+		else if (iSendRet == OI_ERR_CONNECT)
+		{
+			iStatus = RedisStatus::Disconnected;
+			pReason = "session disconnected";
+		}
 		char vReason[160];
-		snprintf(vReason, sizeof(vReason), "ret=%d bytes=%zu cause=%s", iSendRet, stFrame.Size(),
-		    iSendRet == OI_ERR_BUSY ? "send queue capacity exceeded" : (iSendRet == OI_ERR_CONNECT ? "session disconnected" : "send failed"));
+		snprintf(vReason, sizeof(vReason), "ret=%d bytes=%zu cause=%s", iSendRet, stFrame.Size(), pReason);
 		ReportRedisError(pSt->iRequestId, pSt->iSessionId, "send", pSt->vArguments.front(), vReason);
 		Settle(pSt, {}, iStatus);
 		Release(pSt);

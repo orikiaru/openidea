@@ -16,7 +16,11 @@ class FormCodec
 	static View Trim(View sValue)
 	{
 		auto iStart = sValue.find_first_not_of(" \t");
-		return iStart == View::npos ? View{} : sValue.substr(iStart, sValue.find_last_not_of(" \t") - iStart + 1);
+		if (iStart == View::npos)
+		{
+			return View{};
+		}
+		return sValue.substr(iStart, sValue.find_last_not_of(" \t") - iStart + 1);
 	}
 
 	static bool Safe(View sValue)

@@ -94,11 +94,12 @@ OI::Coro::TaskResult<int> TestTaskShare::CheckForeignTaskStart()
 	{
 		try
 		{
-			auto stTask = OI::Coro::StartTask([pRuns]()
+			auto fnRunChild = [pRuns]()
 			{
 				++*pRuns;
 				return TestTaskShare::GetInstance().SharedVoidChild(pRuns);
-			});
+			};
+			auto stTask = OI::Coro::StartTask(std::move(fnRunChild));
 		}
 		catch (const std::logic_error&)
 		{

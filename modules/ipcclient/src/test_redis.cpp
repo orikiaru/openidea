@@ -455,7 +455,11 @@ static OI::Coro::TaskResult<int> CheckReplyStatus()
 static int32_t CheckRedisWorkerThread()
 {
 	const auto stResult = OI::Redis::CallRedisSync({"PING"});
-	return stResult.iStatus == OI::Redis::RedisStatus::WrongThread && stResult.GetRet() == OI_ERR_WRONG_THREAD ? OI_OK : OI_ERR_FAIL;
+	if (stResult.iStatus == OI::Redis::RedisStatus::WrongThread && stResult.GetRet() == OI_ERR_WRONG_THREAD)
+	{
+		return OI_OK;
+	}
+	return OI_ERR_FAIL;
 }
 #endif
 
@@ -477,7 +481,7 @@ static OI::Coro::TaskResult<int> CheckSyncOnLoop()
 		auto pTimer = new uv_timer_t{};
 		pTimer->data = pArgument;
 		uv_timer_init(OI::Net::Poll::GetInstance().Loop(), pTimer);
-		uv_timer_start(pTimer, [](uv_timer_t* pTimer)
+		auto fnCheckSyncOnLoop = [](uv_timer_t* pTimer)
 		{
 			int32_t iChecked = -1;
 			try
@@ -489,11 +493,13 @@ static OI::Coro::TaskResult<int> CheckSyncOnLoop()
 				iChecked = 1;
 			}
 			static_cast<std::atomic<int32_t>*>(pTimer->data)->store(iChecked, std::memory_order_release);
-			uv_close(reinterpret_cast<uv_handle_t*>(pTimer), [](uv_handle_t* pHandle)
+			auto fnDeleteTimer = [](uv_handle_t* pHandle)
 			{
 				delete reinterpret_cast<uv_timer_t*>(pHandle);
-			});
-		}, 1, 0);
+			};
+			uv_close(reinterpret_cast<uv_handle_t*>(pTimer), fnDeleteTimer);
+		};
+		uv_timer_start(pTimer, fnCheckSyncOnLoop, 1, 0);
 	}, &iSyncGuard);
 	while (iSyncGuard.load(std::memory_order_acquire) == 0)
 	{

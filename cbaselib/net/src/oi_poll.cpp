@@ -81,7 +81,16 @@ struct IoOp
 
 int MaskToUv(int32_t iMask)
 {
-	return ((iMask & IO_EV_READ) ? UV_READABLE : 0) | ((iMask & IO_EV_WRITE) ? UV_WRITABLE : 0);
+	int32_t iEvents = 0;
+	if (iMask & IO_EV_READ)
+	{
+		iEvents |= UV_READABLE;
+	}
+	if (iMask & IO_EV_WRITE)
+	{
+		iEvents |= UV_WRITABLE;
+	}
+	return iEvents;
 }
 
 void OnPoll(uv_poll_t* pHandle, int iStatus, int iEvents)
@@ -524,13 +533,14 @@ int32_t Poll::StopAndJoin()
 	{
 		CallOnLoop([](void* pArgument)
 		{
-			BlockingWorkSessionManager::GetInstance().Drain([](void* pData)
+			auto fnFinish = [](void* pData)
 			{
 				auto* pState = static_cast<State*>(pData);
 				::OI::Thread::NativeMutexGuard stGuard(pState->stQueueLock);
 				pState->bStop.store(true);
 				pState->pWakeup->Wakeup();
-			}, pArgument);
+			};
+			BlockingWorkSessionManager::GetInstance().Drain(fnFinish, pArgument);
 		}, m_pState.get());
 #ifdef _SINGLE_THREAD_
 		while (!m_pState->bStop.load())

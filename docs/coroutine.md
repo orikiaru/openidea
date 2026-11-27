@@ -42,7 +42,7 @@
 
 任务创建和启动的线程限制见 [硬性约束](#硬性约束)。
 
-`co_return` 才结束一条 `OI::Coro::Task`。同一个 Task / TaskResult 可以重复或并发 `co_await`，任务只执行一次。两个等待者都在完成前，会挂进 `pWaiters`，结束时逐个 `Schedule`；一个在完成前、一个在完成后，先来的入队，后来的看见 `bReady` 当场取结果；两个都在完成后，都不挂起，各复制一次结果。时序见 [单线程](sequence-diagram/single-thread/waiters.md) 和 [多线程](sequence-diagram/multi-thread/waiters.md)。完成后再等，直接取得已保存的结果或异常。`StartTask` 接受无参任务函数，也兼容接收 `Token` 的任务函数；两种形式都可调用时优先传入 `Token`，保持原有行为；启动独立任务并返回对应的 Task / TaskResult 实例；可直接 await，也可按值传给多个协程。需要调用号时用 `stTask.GetToken()`。不接返回值仍然正常独立执行，不取消任务。底层 `task.Start()` 只把任务标成独立任务（分配 token、异常直接报告），可重复调用，不会再次执行。
+`co_return` 才结束一条 `OI::Coro::Task`。同一个 Task / TaskResult 可以重复或并发 `co_await`，任务只执行一次。两个等待者都在完成前，会挂进 `pWaiters`，结束时逐个 `Schedule`；一个在完成前、一个在完成后，先来的入队，后来的看见 `bReady` 当场取结果；两个都在完成后，都不挂起，各复制一次结果。时序见 [单线程](sequence-diagram/single-thread/waiters.md) 和 [多线程](sequence-diagram/multi-thread/waiters.md)。完成后再等，直接取得已保存的结果或异常。`StartTask` 接受无参任务函数，也兼容接收 `Token` 的任务函数；两种形式都可调用时优先传入 `Token`，保持原有行为；接收 `const Token&` 时引用在任务执行期有效，不要在任务结束后保存或使用；启动独立任务并返回对应的 Task / TaskResult 实例；可直接 await，也可按值传给多个协程。需要调用号时用 `stTask.GetToken()`。不接返回值仍然正常独立执行，不取消任务。底层 `task.Start()` 只把任务标成独立任务（分配 token、异常直接报告），可重复调用，不会再次执行。
 
 Task 对象、每个等待器及运行中的帧各持一份引用。任务对象析构不会取消已启动任务，等待器可独立保活；最后一个引用释放才销毁帧。任务对象可复制或移动；复制只增加共享引用，不复制任务或结果，已经登记的等待不受影响；移后对象再次 Start/await 抛 logic_error。不支持一边移动/销毁同一个 C++ 对象一边从其他线程访问它。
 

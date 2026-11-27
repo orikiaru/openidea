@@ -134,24 +134,39 @@ OI::Coro::TaskResult<int> TestSchedule::CheckTaskScope()
 	co_return iBadLocal;
 }
 
+static constexpr OI::Coro::Token iMissingToken = 0;
+
 // 真正的带捕获协程 lambda：临时闭包离开后、挂起恢复后仍访问捕获。
 OI::Coro::TaskResult<int> TestSchedule::CheckCapturedTasks()
 {
-	// 默认标识 0 让两种签名都能调用；若启动时没传入真实标识，子任务会报错。
-	std::vector<OI::Coro::TaskResult<int>> vTasks;
+	using OI::Coro::Token;
+	using TokenTask = OI::Coro::TaskResult<Token>;
+	// 两种签名都可调用。跨挂起后按引用读到的标识，必须和各自的任务句柄一致。
+	std::vector<TokenTask> vTasks;
 	for (int iIndexLocal = 0; iIndexLocal < 32; ++iIndexLocal)
 	{
-		vTasks.push_back(OI::Coro::StartTask([text = std::string(4096, 'a' + iIndexLocal % 26), iIndexLocal](OI::Coro::Token iToken = 0) -> OI::Coro::TaskResult<int>
+		std::string sText(4096, 'a' + iIndexLocal % 26);
+		auto fnReadToken = [sText = std::move(sText), iIndexLocal](const Token& iToken = iMissingToken) -> TokenTask
 		{
 			co_await OI::Coro::yield(::OI::Timer::Milliseconds(0));
 			co_await OI::Coro::yield(::OI::Timer::Milliseconds(10));
-			co_return (!iToken || text != std::string(4096, 'a' + iIndexLocal % 26)) ? 1 : 0;
-		}));
+			if (sText != std::string(4096, 'a' + iIndexLocal % 26))
+			{
+				co_return iMissingToken;
+			}
+			co_return iToken;
+		};
+		auto stTask = OI::Coro::StartTask(std::move(fnReadToken));
+		vTasks.push_back(std::move(stTask));
 	}
 	int iBad = 0;
 	for (const auto& stTask : vTasks)
 	{
-		iBad += co_await stTask;
+		const auto iToken = co_await stTask;
+		if (iToken == 0 || iToken != stTask.GetToken())
+		{
+			++iBad;
+		}
 	}
 	LOG_TRACE("hold captured tasks done=%zu bad=%d", vTasks.size(), iBad);
 	co_return iBad;

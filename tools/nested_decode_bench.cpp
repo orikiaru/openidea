@@ -536,7 +536,11 @@ int main()
 		const bool bNested = BenchNested();
 		const bool bFrames = BenchFrames();
 		const bool bFlat = BenchFlat();
-		return bNested && bFrames && bFlat ? 0 : 1;
+		if (bNested && bFrames && bFlat)
+		{
+			return 0;
+		}
+		return 1;
 	}
 	catch (const std::exception& stError)
 	{

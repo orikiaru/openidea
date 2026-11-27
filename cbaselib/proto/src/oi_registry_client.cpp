@@ -210,7 +210,15 @@ int32_t RegistryClient::WaitFlag(const std::atomic<bool>& bFlag)
 		}
 	}
 #endif
-	return bFlag.load() ? OI_OK : (m_bFailed.load() ? OI_ERR_CONNECT : OI_ERR_TIMEOUT);
+	if (bFlag.load())
+	{
+		return OI_OK;
+	}
+	if (m_bFailed.load())
+	{
+		return OI_ERR_CONNECT;
+	}
+	return OI_ERR_TIMEOUT;
 }
 
 int32_t RegistryClient::WaitDone(const std::atomic<bool>& bFlag)
@@ -293,7 +301,11 @@ int32_t RegistryClient::Ensure()
 		return OI_OK;
 	}
 	const int32_t iStatus = Connect();
-	return iStatus == OI_OK ? WaitFlag(m_bConnected) : iStatus;
+	if (iStatus != OI_OK)
+	{
+		return iStatus;
+	}
+	return WaitFlag(m_bConnected);
 }
 
 template <typename Req>

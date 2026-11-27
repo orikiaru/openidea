@@ -145,10 +145,11 @@ void SingletonUpdates::DispatchTick(uint64_t iNowMilliseconds)
 	{
 		Launch(pEntry, [pEntry, iNowMilliseconds]()
 		{
-			return ::OI::Coro::StartTask([pEntry, iNowMilliseconds]()
+			auto fnUpdate = [pEntry, iNowMilliseconds]()
 			{
 				return RunTick(pEntry, iNowMilliseconds);
-			});
+			};
+			return ::OI::Coro::StartTask(std::move(fnUpdate));
 		});
 	}
 }
@@ -168,10 +169,11 @@ void SingletonUpdates::DispatchSecond(time_t iNow)
 	{
 		Launch(pEntry, [pEntry, iNow]()
 		{
-			return ::OI::Coro::StartTask([pEntry, iNow]()
+			auto fnUpdate = [pEntry, iNow]()
 			{
 				return RunSecond(pEntry, iNow);
-			});
+			};
+			return ::OI::Coro::StartTask(std::move(fnUpdate));
 		});
 	}
 }

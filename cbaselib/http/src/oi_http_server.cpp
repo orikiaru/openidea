@@ -21,14 +21,22 @@ bool EqualName(View sLeft, View sRight)
 {
 	return sLeft.size() == sRight.size() && std::equal(sLeft.begin(), sLeft.end(), sRight.begin(), [](char iLeft, char iRight)
 	{
-		return (iLeft >= 'A' && iLeft <= 'Z' ? iLeft + ('a' - 'A') : iLeft) == iRight;
+		if (iLeft >= 'A' && iLeft <= 'Z')
+		{
+			iLeft += 'a' - 'A';
+		}
+		return iLeft == iRight;
 	});
 }
 
 View Trim(View sText)
 {
 	const auto iFirst = sText.find_first_not_of(" \t");
-	return iFirst == View::npos ? View{} : sText.substr(iFirst, sText.find_last_not_of(" \t") - iFirst + 1);
+	if (iFirst == View::npos)
+	{
+		return View{};
+	}
+	return sText.substr(iFirst, sText.find_last_not_of(" \t") - iFirst + 1);
 }
 
 bool Token(View sText)
@@ -262,7 +270,11 @@ struct RequestFrame
 			{
 				return iRet;
 			}
-			return iRet == OI_OK ? (stStream.Done() ? 200 : 0) : 400;
+			if (iRet != OI_OK)
+			{
+				return 400;
+			}
+			return stStream.Done() ? 200 : 0;
 		}
 		if (!bChunked)
 		{
@@ -653,10 +665,11 @@ class ServerSession final : public Net::NetSession
 		pDone->stCall.fnCall = [](void* pArg)
 		{
 			std::unique_ptr<Completion> pFinished(static_cast<Completion*>(pArg));
-			pFinished->pServer->UseSession(pFinished->iSessionId, [&pFinished](Net::Session& stSession)
+			auto fnReply = [&pFinished](Net::Session& stSession)
 			{
 				static_cast<ServerSession&>(stSession).Reply(pFinished->stReply, pFinished->bClose, pFinished->bHttp10, pFinished->bHead);
-			});
+			};
+			pFinished->pServer->UseSession(pFinished->iSessionId, fnReply);
 		};
 		pDone->stCall.pArgument = pDone.get();
 		auto stRequest = std::move(m_stFrame.stRequest);

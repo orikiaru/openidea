@@ -207,10 +207,12 @@ OI::Coro::TaskResult<int> TestRpcOutput::CheckOutputRpcTask(sid_t iSessionId)
 	std::vector<OI::Coro::TaskResult<int>> vWaiters;
 	for (int iIndex = 0; iIndex < 16; ++iIndex)
 	{
-		vWaiters.push_back(OI::Coro::StartTask([stCall]()
+		auto fnWaitForCall = [stCall]()
 		{
 			return RpcOutputWait::Await(stCall);
-		}));
+		};
+		auto stWaiter = OI::Coro::StartTask(std::move(fnWaitForCall));
+		vWaiters.push_back(std::move(stWaiter));
 	}
 	if ((co_await stClient.StartClient()) != OI_OK)
 	{
@@ -229,10 +231,12 @@ OI::Coro::TaskResult<int> TestRpcOutput::CheckOutputRpcTask(sid_t iSessionId)
 	vWaiters.clear();
 	for (int iIndex = 0; iIndex < 16; ++iIndex)
 	{
-		vWaiters.push_back(OI::Coro::StartTask([stCall]()
+		auto fnWaitForCompletedCall = [stCall]()
 		{
 			return RpcOutputWait::Await(stCall);
-		}));
+		};
+		auto stWaiter = OI::Coro::StartTask(std::move(fnWaitForCompletedCall));
+		vWaiters.push_back(std::move(stWaiter));
 	}
 	for (const auto& stWaiter : vWaiters)
 	{

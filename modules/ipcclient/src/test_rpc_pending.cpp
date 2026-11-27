@@ -521,14 +521,16 @@ OI::Coro::TaskResult<int> TestRpcPending::CheckDeadlineBuckets()
 	{
 		// 不同剩余时长落到同一小段绝对截止时间，而不是产生4096个时长桶。
 		const int64_t iRemainingMilliseconds = iTargetMilliseconds + iIndex % 100 - OI::Timer::SteadyMilliseconds();
-		vCalls.push_back(OI::Rpc::RpcCallManager::GetInstance().Bind(&stManager, INVALID_SID, 0, {}, nullptr, iRemainingMilliseconds, {}, {}));
+		const uint64_t iCallId = OI::Rpc::RpcCallManager::GetInstance().Bind(&stManager, INVALID_SID, 0, {}, nullptr, iRemainingMilliseconds, {}, {});
+		vCalls.push_back(iCallId);
 	}
 	const auto stDuring = OI::Rpc::RpcCallManager::GetInstance().WaitStats();
 	if (stDuring.iCalls != stBefore.iCalls + 4096 || stDuring.iBuckets > stBefore.iBuckets + 192)
 	{
 		++iBad;
 	}
-	vCalls.push_back(OI::Rpc::RpcCallManager::GetInstance().Bind(&stManager, INVALID_SID, 0, {}, nullptr, INT64_MAX, {}, {}));
+	const uint64_t iCallId = OI::Rpc::RpcCallManager::GetInstance().Bind(&stManager, INVALID_SID, 0, {}, nullptr, INT64_MAX, {}, {});
+	vCalls.push_back(iCallId);
 	for (const auto& iCall : vCalls)
 	{
 		OI::Rpc::RpcCallManager::GetInstance().Abandon(iCall);
@@ -546,15 +548,17 @@ OI::Coro::TaskResult<int> TestRpcPending::CheckDeadlineBuckets()
 	{
 		const int64_t iDelayMilliseconds = 50 + (31 - iIndex) * 23;
 		const int64_t iDeadlineMilliseconds = OI::Timer::SteadyMilliseconds() + iDelayMilliseconds;
-		vCalls.push_back(OI::Rpc::RpcCallManager::GetInstance().Bind(&stManager, INVALID_SID, 0, {}, &pProbe->vCodes[iIndex], iDelayMilliseconds, {},
-		    [pProbe, iIndex, iDeadlineMilliseconds]()
+		auto fnCheckTimeout = [pProbe, iIndex, iDeadlineMilliseconds]()
 		{
 			if (OI::Timer::SteadyMilliseconds() < iDeadlineMilliseconds || pProbe->vCodes[iIndex] != OI_ERR_TIMEOUT)
 			{
 				++pProbe->iBad;
 			}
 			++pProbe->iCompleted;
-		}, pGuard));
+		};
+		const uint64_t iCallId = OI::Rpc::RpcCallManager::GetInstance().Bind(&stManager, INVALID_SID, 0, {}, &pProbe->vCodes[iIndex], iDelayMilliseconds, {},
+		    std::move(fnCheckTimeout), pGuard);
+		vCalls.push_back(iCallId);
 	}
 	const int64_t iLimitMilliseconds = OI::Timer::SteadyMilliseconds() + 4000;
 	while (pProbe->iCompleted.load() != 32 && OI::Timer::SteadyMilliseconds() < iLimitMilliseconds)
@@ -584,15 +588,17 @@ OI::Coro::TaskResult<int> TestRpcPending::CheckDeadlineBuckets()
 	for (size_t iIndex = 0; iIndex < pSweepProbe->vCodes.size(); ++iIndex)
 	{
 		const int64_t iRemaining = iSweepDeadline - OI::Timer::SteadyMilliseconds();
-		vCalls.push_back(OI::Rpc::RpcCallManager::GetInstance().Bind(&stManager, 123456, 0, {}, &pSweepProbe->vCodes[iIndex], iRemaining, {},
-		    [pSweepProbe, pSweepGuard]()
+		auto fnCheckSweep = [pSweepProbe, pSweepGuard]()
 		{
 			if (pSweepProbe->iCallbacks.fetch_add(1) == 0)
 			{
 				pSweepProbe->iFirstBatch = pSweepGuard->load() >= 2 ? 1 : -1;
 				throw std::runtime_error("injected sweep callback failure");
 			}
-		}, pSweepGuard));
+		};
+		const uint64_t iCallId = OI::Rpc::RpcCallManager::GetInstance().Bind(&stManager, 123456, 0, {}, &pSweepProbe->vCodes[iIndex], iRemaining, {},
+		    std::move(fnCheckSweep), pSweepGuard);
+		vCalls.push_back(iCallId);
 	}
 	const int64_t iSweepLimit = OI::Timer::SteadyMilliseconds() + 4000;
 	while ((pSweepProbe->iCallbacks.load() != 128 || pSweepGuard->load() != 0) && OI::Timer::SteadyMilliseconds() < iSweepLimit)
@@ -700,19 +706,21 @@ OI::Coro::TaskResult<int> TestRpcPending::Run(sid_t iSessionId)
 		OI::Base::Bytes stWireFrames;
 		for (int iIndex = 0; iIndex < 2; ++iIndex)
 		{
-			const uint64_t iCall = OI::Rpc::RpcCallManager::GetInstance().Bind(&stWireClient, iWireSid,
-			    OI::Rpc::RpcProtoId<OI::RpcData::HoldRes>::iValue, {}, &pWire->vCode[iIndex], 3000,
-			    [iIndex](OI::Base::BytesStream&, sid_t)
+			auto fnDecodeReply = [iIndex](OI::Base::BytesStream&, sid_t)
 			{
 				if (iIndex == 0)
 				{
 					throw std::runtime_error("injected response decode failure");
 				}
 				return true;
-			}, [pWire, iIndex]()
+			};
+			auto fnCountResume = [pWire, iIndex]()
 			{
 				pWire->vResumed[iIndex].fetch_add(1);
-			}, pWireGuard);
+			};
+			const uint64_t iCall = OI::Rpc::RpcCallManager::GetInstance().Bind(&stWireClient, iWireSid,
+			    OI::Rpc::RpcProtoId<OI::RpcData::HoldRes>::iValue, {}, &pWire->vCode[iIndex], 3000,
+			    std::move(fnDecodeReply), std::move(fnCountResume), pWireGuard);
 			vWireCalls.push_back(iCall);
 			OI::RpcData::HoldReq stRequest;
 			stRequest.iDelayMilliseconds = iIndex == 0 ? 0 : 1000;

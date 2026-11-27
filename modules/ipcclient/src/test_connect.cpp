@@ -184,7 +184,7 @@ OI::Coro::TaskResult<int> TestConnect::CheckClientConnect()
 	OI::Net::Poll::GetInstance().PostOnLoop([](void* pArgument)
 	{
 		auto* pState = static_cast<Result*>(pArgument);
-		OI::Net::Poll::GetInstance().PostOnLoop([](void* pNestedLocal)
+		auto fnCheckDeferred = [](void* pNestedLocal)
 		{
 			auto* pNested = static_cast<Result*>(pNestedLocal);
 			if (!pNested->bReturned)
@@ -192,7 +192,8 @@ OI::Coro::TaskResult<int> TestConnect::CheckClientConnect()
 				++pNested->iBad;
 			}
 			pNested->bDone = true;
-		}, pState);
+		};
+		OI::Net::Poll::GetInstance().PostOnLoop(fnCheckDeferred, pState);
 		pState->bReturned = true;
 	}, pResult.get());
 	while (!pResult->bDone.load())

@@ -85,7 +85,15 @@ int32_t UDP_Channel::StartBind(SessionManager* pMgr)
 		uv_timer_t* pIdle = pTimer.release();
 		stPoll.AdoptWatchTimer(pChannelLocal.get(), pIdle);
 		pIdle->data = pMgr;
-		const uint64_t iRepeat = iIdle < 4000 ? (iIdle / 4 > 0 ? iIdle / 4 : 1) : 1000;
+		uint64_t iRepeat = 1000;
+		if (iIdle < 4000)
+		{
+			iRepeat = iIdle / 4;
+			if (iRepeat == 0)
+			{
+				iRepeat = 1;
+			}
+		}
 		iStatus = uv_timer_start(pIdle, [](uv_timer_t* pHandle)
 		{
 			static_cast<SessionManager*>(pHandle->data)->CloseIdleUdpPeers();

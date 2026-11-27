@@ -82,7 +82,7 @@ static void StartBatchProbe(void* pArgument)
         {
             ++pBatch->iBad;
         }
-        OI::Net::Poll::GetInstance().PostOnLoop([](void* pMarker)
+        auto fnCheckBatchMarker = [](void* pMarker)
         {
             auto* pBatchMarker = static_cast<BatchProbe*>(pMarker);
             if (!OI::Net::Poll::GetInstance().InLoopThread() || pBatchMarker->iStage.load() != 2 ||
@@ -90,7 +90,8 @@ static void StartBatchProbe(void* pArgument)
             {
                 ++pBatchMarker->iBad;
             }
-        }, pBatch);
+        };
+        OI::Net::Poll::GetInstance().PostOnLoop(fnCheckBatchMarker, pBatch);
         OI::Net::Poll::GetInstance().PostOnLoop(pBatch->stReposted);
     };
     pProbe->stSentinel.fnCall = [](void* pValue)
@@ -137,7 +138,7 @@ int main(int iCountParam, char** vArgumentsParam)
         pCloseProbe->stCall.pArgument = pCloseProbe.get();
         OI::Coro::StartTask([pStarted, pFinished, pRejected, pRelease, pDrained, pRegistered, pCloseProbe]() -> OI::Coro::Task
         {
-            auto stWork = OI::Coro::RunBlocking([pStarted, pFinished, pRelease]()
+            auto fnBlockingWork = [pStarted, pFinished, pRelease]()
             {
                 pStarted->store(true);
                 for (int iWait = 0; iWait < 2000 && !pRelease->load(); ++iWait)
@@ -146,13 +147,18 @@ int main(int iCountParam, char** vArgumentsParam)
                 }
                 pFinished->store(true);
                 return int32_t{0};
-            });
+            };
+            auto stWork = OI::Coro::RunBlocking(std::move(fnBlockingWork));
             while (!pStarted->load())
             {
                 co_await OI::Coro::yield(1);
             }
             OI::Thread::ThreadPool::GetInstance().RequestStop(0);
-            auto stRejected = OI::Coro::RunBlocking([]() { return int32_t{0}; });
+            auto fnRejectedWork = []()
+            {
+                return int32_t{0};
+            };
+            auto stRejected = OI::Coro::RunBlocking(fnRejectedWork);
             const int32_t iRejectedCode = co_await stRejected;
             pRejected->store(iRejectedCode == OI_ERR_CONNECT);
             struct DrainProbe
@@ -161,7 +167,7 @@ int main(int iCountParam, char** vArgumentsParam)
                 std::atomic<bool>* pRegistered;
             };
             auto stProbe = std::make_shared<DrainProbe>(DrainProbe{pDrained.get(), pRegistered.get()});
-            OI::Net::Poll::GetInstance().CallOnLoop([](void* pArgument)
+            auto fnRegisterDrain = [](void* pArgument)
             {
                 auto* pProbe = static_cast<DrainProbe*>(pArgument);
                 auto fnDone = [](void* pValue)
@@ -171,7 +177,8 @@ int main(int iCountParam, char** vArgumentsParam)
                 OI::Net::BlockingWorkSessionManager::GetInstance().Drain(fnDone, pProbe->pCount);
                 OI::Net::BlockingWorkSessionManager::GetInstance().Drain(fnDone, pProbe->pCount);
                 pProbe->pRegistered->store(true);
-            }, stProbe.get());
+            };
+            OI::Net::Poll::GetInstance().CallOnLoop(fnRegisterDrain, stProbe.get());
             while (!pRegistered->load())
             {
                 co_await OI::Coro::yield(1);
@@ -182,8 +189,12 @@ int main(int iCountParam, char** vArgumentsParam)
         const int iCode = OI::Base::RunFramework();
         std::printf("blocking shutdown ret=%d finished=%d rejected=%d drained=%d\n", iCode, pFinished->load(), pRejected->load(), pDrained->load());
         std::printf("queued shutdown runs=%d bad=%d\n", pCloseProbe->iRuns.load(), pCloseBad->load());
-        return iCode == 0 && pFinished->load() && pRejected->load() && pDrained->load() == 2 &&
-            pCloseProbe->iRuns.load() == 1 && pCloseBad->load() == 0 ? 0 : 9;
+        if (iCode == 0 && pFinished->load() && pRejected->load() && pDrained->load() == 2 &&
+            pCloseProbe->iRuns.load() == 1 && pCloseBad->load() == 0)
+        {
+            return 0;
+        }
+        return 9;
     }
     OI::Base::BytesStream stFields;
     stFields.WritePb(0, uint64_t{42});
@@ -207,7 +218,7 @@ int main(int iCountParam, char** vArgumentsParam)
     auto pBatch = std::make_shared<BatchProbe>();
     auto pLifetime = std::make_shared<int>(42);
     std::weak_ptr<int> pWeak = pLifetime;
-    OI::Coro::StartTask([pLifetime, pQueuedBad, pQueued, pBatch]() -> OI::Coro::Task
+    auto fnRunChecks = [pLifetime, pQueuedBad, pQueued, pBatch]() -> OI::Coro::Task
     {
         int iBad = 0;
         for (auto& stProbe : *pQueued)
@@ -219,13 +230,14 @@ int main(int iCountParam, char** vArgumentsParam)
         std::array<std::thread, 4> vPosters;
         for (size_t iPoster = 0; iPoster < vPosters.size(); ++iPoster)
         {
-            vPosters[iPoster] = std::thread([pQueued, iPoster]()
+            auto fnPostBatch = [pQueued, iPoster]()
             {
                 for (size_t iIndex = iPoster; iIndex < pQueued->size(); iIndex += 4)
                 {
                     OI::Net::Poll::GetInstance().PostOnLoop((*pQueued)[iIndex].stCall);
                 }
-            });
+            };
+            vPosters[iPoster] = std::thread(std::move(fnPostBatch));
         }
         for (auto& stPoster : vPosters)
         {
@@ -260,7 +272,7 @@ int main(int iCountParam, char** vArgumentsParam)
         // 故意违规从外部线程创建和启动，验证 ST 拒绝及 MT 仍允许。
         auto* pScope = &stScope;
         auto* pExisting = &stExisting;
-        std::thread stForeign([pThreadRuns, pWrappers, pRejected, pWrongError, pScope, pExisting]()
+        auto fnStartFromForeignThread = [pThreadRuns, pWrappers, pRejected, pWrongError, pScope, pExisting]()
         {
             try
             {
@@ -276,11 +288,12 @@ int main(int iCountParam, char** vArgumentsParam)
             }
             try
             {
-                auto stTask = OI::Coro::StartTask([pThreadRuns, pWrappers]()
+                auto fnCreateChild = [pThreadRuns, pWrappers]()
                 {
                     ++*pWrappers;
                     return ThreadGuardChild(pThreadRuns);
-                });
+                };
+                auto stTask = OI::Coro::StartTask(std::move(fnCreateChild));
             }
             catch (const std::logic_error& stError)
             {
@@ -292,11 +305,12 @@ int main(int iCountParam, char** vArgumentsParam)
             }
             try
             {
-                pScope->Start([pThreadRuns, pWrappers](OI::Coro::Token, OI::Coro::StopToken)
+                auto fnScopedChild = [pThreadRuns, pWrappers](OI::Coro::Token, OI::Coro::StopToken)
                 {
                     ++*pWrappers;
                     return ThreadGuardChild(pThreadRuns);
-                });
+                };
+                pScope->Start(std::move(fnScopedChild));
             }
             catch (const std::logic_error& stError)
             {
@@ -318,7 +332,8 @@ int main(int iCountParam, char** vArgumentsParam)
                     ++*pWrongError;
                 }
             }
-        });
+        };
+        std::thread stForeign(std::move(fnStartFromForeignThread));
         stForeign.join();
         co_await stScope.Join();
         for (int iWait = 0; iWait < 500 && pThreadRuns->load() < 4 && pRejected->load() == 0; ++iWait)
@@ -363,7 +378,7 @@ int main(int iCountParam, char** vArgumentsParam)
                 auto pValue = std::make_shared<CaptureValue>();
                 pValue->pReleased = pCaptureReleased;
                 pCaptureWeak = pValue;
-                return OI::Coro::StartTask([pValue, pCaptureRuns, pCaptureGate, pCaptureSuspended]() -> OI::Coro::TaskResult<int>
+                auto fnCaptureTask = [pValue, pCaptureRuns, pCaptureGate, pCaptureSuspended]() -> OI::Coro::TaskResult<int>
                 {
                     ++*pCaptureRuns;
                     co_await OI::Coro::yield(1);
@@ -377,7 +392,8 @@ int main(int iCountParam, char** vArgumentsParam)
                         co_return 7;
                     }
                     throw std::runtime_error("capture exception probe");
-                });
+                };
+                return OI::Coro::StartTask(std::move(fnCaptureTask));
             };
             auto stCaptureTask = fnCreate();
             while (!pCaptureSuspended->load())
@@ -422,14 +438,15 @@ int main(int iCountParam, char** vArgumentsParam)
         }
         auto pRuns = std::make_shared<std::atomic<int>>(0);
         auto pBad = std::make_shared<std::atomic<int>>(0);
-        auto stShared = OI::Coro::StartTask([pRuns]()
+        auto fnSharedChild = [pRuns]()
         {
             return SharedChild(pRuns);
-        });
+        };
+        auto stShared = OI::Coro::StartTask(std::move(fnSharedChild));
         std::vector<OI::Coro::Task> vWaiters;
         for (int iIndex = 0; iIndex < 64; ++iIndex)
         {
-            vWaiters.push_back(OI::Coro::StartTask([stShared, pBad]() -> OI::Coro::Task
+            auto fnWaitForShared = [stShared, pBad]() -> OI::Coro::Task
             {
                 for (int iRound = 0; iRound < 2; ++iRound)
                 {
@@ -438,7 +455,9 @@ int main(int iCountParam, char** vArgumentsParam)
                         ++*pBad;
                     }
                 }
-            }));
+            };
+            auto stWaiter = OI::Coro::StartTask(std::move(fnWaitForShared));
+            vWaiters.push_back(std::move(stWaiter));
         }
         for (const auto& stWaiter : vWaiters)
         {
@@ -449,7 +468,7 @@ int main(int iCountParam, char** vArgumentsParam)
         std::vector<OI::Coro::TaskResult<int32_t>> vBlocking;
         for (int iIndex = 0; iIndex < 1025; ++iIndex)
         {
-            vBlocking.push_back(OI::Coro::RunBlocking([pRelease, pExecuted]()
+            auto fnBlockedWork = [pRelease, pExecuted]()
             {
                 ++*pExecuted;
                 for (int iWait = 0; iWait < 1000 && !pRelease->load(); ++iWait)
@@ -457,15 +476,18 @@ int main(int iCountParam, char** vArgumentsParam)
                     uv_sleep(5);
                 }
                 return int32_t{0};
-            }));
+            };
+            auto stWork = OI::Coro::RunBlocking(std::move(fnBlockedWork));
+            vBlocking.push_back(std::move(stWork));
         }
         auto* pReleaseOwner = new std::shared_ptr<std::atomic<bool>>(pRelease);
-        OI::Net::Poll::GetInstance().PostOnLoop([](void* pArgument)
+        auto fnReleaseWork = [](void* pArgument)
         {
             std::unique_ptr<std::shared_ptr<std::atomic<bool>>> pOwner(
                 static_cast<std::shared_ptr<std::atomic<bool>>*>(pArgument));
             (*pOwner)->store(true);
-        }, pReleaseOwner);
+        };
+        OI::Net::Poll::GetInstance().PostOnLoop(fnReleaseWork, pReleaseOwner);
         int iRejected = 0;
         for (const auto& stWork : vBlocking)
         {
@@ -497,7 +519,7 @@ int main(int iCountParam, char** vArgumentsParam)
         std::vector<OI::Coro::TaskResult<int32_t>> vSdk;
         for (int iIndex = 0; iIndex < 1025; ++iIndex)
         {
-            vSdk.push_back(OI::Coro::RunBlocking(OI::Thread::BlockingType::Sdk, [pSdkRelease, pSdkExecuted]()
+            auto fnSdkWork = [pSdkRelease, pSdkExecuted]()
             {
                 ++*pSdkExecuted;
                 for (int iWait = 0; iWait < 1000 && !pSdkRelease->load(); ++iWait)
@@ -505,14 +527,17 @@ int main(int iCountParam, char** vArgumentsParam)
                     uv_sleep(5);
                 }
                 return int32_t{0};
-            }));
+            };
+            auto stWork = OI::Coro::RunBlocking(OI::Thread::BlockingType::Sdk, std::move(fnSdkWork));
+            vSdk.push_back(std::move(stWork));
         }
         auto* pSdkReleaseOwner = new std::shared_ptr<std::atomic<bool>>(pSdkRelease);
-        OI::Net::Poll::GetInstance().PostOnLoop([](void* pArgument)
+        auto fnReleaseSdk = [](void* pArgument)
         {
             std::unique_ptr<std::shared_ptr<std::atomic<bool>>> pOwner(static_cast<std::shared_ptr<std::atomic<bool>>*>(pArgument));
             (*pOwner)->store(true);
-        }, pSdkReleaseOwner);
+        };
+        OI::Net::Poll::GetInstance().PostOnLoop(fnReleaseSdk, pSdkReleaseOwner);
         int iSdkRejected = 0;
         for (const auto& stWork : vSdk)
         {
@@ -536,11 +561,16 @@ int main(int iCountParam, char** vArgumentsParam)
         iBad += pBad->load() + (pRuns->load() != 1);
         std::printf("shared task runs=%d bad=%d\n", pRuns->load(), iBad);
         OI::Thread::ThreadPool::GetInstance().RequestStop(iBad ? 9 : 0);
-    });
+    };
+    OI::Coro::StartTask(std::move(fnRunChecks));
     pLifetime.reset();
     const int iCode = OI::Base::RunFramework();
     std::printf("pure coroutine ret=%d released=%d\n", iCode, pWeak.expired());
-    return iCode == 0 && pWeak.expired() ? 0 : 9;
+    if (iCode == 0 && pWeak.expired())
+    {
+        return 0;
+    }
+    return 9;
 }
 '''
 

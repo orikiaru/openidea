@@ -673,19 +673,24 @@ auto InvokeTask(TaskLaunch stLaunch, F&& fnFunction)
 
 namespace Detail
 {
-// 回调既能无参调用又能接收 Token 时，优先传入任务标识。
+// 协程可以按 const Token& 接收标识，标识和回调一起保活到任务结束。
 template <typename F>
-auto InvokeStartedTask(F& fnFunction, const Token& iToken)
+struct StartedCall
 {
-	if constexpr (std::is_invocable_v<F&, const Token&>)
+	const Token iToken;
+	F fnTask;
+	auto operator()()
 	{
-		return fnFunction(iToken);
+		if constexpr (std::is_invocable_v<F&, const Token&>)
+		{
+			return fnTask(iToken);
+		}
+		else
+		{
+			return fnTask();
+		}
 	}
-	else
-	{
-		return fnFunction();
-	}
-}
+};
 }
 
 // 闭包按值保活到任务结束，带捕获的协程 lambda 必须经这里启动。任务总是入队，不在调用方栈上跑。
@@ -694,13 +699,11 @@ template <typename F>
 auto StartTask(F&& fnFunction)
 {
 	CheckTaskStartThread();
-	Token iTokenLocal = AllocTaskUid();
-	auto stCallable = std::make_shared<std::decay_t<F>>(std::forward<F>(fnFunction));
-	auto stTask = InvokeTask(TaskLaunch{iTokenLocal, true, true}, [&stCallable, iTokenLocal]()
-	{
-		return Detail::InvokeStartedTask(*stCallable, iTokenLocal);
-	});
-	stTask.Start(std::move(stCallable), iTokenLocal);
+	using Call = Detail::StartedCall<std::decay_t<F>>;
+	const Token iTokenLocal = AllocTaskUid();
+	auto pCall = std::make_shared<Call>(iTokenLocal, std::forward<F>(fnFunction));
+	auto stTask = InvokeTask(TaskLaunch{iTokenLocal, true, true}, *pCall);
+	stTask.Start(std::move(pCall), iTokenLocal);
 	return stTask;
 }
 

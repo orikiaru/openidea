@@ -49,7 +49,11 @@ std::string Encode(const T& stValue)
 {
 	OI::Base::BytesStream stBytes;
 	stValue.serialize(stBytes);
-	return stBytes.Size() ? std::string(stBytes.Begin(), stBytes.Size()) : std::string();
+	if (stBytes.Size())
+	{
+		return std::string(stBytes.Begin(), stBytes.Size());
+	}
+	return std::string();
 }
 inline std::string Score(double dValue)
 {

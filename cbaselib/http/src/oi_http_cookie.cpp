@@ -15,7 +15,11 @@ class CookieField
 	static View Trim(View sValue)
 	{
 		const auto iFirst = sValue.find_first_not_of(" \t");
-		return iFirst == View::npos ? View{} : sValue.substr(iFirst, sValue.find_last_not_of(" \t") - iFirst + 1);
+		if (iFirst == View::npos)
+		{
+			return View{};
+		}
+		return sValue.substr(iFirst, sValue.find_last_not_of(" \t") - iFirst + 1);
 	}
 
 	View TakePart()

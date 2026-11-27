@@ -126,14 +126,25 @@ OI::Coro::TaskResult<int> TestRpcAdmission::CheckRpcAdmission()
 			++iBad;
 		}
 	}
-	for (int iKind = 0; iKind < 4; ++iKind)
+	struct AdmissionCase
+	{
+		int32_t iDelayMilliseconds;
+		int32_t iMark;
+		int32_t iExpected;
+	};
+	static constexpr AdmissionCase vCases[] = {
+	    {-1, 71, 1001},
+	    {0, -2147483600, OI_ERR_FAIL},
+	    {0, -2147483599, OI_ERR_FAIL},
+	    {0, 71, OI_OK},
+	};
+	for (const auto& stCase : vCases)
 	{
 		OI::RpcData::HoldReq stRequest;
-		stRequest.iDelayMilliseconds = iKind == 0 ? -1 : 0;
-		stRequest.iMark = iKind == 1 ? -2147483600 : (iKind == 2 ? -2147483599 : 71);
+		stRequest.iDelayMilliseconds = stCase.iDelayMilliseconds;
+		stRequest.iMark = stCase.iMark;
 		auto stResult = co_await OI::Rpc::RpcCall(vClients[0], stRequest, OI::Timer::Seconds(3));
-		const int iExpected = iKind == 0 ? 1001 : (iKind < 3 ? OI_ERR_FAIL : 0);
-		if (stResult.GetRet() != iExpected)
+		if (stResult.GetRet() != stCase.iExpected)
 		{
 			++iBad;
 		}

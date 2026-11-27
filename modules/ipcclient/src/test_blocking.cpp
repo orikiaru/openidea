@@ -328,7 +328,11 @@ OI::Coro::TaskResult<int> TestBlocking::BlockingWaiter(OI::Coro::TaskResult<int3
 {
 	const int32_t iFirst = co_await stTask;
 	const int32_t iSecond = co_await stTask;
-	co_return iFirst == 0 && iSecond == 0 ? 0 : 1;
+	if (iFirst == 0 && iSecond == 0)
+	{
+		co_return 0;
+	}
+	co_return 1;
 }
 
 struct BlockingPipeProbe
@@ -431,15 +435,19 @@ OI::Coro::TaskResult<int> TestBlocking::CheckBlockingCategories()
 		}
 		if (pProbe->bStarted.load())
 		{
-			stQueued.emplace(OI::Coro::RunBlocking(BlockingType::Mysql, [pQueuedRuns]() -> int32_t
+			auto fnCountQueuedWork = [pQueuedRuns]() -> int32_t
 			{
 				++*pQueuedRuns;
 				return 0;
-			}));
-			stBusy.emplace(OI::Coro::RunBlocking(BlockingType::Mysql, []() -> int32_t
+			};
+			auto stQueuedTask = OI::Coro::RunBlocking(BlockingType::Mysql, std::move(fnCountQueuedWork));
+			stQueued.emplace(std::move(stQueuedTask));
+			auto fnBusyWork = []() -> int32_t
 			{
 				return 0;
-			}));
+			};
+			auto stBusyTask = OI::Coro::RunBlocking(BlockingType::Mysql, fnBusyWork);
+			stBusy.emplace(std::move(stBusyTask));
 			iReconfigure = OI::Thread::ConfigureBlockingPool(BlockingType::Mysql, 2, 2);
 			iFile = co_await OI::Coro::RunBlocking(BlockingType::File, []() -> int32_t
 			{
@@ -488,10 +496,11 @@ OI::Coro::TaskResult<int> TestBlocking::CheckBlockingCategories()
 	bool bException = false;
 	try
 	{
-		(void)(co_await OI::Coro::RunBlocking(BlockingType::File, []() -> int32_t
+		auto fnThrow = []() -> int32_t
 		{
 			throw std::runtime_error("category failure");
-		}));
+		};
+		(void)(co_await OI::Coro::RunBlocking(BlockingType::File, fnThrow));
 	}
 	catch (const std::runtime_error&)
 	{
@@ -691,11 +700,13 @@ OI::Coro::TaskResult<int> TestBlocking::CheckBlockingWork()
 	for (int iIndex = 0; iIndex < 128; ++iIndex)
 	{
 		const int iDelayMilliseconds = stDelay(stRandom);
-		vTasks.push_back(OI::Coro::RunBlocking([iIndex, iDelayMilliseconds]()
+		auto fnDelayedResult = [iIndex, iDelayMilliseconds]()
 		{
 			uv_sleep(iDelayMilliseconds);
 			return iIndex * 3;
-		}));
+		};
+		auto stTask = OI::Coro::RunBlocking(std::move(fnDelayedResult));
+		vTasks.push_back(std::move(stTask));
 	}
 	LOG_TRACE("hold blocking delay seed=%u min_ms=1 max_ms=20", iSeed);
 	const auto vResults = co_await OI::Coro::WhenAll(std::move(vTasks));

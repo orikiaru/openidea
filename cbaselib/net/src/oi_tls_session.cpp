@@ -17,7 +17,13 @@ class TlsError
 	static std::string Describe(const char* pStage)
 	{
 		const char* pReason = ERR_reason_error_string(ERR_peek_last_error());
-		return std::string(pStage) + (pReason ? std::string(": ") + pReason : "");
+		std::string sMessage(pStage);
+		if (pReason)
+		{
+			sMessage += ": ";
+			sMessage += pReason;
+		}
+		return sMessage;
 	}
 };
 }
@@ -125,7 +131,11 @@ int32_t TlsSession::Connection::Init(const TlsClientContext& stContext, std::str
 	sockaddr_in6 stIpv6{};
 	if (uv_ip4_addr(sHost.c_str(), 0, &stIpv4) == 0 || uv_ip6_addr(sHost.c_str(), 0, &stIpv6) == 0)
 	{
-		return X509_VERIFY_PARAM_set1_ip_asc(SSL_get0_param(m_pSsl), sHost.c_str()) == 1 ? OI_OK : Failed("TLS peer IP");
+		if (X509_VERIFY_PARAM_set1_ip_asc(SSL_get0_param(m_pSsl), sHost.c_str()) == 1)
+		{
+			return OI_OK;
+		}
+		return Failed("TLS peer IP");
 	}
 	SSL_set_hostflags(m_pSsl, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS | X509_CHECK_FLAG_NEVER_CHECK_SUBJECT);
 	if (SSL_set1_host(m_pSsl, sHost.c_str()) != 1 || SSL_set_tlsext_host_name(m_pSsl, sHost.c_str()) != 1)
@@ -354,7 +364,11 @@ bool TlsSession::PeerEnded() const
 
 const char* TlsSession::TransportError() const
 {
-	return m_pTls && !m_pTls->Error().empty() ? m_pTls->Error().c_str() : "transport send";
+	if (m_pTls && !m_pTls->Error().empty())
+	{
+		return m_pTls->Error().c_str();
+	}
+	return "transport send";
 }
 
 int32_t TlsSession::StartTransport()

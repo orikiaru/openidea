@@ -70,10 +70,11 @@ ServiceGroup* RouteManager::Group(const std::string& sName, const std::vector<::
 	});
 	std::call_once(m_stStopOnce, []()
 	{
-		::OI::Thread::ThreadPool::GetInstance().AddStopHandler([]()
+		auto fnStop = []()
 		{
 			GetInstance().Stop();
-		});
+		};
+		::OI::Thread::ThreadPool::GetInstance().AddStopHandler(fnStop);
 	});
 	ServiceGroup* pGroup = nullptr;
 	{

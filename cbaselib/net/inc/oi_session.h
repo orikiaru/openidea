@@ -149,7 +149,12 @@ class Session
 	}
 	size_t ReceiveAllowance() const
 	{
-		return stInputBuffer.Size() < iMaxReceiveBufferBytes ? iMaxReceiveBufferBytes - stInputBuffer.Size() : 0;
+		const size_t iSize = stInputBuffer.Size();
+		if (iSize < iMaxReceiveBufferBytes)
+		{
+			return iMaxReceiveBufferBytes - iSize;
+		}
+		return 0;
 	}
 	// 还没写出去的字节数。
 	size_t PendingSendBytes();

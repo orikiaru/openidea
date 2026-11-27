@@ -104,7 +104,11 @@ static int32_t CheckPollUdpClose()
 	const int32_t iClose = ::OI::Net::Poll::GetInstance().StopAndJoin();
 	std::printf("poll udp close bound=1 paused=%d loop=%d\n", iPause == OI_OK ? 1 : 0, iClose);
 	std::fflush(stdout);
-	return iPause == OI_OK && iClose == 0 ? OI_OK : OI_ERR_FAIL;
+	if (iPause == OI_OK && iClose == 0)
+	{
+		return OI_OK;
+	}
+	return OI_ERR_FAIL;
 }
 
 static int32_t CheckPollLoopBusy()
@@ -118,9 +122,10 @@ static int32_t CheckPollLoopBusy()
 			delete pTimer;
 			return OI_ERR_FAIL;
 		}
-		if (uv_timer_start(pTimer, [](uv_timer_t*)
+		auto fnIdleTimer = [](uv_timer_t*)
 		{
-		}, 60000, 60000) != 0)
+		};
+		if (uv_timer_start(pTimer, fnIdleTimer, 60000, 60000) != 0)
 		{
 			return OI_ERR_FAIL;
 		}
@@ -148,14 +153,15 @@ static int32_t CheckRpcCloseBatch()
 			::OI::Rpc::ProtoSessionManager stManager;
 			::OI::Rpc::ProtoSession stSession(&stManager);
 			stSession.SetSessionID(1);
-			stManager.BindRpcHandler(999999, [pSession = &stSession, pCount = &iCounts[iMode], iMode](::OI::Base::BytesStream&, ::OI::Rpc::RpcDelivery&&)
+			auto fnCloseFirstSession = [pSession = &stSession, pCount = &iCounts[iMode], iMode](::OI::Base::BytesStream&, ::OI::Rpc::RpcDelivery&&)
 			{
 				++*pCount;
 				if (iMode == 0)
 				{
 					pSession->ActiveClose();
 				}
-			});
+			};
+			stManager.BindRpcHandler(999999, std::move(fnCloseFirstSession));
 			::OI::Base::BytesStream stBody;
 			stBody << uint64_t(0);
 			auto stFrame = ::OI::Rpc::EncodePbFrame(999999, stBody);

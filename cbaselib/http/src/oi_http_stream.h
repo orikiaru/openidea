@@ -112,7 +112,18 @@ class StreamBody
 	static constexpr size_t Block = 64 * 1024;
 	void Begin(bool bChunked, bool bLength, uint64_t iLength)
 	{
-		m_iPhase = bChunked ? Phase::Size : (bLength ? Phase::Length : Phase::Eof);
+		if (bChunked)
+		{
+			m_iPhase = Phase::Size;
+		}
+		else if (bLength)
+		{
+			m_iPhase = Phase::Length;
+		}
+		else
+		{
+			m_iPhase = Phase::Eof;
+		}
 		m_iRemaining = iLength;
 		m_iTrailerBytes = 0;
 		m_iRetrySize = 0;
@@ -154,7 +165,11 @@ class StreamBody
 				const size_t iTrailerLimit = Block - m_iTrailerBytes;
 				if (iEnd == sRest.npos)
 				{
-					return m_iPhase == Phase::Trailers && sRest.size() > iTrailerLimit ? OI_ERR_PROTOCOL : OI_OK;
+					if (m_iPhase == Phase::Trailers && sRest.size() > iTrailerLimit)
+					{
+						return OI_ERR_PROTOCOL;
+					}
+					return OI_OK;
 				}
 				if (m_iPhase == Phase::Trailers && iEnd + 2 > iTrailerLimit)
 				{

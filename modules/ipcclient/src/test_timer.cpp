@@ -229,17 +229,18 @@ int32_t TestTimer::CheckBacklog()
 	{
 		auto& stTimer = OI::Timer::BaseTimerManager::GetInstance();
 		auto pState = std::make_shared<TimerBacklogState>();
-		const int32_t iRepeatCode = stTimer.AddTimer([pState]()
+		auto fnRepeat = [pState]()
 		{
 			++pState->iRepeat;
 			if (pState->iRepeat == 1)
 			{
 				auto& stLocalTimer = OI::Timer::BaseTimerManager::GetInstance();
 				pState->iFirstTick = stLocalTimer.GetCurTick();
-				pState->iChildCode = stLocalTimer.AddTimer([pState]()
+				auto fnCountChild = [pState]()
 				{
 					++pState->iChild;
-				}, 1);
+				};
+				pState->iChildCode = stLocalTimer.AddTimer(std::move(fnCountChild), 1);
 				const auto stBegin = std::chrono::steady_clock::now();
 				std::this_thread::sleep_for(std::chrono::milliseconds(60));
 				pState->iSlowMilliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - stBegin).count();
@@ -248,12 +249,14 @@ int32_t TestTimer::CheckBacklog()
 			{
 				pState->iSecondTick = OI::Timer::BaseTimerManager::GetInstance().GetCurTick();
 			}
-		}, 1, 3);
-		const int32_t iStopCode = stTimer.AddTimer([pState](OI::Timer::TimerContext& stContext)
+		};
+		const int32_t iRepeatCode = stTimer.AddTimer(std::move(fnRepeat), 1, 3);
+		auto fnStop = [pState](OI::Timer::TimerContext& stContext)
 		{
 			++pState->iStop;
 			stContext.Stop();
-		}, 1, 3);
+		};
+		const int32_t iStopCode = stTimer.AddTimer(std::move(fnStop), 1, 3);
 		OI::Timer::TimerTestAccess::Backdate(stTimer, 220);
 		stTimer.Update();
 		const int32_t iFirstCount = pState->iRepeat;
@@ -317,6 +320,10 @@ struct TimerExceptionProbe
 	std::atomic<bool> bPassed{false};
 	std::atomic<int64_t> vTicks[5]{};
 	uint64_t iDeadlineMilliseconds = 0;
+	static void OnWatchdogClosed(uv_handle_t* pHandle)
+	{
+		static_cast<TimerExceptionProbe*>(pHandle->data)->bClosed = true;
+	}
 };
 
 struct TimerClosureProbe
@@ -337,7 +344,8 @@ OI::Coro::TaskResult<int> TestTimer::CheckTimerExceptions()
 	const int32_t iUninitializedBad = OI::Timer::TimerTestAccess::CheckUninitialized();
 	auto& stInitialized = OI::Timer::BaseTimerManager::GetInstance();
 	const int32_t iOffset = stInitialized.GetTickOffsetMS();
-	const int32_t iConversionBad = iOffset > 0 && stInitialized.milling2tick(iOffset) == 1 && stInitialized.milling2tick(iOffset + 1) == 2 ? 0 : 1;
+	const bool bConversionValid = iOffset > 0 && stInitialized.milling2tick(iOffset) == 1 && stInitialized.milling2tick(iOffset + 1) == 2;
+	const int32_t iConversionBad = bConversionValid ? 0 : 1;
 	LOG_TRACE("hold timer conversion offset=%d bad=%d", iOffset, iConversionBad);
 	auto pFrameworkProbe = std::make_shared<FrameworkTimerProbeState>();
 	auto* pZeroTimer = new FrameworkTimerProbe(pFrameworkProbe, true);
@@ -365,7 +373,7 @@ OI::Coro::TaskResult<int> TestTimer::CheckTimerExceptions()
 		auto pState = *pHolder;
 		delete pHolder;
 		auto& stTimers = OI::Timer::BaseTimerManager::GetInstance();
-		const int32_t iCode = stTimers.AddTimer([pState](OI::Timer::TimerContext& stContext)
+		auto fnCheckTimerContext = [pState](OI::Timer::TimerContext& stContext)
 		{
 			auto& stLocalTimers = OI::Timer::BaseTimerManager::GetInstance();
 			const int64_t iStartTick = stLocalTimers.GetCurTick();
@@ -386,7 +394,8 @@ OI::Coro::TaskResult<int> TestTimer::CheckTimerExceptions()
 				pTimer->SetTarget(iStartTick + iTicks);
 				pTimer.release();
 			}
-		}, 1, 64);
+		};
+		const int32_t iCode = stTimers.AddTimer(std::move(fnCheckTimerContext), 1, 64);
 		if (iCode != OI_OK)
 		{
 			++pState->iBad;
@@ -416,7 +425,7 @@ OI::Coro::TaskResult<int> TestTimer::CheckTimerExceptions()
 		}
 		pProbe->stWatchdog.data = pProbe;
 		pProbe->iDeadlineMilliseconds = uv_now(pLoop) + 10000;
-		const int iReturnCode = uv_timer_start(&pProbe->stWatchdog, [](uv_timer_t* pTimer)
+		auto fnWatchdogTick = [](uv_timer_t* pTimer)
 		{
 			auto* pProbeLocal = static_cast<TimerExceptionProbe*>(pTimer->data);
 			const bool bComplete = pProbeLocal->iExecuted == 5 && pProbeLocal->iDestroyed == 5;
@@ -426,17 +435,12 @@ OI::Coro::TaskResult<int> TestTimer::CheckTimerExceptions()
 			}
 			pProbeLocal->bPassed = bComplete;
 			uv_timer_stop(pTimer);
-			uv_close(reinterpret_cast<uv_handle_t*>(pTimer), [](uv_handle_t* pHandle)
-			{
-				static_cast<TimerExceptionProbe*>(pHandle->data)->bClosed = true;
-			});
-		}, 10, 10);
+			uv_close(reinterpret_cast<uv_handle_t*>(pTimer), TimerExceptionProbe::OnWatchdogClosed);
+		};
+		const int iReturnCode = uv_timer_start(&pProbe->stWatchdog, fnWatchdogTick, 10, 10);
 		if (iReturnCode != 0)
 		{
-			uv_close(reinterpret_cast<uv_handle_t*>(&pProbe->stWatchdog), [](uv_handle_t* pHandle)
-			{
-				static_cast<TimerExceptionProbe*>(pHandle->data)->bClosed = true;
-			});
+			uv_close(reinterpret_cast<uv_handle_t*>(&pProbe->stWatchdog), TimerExceptionProbe::OnWatchdogClosed);
 		}
 	}, pState.get());
 	// 在时间轮回调内布置下一批，记录实际 tick，确保覆盖同批余下回调。
@@ -446,7 +450,7 @@ OI::Coro::TaskResult<int> TestTimer::CheckTimerExceptions()
 		for (int iIndex = 0; iIndex < 5; ++iIndex)
 		{
 			auto pClosure = std::make_shared<TimerClosureProbe>(pState);
-			stTimers.AddTimer([pClosure, iIndex]()
+			auto fnRunTimer = [pClosure, iIndex]()
 			{
 				auto pProbe = pClosure->pState;
 				pProbe->vTicks[iIndex] = OI::Timer::BaseTimerManager::GetInstance().GetCurTick();
@@ -459,7 +463,8 @@ OI::Coro::TaskResult<int> TestTimer::CheckTimerExceptions()
 				{
 					throw 73;
 				}
-			}, iIndex == 4 ? stTimers.GetTickOffsetMS() * 3 : 1);
+			};
+			stTimers.AddTimer(std::move(fnRunTimer), iIndex == 4 ? stTimers.GetTickOffsetMS() * 3 : 1);
 		}
 	}, 1);
 	while (!pState->bClosed.load())

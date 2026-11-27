@@ -368,7 +368,16 @@ OI::Coro::TaskResult<int> TestHold::CheckRpcRace()
 		}
 		sMarks += std::to_string(iMark);
 		sMarks.push_back(':');
-		sMarks.push_back(iOutcome == RaceOutcome::Reply ? 'R' : iOutcome == RaceOutcome::Timeout ? 'T' : 'B');
+		char iOutcomeMark = 'B';
+		if (iOutcome == RaceOutcome::Reply)
+		{
+			iOutcomeMark = 'R';
+		}
+		else if (iOutcome == RaceOutcome::Timeout)
+		{
+			iOutcomeMark = 'T';
+		}
+		sMarks.push_back(iOutcomeMark);
 	}
 	const RaceOutcome iControlledReply = co_await RaceOne(200, 0);
 	const RaceOutcome iControlledTimeout = co_await RaceOne(201, 5000);
@@ -477,7 +486,11 @@ OI::Coro::TaskResult<int> TestHold::CheckRpcDisconnect(sid_t iSessionId)
 	const long long iWallMilliseconds = HoldTest::WallMs(iWallBegin);
 	co_await stClose;
 	LOG_TRACE("hold rpc disconnected code=%d wall_ms=%lld", stClosed.GetRet(), iWallMilliseconds);
-	co_return (stClosed.GetRet() != OI_ERR_CONNECT || iWallMilliseconds > 2000) ? 1 : 0;
+	if (stClosed.GetRet() != OI_ERR_CONNECT || iWallMilliseconds > 2000)
+	{
+		co_return 1;
+	}
+	co_return 0;
 }
 
 // 按固定顺序跑各主题 mgr，再测标准回包、迟到回包、回包撞车、Redis 迟到 PING 和断连收尾。

@@ -248,7 +248,18 @@ class MysqlConnection final : public OI::Db::Connection
 				}
 				vLengths[iIndex] = static_cast<unsigned long>(iSize);
 				stBind.buffer_type = pString ? MYSQL_TYPE_STRING : MYSQL_TYPE_BLOB;
-				stBind.buffer = iSize == 0 ? static_cast<void*>(&iEmptyByte) : (pString ? static_cast<void*>(const_cast<char*>(pString->data())) : static_cast<void*>(const_cast<uint8_t*>(pBlob->data())));
+				if (iSize == 0)
+				{
+					stBind.buffer = static_cast<void*>(&iEmptyByte);
+				}
+				else if (pString)
+				{
+					stBind.buffer = static_cast<void*>(const_cast<char*>(pString->data()));
+				}
+				else
+				{
+					stBind.buffer = static_cast<void*>(const_cast<uint8_t*>(pBlob->data()));
+				}
 				stBind.buffer_length = vLengths[iIndex];
 				stBind.length = &vLengths[iIndex];
 			}

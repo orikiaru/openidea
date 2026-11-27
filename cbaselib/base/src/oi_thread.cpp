@@ -168,10 +168,11 @@ void ThreadPool::RequestStop(int iCode)
 	}
 	::OI::Net::Poll::GetInstance().CallOnLoop([](void* pArgument)
 	{
-		::OI::Net::BlockingWorkSessionManager::GetInstance().Drain([](void* pArgumentLocal)
+		auto fnFinish = [](void* pArgumentLocal)
 		{
 			static_cast<ThreadPool*>(pArgumentLocal)->FinishStop();
-		}, pArgument);
+		};
+		::OI::Net::BlockingWorkSessionManager::GetInstance().Drain(fnFinish, pArgument);
 	}, this);
 }
 

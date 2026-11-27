@@ -157,9 +157,15 @@ void BlockingWorkSessionManager::SubmitOnLoop(Submission& stSubmission) noexcept
 	uint64_t iOperation = 0;
 	// 与 RPC 一样，常规拒绝通过返回码交回；C++ 异常仍在等待处重抛。
 	const size_t iCapacity = OI::Thread::BlockingPoolCapacity(stSubmission.iType);
-	const int32_t iAdmission = m_bClosed || OI::Thread::ThreadPool::GetInstance().StopRequested()
-	                               ? OI_ERR_CONNECT
-	                               : (iCapacity != 0 && m_mCounts.contains(stSubmission.iType) && m_mCounts.at(stSubmission.iType) >= iCapacity ? OI_ERR_BUSY : OI_OK);
+	int32_t iAdmission = OI_OK;
+	if (m_bClosed || OI::Thread::ThreadPool::GetInstance().StopRequested())
+	{
+		iAdmission = OI_ERR_CONNECT;
+	}
+	else if (iCapacity != 0 && m_mCounts.contains(stSubmission.iType) && m_mCounts.at(stSubmission.iType) >= iCapacity)
+	{
+		iAdmission = OI_ERR_BUSY;
+	}
 	try
 	{
 		if (iAdmission != OI_OK)

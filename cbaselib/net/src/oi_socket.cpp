@@ -443,12 +443,22 @@ void NetAddr::Resolve(const std::string& sHost, const std::string& sPort, void (
 	ResolveAll(sHost, sPort, [](void* pContext, std::vector<NetAddr> vAddresses)
 	{
 		std::unique_ptr<Callback> pCallback(static_cast<Callback*>(pContext));
-		const auto it = std::find_if(vAddresses.begin(), vAddresses.end(), [](const NetAddr& stAddress)
+		auto fnIsIpv4 = [](const NetAddr& stAddress)
 		{
 			return stAddress.Family() == AF_INET;
-		});
-		pCallback->fnComplete(pCallback->pContext, !vAddresses.empty(), it != vAddresses.end() ? *it : vAddresses.empty() ? NetAddr()
-		                                                                                                                  : vAddresses.front());
+		};
+		const auto it = std::find_if(vAddresses.begin(), vAddresses.end(), fnIsIpv4);
+		if (vAddresses.empty())
+		{
+			pCallback->fnComplete(pCallback->pContext, false, NetAddr());
+			return;
+		}
+		if (it != vAddresses.end())
+		{
+			pCallback->fnComplete(pCallback->pContext, true, *it);
+			return;
+		}
+		pCallback->fnComplete(pCallback->pContext, true, vAddresses.front());
 	}, new Callback{fnDone, pArgument});
 }
 
