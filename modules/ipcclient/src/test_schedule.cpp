@@ -55,7 +55,7 @@ OI::Coro::TaskResult<int> TestSchedule::CheckSchedulerFairness()
 		});
 	}
 	co_await OI::Coro::yield(OI::Timer::Milliseconds(50));
-	OI::Coro::StartTask([&bOrdinaryDone](OI::Coro::Token) -> OI::Coro::Task
+	OI::Coro::StartTask([&bOrdinaryDone]() -> OI::Coro::Task
 	{
 		bOrdinaryDone.store(true);
 		co_return;
@@ -137,10 +137,11 @@ OI::Coro::TaskResult<int> TestSchedule::CheckTaskScope()
 // 真正的带捕获协程 lambda：临时闭包离开后、挂起恢复后仍访问捕获。
 OI::Coro::TaskResult<int> TestSchedule::CheckCapturedTasks()
 {
+	// 默认标识 0 让两种签名都能调用；若启动时没传入真实标识，子任务会报错。
 	std::vector<OI::Coro::TaskResult<int>> vTasks;
 	for (int iIndexLocal = 0; iIndexLocal < 32; ++iIndexLocal)
 	{
-		vTasks.push_back(OI::Coro::StartTask([text = std::string(4096, 'a' + iIndexLocal % 26), iIndexLocal](OI::Coro::Token iToken) -> OI::Coro::TaskResult<int>
+		vTasks.push_back(OI::Coro::StartTask([text = std::string(4096, 'a' + iIndexLocal % 26), iIndexLocal](OI::Coro::Token iToken = 0) -> OI::Coro::TaskResult<int>
 		{
 			co_await OI::Coro::yield(::OI::Timer::Milliseconds(0));
 			co_await OI::Coro::yield(::OI::Timer::Milliseconds(10));

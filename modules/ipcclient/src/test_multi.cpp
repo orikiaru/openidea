@@ -123,7 +123,7 @@ void TestMulti::Start()
 	if (m_bPool)
 	{
 		TestBoard::GetInstance().Arm();
-		OI::Coro::StartTask([](OI::Coro::Token)
+		OI::Coro::StartTask([]()
 		{
 			return TestMulti::GetInstance().Pool();
 		});
@@ -134,7 +134,7 @@ void TestMulti::Start()
 		return;
 	}
 	TestBoard::GetInstance().Arm();
-	OI::Coro::StartTask([](OI::Coro::Token)
+	OI::Coro::StartTask([]()
 	{
 		return TestMulti::GetInstance().Run();
 	});

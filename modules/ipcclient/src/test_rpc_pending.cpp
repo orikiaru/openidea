@@ -114,7 +114,7 @@ struct TestRpcPending::PendingClient : OI::Rpc::ProtoClientManager
 		}
 		if (iFailureMode == 4)
 		{
-			OI::Coro::StartTask([iId](OI::Coro::Token) -> OI::Coro::Task
+			OI::Coro::StartTask([iId]() -> OI::Coro::Task
 			{
 				OI::Rpc::RpcCallManager::GetInstance().Wake(iId, OI_ERR_FAIL, nullptr);
 				co_return;

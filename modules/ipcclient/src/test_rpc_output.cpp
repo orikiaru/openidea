@@ -207,7 +207,7 @@ OI::Coro::TaskResult<int> TestRpcOutput::CheckOutputRpcTask(sid_t iSessionId)
 	std::vector<OI::Coro::TaskResult<int>> vWaiters;
 	for (int iIndex = 0; iIndex < 16; ++iIndex)
 	{
-		vWaiters.push_back(OI::Coro::StartTask([stCall](OI::Coro::Token)
+		vWaiters.push_back(OI::Coro::StartTask([stCall]()
 		{
 			return RpcOutputWait::Await(stCall);
 		}));
@@ -229,7 +229,7 @@ OI::Coro::TaskResult<int> TestRpcOutput::CheckOutputRpcTask(sid_t iSessionId)
 	vWaiters.clear();
 	for (int iIndex = 0; iIndex < 16; ++iIndex)
 	{
-		vWaiters.push_back(OI::Coro::StartTask([stCall](OI::Coro::Token)
+		vWaiters.push_back(OI::Coro::StartTask([stCall]()
 		{
 			return RpcOutputWait::Await(stCall);
 		}));

@@ -31,7 +31,7 @@ void TestLog::Start()
 	}
 	m_stStart = std::chrono::steady_clock::now();
 	TestBoard::GetInstance().Arm();
-	OI::Coro::StartTask([](OI::Coro::Token)
+	OI::Coro::StartTask([]()
 	{
 		return TestLog::GetInstance().Run();
 	});

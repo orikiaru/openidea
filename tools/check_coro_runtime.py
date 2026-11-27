@@ -135,7 +135,7 @@ int main(int iCountParam, char** vArgumentsParam)
         pCloseProbe->pBad = pCloseBad.get();
         pCloseProbe->stCall.fnCall = QueuedProbeCallback;
         pCloseProbe->stCall.pArgument = pCloseProbe.get();
-        OI::Coro::StartTask([pStarted, pFinished, pRejected, pRelease, pDrained, pRegistered, pCloseProbe](OI::Coro::Token) -> OI::Coro::Task
+        OI::Coro::StartTask([pStarted, pFinished, pRejected, pRelease, pDrained, pRegistered, pCloseProbe]() -> OI::Coro::Task
         {
             auto stWork = OI::Coro::RunBlocking([pStarted, pFinished, pRelease]()
             {
@@ -207,7 +207,7 @@ int main(int iCountParam, char** vArgumentsParam)
     auto pBatch = std::make_shared<BatchProbe>();
     auto pLifetime = std::make_shared<int>(42);
     std::weak_ptr<int> pWeak = pLifetime;
-    OI::Coro::StartTask([pLifetime, pQueuedBad, pQueued, pBatch](OI::Coro::Token) -> OI::Coro::Task
+    OI::Coro::StartTask([pLifetime, pQueuedBad, pQueued, pBatch]() -> OI::Coro::Task
     {
         int iBad = 0;
         for (auto& stProbe : *pQueued)
@@ -276,7 +276,7 @@ int main(int iCountParam, char** vArgumentsParam)
             }
             try
             {
-                auto stTask = OI::Coro::StartTask([pThreadRuns, pWrappers](OI::Coro::Token)
+                auto stTask = OI::Coro::StartTask([pThreadRuns, pWrappers]()
                 {
                     ++*pWrappers;
                     return ThreadGuardChild(pThreadRuns);
@@ -363,7 +363,7 @@ int main(int iCountParam, char** vArgumentsParam)
                 auto pValue = std::make_shared<CaptureValue>();
                 pValue->pReleased = pCaptureReleased;
                 pCaptureWeak = pValue;
-                return OI::Coro::StartTask([pValue, pCaptureRuns, pCaptureGate, pCaptureSuspended](OI::Coro::Token) -> OI::Coro::TaskResult<int>
+                return OI::Coro::StartTask([pValue, pCaptureRuns, pCaptureGate, pCaptureSuspended]() -> OI::Coro::TaskResult<int>
                 {
                     ++*pCaptureRuns;
                     co_await OI::Coro::yield(1);
@@ -422,14 +422,14 @@ int main(int iCountParam, char** vArgumentsParam)
         }
         auto pRuns = std::make_shared<std::atomic<int>>(0);
         auto pBad = std::make_shared<std::atomic<int>>(0);
-        auto stShared = OI::Coro::StartTask([pRuns](OI::Coro::Token)
+        auto stShared = OI::Coro::StartTask([pRuns]()
         {
             return SharedChild(pRuns);
         });
         std::vector<OI::Coro::Task> vWaiters;
         for (int iIndex = 0; iIndex < 64; ++iIndex)
         {
-            vWaiters.push_back(OI::Coro::StartTask([stShared, pBad](OI::Coro::Token) -> OI::Coro::Task
+            vWaiters.push_back(OI::Coro::StartTask([stShared, pBad]() -> OI::Coro::Task
             {
                 for (int iRound = 0; iRound < 2; ++iRound)
                 {

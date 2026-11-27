@@ -245,7 +245,7 @@ int32_t RegistryServer::Init()
 		{
 			return iCode;
 		}
-		OI::Coro::StartTask([this](OI::Coro::Token)
+		OI::Coro::StartTask([this]()
 		{
 			return BootMysql();
 		});
@@ -264,7 +264,7 @@ int32_t RegistryServer::Init()
 		return iCode;
 	}
 	::OI::Redis::RedisClient::GetInstance().StartClient();
-	OI::Coro::StartTask([this](OI::Coro::Token)
+	OI::Coro::StartTask([this]()
 	{
 		return Boot();
 	});
@@ -361,7 +361,7 @@ void RegistryServer::OnDelSession(const ::OI::Net::Session* pSession)
 			}
 			HideWithdrawn(stSecond);
 			LOG_TRACE("registry offline %s id=%d (connection closed)", stSecond.stLease.sName.c_str(), stSecond.stLease.iId);
-			OI::Coro::StartTask([this, stSecond](OI::Coro::Token)
+			OI::Coro::StartTask([this, stSecond]()
 			{
 				return Withdraw(stSecond);
 			});
@@ -431,13 +431,13 @@ void RegistryServer::StartReload()
 	m_bReloading = true;
 	if (!m_bReport)
 	{
-		OI::Coro::StartTask([this](OI::Coro::Token)
+		OI::Coro::StartTask([this]()
 		{
 			return ReloadMysql();
 		});
 		return;
 	}
-	OI::Coro::StartTask([this](OI::Coro::Token)
+	OI::Coro::StartTask([this]()
 	{
 		return Reload();
 	});

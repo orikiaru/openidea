@@ -93,7 +93,7 @@ static OI::Rpc::RpcTask HandleEncodingRegression(const OI::Rpc::RpcContext& stCo
 	if (stRequest.iMark == -2147483598)
 	{
 		// 先回原请求，让客户端释放出站租约；反向 RPC 独立挂起。
-		OI::Coro::StartTask([pManager = &stContext.stManager, iSessionId = stContext.iSessionId](OI::Coro::Token) -> OI::Coro::Task
+		OI::Coro::StartTask([pManager = &stContext.stManager, iSessionId = stContext.iSessionId]() -> OI::Coro::Task
 		{
 			OI::RpcData::HoldReq stReverse;
 			stReverse.iMark = -2147483598;
@@ -238,7 +238,7 @@ void IpcServer::StartHttpProbe()
 	{
 		return;
 	}
-	OI::Coro::StartTask([sHostLocal, iPortLocal, sPath, iTimeoutMillisecondsLocal](OI::Coro::Token)
+	OI::Coro::StartTask([sHostLocal, iPortLocal, sPath, iTimeoutMillisecondsLocal]()
 	{
 		return HttpProbe(sHostLocal, iPortLocal, sPath, iTimeoutMillisecondsLocal);
 	});

@@ -115,7 +115,7 @@ void TestCoro::Start()
 	{
 		return;
 	}
-	OI::Coro::StartTask([](OI::Coro::Token)
+	OI::Coro::StartTask([]()
 	{
 		return TestCoro::GetInstance().Run();
 	});
@@ -173,7 +173,7 @@ OI::Coro::Task TestCoro::Run()
 	const auto stLiveBegin = std::chrono::steady_clock::now();
 	for (int32_t iIndex = 0; iIndex < m_iLive; ++iIndex)
 	{
-		OI::Coro::StartTask([](OI::Coro::Token) -> OI::Coro::Task
+		OI::Coro::StartTask([]() -> OI::Coro::Task
 		{
 			co_await SuspendGate{};
 			TestCoro::GetInstance().NoteWake();
@@ -204,7 +204,7 @@ OI::Coro::Task TestCoro::Run()
 	const auto stChurnBegin = std::chrono::steady_clock::now();
 	for (int32_t iIndex = 0; iIndex < m_iChurn; ++iIndex)
 	{
-		OI::Coro::StartTask([](OI::Coro::Token) -> OI::Coro::Task
+		OI::Coro::StartTask([]() -> OI::Coro::Task
 		{
 			TestCoro::GetInstance().NoteChurn();
 			co_return;

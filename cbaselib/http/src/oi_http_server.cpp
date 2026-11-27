@@ -661,7 +661,7 @@ class ServerSession final : public Net::NetSession
 		pDone->stCall.pArgument = pDone.get();
 		auto stRequest = std::move(m_stFrame.stRequest);
 		m_stFrame = {};
-		Coro::StartTask([fnHandler, pDone = std::move(pDone), stRequest = std::move(stRequest)](Coro::Token) mutable
+		Coro::StartTask([fnHandler, pDone = std::move(pDone), stRequest = std::move(stRequest)]() mutable
 		{
 			return Dispatch(std::move(pDone), fnHandler, std::move(stRequest));
 		});

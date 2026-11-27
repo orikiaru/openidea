@@ -68,7 +68,7 @@ void TestEmpty::Start()
 	m_stStart = std::chrono::steady_clock::now();
 	ArmTimeout();
 	TestBoard::GetInstance().Arm();
-	OI::Coro::StartTask([](OI::Coro::Token)
+	OI::Coro::StartTask([]()
 	{
 		return TestEmpty::GetInstance().Run();
 	});
@@ -113,7 +113,7 @@ OI::Coro::Task TestEmpty::Run()
 			co_await OI::Coro::yield(1);
 			continue;
 		}
-		OI::Coro::StartTask([iTimeoutMilliseconds](OI::Coro::Token)
+		OI::Coro::StartTask([iTimeoutMilliseconds]()
 		{
 			return TestEmpty::SendOne(iTimeoutMilliseconds);
 		});

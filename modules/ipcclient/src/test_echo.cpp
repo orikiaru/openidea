@@ -396,7 +396,7 @@ void TestEcho::Start(sid_t iSessionId)
 	LOG_TRACE("ipc client connect sid=%d mode=%s total=%d", m_iSessionId, kMode, m_iTotal);
 	fflush(stdout);
 	TestBoard::GetInstance().Arm();
-	OI::Coro::StartTask([](OI::Coro::Token)
+	OI::Coro::StartTask([]()
 	{
 		return TestEcho::GetInstance().Run();
 	});

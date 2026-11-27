@@ -38,7 +38,7 @@ void TestRedis::Start()
 	}
 	m_stStart = std::chrono::steady_clock::now();
 	TestBoard::GetInstance().Arm();
-	OI::Coro::StartTask([](OI::Coro::Token)
+	OI::Coro::StartTask([]()
 	{
 		return TestRedis::GetInstance().Pump();
 	});
@@ -62,7 +62,7 @@ static bool BulkIs(const ::OI::Redis::RedisResult& stResult, const char* pText, 
 static OI::Coro::Task RedisQueueTimeoutRegression()
 {
 	// 故意在协程里同步阻塞，超时必须仍由 poll 推进。
-	OI::Coro::StartTask([](OI::Coro::Token) -> OI::Coro::Task
+	OI::Coro::StartTask([]() -> OI::Coro::Task
 	{
 		const auto stStart = std::chrono::steady_clock::now();
 		auto stResult = OI::Redis::CallRedisSync({"BLPOP", "oi-queue-timeout-regression", "2"});
@@ -78,7 +78,7 @@ static OI::Coro::Task RedisQueueTimeoutRegression()
 
 static OI::Coro::Task RedisShutdownRegression()
 {
-	OI::Coro::StartTask([](OI::Coro::Token) -> OI::Coro::Task
+	OI::Coro::StartTask([]() -> OI::Coro::Task
 	{
 		auto stResult = OI::Redis::CallRedisSync({"BLPOP", "oi-shutdown-regression", "0"});
 		auto stLate = OI::Redis::CallRedisSync({"PING"});
@@ -553,7 +553,7 @@ static OI::Coro::TaskResult<int> CheckSingleUse()
 	}
 	auto pSharedCall = std::make_shared<OI::Redis::RedisCall>(OI::Redis::CallRedis({"INCR", "oi-concurrent-use"}));
 	auto pReadyCount = std::make_shared<std::atomic<int>>(0);
-	auto fnContend = [pSharedCall, pReadyCount](OI::Coro::Token) -> OI::Coro::TaskResult<bool>
+	auto fnContend = [pSharedCall, pReadyCount]() -> OI::Coro::TaskResult<bool>
 	{
 		pReadyCount->fetch_add(1, std::memory_order_acq_rel);
 		// 两个独立任务都就绪后再争抢；单线程等待时让出调度。

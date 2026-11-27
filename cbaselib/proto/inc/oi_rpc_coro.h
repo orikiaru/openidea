@@ -935,7 +935,7 @@ class RouteCall
 		{
 			return iThreadStatus;
 		}
-		OI::Coro::StartTask([iKind, sName = std::move(sName), iPick, sZone = std::move(sZone), vZones = std::move(vZones), stMessage](OI::Coro::Token) mutable
+		OI::Coro::StartTask([iKind, sName = std::move(sName), iPick, sZone = std::move(sZone), vZones = std::move(vZones), stMessage]() mutable
 		{
 			return RunNotify(iKind, std::move(sName), iPick, std::move(sZone), std::move(vZones), std::move(stMessage));
 		});
@@ -1006,7 +1006,7 @@ class PeerCall
 		{
 			return OI_ERR_CONNECT;
 		}
-		OI::Coro::StartTask([pSender = std::move(pSender), stMessage](OI::Coro::Token) mutable
+		OI::Coro::StartTask([pSender = std::move(pSender), stMessage]() mutable
 		{
 			return RunNotify(std::move(pSender), std::move(stMessage));
 		});
@@ -1029,7 +1029,7 @@ class PeerCall
 			{
 				continue;
 			}
-			OI::Coro::StartTask([pSender, stMessage](OI::Coro::Token) mutable
+			OI::Coro::StartTask([pSender, stMessage]() mutable
 			{
 				return RunNotify(std::move(pSender), std::move(stMessage));
 			});

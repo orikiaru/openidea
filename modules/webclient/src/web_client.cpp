@@ -1171,8 +1171,5 @@ OI::Coro::Task WebClient::Run()
 
 void WebClient::Start()
 {
-	OI::Coro::StartTask([](OI::Coro::Token)
-	{
-		return Run();
-	});
+	OI::Coro::StartTask(Run);
 }

@@ -235,7 +235,7 @@ OI::Coro::TaskResult<int> TestRpcService::CheckNamedOutputRpcTask()
 	std::vector<OI::Coro::TaskResult<int>> vWaiters;
 	for (int iIndex = 0; iIndex < 8; ++iIndex)
 	{
-		vWaiters.push_back(OI::Coro::StartTask([stNamed](OI::Coro::Token)
+		vWaiters.push_back(OI::Coro::StartTask([stNamed]()
 		{
 			return RpcOutputWait::Await(stNamed);
 		}));

@@ -6,14 +6,14 @@
 
 | 用途 | 声明 |
 | --- | --- |
-| 拉起一条独立任务 | [`StartTask`](../../cbaselib/base/inc/oi_coro.h#L666) |
+| 拉起一条独立任务 | [`StartTask`](../../cbaselib/base/inc/oi_coro.h#L694) |
 | 空等若干毫秒 | [`yield`](../../cbaselib/base/inc/oi_coro.h#L113) |
 | 等一组任务 | [`WhenAll`](../../cbaselib/base/inc/oi_coro.h#L608) |
 | 把同步函数丢到后台 | [`RunBlocking`](../../cbaselib/base/inc/oi_coro.h#L505) |
 | 单线程启动检查 | [`CheckTaskStartThread`](../../cbaselib/base/inc/oi_coro.h#L54) |
 
 ```cpp
-::OI::Coro::StartTask([](::OI::Coro::Token)
+::OI::Coro::StartTask([]() -> ::OI::Coro::Task
 {
 	co_await ::OI::Coro::yield(1000);
 });

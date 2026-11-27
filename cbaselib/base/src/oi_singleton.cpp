@@ -145,7 +145,7 @@ void SingletonUpdates::DispatchTick(uint64_t iNowMilliseconds)
 	{
 		Launch(pEntry, [pEntry, iNowMilliseconds]()
 		{
-			return ::OI::Coro::StartTask([pEntry, iNowMilliseconds](::OI::Coro::Token)
+			return ::OI::Coro::StartTask([pEntry, iNowMilliseconds]()
 			{
 				return RunTick(pEntry, iNowMilliseconds);
 			});
@@ -168,7 +168,7 @@ void SingletonUpdates::DispatchSecond(time_t iNow)
 	{
 		Launch(pEntry, [pEntry, iNow]()
 		{
-			return ::OI::Coro::StartTask([pEntry, iNow](::OI::Coro::Token)
+			return ::OI::Coro::StartTask([pEntry, iNow]()
 			{
 				return RunSecond(pEntry, iNow);
 			});

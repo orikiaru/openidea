@@ -94,7 +94,7 @@ OI::Coro::TaskResult<int> TestTaskShare::CheckForeignTaskStart()
 	{
 		try
 		{
-			auto stTask = OI::Coro::StartTask([pRuns](OI::Coro::Token)
+			auto stTask = OI::Coro::StartTask([pRuns]()
 			{
 				++*pRuns;
 				return TestTaskShare::GetInstance().SharedVoidChild(pRuns);

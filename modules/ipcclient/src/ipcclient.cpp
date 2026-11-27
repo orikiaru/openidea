@@ -28,7 +28,7 @@ int32_t IpcClient::Init()
 	TestCoro::GetInstance().Load();
 	if (TestEcho::GetInstance().StackOn())
 	{
-		OI::Coro::StartTask([](OI::Coro::Token)
+		OI::Coro::StartTask([]()
 		{
 			return TestEcho::GetInstance().StackProbe();
 		});

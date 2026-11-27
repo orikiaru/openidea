@@ -119,7 +119,7 @@ OI::Coro::TaskResult<int> TestTaskStart::CheckStartedTaskWaiters()
 			auto pState = std::make_shared<SharedWaitersState>(iCount);
 			std::vector<OI::Coro::Task> vWaiters;
 			{
-				auto stTask = OI::Coro::StartTask([pState](OI::Coro::Token)
+				auto stTask = OI::Coro::StartTask([pState]()
 				{
 					return TestTaskStart::GetInstance().SharedWaitersChild(pState);
 				});

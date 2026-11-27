@@ -122,7 +122,7 @@ void TestUdp::Start()
 		return;
 	}
 	TestBoard::GetInstance().Arm();
-	OI::Coro::StartTask([](OI::Coro::Token)
+	OI::Coro::StartTask([]()
 	{
 		return TestUdp::GetInstance().Run();
 	});

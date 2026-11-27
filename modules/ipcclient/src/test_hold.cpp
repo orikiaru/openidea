@@ -105,7 +105,7 @@ void TestHold::Start(sid_t iSessionId)
 	}
 	m_iSessionId = iSessionId;
 	TestBoard::GetInstance().Arm();
-	OI::Coro::StartTask([](OI::Coro::Token)
+	OI::Coro::StartTask([]()
 	{
 		return TestHold::GetInstance().Pump();
 	});

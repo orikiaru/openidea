@@ -21,7 +21,7 @@ namespace OI
 namespace Coro
 {
 
-// 协程 token。StartTask 生成并传进协程。
+// 协程 token。StartTask 分配任务标识，回调可选择接收。
 typedef uint64_t Token;
 typedef Token TaskUid;
 
@@ -671,6 +671,23 @@ auto InvokeTask(TaskLaunch stLaunch, F&& fnFunction)
 	return std::forward<F>(fnFunction)();
 }
 
+namespace Detail
+{
+// 回调既能无参调用又能接收 Token 时，优先传入任务标识。
+template <typename F>
+auto InvokeStartedTask(F& fnFunction, const Token& iToken)
+{
+	if constexpr (std::is_invocable_v<F&, const Token&>)
+	{
+		return fnFunction(iToken);
+	}
+	else
+	{
+		return fnFunction();
+	}
+}
+}
+
 // 闭包按值保活到任务结束，带捕获的协程 lambda 必须经这里启动。任务总是入队，不在调用方栈上跑。
 // 只允许具名捕获。没在当前栈 co_await 的任务，要带进去的对象按值具名捕获。具名引用和裸 this 不延长被指对象的寿命。
 template <typename F>
@@ -681,7 +698,7 @@ auto StartTask(F&& fnFunction)
 	auto stCallable = std::make_shared<std::decay_t<F>>(std::forward<F>(fnFunction));
 	auto stTask = InvokeTask(TaskLaunch{iTokenLocal, true, true}, [&stCallable, iTokenLocal]()
 	{
-		return (*stCallable)(iTokenLocal);
+		return Detail::InvokeStartedTask(*stCallable, iTokenLocal);
 	});
 	stTask.Start(std::move(stCallable), iTokenLocal);
 	return stTask;

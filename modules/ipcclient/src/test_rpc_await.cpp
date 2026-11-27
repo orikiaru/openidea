@@ -56,7 +56,7 @@ template <typename T>
 OI::Coro::TaskResult<int> TestRpcAwait::CheckSingleUse(std::shared_ptr<T> pCall)
 {
 	auto pReadyCount = std::make_shared<std::atomic<int>>(0);
-	auto fnContend = [pCall, pReadyCount](OI::Coro::Token) -> OI::Coro::TaskResult<bool>
+	auto fnContend = [pCall, pReadyCount]() -> OI::Coro::TaskResult<bool>
 	{
 		pReadyCount->fetch_add(1, std::memory_order_acq_rel);
 		// 两个独立任务都就绪后再争抢；单线程等待时让出调度。
