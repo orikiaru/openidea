@@ -23,20 +23,18 @@
 - 唤醒性能单线程专项：远程 Linux 的 100000 次串行空任务三轮平均分别为 13.590、13.840、13.800 微秒；真 MySQL 的 `mysql_direct_finish_to_resume` 为 1000 样本，p50/p95/p99 分别 15.241/25.457/32.247 微秒，逐段结果在 `st-wake-20261126-200353`。Windows ST 同一轮的串行空任务平均 39.265 微秒；独立 trace 的 `trace_total` p50/p95/p99 为 36.1/69.2/96.5 微秒。串行整链与独立打点采样分别记录，不将两者相减或混为同一测量。
 - Windows `web-stop` 单/多线程各做两轮 control、idle、stop：control 每轮完整接收 9437184 字节；idle 零退出后收到 RST；活跃响应停服每轮收到 8185 字节后 RST，诊断失败。结果位于 `.local/webstop-final-windows-mt`、`.local/webstop-final-windows-st`。这是已观察行为，停服是否应排空在途响应仍待定。
 
-## 全量（2026-11-26，配置参数改动）
+## 全量（2026-11-27，HEAD 94edfac）
 
-受测 HEAD `e2a4ef63ef0bed5323dd9d5a3e47166d13302ff8` 加启动配置参数工作区改动。Windows 为 MSVC x64 Release，Linux 为远程 GCC 13 Release。四路 `all` 通过；Linux 两路额外运行 MySQL 8.4.13 和静态注册表。启动参数矩阵步骤通过，最终补强的合法带空格路径、参数错误诊断和探针兼容检查在四路分别重跑通过。Linux 矩阵 `passed=true`、`completed=true`、`restored=false`、`restore_skipped=true`，前后归属清理成功。
+受测 HEAD `94edfac9b8332aed25e58b2d14191a56f045372a`。Windows 为 MSVC x64 Release，Linux 为远程 GCC 13 Release，四路 `all` 均通过。Linux 两路分别完成 20、19 个矩阵步骤，退出码均为 0，ASan 探针通过；同步后的独立目录与受测版本只有行尾差异。四路前后归属清理均退出 0。
 
-| 平台 | 线程 | CPU | 频率 MHz | `all` 结果 | 额外检查 | 耗时 |
-| --- | --- | --- | ---: | --- | --- | --- |
-| Windows | 多线程 | Intel Core i9-11900K | 3504（测后 CIM） | 23 通过、1 Unix 专项跳过 | 配置参数通过 | 496.8 秒 |
-| Windows | 单线程 | Intel Core i9-11900K | 3504（测后 CIM） | 23 通过、1 Unix 专项跳过 | 配置参数通过 | 548.4 秒 |
-| 远程 Linux | 多线程 | Intel Xeon Platinum 8255C | 2494.140（上轮测后采样） | 24/24 | mysql、registry-static、配置参数通过 | 未记录总耗时 |
-| 远程 Linux | 单线程 | Intel Xeon Gold 6271C | 2593.904（上轮测后采样） | 24/24 | mysql、registry-static、配置参数通过 | 未记录总耗时 |
+| 平台 | 线程 | CPU | 频率 MHz | `all` 结果 | 耗时 |
+| --- | --- | --- | ---: | --- | --- |
+| Windows | 多线程 | AMD Ryzen 7 9800X3D | 4700（测后） | 25 通过、1 Unix 专项跳过 | 539.9 秒 |
+| Windows | 单线程 | AMD Ryzen 7 9800X3D | 4700（测后） | 25 通过、1 Unix 专项跳过 | 563.3 秒 |
+| 远程 Linux | 多线程 | Intel Xeon Platinum 8255C | 2494.140 | 26/26 | 563 秒 |
+| 远程 Linux | 单线程 | Intel Xeon Gold 6271C | 2593.904 | 26/26 | 863 秒 |
 
-Linux 两路均输出 `mysql row mapping bad=0`、`mysql rows bad=0`、`mysql done bad=0`；两台 localhost 双栈回退子检查因只解析出一种地址族标记环境阻塞，其他 Web 检查通过。Linux 全量目录为 `~/openidea-test-results/mt-configargs-20261126-183553`、`~/openidea-test-results/st-configargs-20261126-183617`。启动参数最终补强在全量同步后落盘，故同步新版脚本并重编对应产物后单独通过，不把新增断言称作全量中已执行。
-
-Windows 多线程首轮耗时 511.8 秒，hold 在 `timer uninitialized probe update` 后以 `0xC0000094` 退出，判为失败；隔离副本中发现未在该轮重编的旧 timer 对象，源码哈希一致，旧 exe 和对象留在 `.local/config-final-windows-mt`，尚未反汇编验证对象内容。随后 clean-first 全重编，重跑全量通过，结果位于 `.local/config-clean-windows-mt`；单线程结果位于 `.local/config-final-windows-st`。这次复测不抹去首轮失败。本轮未跑 ASan、coro，Windows 未运行 MySQL 专项。
+Windows 结果目录为 `.local/recheck-94edfac-windows`；Linux 结果目录为 `~/openidea-test-results/mt-94edfac-20261127`、`~/openidea-test-results/st-94edfac-20261127`。本轮未运行 MySQL 和静态数据库专项。
 
 ## 收包额度与解码预算复验（2026-11-25 晚，历史记录）
 
