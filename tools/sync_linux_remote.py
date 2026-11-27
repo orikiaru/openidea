@@ -13,7 +13,6 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -262,8 +261,6 @@ def sync_one(host: dict, identity: Path, archive: Path, require_checks: list[tup
     user = host["user"]
     ip = host["ip"]
     source = source_for(host)
-    stamp = time.strftime("%Y%m%d%H%M%S")
-    remote_tar = f"$HOME/openidea-sync-{stamp}.tar"
     # scp 不能展开远端 $HOME，先解析。
     home = remote_bash(identity, user, ip, "printf '%s\\n' \"$HOME\"")
     if home.returncode != 0:
@@ -271,7 +268,6 @@ def sync_one(host: dict, identity: Path, archive: Path, require_checks: list[tup
     home_dir = home.stdout.strip()
     if not home_dir:
         raise SystemExit(f"role={role} empty HOME")
-    remote_tar_path = f"{home_dir}/openidea-sync-{stamp}.tar"
     source_expanded = source.replace("$HOME", home_dir)
 
     busy = remote_bash(identity, user, ip, busy_script(source_expanded))
@@ -280,15 +276,29 @@ def sync_one(host: dict, identity: Path, archive: Path, require_checks: list[tup
     if busy.returncode not in (0, 2):
         raise SystemExit(f"role={role} busy check failed: {busy.stderr or busy.stdout}")
 
-    upload = run([*scp_base(identity), str(archive), f"{user}@{ip}:{remote_tar_path}"])
-    if upload.returncode != 0:
-        raise SystemExit(f"role={role} scp failed: {upload.stderr or upload.stdout}")
+    reserved = remote_bash(identity, user, ip, 'mktemp -- "$HOME/openidea-sync.XXXXXXXXXX.tar"')
+    if reserved.returncode != 0:
+        raise SystemExit(f"role={role} mktemp failed: {reserved.stderr or reserved.stdout}")
+    remote_tar_path = reserved.stdout.rstrip("\n")
+    try:
+        upload = run([*scp_base(identity), str(archive), f"{user}@{ip}:{remote_tar_path}"])
+        if upload.returncode != 0:
+            raise SystemExit(f"role={role} scp failed: {upload.stderr or upload.stdout}")
 
-    apply = remote_bash(identity, user, ip, apply_script(source_expanded, remote_tar_path, require_checks))
-    if apply.returncode != 0:
-        raise SystemExit(f"role={role} apply failed ({apply.returncode}):\n{apply.stdout}\n{apply.stderr}")
-    if "SYNC_OK=1" not in apply.stdout:
-        raise SystemExit(f"role={role} apply missing SYNC_OK:\n{apply.stdout}\n{apply.stderr}")
+        apply = remote_bash(identity, user, ip, apply_script(source_expanded, remote_tar_path, require_checks))
+        if apply.returncode != 0:
+            raise SystemExit(f"role={role} apply failed ({apply.returncode}):\n{apply.stdout}\n{apply.stderr}")
+        if "SYNC_OK=1" not in apply.stdout.splitlines():
+            raise SystemExit(f"role={role} apply missing SYNC_OK:\n{apply.stdout}\n{apply.stderr}")
+    except BaseException:
+        # 安装成功时远端脚本自行删除。部分上传或安装失败只回收本次包，保留原错误。
+        try:
+            cleanup = remote_bash(identity, user, ip, "rm -f -- " + shlex.quote(remote_tar_path))
+            if cleanup.returncode != 0:
+                print(f"role={role} cleanup failed: {remote_tar_path}: {cleanup.stderr}", file=sys.stderr)
+        except OSError as error:
+            print(f"role={role} cleanup failed: {remote_tar_path}: {error}", file=sys.stderr)
+        raise
     print(f"SYNC_OK role={role} source={source_expanded}", flush=True)
 
 

@@ -1,15 +1,105 @@
 """远程源码同步的打包、安装与回滚测试。"""
 import os
+import concurrent.futures
+import shlex
 import shutil
 import subprocess
 import tempfile
+import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import sync_linux_remote as sync
 
 
 class SyncLinuxRemoteTests(unittest.TestCase):
+    def test_parallel_sync_and_failure_cleanup(self):
+        # Windows 运行 Python，使用 WSL 执行实际远端 bash；Linux 直接执行 bash。
+        bash = ["wsl.exe", "--exec", "bash", "-s"] if os.name == "nt" else ["bash", "-s"]
+        try:
+            probe = subprocess.run(bash, input=b"exit 0\n", capture_output=True)
+        except OSError:
+            self.skipTest("requires a working Linux bash")
+        if probe.returncode:
+            self.skipTest("requires a working Linux bash")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            home = root / "home"
+            home.mkdir()
+            if os.name == "nt":
+                remote_home = subprocess.check_output(
+                    ["wsl.exe", "--exec", "wslpath", "-a", str(home)], text=True
+                ).strip()
+            else:
+                remote_home = str(home)
+            archives = []
+            for value in ("first", "second"):
+                repo = root / value
+                (repo / "tools").mkdir(parents=True)
+                (repo / ".git").mkdir()
+                (repo / "tools" / "test_matrix.py").write_text("marker", encoding="utf-8")
+                (repo / "tools" / "cleanup_linux_tests.py").write_text("cleanup", encoding="utf-8")
+                (repo / "content.txt").write_text(value, encoding="utf-8")
+                archive = root / (value + ".tar")
+                sync.build_archive(repo, archive)
+                archives.append(archive)
+
+            foreign = home / "openidea-sync-foreign.tar"
+            foreign.write_text("other upload", encoding="utf-8")
+            barrier = threading.Barrier(2)
+            uploaded = []
+
+            def remote_bash(identity, user, ip, script):
+                # busy 探测与本测试无关；安装脚本本身仍由真实 bash 执行。
+                if script.startswith("set -eu\nSOURCE=") and "echo BUSY=0" in script:
+                    return subprocess.CompletedProcess([], 0, "BUSY=0\n", "")
+                script = ("export HOME=" + shlex.quote(remote_home)
+                          + "\nps() { :; }\nexport -f ps\n" + script)
+                result = subprocess.run(bash, input=script.encode("utf-8"), capture_output=True)
+                return subprocess.CompletedProcess(result.args, result.returncode,
+                                                   result.stdout.decode("utf-8", errors="replace"),
+                                                   result.stderr.decode("utf-8", errors="replace"))
+
+            def run(command, *, input_bytes=None):
+                remote_path = command[-1].split(":", 1)[1]
+                target = home / remote_path.rsplit("/", 1)[-1]
+                shutil.copyfile(command[-2], target)
+                uploaded.append(remote_path)
+                barrier.wait(timeout=20)
+                return subprocess.CompletedProcess(command, 0, b"", b"")
+
+            hosts = [{"role": value, "user": "same", "ip": "same", "source": "$HOME/" + value}
+                     for value in ("first", "second")]
+            with mock.patch.object(sync, "remote_bash", side_effect=remote_bash), \
+                 mock.patch.object(sync, "run", side_effect=run), \
+                 mock.patch("time.strftime", return_value="20261127000000"):
+                with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                    futures = [pool.submit(sync.sync_one, host, root / "id", archive, [], False)
+                               for host, archive in zip(hosts, archives)]
+                    for future in futures:
+                        future.result(timeout=40)
+            self.assertEqual(len(set(uploaded)), 2)
+            for value in ("first", "second"):
+                self.assertEqual((home / value / "content.txt").read_text(encoding="utf-8"), value)
+            self.assertEqual(list(home.glob("openidea-sync*.tar")), [foreign])
+
+            for failure in ("scp", "apply"):
+                with self.subTest(failure=failure):
+                    def fail_or_upload(command, *, input_bytes=None):
+                        remote_path = command[-1].split(":", 1)[1]
+                        shutil.copyfile(command[-2], home / remote_path.rsplit("/", 1)[-1])
+                        return subprocess.CompletedProcess(command, 1 if failure == "scp" else 0, b"", b"failed")
+
+                    checks = [("content.txt", "missing marker")] if failure == "apply" else []
+                    with mock.patch.object(sync, "remote_bash", side_effect=remote_bash), \
+                         mock.patch.object(sync, "run", side_effect=fail_or_upload):
+                        with self.assertRaisesRegex(SystemExit, failure + " failed"):
+                            sync.sync_one(hosts[0], root / "id", archives[0], checks, False)
+                    self.assertEqual(foreign.read_text(encoding="utf-8"), "other upload")
+                    self.assertEqual(list(home.glob("openidea-sync*.tar")), [foreign])
+                    self.assertEqual((home / "first" / "content.txt").read_text(encoding="utf-8"), "first")
+
     @unittest.skipUnless(os.name == "posix" and shutil.which("bash") and shutil.which("mv"), "requires Linux shell")
     def test_apply_switch_and_recovery(self):
         for mode in ("success", "fail", "occupied"):
