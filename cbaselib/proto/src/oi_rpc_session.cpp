@@ -92,7 +92,7 @@ void ProtoSession::OnDataIn()
 	stOutputStream.Swap(stInputBuffer);
 	// 构造时只收 ProtoSessionManager。
 	auto* pProtoManager = static_cast<ProtoSessionManager*>(pSessionManager);
-	while (stOutputStream.RemainSize())
+	while (stOutputStream.RemainSize() && !IsClosed())
 	{
 		if (stOutputStream.RemainSize() >= sizeof(uint32_t) * 2)
 		{

@@ -210,21 +210,34 @@ then
   exit 2
 fi
 test -f "$TAR"
-rm -rf "$STAGE"
-mkdir -p "$STAGE"
+mkdir -p "$(dirname "$SOURCE")"
+mkdir -- "$STAGE"
 tar -xf "$TAR" -C "$STAGE"
 test -f "$STAGE/tools/test_matrix.py"
 test -f "$STAGE/tools/cleanup_linux_tests.py"
 test -d "$STAGE/.git" -o -f "$STAGE/.git"
 {checks_text}
-PARENT=$(dirname "$SOURCE")
-mkdir -p "$PARENT"
-if test -e "$SOURCE"
+saved=0
+if test -e "$SOURCE" || test -L "$SOURCE"
 then
-  mv "$SOURCE" "$BACKUP"
+  if test -e "$BACKUP" || test -L "$BACKUP"; then exit 1; fi
+  mv -T -- "$SOURCE" "$BACKUP"
+  saved=1
 fi
-mv "$STAGE" "$SOURCE"
-rm -rf "$BACKUP"
+if ! mv -nT -- "$STAGE" "$SOURCE" || test -e "$STAGE"
+then
+  if test "$saved" = 1
+  then
+    if mv -nT -- "$BACKUP" "$SOURCE" && ! test -e "$BACKUP" && ! test -L "$BACKUP"
+    then
+      echo "SYNC_RESTORED=$SOURCE" >&2
+    else
+      echo "SYNC_RESTORE_BLOCKED backup=$BACKUP" >&2
+    fi
+  fi
+  exit 1
+fi
+if test "$saved" = 1; then rm -rf -- "$BACKUP"; fi
 rm -f "$TAR"
 echo SYNC_OK=1
 echo SOURCE_PATH=$SOURCE

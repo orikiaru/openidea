@@ -139,6 +139,39 @@ static int32_t CheckPollLoopBusy()
 	return bBusy ? OI_OK : OI_ERR_FAIL;
 }
 
+static int32_t CheckRpcCloseBatch()
+{
+	return ::OI::Net::Poll::GetInstance().StartListener([](void*) -> int32_t
+	{
+		int iCounts[2] = {0, 0};
+		for (int iMode = 0; iMode < 2; ++iMode)
+		{
+			::OI::Rpc::ProtoSessionManager stManager;
+			::OI::Rpc::ProtoSession stSession(&stManager);
+			stSession.SetSessionID(1);
+			stManager.BindRpcHandler(999999, [pSession = &stSession, pCount = &iCounts[iMode], iMode](::OI::Base::BytesStream&, ::OI::Rpc::RpcDelivery&&)
+			{
+				++*pCount;
+				if (iMode == 0)
+				{
+					pSession->ActiveClose();
+				}
+			});
+			::OI::Base::BytesStream stBody;
+			stBody << uint64_t(0);
+			auto stFrame = ::OI::Rpc::EncodePbFrame(999999, stBody);
+			::OI::Base::Bytes stBatch;
+			stBatch.Append(stFrame.GetMutableBuff());
+			stBatch.Append(stFrame.GetMutableBuff());
+			stSession.SwapInBuff(stBatch);
+		}
+		const bool bPassed = iCounts[0] == 1 && iCounts[1] == 2;
+		std::printf("rpc close batch closed=%d open=%d bad=%d\n", iCounts[0], iCounts[1], bPassed ? 0 : 1);
+		std::fflush(stdout);
+		return bPassed ? OI_OK : OI_ERR_FAIL;
+	}, nullptr);
+}
+
 int main(int iArgumentCount, char* vArguments[])
 {
 	const char* pConfigPath = "../config/ipcclient.toml";
@@ -192,6 +225,12 @@ int main(int iArgumentCount, char* vArguments[])
 	if (iArgumentCount == 2 && std::strcmp(vArguments[1], "--poll-udp-close") == 0)
 	{
 		return CheckPollUdpClose();
+	}
+	if (iArgumentCount == 2 && std::strcmp(vArguments[1], "--rpc-close-batch") == 0)
+	{
+		iCode = CheckRpcCloseBatch();
+		::OI::Base::StopFramework();
+		return iCode;
 	}
 	if (iArgumentCount == 2 && std::strcmp(vArguments[1], "--timer-backlog") == 0)
 	{

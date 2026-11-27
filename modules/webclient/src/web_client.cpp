@@ -841,6 +841,21 @@ OI::Coro::Task WebClient::Run()
 		else
 		{
 			OI::Http::Client stFixtureClient("127.0.0.1", iStreamFixturePort, 120000, false);
+			for (bool bOver : {false, true})
+			{
+				OI::Http::Request stRequest;
+				stRequest.sPath = bOver ? "/buffered-eof-over" : "/buffered-eof-exact";
+				auto stResponse = co_await stFixtureClient.Send(stRequest);
+				const bool bValid = bOver ? stResponse.iCode == OI_ERR_PROTOCOL && stResponse.sBody.empty() :
+				                            stResponse.iCode == OI_OK && stResponse.iStatus == 200 &&
+				                                stResponse.sBody.size() == 8 * 1024 * 1024 &&
+				                                stResponse.sBody.find_first_not_of('e') == std::string::npos;
+				if (!bValid)
+				{
+					LOG_ERROR("web buffered EOF failed path=%s code=%d status=%d bytes=%zu", stRequest.sPath.c_str(), stResponse.iCode, stResponse.iStatus, stResponse.sBody.size());
+					++iBadLocal;
+				}
+			}
 			for (const auto& sPath : std::vector<std::string>{"/length", "/eof"})
 			{
 				OI::Http::Request stFixtureRequest;

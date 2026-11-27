@@ -783,6 +783,11 @@ bool HttpSession::Consume()
 	}
 	if (!m_bHasLength)
 	{
+		if (m_sIncoming.size() - m_iHeaderBytes > kMaxBody)
+		{
+			Fail("size");
+			return true;
+		}
 		m_bCloseAfter = true;
 		return false;
 	}

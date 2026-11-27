@@ -76,6 +76,19 @@ class StreamResponseFixture(socketserver.BaseRequestHandler):
                 return
             request += part
         path = request.split(b" ", 2)[1]
+        if path in (b"/buffered-eof-exact", b"/buffered-eof-over"):
+            over = path.endswith(b"-over")
+            header = b"HTTP/1.1 200 OK\r\nConnection: close\r\n"
+            if over:
+                header += b"X-Fixture: " + b"x" * 1024 + b"\r\n"
+            self.request.sendall(header + b"\r\n")
+            block = b"e" * 65536
+            for _ in range(128):
+                self.request.sendall(block)
+            if over:
+                self.request.sendall(b"!")
+            self.request.shutdown(socket.SHUT_WR)
+            return
         if path.startswith(b"/size-"):
             size = int(path[6:])
             self.request.sendall(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n" +

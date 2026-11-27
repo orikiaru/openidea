@@ -194,6 +194,11 @@ class EchoCase(Case):
         if case == "tcp-close-reclaim":
             tcp_close_reclaim(ctx, TCP_CLOSE_QUEUE_LIMIT)
         if case == "rpc-ingress":
+            probe, probe_path = ctx.start("rpc-close-batch", [str(ctx.work / ("ipcclient" + SUFFIX)), "--rpc-close-batch"])
+            probe.wait(timeout=15)
+            ctx.procs.remove(probe)
+            output = probe_path.read_text(encoding="utf-8", errors="replace")
+            assert probe.returncode == 0 and "rpc close batch closed=1 open=2 bad=0" in output, output
             rpc_ingress_faults()
             ctx.stop(ctx.server)
             ctx.server.wait(timeout=10)
