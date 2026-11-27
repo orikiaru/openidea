@@ -16,15 +16,15 @@ namespace OI::Db
 {
 // 数值列按 MySQL 以文本取回的十进制写回。空文本、空白、正号和尾随字符都拒绝。
 template <typename T>
-bool FromDbInteger(const Blob& stBlob, T& stOutput)
+bool FromDbInteger(const std::string& sBytes, T& stOutput)
 {
 	static_assert(std::is_integral_v<T> && !std::is_same_v<T, bool>);
-	if (stBlob.empty())
+	if (sBytes.empty())
 	{
 		return false;
 	}
-	const char* pBegin = reinterpret_cast<const char*>(stBlob.data());
-	const char* pEnd = pBegin + stBlob.size();
+	const char* pBegin = sBytes.data();
+	const char* pEnd = pBegin + sBytes.size();
 	if constexpr (std::is_signed_v<T>)
 	{
 		int64_t iValue = 0;
@@ -63,14 +63,14 @@ bool FromDbInteger(const Blob& stBlob, T& stOutput)
 	}
 }
 
-inline bool FromDbBool(const Blob& stBlob, bool& bOutput)
+inline bool FromDbBool(const std::string& sBytes, bool& bOutput)
 {
-	if (stBlob.size() == 1 && stBlob[0] == static_cast<uint8_t>('0'))
+	if (sBytes.size() == 1 && sBytes[0] == static_cast<uint8_t>('0'))
 	{
 		bOutput = false;
 		return true;
 	}
-	if (stBlob.size() == 1 && stBlob[0] == static_cast<uint8_t>('1'))
+	if (sBytes.size() == 1 && sBytes[0] == static_cast<uint8_t>('1'))
 	{
 		bOutput = true;
 		return true;
@@ -78,14 +78,14 @@ inline bool FromDbBool(const Blob& stBlob, bool& bOutput)
 	return false;
 }
 
-inline bool ParseDbDouble(const Blob& stBlob, double& dOutput)
+inline bool ParseDbDouble(const std::string& sBytes, double& dOutput)
 {
-	if (stBlob.empty())
+	if (sBytes.empty())
 	{
 		return false;
 	}
-	const char* pBegin = reinterpret_cast<const char*>(stBlob.data());
-	const char* pEnd = pBegin + stBlob.size();
+	const char* pBegin = sBytes.data();
+	const char* pEnd = pBegin + sBytes.size();
 	double dValue = 0;
 	const std::from_chars_result stParsed = std::from_chars(pBegin, pEnd, dValue, std::chars_format::general);
 	if (stParsed.ec != std::errc() || stParsed.ptr != pEnd || !std::isfinite(dValue))
@@ -97,11 +97,11 @@ inline bool ParseDbDouble(const Blob& stBlob, double& dOutput)
 }
 
 template <typename T>
-bool FromDbReal(const Blob& stBlob, T& stOutput)
+bool FromDbReal(const std::string& sBytes, T& stOutput)
 {
 	static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>);
 	double dValue = 0;
-	if (!ParseDbDouble(stBlob, dValue))
+	if (!ParseDbDouble(sBytes, dValue))
 	{
 		return false;
 	}
@@ -122,44 +122,38 @@ bool FromDbReal(const Blob& stBlob, T& stOutput)
 	}
 }
 
-inline bool FromDbText(const Blob& stBlob, std::string& sOutput)
+inline bool FromDbText(const std::string& sBytes, std::string& sOutput)
 {
-	if (stBlob.empty())
-	{
-		sOutput.clear();
-		return true;
-	}
-	sOutput.assign(reinterpret_cast<const char*>(stBlob.data()), stBlob.size());
+	sOutput = sBytes;
 	return true;
 }
 
-inline bool FromDbText(const Blob& stBlob, ::OI::Base::Bytes& stOutput)
+inline bool FromDbText(const std::string& sBytes, ::OI::Base::Bytes& stOutput)
 {
-	stOutput = ::OI::Base::Bytes(stBlob.empty() ? nullptr : reinterpret_cast<const char*>(stBlob.data()), stBlob.size());
+	stOutput = ::OI::Base::Bytes(sBytes.empty() ? nullptr : sBytes.data(), sBytes.size());
 	return true;
 }
 
 // 头一层的 vector、map、rpcdata 不拆列。blob 是这条值自己的 PB：序号固定为 0。
 // 所有类型均为一条完整字段，空容器也带数量头。
 template <typename T>
-Blob ToDbBlob(const T& stValue)
+std::string ToDbBlob(const T& stValue)
 {
 	::OI::Base::BytesStream stStream;
 	stStream.WritePb(0, stValue);
 	if (stStream.Size() == 0)
 	{
-		return Blob();
+		return {};
 	}
-	const auto* pData = reinterpret_cast<const uint8_t*>(stStream.Data());
-	return Blob(pData, pData + stStream.Size());
+	return std::string(stStream.Data(), stStream.Size());
 }
 
 template <typename T>
-bool FromDbBlob(const Blob& stBlob, T& stOutput)
+bool FromDbBlob(const std::string& sBytes, T& stOutput)
 {
 	try
 	{
-		::OI::Base::BytesStream stStream(stBlob.empty() ? nullptr : reinterpret_cast<const char*>(stBlob.data()), stBlob.size());
+		::OI::Base::BytesStream stStream(sBytes.empty() ? nullptr : sBytes.data(), sBytes.size());
 		T stDecoded{};
 		uint32_t iSequence = 0;
 		uint32_t iSize = 0;
@@ -189,7 +183,7 @@ Parameter EncodeDbValue(const M& stValue)
 {
 	if constexpr (std::is_same_v<M, bool>)
 	{
-		return static_cast<int64_t>(stValue ? 1 : 0);
+		return stValue;
 	}
 	else if constexpr (std::is_integral_v<M> && std::is_signed_v<M>)
 	{
@@ -209,37 +203,36 @@ Parameter EncodeDbValue(const M& stValue)
 	}
 	else if constexpr (std::is_same_v<M, ::OI::Base::Bytes>)
 	{
-		const auto* pData = reinterpret_cast<const uint8_t*>(stValue.Data());
-		return Blob(pData, pData + stValue.Size());
+		return Parameter::Binary(std::string(stValue.Data(), stValue.Size()));
 	}
 	else
 	{
-		return ToDbBlob(stValue);
+		return Parameter::Binary(ToDbBlob(stValue));
 	}
 }
 
 template <typename M>
-bool DecodeDbValue(const Blob& stBlob, M& stOutput)
+bool DecodeDbValue(const std::string& sBytes, M& stOutput)
 {
 	if constexpr (std::is_same_v<M, bool>)
 	{
-		return FromDbBool(stBlob, stOutput);
+		return FromDbBool(sBytes, stOutput);
 	}
 	else if constexpr (std::is_integral_v<M>)
 	{
-		return FromDbInteger(stBlob, stOutput);
+		return FromDbInteger(sBytes, stOutput);
 	}
 	else if constexpr (std::is_floating_point_v<M>)
 	{
-		return FromDbReal(stBlob, stOutput);
+		return FromDbReal(sBytes, stOutput);
 	}
 	else if constexpr (std::is_same_v<M, std::string> || std::is_same_v<M, ::OI::Base::Bytes>)
 	{
-		return FromDbText(stBlob, stOutput);
+		return FromDbText(sBytes, stOutput);
 	}
 	else
 	{
-		return FromDbBlob(stBlob, stOutput);
+		return FromDbBlob(sBytes, stOutput);
 	}
 }
 
@@ -289,7 +282,7 @@ struct Field
 {
 	const char* pColumn;
 	Parameter (*fnEncode)(const C&);
-	bool (*fnDecode)(const Blob&, C&);
+	bool (*fnDecode)(const std::string&, C&);
 	const char* pSqlType;
 	bool bKey;
 };
@@ -311,7 +304,7 @@ void AppendRowParameters(const C& stRow, std::vector<Parameter>& vParameters)
 
 // 未知列跳过；已知列重复、NULL 或解码失败时保持原对象。
 template <typename C>
-bool FromRow(C& stRow, const std::vector<std::string>& vColumns, const std::vector<std::optional<Blob>>& vRow)
+bool FromRow(C& stRow, const std::vector<std::string>& vColumns, const std::vector<std::optional<std::string>>& vRow)
 {
 	if (vColumns.size() != vRow.size())
 	{
@@ -346,10 +339,10 @@ int32_t FromRows(const Result& stResult, std::vector<C>& vRows)
 {
 	std::vector<C> vDecoded;
 	vDecoded.reserve(stResult.vRows.size());
-	for (const std::vector<std::optional<Blob>>& vRow : stResult.vRows)
+	for (const auto& stResultRow : stResult.vRows)
 	{
 		C stRow;
-		if (!FromRow(stRow, stResult.vColumns, vRow))
+		if (!stRow.FromDbMap(stResultRow.mCells))
 		{
 			return OI_ERR_DECODE;
 		}
@@ -360,7 +353,6 @@ int32_t FromRows(const Result& stResult, std::vector<C>& vRows)
 }
 
 using ParameterMap = std::map<std::string, Parameter>;
-using CellMap = std::map<std::string, std::optional<Blob>>;
 
 template <typename C>
 ParameterMap ToParameterMap(const C& stRow)
@@ -390,23 +382,36 @@ bool FromCellMap(C& stRow, const CellMap& mCells)
 	return true;
 }
 
-// 查询结果的第 iRow 行按列名取出。行号越界或列名重复返回 false，mCells 不变。
-inline bool RowCells(const Result& stResult, size_t iRow, CellMap& mCells)
+// 单行单列结果按数据库字段规则解码，失败时保留调用方原值。
+template <typename T>
+OI::Coro::TaskResult<int32_t> Client::ReadScalar(Client stClient, std::string sSql, std::vector<Parameter> vParameters, T& stValue, Error& stError)
 {
-	if (iRow >= stResult.vRows.size() || stResult.vRows[iRow].size() != stResult.vColumns.size())
+	Result stResult;
+	const int32_t iCode = co_await stClient.Call(std::move(sSql), std::move(vParameters), stResult, stError);
+	if (iCode != OI_OK)
 	{
-		return false;
+		co_return iCode;
 	}
-	CellMap mRow;
-	for (size_t iIndex = 0; iIndex < stResult.vColumns.size(); ++iIndex)
+	if (stResult.vRows.size() != 1 || stResult.vRows.front().mCells.size() != 1)
 	{
-		if (!mRow.emplace(stResult.vColumns[iIndex], stResult.vRows[iRow][iIndex]).second)
-		{
-			return false;
-		}
+		stError.sStage = "scalar_shape";
+		co_return OI_ERR_DECODE;
 	}
-	mCells = std::move(mRow);
-	return true;
+	const auto& stCell = stResult.vRows.front().mCells.begin()->second;
+	T stDecoded{};
+	if (!stCell || !DecodeDbValue(*stCell, stDecoded))
+	{
+		stError.sStage = "scalar_value";
+		co_return OI_ERR_DECODE;
+	}
+	stValue = std::move(stDecoded);
+	co_return OI_OK;
+}
+
+template <typename T>
+OI::Coro::TaskResult<int32_t> Client::Scalar(std::string sSql, std::vector<Parameter> vParameters, T& stValue, Error& stError) const
+{
+	return ReadScalar(*this, std::move(sSql), std::move(vParameters), stValue, stError);
 }
 
 template <typename C, typename M>

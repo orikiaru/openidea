@@ -122,6 +122,16 @@ class DbCase(Case):
                 parse_wake_metrics(text, case, hooks, os.environ["OI_WAKE_P99_LIMIT_US"])
         elif case == "mysql":
             assert "mysql row mapping bad=0" in text
+            assert "mysql cell predicates bad=0" in text
+            assert "mysql all field types batch bad=0" in text
+            assert "mysql error handling bad=0" in text
+            assert re.search(r"database failure code=-11 database=\S+ table=<unknown> column=required_id missing", text)
+            assert re.search(r"database failure code=-18 database=\S+ stage=prepare native=1054 sqlstate=42S22", text)
+            assert re.search(r"database failure code=-3 database=\S+ stage=connect native=1045 sqlstate=28000", text)
+            if os.environ.get("OI_TEST_DB_REFUSED_PORT"):
+                assert re.search(r"database failure code=-3 database=\S+ stage=connect native=200[23] sqlstate=\S+", text)
+            assert text.count("database failure code=-1 unexpected exception") == 1
+            assert "oi_test_credential" not in text and "oi_private_exception_probe" not in text
             assert "mysql rows bad=0" in text
             assert "mysql done bad=0" in text
         return False

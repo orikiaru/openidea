@@ -4,8 +4,6 @@
 #include "oi_http.h"
 #include "oi_http_json.h"
 #include "oi_db_json.h"
-#include "oi_db_table.h"
-#include "oi_rpcdata_dbsample.h"
 #include <stdexcept>
 #include "oi_log_client.h"
 #include "oi_log.h"
@@ -124,29 +122,8 @@ int TestJson::CheckJsonDecoding()
 	}
 	const std::vector<std::string> vOriginal{std::string("hello\0world", 11), "\xe4\xb8\xad"};
 	const auto stParameter = OI::Db::EncodeDbJson(vOriginal);
-	const auto& sJson = std::get<std::string>(stParameter);
-	const OI::Db::Blob vBlob(sJson.begin(), sJson.end());
 	std::vector<std::string> vDecoded;
-	if (!OI::Db::DecodeDbJson(vBlob, vDecoded) || vDecoded != vOriginal)
-	{
-		++iBad;
-	}
-	OI::RpcData::DbSample stBadRow;
-	stBadRow.iId = 9;
-	stBadRow.sName = "valid";
-	stBadRow.stJsonChild.sText = std::string("\xff", 1);
-	OI::Db::Statement stStatement;
-	stStatement.sSql = "old";
-	stStatement.vParameters.emplace_back(int64_t(42));
-	if (OI::Db::BuildInsert("t_1", stBadRow, stStatement) != OI_ERR_INVALID_ARGUMENT || stStatement.sSql != "old" || stStatement.vParameters != std::vector<OI::Db::Parameter>{int64_t(42)})
-	{
-		++iBad;
-	}
-	if (OI::Db::BuildSelectByKey("t_1", stBadRow, stStatement) != OI_OK || stStatement.vParameters != std::vector<OI::Db::Parameter>{int64_t(9)})
-	{
-		++iBad;
-	}
-	if (OI::Db::BuildUpdateByKey("t_1", stBadRow, stStatement, &OI::RpcData::DbSample::sName) != OI_OK || stStatement.vParameters != std::vector<OI::Db::Parameter>{std::string("valid"), int64_t(9)})
+	if (!stParameter.is_text() || !OI::Db::DecodeDbJson(stParameter.sBytes, vDecoded) || vDecoded != vOriginal)
 	{
 		++iBad;
 	}

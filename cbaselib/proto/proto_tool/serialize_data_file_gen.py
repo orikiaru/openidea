@@ -269,9 +269,9 @@ __COMPARE____JSON_METHODS____DB_METHODS__};
                 '                {\n'
                 '                    return ::OI::Db::EncodeDb%s(stRow.%s);\n'
                 '                },\n'
-                '                +[](const ::OI::Db::Blob& stBlob, %s& stRow) -> bool\n'
+                '                +[](const std::string& sBytes, %s& stRow) -> bool\n'
                 '                {\n'
-                '                    return ::OI::Db::DecodeDb%s(stBlob, stRow.%s);\n'
+                '                    return ::OI::Db::DecodeDb%s(sBytes, stRow.%s);\n'
                 '                }, %s, %s}' %
                 (member.db_name, self.class_name, codec, member.name,
                  self.class_name, codec, member.name, sql_type,
@@ -312,7 +312,7 @@ __COMPARE____JSON_METHODS____DB_METHODS__};
         lines.append("    {")
         lines.append("        ::OI::Db::AppendRowParameters(*this, vParameters);")
         lines.append("    }")
-        lines.append("    bool FromDbRow(const std::vector<std::string>& vColumns, const std::vector<std::optional<::OI::Db::Blob>>& vRow)")
+        lines.append("    bool FromDbRow(const std::vector<std::string>& vColumns, const std::vector<std::optional<std::string>>& vRow)")
         lines.append("    {")
         lines.append("        return ::OI::Db::FromRow(*this, vColumns, vRow);")
         lines.append("    }")

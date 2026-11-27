@@ -132,7 +132,11 @@ def main():
                        "--bin-dir", str(args.bin_dir), "--port-offset", str(args.port_offset)]
             if args.artifacts:
                 command += ["--artifacts", str(args.artifacts)]
-            code = subprocess.run(command, cwd=REPO, env=env, check=False).returncode
+            # 保持绑定但不监听，拒连用例不会连到恰好占用同一端口的服务。
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as refused:
+                refused.bind(("127.0.0.1", 0))
+                env["OI_TEST_DB_REFUSED_PORT"] = str(refused.getsockname()[1])
+                code = subprocess.run(command, cwd=REPO, env=env, check=False).returncode
             if code != 0:
                 return code
             if args.case == "mysql-wake":

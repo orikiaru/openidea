@@ -23,6 +23,7 @@ enum OI_ERR
 	OI_ERR_BIND = -15,         // 绑定本地地址失败
 	OI_ERR_LISTEN = -16,       // 启动监听失败
 	OI_ERR_CANCELLED = -17,
+	OI_ERR_DB = -18, // 数据库拒绝语句，原生错误号和 SQLSTATE 见数据库错误详情。
 };
 
 #define NET_PARSER_ERR_BEGIN (-10000)

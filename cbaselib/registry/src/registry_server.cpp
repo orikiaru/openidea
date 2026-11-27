@@ -15,8 +15,6 @@
 #include "oi_log.h"
 #include "oi_timer_manager.h"
 #include "oi_blocking_pool.h"
-#include "oi_db.h"
-#include "oi_db_row.h"
 #include "oi_db_table.h"
 #include "oi_mysql.h"
 #include "framework_protocol/oi_rpcdata_servicelease.h"
@@ -513,39 +511,14 @@ OI::Coro::Task RegistryServer::ReloadMysql()
 		m_bReloading = false;
 		co_return;
 	}
-	OI::Db::Statement stSelect;
-	const std::vector<OI::Db::ColumnSpec> vColumns = OI::Db::DescribeRow(::OI::RpcData::ServiceLease{});
-	std::string sNames;
-	for (const OI::Db::ColumnSpec& stColumn : vColumns)
-	{
-		if (!sNames.empty())
-		{
-			sNames += ",";
-		}
-		sNames += OI::Db::QuoteName(stColumn.sName);
-	}
-	if (sNames.empty())
-	{
-		m_bReloading = false;
-		LOG_ERROR("registry static select build failed");
-		co_return;
-	}
-	stSelect.sSql = "SELECT " + sNames + " FROM " + OI::Db::QuoteName("oi_service_instance");
-	OI::Db::Result stResult;
+	std::vector<::OI::RpcData::ServiceLease> vRows;
 	OI::Db::Error stError;
-	const int32_t iCode = co_await m_pMysql->Call(std::move(stSelect), stResult, stError);
+	const int32_t iCode = co_await m_pMysql->SelectAll("oi_service_instance", vRows, stError);
 	m_bReloading = false;
 	if (iCode != OI_OK)
 	{
 		const std::string sMessage = stError.sMessage.size() > 200 ? stError.sMessage.substr(0, 200) : stError.sMessage;
 		LOG_ERROR("registry static pull stage=%s native=%u message=%s", stError.sStage.c_str(), stError.iNativeCode, sMessage.c_str());
-		co_return;
-	}
-	std::vector<::OI::RpcData::ServiceLease> vRows;
-	const int32_t iRows = ::OI::Db::FromRows(stResult, vRows);
-	if (iRows != OI_OK)
-	{
-		LOG_ERROR("registry static pull decode code=%d", iRows);
 		co_return;
 	}
 	std::vector<Binding> vList;

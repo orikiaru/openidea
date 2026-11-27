@@ -12,9 +12,9 @@ Parameter EncodeDbJson(const M& stValue)
 }
 
 template <typename M>
-bool DecodeDbJson(const Blob& stBlob, M& stOutput)
+bool DecodeDbJson(const std::string& sBytes, M& stOutput)
 {
-	return ::OI::Rpc::FromJsonText(std::string(reinterpret_cast<const char*>(stBlob.data()), stBlob.size()), stOutput);
+	return ::OI::Rpc::FromJsonText(sBytes, stOutput);
 }
 
 }

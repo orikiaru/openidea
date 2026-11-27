@@ -1,12 +1,13 @@
 #pragma once
 #include "oi_db_row.h"
+#include "oi_db_driver.h"
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 // 按标了 db 的 rpcdata 生成单表语句：建表、整行写入、按主键读、改、删。
-// 只拼 Statement，不执行；JOIN、任意条件、跨表和 ALTER 仍由调用方写 SQL。
-// 失败都返回 OI_ERR_INVALID_ARGUMENT，stStatement 不变。
+// 客户端执行常规单表操作；JOIN、任意条件、跨表和 ALTER 可直接传 SQL。
+// 失败都返回 OI_ERR_INVALID_ARGUMENT，stBoundSql 不变。
 namespace OI::Db
 {
 // 一列的建表和写入信息，按 DbFields 的顺序。
@@ -140,7 +141,7 @@ bool PickedNames(std::vector<std::string>& vNames, M C::*... pMembers)
 
 // CREATE TABLE IF NOT EXISTS，列都是 NOT NULL，主键是全部 [dbkey] 字段。没有主键时失败。
 template <typename C>
-int32_t BuildCreateTable(const std::string& sTable, Statement& stStatement)
+int32_t BuildCreateTable(const std::string& sTable, BoundSql& stBoundSql)
 {
 	if (!ValidTableName(sTable))
 	{
@@ -162,13 +163,13 @@ int32_t BuildCreateTable(const std::string& sTable, Statement& stStatement)
 		return OI_ERR_INVALID_ARGUMENT;
 	}
 	sSql += "PRIMARY KEY (" + sKeys + ")) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4";
-	stStatement = Statement{std::move(sSql), {}};
+	stBoundSql = BoundSql{std::move(sSql), {}};
 	return OI_OK;
 }
 
 // INSERT 整行，主键冲突时由数据库报错。
 template <typename C>
-int32_t BuildInsert(const std::string& sTable, const C& stRow, Statement& stStatement)
+int32_t BuildInsert(const std::string& sTable, const C& stRow, BoundSql& stBoundSql)
 {
 	if (!ValidTableName(sTable))
 	{
@@ -188,13 +189,13 @@ int32_t BuildInsert(const std::string& sTable, const C& stRow, Statement& stStat
 		sMarks += sMarks.empty() ? "?" : ",?";
 		vParameters.push_back(std::move(stColumn.stValue));
 	}
-	stStatement = Statement{"INSERT INTO " + QuoteName(sTable) + " (" + sNames + ") VALUES (" + sMarks + ")", std::move(vParameters)};
+	stBoundSql = BoundSql{"INSERT INTO " + QuoteName(sTable) + " (" + sNames + ") VALUES (" + sMarks + ")", std::move(vParameters)};
 	return OI_OK;
 }
 
 // 整行写入，主键已存在时改写其余列。需要 [dbkey]。
 template <typename C>
-int32_t BuildUpsert(const std::string& sTable, const C& stRow, Statement& stStatement)
+int32_t BuildUpsert(const std::string& sTable, const C& stRow, BoundSql& stBoundSql)
 {
 	if (!ValidTableName(sTable))
 	{
@@ -236,14 +237,14 @@ int32_t BuildUpsert(const std::string& sTable, const C& stRow, Statement& stStat
 		sUpdates = sFirstKey + "=" + sFirstKey;
 	}
 	vParameters.insert(vParameters.end(), vUpdates.begin(), vUpdates.end());
-	stStatement = Statement{"INSERT INTO " + QuoteName(sTable) + " (" + sNames + ") VALUES (" + sMarks + ") ON DUPLICATE KEY UPDATE " + sUpdates,
+	stBoundSql = BoundSql{"INSERT INTO " + QuoteName(sTable) + " (" + sNames + ") VALUES (" + sMarks + ") ON DUPLICATE KEY UPDATE " + sUpdates,
 	    std::move(vParameters)};
 	return OI_OK;
 }
 
-// 按 stRow 的主键读。不传成员读整行，传了只读这几列，读回用 RowCells + FromDbMap。
+// 按 stRow 的主键读。不传成员读整行，传了只读这几列，读回按列名解码。
 template <typename C, typename... M>
-int32_t BuildSelectByKey(const std::string& sTable, const C& stRow, Statement& stStatement, M C::*... pMembers)
+int32_t BuildSelectByKey(const std::string& sTable, const C& stRow, BoundSql& stBoundSql, M C::*... pMembers)
 {
 	if (!ValidTableName(sTable))
 	{
@@ -273,13 +274,13 @@ int32_t BuildSelectByKey(const std::string& sTable, const C& stRow, Statement& s
 	{
 		sNames += (sNames.empty() ? "" : ",") + QuoteName(sName);
 	}
-	stStatement = Statement{"SELECT " + sNames + " FROM " + QuoteName(sTable) + " WHERE " + sCondition, std::move(vParameters)};
+	stBoundSql = BoundSql{"SELECT " + sNames + " FROM " + QuoteName(sTable) + " WHERE " + sCondition, std::move(vParameters)};
 	return OI_OK;
 }
 
 // 按 stRow 的主键改。不传成员改全部非主键列，传了只改这几列；主键列不能改。
 template <typename C, typename... M>
-int32_t BuildUpdateByKey(const std::string& sTable, const C& stRow, Statement& stStatement, M C::*... pMembers)
+int32_t BuildUpdateByKey(const std::string& sTable, const C& stRow, BoundSql& stBoundSql, M C::*... pMembers)
 {
 	if (!ValidTableName(sTable))
 	{
@@ -320,13 +321,13 @@ int32_t BuildUpdateByKey(const std::string& sTable, const C& stRow, Statement& s
 		vParameters.push_back(pColumn->stValue);
 	}
 	vParameters.insert(vParameters.end(), vKeys.begin(), vKeys.end());
-	stStatement = Statement{"UPDATE " + QuoteName(sTable) + " SET " + sAssignments + " WHERE " + sCondition, std::move(vParameters)};
+	stBoundSql = BoundSql{"UPDATE " + QuoteName(sTable) + " SET " + sAssignments + " WHERE " + sCondition, std::move(vParameters)};
 	return OI_OK;
 }
 
 // 按 stRow 的主键删。
 template <typename C>
-int32_t BuildDeleteByKey(const std::string& sTable, const C& stRow, Statement& stStatement)
+int32_t BuildDeleteByKey(const std::string& sTable, const C& stRow, BoundSql& stBoundSql)
 {
 	if (!ValidTableName(sTable))
 	{
@@ -343,7 +344,243 @@ int32_t BuildDeleteByKey(const std::string& sTable, const C& stRow, Statement& s
 	{
 		return OI_ERR_INVALID_ARGUMENT;
 	}
-	stStatement = Statement{"DELETE FROM " + QuoteName(sTable) + " WHERE " + sCondition, std::move(vParameters)};
+	stBoundSql = BoundSql{"DELETE FROM " + QuoteName(sTable) + " WHERE " + sCondition, std::move(vParameters)};
 	return OI_OK;
+}
+
+template <typename C, typename F, typename... M>
+OI::Coro::TaskResult<int32_t> Client::WriteTable(const std::string& sTable, const C& stRow, Result* pResult, Error& stError, F fnBuild, M... pMembers) const
+{
+	BoundSql stBoundSql;
+	const int32_t iCode = fnBuild(sTable, stRow, stBoundSql, pMembers...);
+	if (iCode != OI_OK)
+	{
+		return BuildStatus(iCode, stError);
+	}
+	if (pResult)
+	{
+		return Call(std::move(stBoundSql.sSql), std::move(stBoundSql.vParameters), *pResult, stError);
+	}
+	return ExecuteWrite(*this, std::move(stBoundSql), stError);
+}
+
+template <typename C, typename F, typename... M>
+OI::Coro::TaskResult<int32_t> Client::WriteTable(const std::string& sTable, const std::vector<C>& vRows, Error& stError, F fnBuild, M... pMembers) const
+{
+	Batch stBatch;
+	for (const auto& stRow : vRows)
+	{
+		BoundSql stBoundSql;
+		const int32_t iCode = fnBuild(sTable, stRow, stBoundSql, pMembers...);
+		if (iCode != OI_OK)
+		{
+			return BuildStatus(iCode, stError);
+		}
+		stBatch.Add(std::move(stBoundSql.sSql), std::move(stBoundSql.vParameters));
+	}
+	if (vRows.empty())
+	{
+		return BuildStatus(OI_OK, stError);
+	}
+	return ExecuteTableBatch(*this, std::move(stBatch), stError);
+}
+
+template <typename C>
+int32_t Client::ReadByKey(const Result& stResult, C& stRow)
+{
+	if (stResult.vRows.empty())
+	{
+		return OI_ERR_NOT_FOUND;
+	}
+	if (stResult.vRows.size() != 1 || !stRow.FromDbMap(stResult.vRows.front().mCells))
+	{
+		return OI_ERR_DECODE;
+	}
+	return OI_OK;
+}
+
+template <typename C>
+OI::Coro::TaskResult<int32_t> Client::CreateTable(const std::string& sTable, Error& stError) const
+{
+	BoundSql stBoundSql;
+	const int32_t iCode = BuildCreateTable<C>(sTable, stBoundSql);
+	if (iCode != OI_OK)
+	{
+		return BuildStatus(iCode, stError);
+	}
+	return ExecuteWrite(*this, std::move(stBoundSql), stError);
+}
+
+template <typename C>
+OI::Coro::TaskResult<int32_t> Client::Insert(const std::string& sTable, const C& stRow, Error& stError) const
+{
+	return WriteTable(sTable, stRow, nullptr, stError, BuildInsert<C>);
+}
+
+template <typename C>
+OI::Coro::TaskResult<int32_t> Client::Insert(const std::string& sTable, const C& stRow, Result& stResult, Error& stError) const
+{
+	return WriteTable(sTable, stRow, &stResult, stError, BuildInsert<C>);
+}
+
+template <typename C>
+OI::Coro::TaskResult<int32_t> Client::Insert(const std::string& sTable, const std::vector<C>& vRows, Error& stError) const
+{
+	return WriteTable(sTable, vRows, stError, BuildInsert<C>);
+}
+
+template <typename C>
+OI::Coro::TaskResult<int32_t> Client::Upsert(const std::string& sTable, const C& stRow, Error& stError) const
+{
+	return WriteTable(sTable, stRow, nullptr, stError, BuildUpsert<C>);
+}
+
+template <typename C>
+OI::Coro::TaskResult<int32_t> Client::Upsert(const std::string& sTable, const C& stRow, Result& stResult, Error& stError) const
+{
+	return WriteTable(sTable, stRow, &stResult, stError, BuildUpsert<C>);
+}
+
+template <typename C>
+OI::Coro::TaskResult<int32_t> Client::Upsert(const std::string& sTable, const std::vector<C>& vRows, Error& stError) const
+{
+	return WriteTable(sTable, vRows, stError, BuildUpsert<C>);
+}
+
+template <typename C, typename... M>
+OI::Coro::TaskResult<int32_t> Client::Update(const std::string& sTable, const C& stRow, Error& stError, M C::*... pMembers) const
+{
+	return WriteTable(sTable, stRow, nullptr, stError, BuildUpdateByKey<C, M...>, pMembers...);
+}
+
+template <typename C, typename... M>
+OI::Coro::TaskResult<int32_t> Client::Update(const std::string& sTable, const C& stRow, Result& stResult, Error& stError, M C::*... pMembers) const
+{
+	return WriteTable(sTable, stRow, &stResult, stError, BuildUpdateByKey<C, M...>, pMembers...);
+}
+
+template <typename C, typename... M>
+OI::Coro::TaskResult<int32_t> Client::Update(const std::string& sTable, const std::vector<C>& vRows, Error& stError, M C::*... pMembers) const
+{
+	return WriteTable(sTable, vRows, stError, BuildUpdateByKey<C, M...>, pMembers...);
+}
+
+template <typename C>
+OI::Coro::TaskResult<int32_t> Client::Delete(const std::string& sTable, const C& stRow, Error& stError) const
+{
+	return WriteTable(sTable, stRow, nullptr, stError, BuildDeleteByKey<C>);
+}
+
+template <typename C>
+OI::Coro::TaskResult<int32_t> Client::Delete(const std::string& sTable, const C& stRow, Result& stResult, Error& stError) const
+{
+	return WriteTable(sTable, stRow, &stResult, stError, BuildDeleteByKey<C>);
+}
+
+template <typename C>
+OI::Coro::TaskResult<int32_t> Client::Delete(const std::string& sTable, const std::vector<C>& vRows, Error& stError) const
+{
+	return WriteTable(sTable, vRows, stError, BuildDeleteByKey<C>);
+}
+
+template <typename C>
+OI::Coro::TaskResult<int32_t> Client::SelectAllRows(Client stClient, std::string sTable, std::vector<C>& vRows, Error& stError)
+{
+	if (!ValidTableName(sTable))
+	{
+		stError = {};
+		stError.sStage = "build_statement";
+		co_return OI_ERR_INVALID_ARGUMENT;
+	}
+	std::string sSql = std::string("SELECT ") + C::DbColumnList() + " FROM " + QuoteName(sTable);
+	Result stResult;
+	const int32_t iCode = co_await stClient.Call(std::move(sSql), {}, stResult, stError);
+	if (iCode != OI_OK)
+	{
+		co_return iCode;
+	}
+	const int32_t iRead = FromRows(stResult, vRows);
+	if (iRead != OI_OK)
+	{
+		stError.sStage = "decode_row";
+	}
+	co_return iRead;
+}
+
+template <typename C, typename... M>
+OI::Coro::TaskResult<int32_t> Client::SelectByKey(Client stClient, std::string sTable, C& stRow, Error& stError, M C::*... pMembers)
+{
+	BoundSql stBoundSql;
+	const int32_t iBuild = BuildSelectByKey(sTable, stRow, stBoundSql, pMembers...);
+	if (iBuild != OI_OK)
+	{
+		stError = {};
+		stError.sStage = "build_statement";
+		co_return iBuild;
+	}
+	Result stResult;
+	const int32_t iCode = co_await stClient.Call(std::move(stBoundSql.sSql), std::move(stBoundSql.vParameters), stResult, stError);
+	if (iCode != OI_OK)
+	{
+		co_return iCode;
+	}
+	co_return ReadByKey(stResult, stRow);
+}
+
+template <typename C, typename... M>
+OI::Coro::TaskResult<int32_t> Client::SelectByKey(Client stClient, std::string sTable, std::vector<C>& vRows, Error& stError, M C::*... pMembers)
+{
+	if (vRows.empty())
+	{
+		stError = {};
+		co_return OI_OK;
+	}
+	Batch stBatch;
+	auto vDecoded = vRows;
+	for (const auto& stRow : vDecoded)
+	{
+		BoundSql stBoundSql;
+		const int32_t iBuild = BuildSelectByKey(sTable, stRow, stBoundSql, pMembers...);
+		if (iBuild != OI_OK)
+		{
+			stError = {};
+			stError.sStage = "build_statement";
+			co_return iBuild;
+		}
+		stBatch.Add(std::move(stBoundSql.sSql), std::move(stBoundSql.vParameters));
+	}
+	std::vector<Result> vResults;
+	const int32_t iCode = co_await stClient.Transaction(std::move(stBatch), vResults, stError);
+	if (iCode != OI_OK)
+	{
+		co_return iCode;
+	}
+	for (size_t iIndex = 0; iIndex < vResults.size(); ++iIndex)
+	{
+		const int32_t iRead = ReadByKey(vResults[iIndex], vDecoded[iIndex]);
+		if (iRead != OI_OK)
+		{
+			co_return iRead;
+		}
+	}
+	vRows = std::move(vDecoded);
+	co_return OI_OK;
+}
+
+template <typename C, typename... M>
+OI::Coro::TaskResult<int32_t> Client::Select(const std::string& sTable, C& stRow, Error& stError, M C::*... pMembers) const
+{
+	return SelectByKey(*this, sTable, stRow, stError, pMembers...);
+}
+
+template <typename C, typename... M>
+OI::Coro::TaskResult<int32_t> Client::Select(const std::string& sTable, std::vector<C>& vRows, Error& stError, M C::*... pMembers) const
+{
+	return SelectByKey(*this, sTable, vRows, stError, pMembers...);
+}
+template <typename C>
+OI::Coro::TaskResult<int32_t> Client::SelectAll(const std::string& sTable, std::vector<C>& vRows, Error& stError) const
+{
+	return SelectAllRows(*this, sTable, vRows, stError);
 }
 }

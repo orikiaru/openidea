@@ -1,8 +1,10 @@
 # 数据库调用
 
+`Call` 接收 SQL 和参数，`Transaction` 接收由 `Batch::Add` 组装的语句；单表和标量入口复用这些路径，结果行按列名保存。
+
 `Client::Call` 和 `Client::Transaction` 都是 `co_await OI::Coro::RunBlocking`。阻塞类型是客户端构造时的 `BlockingType`，默认 `Mysql`。`Call` 的 `Result`、`Error`，以及 `Transaction` 的结果数组、`Error`，都是借用，必须活到这次工作真正结束。丢掉返回的 `Task`，工作仍会跑完。
 
-同步驱动跑在该类型的阻塞池线程上。完成后经本地 FIFO 会话唤醒 poll，再 `Schedule` 回业务协程。细节见 [blocking.md](blocking.md)。工作若在进入 `State::Run` 之前被阻塞池拒绝，这次调用不会改写 `Error`。
+同步驱动跑在该类型的阻塞池线程上。完成后经本地 FIFO 会话唤醒 poll，再 `Schedule` 回业务协程。细节见 [blocking.md](blocking.md)。公开 `Call` 和 `Transaction` 提交前清空 `Error`；若工作在进入 `State::Run` 前被阻塞池拒绝，不会产生驱动错误详情。
 
 多线程里业务协程在工人上。挂起后这个工人接着干别的，poll 照常转。完成后 poll 线程 `Schedule` 回工人，由工人 `resume`。阻塞池线程是另一条真实线程。
 
@@ -22,7 +24,7 @@ sequenceDiagram
     Biz-->>Worker: 挂起，这个工人接着干别的
     Note over Poll: poll 继续跑
     Note over Pool: 阻塞池线程执行 State::Run
-    Pool->>Pool: 清空调用方 Error
+    Biz->>Biz: 提交前清空 Error
     Pool->>Pool: 锁里看连接池
     alt 已关闭
         Pool->>Pool: 阶段 pool，说明 connection pool closed，返回 OI_ERR_CONNECT

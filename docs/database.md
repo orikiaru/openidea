@@ -32,34 +32,77 @@ MySQL 配置必须指定非空数据库名、1 至 65535 的有效端口，以�
 
 停止框架或阻塞池之前，先等待该客户端所有调用真正结束，再 `co_await stClient.Close()` 并检查返回码。关闭失败时客户端仍处于关闭状态，应重试 `Close` 释放空闲连接；未成功关闭而析构时，连接清理可能退回到同步执行。
 
-## 执行与结果
+## 结构体单表操作
 
-`OI::Db::Statement` 由 SQL 文本 `sSql` 和参数数组 `vParameters` 构成。MySQL 驱动使用预处理语句和 `?` 占位符，参数数量及顺序必须匹配；业务值通过绑定传递，不拼入 SQL。`OI::Db::Parameter` 支持 `nullptr`、`int64_t`、`uint64_t`、`double`、`std::string` 和 `OI::Db::Blob`。SQL 标识符不能当作值参数绑定，应由应用使用固定 SQL 或严格控制可选标识符。
+`oi_db_table.h` 提供 `Client` 的单表入口，表名只认字母、数字、下划线，最长 64；无效输入返回 `OI_ERR_INVALID_ARGUMENT`。这些入口返回 `TaskResult<int32_t>`，逐条等待并检查状态码：
+
+| 接口 | 操作 |
+| --- | --- |
+| `CreateTable<Row>(sTable, stError)` | 建表，列为 `NOT NULL`，使用全部 `[dbkey]` 主键 |
+| `Insert(sTable, stRow, stError)` | 整行插入，主键冲突由数据库报错 |
+| `Upsert(sTable, stRow, stError)` | 整行写入，主键存在时更新非主键列 |
+| `Select(sTable, stRow, stError, 成员...)` | 按行中主键查询，不传成员读整行 |
+| `SelectAll(sTable, vRows, stError)` | 查询整表并解码为行数组 |
+| `Update(sTable, stRow, stError, 成员...)` | 按主键更新，不传成员改全部非主键列 |
+| `Delete(sTable, stRow, stError)` | 按主键删除 |
+
+单对象 `Insert`、`Upsert`、`Update`、`Delete` 可在 `Error` 前额外传 `Result&`，成功后读取 `iAffected` 和 `iInsertId`；输出须活到任务真正结束。除建表外均支持行或行数组；数组写操作使用事务，空数组成功且不执行 SQL。数组查询按输入主键逐条读取，任一失败不覆盖输出。`Select` 找不到返回 `OI_ERR_NOT_FOUND`，多行或解码失败返回 `OI_ERR_DECODE`；成功才写回。`SelectAll` 只接收输出数组，不要求主键；`CreateTable`、`Upsert`、按键的 `Select`、`Update` 和 `Delete` 要求 `[dbkey]`，更新不能指定主键列。读取和更新可通过成员指针指定部分列。
 
 ```cpp
-OI::Db::Statement stStatement;
-stStatement.sSql = "SELECT payload FROM example WHERE id = ?";
-stStatement.vParameters.emplace_back(int64_t{1});
+OI::Db::Error stError;
+const int32_t iStatus = co_await stMysql.Update(sTable, stRow, stError, &Row::sName, &Row::dScore);
+if (iStatus != OI_OK)
+{
+    co_return iStatus;
+}
+```
+
+列类型按字段类型推导，`[dbtype]` 可以换字节和文本列的类型，见 [模块和协议](module.md)。表的默认字符集是 `utf8mb4`。
+
+JOIN、任意条件、范围查询、跨表、`ALTER` 和 schema migration 不在这层，调用方用 `Pick` 或带参数的 SQL，表名用 `QuoteName` 加反引号前先自己校验。schema migration 尚未实现。
+
+旧版先构造语句再调用的代码，可迁移到这些 `Client` 成员；复杂查询仍使用下文的参数化 SQL。
+
+## 执行与结果
+
+`Client::Call(sSql, vParameters, stResult, stError)` 执行一条 SQL。MySQL 驱动使用预处理语句和 `?` 占位符，参数数量及顺序必须匹配；业务值通过绑定传递，不拼入 SQL。`OI::Db::Parameter` 用 `ParameterType` 区分 NULL、bool、有符号整数、无符号整数、浮点、文本和二进制七类。整数与浮点按原生类型绑定；文本和二进制保存在带长度的 `sBytes` 中，二进制字符串用 `Parameter::Binary(sBytes)`，也可从 `Blob` 构造。SQL 标识符不能当作值参数绑定，应由应用使用固定 SQL 或严格控制可选标识符。
+
+```cpp
 OI::Db::Result stResult;
 OI::Db::Error stError;
-const int32_t iRet = co_await stClient.Call(std::move(stStatement), stResult, stError);
+std::vector<OI::Db::Parameter> vParameters{int64_t{1}};
+const int32_t iRet = co_await stClient.Call("SELECT payload FROM example WHERE id = ?", std::move(vParameters), stResult, stError);
 if (iRet != OI_OK)
 {
     co_return iRet;
 }
 ```
 
-`Result::vColumns` 保存列名，`vRows` 按行和列保存 `optional<Blob>`：空 optional 表示 SQL NULL；有值且长度为零表示空字节串，两者不同。非 NULL 的结果保留为字节数组，包括内嵌 NUL；应用按列约定自行解码，不假设结果已转换成 C++ 数字。`iAffected` 和 `iInsertId` 分别提供受影响行数和插入 ID。MySQL 配置还可限制结果总字节数及行数。
+`Result::vRows` 是 `Row` 数组；重复列名拒绝。底层单元格是 `optional<string>`：空 optional 表示 SQL NULL，有值且长度为零表示空字节串。非 NULL 结果保留原始字节，包括内嵌 NUL；`iAffected` 和 `iInsertId` 分别提供受影响行数和插入 ID。MySQL 配置可限制结果总字节数及行数。
 
-`Call` 的 `Result&`、`Error&` 和 `Transaction` 的 `vector<Result>&`、`Error&` 都是借用输出，必须一直存活到后台工作真正结束。丢弃任务不取消工作，不能在等待超时或提前退出时释放这些对象；并发访问由调用方同步。成功时提交结果输出，失败时不要读取结果作为本次成功数据。调用可能在进入驱动前被阻塞池拒绝，此时不能假设错误详情一定更新。
+行来源由执行查询的驱动记录，同一结果共享。MySQL 已知列使用元数据中的原库和原表；缺列时报告能确定的来源表，纯表达式没有原表时显示 `<unknown>`。后续查询不会覆盖早前结果的来源。
+
+读取原始结果时，用 `stRow.at("id").as_uint32()` 按列名取强类型值；`Cell` 还提供 `is_null()`、`as_string()`、`as_int8()`、`as_uint8()`、`as_int16()`、`as_uint16()`、`as_int32()`、`as_uint32()`、`as_int64()`、`as_uint64()`、`as_float()`、`as_double()` 和 `as_bool()`。缺列、NULL 或转换失败抛 `RowDecodeError`；`is_null()` 可先检查 NULL。字符串引用只在所属行存活且未修改时有效。
+
+不希望异常时可先判断：`if (const auto stId = stRow.find("id"); stId && stId->is_uint32())` 再调用 `stId->as_uint32()`。缺列返回空 optional；各 `is_*` 按对应 `as_*` 的转换规则判断能否解码，不抛解码异常。0/1 可同时视为 bool 和数值，`is_string()` 对任何非 NULL 字节串为真。
+
+可用 `stResult.DecodeRows(vOutput, stError, fnDecode)` 逐行返回业务对象；全部成功才替换输出。它只捕获 `RowDecodeError` 并返回解码错误，业务回调的其他异常继续传播，失败时保留旧输出。
+
+单行单列可用 `co_await stClient.Scalar(sSql, vParameters, stValue, stError)`；结果必须恰好一行一列，非 NULL 且可解码，否则返回 `OI_ERR_DECODE`，输出不变。
+
+`Call`、`Scalar` 和事务的输出及 `Error&` 都是借用，必须一直存活到后台工作真正结束。丢弃任务不取消工作，不能在等待超时或提前退出时释放这些对象；并发访问由调用方同步。成功时提交结果输出，失败时不要读取结果作为本次成功数据。公开 `Call` 和 `Transaction` 在提交前清空 `Error`；若阻塞池在进入驱动前拒绝，本次没有驱动错误详情。
 
 ## 事务
 
-`Transaction` 接收一组 `Statement` 和结果数组，整组在同一条借用连接上执行；成功后按语句顺序返回结果。失败时尝试回滚，连接是否可复用取决于回滚和连接状态。事务仅支持事务表上的 DML 和读取；不要放入 DDL、事务控制、存储过程或会隐式提交的语句，不承诺 DDL 能回滚。提交失败也可能存在结果不确定性，应用应按业务需要处理，不自动重试写入。
+用 `OI::Db::Batch stBatch`，逐条 `stBatch.Add(sSql, vParameters)`，再 `co_await stClient.Transaction(std::move(stBatch), vResults, stError)`。整组在同一条借用连接上按顺序执行，成功后结果按语句顺序返回；失败时尝试回滚，连接是否可复用取决于回滚和连接状态。事务仅支持事务表上的 DML 和读取；不要放入 DDL、事务控制、存储过程或会隐式提交的语句，不承诺 DDL 能回滚。提交失败可能存在结果不确定性，应用应按业务需要处理，不自动重试写入。
 
 ## 错误与诊断
 
 返回值是统一的 `int32_t` 状态码。驱动错误通过 `Error` 的 `sStage`、`iNativeCode`、`sSqlState` 和 `sMessage` 提供阶段及原生诊断；原生码和 SQLSTATE 可能因失败阶段不存在而为空或零。`stCleanup` 可记录连接清理失败或异常及其独立的诊断字段，调用成功时也应按需检查。MySQL 的文本使用简短安全描述，不直接输出 SDK 或服务端原始错误文本，避免泄露 SQL、参数、地址和凭据。记录诊断时只记录必要的阶段、状态码和安全文本，不记录完整请求或敏感值。
+
+返回框架状态码的数据库协程可在边界使用 `OI_DB_TRY` / `OI_DB_CATCH`：状态码接口调用后用 `stError.ThrowIfFailed(iCode)` 转入统一处理。捕获宏对数据库异常只在边界记录一次 `LOG_ERROR` 并 `co_return` 原框架码；未知异常返回 `OI_ERR_FAIL`。需要恢复或重试时自行捕获处理。
+
+MySQL 普通 SQL 错误返回 `OI_ERR_DB`（-18），重复键 1062 返回 `OI_ERR_EXIST`，锁等待超时返回 `OI_ERR_TIMEOUT`，死锁返回 `OI_ERR_BUSY`，连接失败或连接丢失返回 `OI_ERR_CONNECT`。原生错误号与 SQLSTATE 保留在 `Error` 中。
 
 ## 协议行
 
@@ -67,8 +110,8 @@ if (iRet != OI_OK)
 
 - `DbFields()`：按列顺序排列的同类型字段数组，每项包含列信息和以整行为参数的编解码回调。字段操作遍历数组；成员指针查列由生成的 `DbFindField` 单独处理。
 - `DbColumnList` 是反引号列名，`DbPlaceholders` 是等量的 `?`，`AppendDbParameters` 按这个顺序追加参数，用于整行写入。
-- `ToDbMap()` 返回「列名 → 参数」，`FromDbMap(CellMap)` 按「列名 → 单元格」写回，只写 map 里有的列。查询结果用 `OI::Db::RowCells(stResult, iRow, mCells)` 换成按列名的 map，列名重复时返回 false。
-- `FromDbRow(vColumns, vRow)` 直接按结果的列名写回。整份结果用 `OI::Db::FromRows(stResult, vRows)`，任一行失败返回 `OI_ERR_DECODE`，`vRows` 不变。
+- `ToDbMap()` 返回「列名 → 参数」，`FromDbMap(CellMap)` 按「列名 → 单元格」写回，只写 map 里有的列。查询结果的每行可通过 `Row::mCells` 取得 `CellMap`。
+- 整份结果用 `OI::Db::FromRows(stResult, vRows)`，任一行失败返回 `OI_ERR_DECODE`，`vRows` 不变。
 
 读回时不认识的列跳过；有 SQL NULL、重复列或某列解不开时整行返回 false，对象保持原值。
 
@@ -78,36 +121,8 @@ if (iRet != OI_OK)
 
 头一层的整数、浮点、`bool`、`string`、`Bytes` 分别绑定成 `int64_t`、`uint64_t`、`double`、`string` 或 `Blob`。`bool` 写成 0 或 1。`vector`、`map` 和嵌套 `rpcdata` 默认不拆列，调用 `ToDbBlob` 收成一个 blob，读的时候用 `FromDbBlob`。blob 里是这条值自己的 PB，序号为 0。容器 blob 恰好包含一条字段（包括空容器），空 blob、多条字段和尾随字节都拒绝。旧容器 blob 与新格式不兼容，需要先用旧版本读取并迁移，相关读写端同步升级。`vector` 和 `map` 各是一条字段，不是每个元素一条。裸流里的嵌套 rpcdata 带长度前缀；同一字段号出现第二次直接拒绝。RPC 混版本、Redis 里已有的值和裸流的读写两端都受这个格式约束，旧数据要用旧端读取或先迁移，不能把新端当成平滑兼容。字段写了 `[dbjson]` 才改成 `ToJsonText` / `FromJsonText` 的 JSON 文本。数据库不穿透，blob 里的结构不用标 `db`。 `[dbjson]` 编码拒绝无效 UTF-8 和非有限浮点数；直接调用 `EncodeDbJson` 时抛 `std::invalid_argument`。合法 UTF-8 和字符串内 NUL 可经 JSON 编解码往返。单表语句构建只编码所需字段：所需字段无法编码时返回 `OI_ERR_INVALID_ARGUMENT`，输出语句不变；按主键查询或只更新其他有效字段不受该值影响。
 
-## 单表语句
 
-`oi_db_table.h` 按字段表生成单表语句，只返回 `Statement`，执行和读回仍是 `Call` 加 `RowCells`、`FromDbMap`。表名由调用方传，只认字母、数字、下划线，最长 64。任何一步不合法都返回 `OI_ERR_INVALID_ARGUMENT`，`stStatement` 不变。
-
-| 函数 | 生成 |
-| --- | --- |
-| `BuildCreateTable<Row>(sTable, stStatement)` | `CREATE TABLE IF NOT EXISTS`，全部列 `NOT NULL`，主键是所有 `[dbkey]` 字段 |
-| `BuildInsert(sTable, stRow, stStatement)` | 整行 `INSERT`，主键冲突由库报错 |
-| `BuildUpsert(sTable, stRow, stStatement)` | 整行写入，主键已存在时改写其余列（`ON DUPLICATE KEY UPDATE`） |
-| `BuildSelectByKey(sTable, stRow, stStatement, 成员...)` | 按 `stRow` 的主键读；不传成员读整行，传了只读这几列 |
-| `BuildUpdateByKey(sTable, stRow, stStatement, 成员...)` | 按主键改；不传成员改全部非主键列，传了只改这几列，主键列不能改 |
-| `BuildDeleteByKey(sTable, stRow, stStatement)` | 按主键删 |
-
-除 `BuildInsert` 外都要求结构里至少有一个 `[dbkey]` 字段。列类型按字段类型推：整数按宽度和符号对应 `TINYINT` 到 `BIGINT UNSIGNED`，`bool` 是 `TINYINT`，`float`、`double` 都是 `DOUBLE`，`string`、`Bytes` 和 PB blob 是 `LONGBLOB`，`[dbjson]` 是 `LONGTEXT`。`[dbtype]` 可以换字节和文本列的类型，见 [模块和协议](module.md)。表的默认字符集是 `utf8mb4`。
-
-部分更新：
-
-```cpp
-OI::Db::Statement stUpdate;
-const int32_t iBuild = OI::Db::BuildUpdateByKey(sTable, stRow, stUpdate, &Row::sName, &Row::dScore);
-if (iBuild != OI_OK)
-{
-    co_return iBuild;
-}
-OI::Db::Result stResult;
-OI::Db::Error stError;
-const int32_t iStatus = co_await stMysql.Call(std::move(stUpdate), stResult, stError);
-```
-
-JOIN、任意条件、范围查询、跨表、`ALTER` 和 schema migration 不在这层，调用方用 `Pick` 或手写 SQL，表名用 `QuoteName` 加反引号前先自己校验。schema migration 尚未实现。
+真 MySQL 回归覆盖 29 个持久字段及 1 个 `nodb` 字段：八种定宽整数、bool、float、double、string、Bytes、PB 和 JSON 各三种复杂类型、嵌套容器及十种可配置文本/二进制列型。单条和批量 CRUD 以相反数据回读，并从 `information_schema` 核对实际列类型；通过标记为 `mysql all field types batch bad=0`。
 
 ## 本轮范围
 

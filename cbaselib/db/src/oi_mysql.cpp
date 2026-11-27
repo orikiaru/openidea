@@ -1,7 +1,10 @@
 #include "oi_mysql.h"
+#include "oi_db_driver.h"
 #include "oi_errno.h"
 #include "oi_lock.h"
 #include <mysql.h>
+#include <errmsg.h>
+#include <mysqld_error.h>
 #include <cstdio>
 #include <limits>
 #include <stdexcept>
@@ -112,6 +115,28 @@ void SetError(OI::Db::Error& stError, const char* pStage, unsigned int iCode, co
 	stError.sMessage = std::string("MySQL ") + pStage + " failed";
 }
 
+int32_t SqlStatus(const OI::Db::Error& stError)
+{
+	switch (stError.iNativeCode)
+	{
+	case ER_DUP_ENTRY:
+		return OI_ERR_EXIST;
+	case ER_LOCK_WAIT_TIMEOUT:
+		return OI_ERR_TIMEOUT;
+	case ER_LOCK_DEADLOCK:
+		return OI_ERR_BUSY;
+	case CR_SERVER_GONE_ERROR:
+	case CR_SERVER_LOST:
+		return OI_ERR_CONNECT;
+	default:
+		if (stError.sSqlState.starts_with("08"))
+		{
+			return OI_ERR_CONNECT;
+		}
+		return OI_ERR_DB;
+	}
+}
+
 class MysqlConnection final : public OI::Db::Connection
 {
 	std::shared_ptr<Runtime> m_pRuntime;
@@ -144,6 +169,7 @@ class MysqlConnection final : public OI::Db::Connection
 	}
 	bool Reset(OI::Db::Error& stError) override
 	{
+		stError.sDatabase = m_stConfig.sDatabase;
 		auto& stThread = GetThreadState(m_pRuntime);
 		if (!stThread.bReady)
 		{
@@ -161,8 +187,9 @@ class MysqlConnection final : public OI::Db::Connection
 		}
 		return true;
 	}
-	int32_t Execute(const OI::Db::Statement& stStatement, OI::Db::Result& stResult, OI::Db::Error& stError) override
+	int32_t Execute(const OI::Db::BoundSql& stBoundSql, OI::Db::Result& stResult, OI::Db::Error& stError) override
 	{
+		stError.sDatabase = m_stConfig.sDatabase;
 		auto& stThread = GetThreadState(m_pRuntime);
 		if (!stThread.bReady)
 		{
@@ -193,72 +220,66 @@ class MysqlConnection final : public OI::Db::Connection
 			SetError(*pError, pStage, mysql_stmt_errno(pStatement), mysql_stmt_sqlstate(pStatement));
 			// Discard on any SDK failure; never retry an operation with uncertain outcome.
 			m_bHealthy = false;
-			return OI_ERR_FAIL;
+			return SqlStatus(*pError);
 		};
-		if (stStatement.sSql.size() > std::numeric_limits<unsigned long>::max())
+		if (stBoundSql.sSql.size() > std::numeric_limits<unsigned long>::max())
 		{
 			SetError(stError, "prepare", 0, nullptr);
 			return OI_ERR_INVALID_ARGUMENT;
 		}
-		if (mysql_stmt_prepare(stGuard.pStatement, stStatement.sSql.data(), static_cast<unsigned long>(stStatement.sSql.size())) != 0)
+		if (mysql_stmt_prepare(stGuard.pStatement, stBoundSql.sSql.data(), static_cast<unsigned long>(stBoundSql.sSql.size())) != 0)
 		{
 			return fnFail("prepare");
 		}
-		if (mysql_stmt_param_count(stGuard.pStatement) != stStatement.vParameters.size())
+		if (mysql_stmt_param_count(stGuard.pStatement) != stBoundSql.vParameters.size())
 		{
 			SetError(stError, "bind", 0, nullptr);
 			return OI_ERR_INVALID_ARGUMENT;
 		}
-		std::vector<MYSQL_BIND> vBind(stStatement.vParameters.size());
-		std::vector<unsigned long> vLengths(stStatement.vParameters.size());
+		std::vector<MYSQL_BIND> vBind(stBoundSql.vParameters.size());
+		std::vector<unsigned long> vLengths(stBoundSql.vParameters.size());
 		unsigned char iEmptyByte = 0;
 		for (size_t iIndex = 0; iIndex < vBind.size(); ++iIndex)
 		{
-			const auto& stValue = stStatement.vParameters[iIndex];
+			const auto& stValue = stBoundSql.vParameters[iIndex];
 			auto& stBind = vBind[iIndex];
-			if (std::holds_alternative<std::nullptr_t>(stValue))
+			if (stValue.is_null())
 			{
 				stBind.buffer_type = MYSQL_TYPE_NULL;
 			}
-			else if (const auto* pValue = std::get_if<int64_t>(&stValue))
+			else if (stValue.is_signed() || stValue.is_bool())
 			{
 				stBind.buffer_type = MYSQL_TYPE_LONGLONG;
-				stBind.buffer = const_cast<int64_t*>(pValue);
+				stBind.buffer = const_cast<int64_t*>(&stValue.iSigned);
 			}
-			else if (const auto* pValue = std::get_if<uint64_t>(&stValue))
+			else if (stValue.is_unsigned())
 			{
 				stBind.buffer_type = MYSQL_TYPE_LONGLONG;
 				stBind.is_unsigned = 1;
-				stBind.buffer = const_cast<uint64_t*>(pValue);
+				stBind.buffer = const_cast<uint64_t*>(&stValue.iUnsigned);
 			}
-			else if (const auto* pValue = std::get_if<double>(&stValue))
+			else if (stValue.is_real())
 			{
 				stBind.buffer_type = MYSQL_TYPE_DOUBLE;
-				stBind.buffer = const_cast<double*>(pValue);
+				stBind.buffer = const_cast<double*>(&stValue.dReal);
 			}
 			else
 			{
-				const auto* pString = std::get_if<std::string>(&stValue);
-				const auto* pBlob = std::get_if<OI::Db::Blob>(&stValue);
-				const size_t iSize = pString ? pString->size() : pBlob->size();
+				const size_t iSize = stValue.sBytes.size();
 				if (iSize > std::numeric_limits<unsigned long>::max())
 				{
 					SetError(stError, "bind", 0, nullptr);
 					return OI_ERR_INVALID_ARGUMENT;
 				}
 				vLengths[iIndex] = static_cast<unsigned long>(iSize);
-				stBind.buffer_type = pString ? MYSQL_TYPE_STRING : MYSQL_TYPE_BLOB;
+				stBind.buffer_type = stValue.is_text() ? MYSQL_TYPE_STRING : MYSQL_TYPE_BLOB;
 				if (iSize == 0)
 				{
 					stBind.buffer = static_cast<void*>(&iEmptyByte);
 				}
-				else if (pString)
-				{
-					stBind.buffer = static_cast<void*>(const_cast<char*>(pString->data()));
-				}
 				else
 				{
-					stBind.buffer = static_cast<void*>(const_cast<uint8_t*>(pBlob->data()));
+					stBind.buffer = const_cast<char*>(stValue.sBytes.data());
 				}
 				stBind.buffer_length = vLengths[iIndex];
 				stBind.length = &vLengths[iIndex];
@@ -304,24 +325,44 @@ class MysqlConnection final : public OI::Db::Connection
 				*pBytes += iSize;
 				return true;
 			};
-			if (iCount > m_stConfig.iMaxResultBytes / (sizeof(std::string) + sizeof(ResultBind) + sizeof(MYSQL_BIND)) ||
-			    !fnCharge(static_cast<size_t>(iCount) * (sizeof(std::string) + sizeof(ResultBind) + sizeof(MYSQL_BIND))))
+			// 库表来源只存一份；字段元数据和每行的 map 节点都计入结果预算。
+			constexpr size_t iNodeOverhead = 4 * sizeof(void*);
+			constexpr size_t iColumnBytes = sizeof(ResultBind) + sizeof(MYSQL_BIND) + sizeof(decltype(OI::Db::QuerySource::mColumns)::value_type) + iNodeOverhead;
+			if (!fnCharge(sizeof(OI::Db::QuerySource)) || !fnCharge(m_stConfig.sDatabase.size()) ||
+			    iCount > m_stConfig.iMaxResultBytes / iColumnBytes || !fnCharge(static_cast<size_t>(iCount) * iColumnBytes))
 			{
 				m_bHealthy = false;
 				SetError(stError, "result_limit", 0, nullptr);
 				return OI_ERR_FAIL;
 			}
+			auto pSource = std::make_shared<OI::Db::QuerySource>();
+			pSource->sDatabase = m_stConfig.sDatabase;
 			std::vector<ResultBind> vFields(iCount);
 			std::vector<MYSQL_BIND> vOutput(iCount);
 			for (size_t iIndex = 0; iIndex < iCount; ++iIndex)
 			{
-				if (!fnCharge(pFields[iIndex].name_length))
+				const MYSQL_FIELD& stField = pFields[iIndex];
+				if (!fnCharge(stField.name_length) || !fnCharge(stField.db_length) || !fnCharge(stField.org_table_length))
 				{
 					m_bHealthy = false;
 					SetError(stError, "result_limit", 0, nullptr);
 					return OI_ERR_FAIL;
 				}
-				stOutput.vColumns.emplace_back(pFields[iIndex].name, pFields[iIndex].name_length);
+				OI::Db::TableSource stOrigin;
+				if (stField.db_length)
+				{
+					stOrigin.sDatabase.assign(stField.db, stField.db_length);
+				}
+				if (stField.org_table_length)
+				{
+					stOrigin.sTable.assign(stField.org_table, stField.org_table_length);
+				}
+				if (!pSource->mColumns.emplace(std::string(stField.name, stField.name_length), std::move(stOrigin)).second)
+				{
+					SetError(stError, "duplicate_column", 0, nullptr);
+					m_bHealthy = false;
+					return OI_ERR_DECODE;
+				}
 				vOutput[iIndex].buffer_type = MYSQL_TYPE_BLOB;
 				vFields[iIndex].bReal = pFields[iIndex].type == MYSQL_TYPE_FLOAT || pFields[iIndex].type == MYSQL_TYPE_DOUBLE;
 				if (vFields[iIndex].bReal)
@@ -354,21 +395,24 @@ class MysqlConnection final : public OI::Db::Connection
 					return fnFail("fetch");
 				}
 				if (stOutput.vRows.size() >= m_stConfig.iMaxRows ||
-				    iCount > m_stConfig.iMaxResultBytes / sizeof(std::optional<OI::Db::Blob>) ||
-				    !fnCharge(sizeof(std::vector<std::optional<OI::Db::Blob>>)) ||
-				    !fnCharge(static_cast<size_t>(iCount) * sizeof(std::optional<OI::Db::Blob>)))
+				    !fnCharge(sizeof(OI::Db::Row)))
 				{
 					m_bHealthy = false;
 					SetError(stError, "result_limit", 0, nullptr);
 					return OI_ERR_FAIL;
 				}
-				std::vector<std::optional<OI::Db::Blob>> vRow;
-				vRow.reserve(iCount);
+				OI::Db::CellMap mRow;
 				for (size_t iIndex = 0; iIndex < iCount; ++iIndex)
 				{
+					if (!fnCharge(sizeof(OI::Db::CellMap::value_type) + iNodeOverhead) || !fnCharge(pFields[iIndex].name_length))
+					{
+						m_bHealthy = false;
+						SetError(stError, "result_limit", 0, nullptr);
+						return OI_ERR_FAIL;
+					}
+					auto& stCell = mRow[std::string(pFields[iIndex].name, pFields[iIndex].name_length)];
 					if (vFields[iIndex].bNull)
 					{
-						vRow.emplace_back(std::nullopt);
 						continue;
 					}
 					const size_t iLength = vFields[iIndex].iLength;
@@ -384,16 +428,15 @@ class MysqlConnection final : public OI::Db::Connection
 						{
 							return fnFail("fetch_real");
 						}
-						const auto* pText = reinterpret_cast<const uint8_t*>(vFields[iIndex].vRealText);
-						vRow.emplace_back(OI::Db::Blob(pText, pText + iLength));
+						stCell.emplace(vFields[iIndex].vRealText, iLength);
 						continue;
 					}
-					vRow.emplace_back(OI::Db::Blob(iLength));
+					stCell.emplace(iLength, '\0');
 					if (iLength > 0)
 					{
 						MYSQL_BIND stColumn{};
 						stColumn.buffer_type = MYSQL_TYPE_BLOB;
-						stColumn.buffer = vRow.back()->data();
+						stColumn.buffer = stCell->data();
 						stColumn.buffer_length = static_cast<unsigned long>(iLength);
 						if (mysql_stmt_fetch_column(stGuard.pStatement, &stColumn, static_cast<unsigned int>(iIndex), 0) != 0)
 						{
@@ -401,7 +444,7 @@ class MysqlConnection final : public OI::Db::Connection
 						}
 					}
 				}
-				stOutput.vRows.push_back(std::move(vRow));
+				stOutput.vRows.push_back({std::move(mRow), pSource});
 			}
 		}
 		else if (mysql_stmt_field_count(stGuard.pStatement) != 0)
@@ -421,6 +464,7 @@ class MysqlConnection final : public OI::Db::Connection
 	// MySQL 不支持用预处理协议发 BEGIN（原生错误 1295，8.0 和 8.4 实测），事务控制统一走文本协议。
 	int32_t ExecuteControl(std::string_view sSql, OI::Db::Error& stError) override
 	{
+		stError.sDatabase = m_stConfig.sDatabase;
 		auto& stThread = GetThreadState(m_pRuntime);
 		if (!stThread.bReady)
 		{
@@ -434,7 +478,7 @@ class MysqlConnection final : public OI::Db::Connection
 			SetError(*pError, pStage, mysql_errno(m_pMysql), mysql_sqlstate(m_pMysql));
 			// Discard on any SDK failure; never retry an operation with uncertain outcome.
 			m_bHealthy = false;
-			return OI_ERR_FAIL;
+			return SqlStatus(*pError);
 		};
 		if (sSql.empty() || sSql.size() > std::numeric_limits<unsigned long>::max())
 		{
@@ -487,6 +531,7 @@ class MysqlDriver final : public OI::Db::Driver
 	}
 	std::unique_ptr<OI::Db::Connection> Connect(OI::Db::Error& stError) override
 	{
+		stError.sDatabase = m_stConfig.sDatabase;
 		if (m_stConfig.iConnectTimeoutSeconds == 0 || m_stConfig.iReadTimeoutSeconds == 0 || m_stConfig.iWriteTimeoutSeconds == 0)
 		{
 			SetError(stError, "invalid_timeout", 0, nullptr);

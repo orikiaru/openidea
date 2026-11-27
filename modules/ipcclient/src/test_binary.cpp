@@ -691,7 +691,7 @@ int TestBinary::CheckBinaryContainers()
 		vDecoded = {77};
 		fnCheck(!OI::Db::FromDbBlob(stTrailingBlob, vDecoded) && vDecoded == std::vector<int32_t>{77}, "database trailing blob preserves output");
 		vDecoded = {77};
-		fnCheck(!OI::Db::FromDbBlob(OI::Db::Blob{}, vDecoded) && vDecoded == std::vector<int32_t>{77}, "database empty blob rejected");
+		fnCheck(!OI::Db::FromDbBlob(std::string{}, vDecoded) && vDecoded == std::vector<int32_t>{77}, "database empty blob rejected");
 		auto stMultipleBlob = stBlob;
 		stMultipleBlob.insert(stMultipleBlob.end(), stBlob.begin(), stBlob.end());
 		vDecoded = {77};

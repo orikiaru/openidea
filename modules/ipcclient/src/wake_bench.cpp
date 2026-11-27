@@ -1,6 +1,7 @@
 #include "test_db.h"
 #include "oi_db.h"
 #include "oi_mysql.h"
+#include "oi_db_driver.h"
 #include "oi_errno.h"
 #include "oi_lock.h"
 #ifdef OI_ENABLE_BLOCKING_WAKE_TRACE
@@ -130,9 +131,9 @@ class BenchConnection : public OI::Db::Connection
 	    : m_pConnection(std::move(pConnection)), m_pFinished(std::move(pFinished)), m_pReset(std::move(pReset))
 	{
 	}
-	int32_t Execute(const OI::Db::Statement& stStatement, OI::Db::Result& stResult, OI::Db::Error& stError) override
+	int32_t Execute(const OI::Db::BoundSql& stBoundSql, OI::Db::Result& stResult, OI::Db::Error& stError) override
 	{
-		const int32_t iStatus = m_pConnection->Execute(stStatement, stResult, stError);
+		const int32_t iStatus = m_pConnection->Execute(stBoundSql, stResult, stError);
 		m_pFinished->store(BenchNow(), std::memory_order_release);
 		return iStatus;
 	}
@@ -330,6 +331,7 @@ OI::Coro::TaskResult<int32_t> TestDb::RunWakeBenchmark(bool bBlockingOnly)
 		pDirect->pDriver = OI::Mysql::MakeDriver(stConfig);
 		std::vector<int64_t> vDirectWake;
 		std::vector<int64_t> vDirectWork;
+		const OI::Db::CellMap mExpected{{"value", "1"}};
 		std::vector<int64_t> vDirectQueue;
 		for (int32_t iRound = 0; iRound < iWarmup + iSamples; ++iRound)
 		{
@@ -347,8 +349,8 @@ OI::Coro::TaskResult<int32_t> TestDb::RunWakeBenchmark(bool bBlockingOnly)
 				{
 					return 1;
 				}
-				OI::Db::Statement stStatement{"SELECT 1", {}};
-				const int32_t iCode = pDirect->pConnection->Execute(stStatement, pDirect->stResult, pDirect->stError);
+				OI::Db::BoundSql stBoundSql{"SELECT 1 AS value", {}};
+				const int32_t iCode = pDirect->pConnection->Execute(stBoundSql, pDirect->stResult, pDirect->stError);
 				if (iCode != OI_OK || !pDirect->pConnection->Healthy() || !pDirect->pConnection->Reset(pDirect->stError))
 				{
 					return 1;
@@ -360,8 +362,7 @@ OI::Coro::TaskResult<int32_t> TestDb::RunWakeBenchmark(bool bBlockingOnly)
 			const int64_t iStarted = pDirect->iStarted.load(std::memory_order_acquire);
 			const int64_t iFinished = pDirect->iFinished.load(std::memory_order_acquire);
 			if (iStatus != OI_OK || iStarted < iStart || iFinished < iStarted || iResumed < iFinished || pDirect->stResult.vRows.size() != 1 ||
-			    pDirect->stResult.vRows[0].size() != 1 || !pDirect->stResult.vRows[0][0] ||
-			    *pDirect->stResult.vRows[0][0] != OI::Db::Blob{'1'})
+			    pDirect->stResult.vRows[0].mCells != mExpected)
 			{
 				std::printf("wake benchmark direct mysql failed status=%d round=%d stage=%s native=%u\n", iStatus, iRound,
 				    pDirect->stError.sStage.c_str(), pDirect->stError.iNativeCode);
@@ -404,14 +405,12 @@ OI::Coro::TaskResult<int32_t> TestDb::RunWakeBenchmark(bool bBlockingOnly)
 			OI::Db::Error stError;
 			pFinished->store(0, std::memory_order_release);
 			pReset->store(0, std::memory_order_release);
-			OI::Db::Statement stStatement{"SELECT 1", {}};
 			const int64_t iStart = BenchNow();
-			const int32_t iStatus = co_await stMysql.Call(std::move(stStatement), stResult, stError);
+			const int32_t iStatus = co_await stMysql.Call("SELECT 1 AS value", {}, stResult, stError);
 			const int64_t iResumed = BenchNow();
 			const int64_t iFinished = pFinished->load(std::memory_order_acquire);
 			const int64_t iReset = pReset->load(std::memory_order_acquire);
-			if (iStatus != OI_OK || iFinished < iStart || iReset < iFinished || iResumed < iReset || stError.stCleanup.bFailed || stResult.vRows.size() != 1 || stResult.vRows[0].size() != 1 ||
-			    !stResult.vRows[0][0] || *stResult.vRows[0][0] != OI::Db::Blob{'1'})
+			if (iStatus != OI_OK || iFinished < iStart || iReset < iFinished || iResumed < iReset || stError.stCleanup.bFailed || stResult.vRows.size() != 1 || stResult.vRows[0].mCells != mExpected)
 			{
 				std::printf("wake benchmark mysql failed status=%d round=%d stage=%s native=%u\n", iStatus, iRound, stError.sStage.c_str(), stError.iNativeCode);
 				iBad = 1;

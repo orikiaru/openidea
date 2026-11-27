@@ -259,7 +259,7 @@ class FieldNamesTest(unittest.TestCase):
         self.assertNotIn("std::make_tuple", generated)
         for member, codec in (("vNumbers", "Json"), ("stChild", "Json"), ("vRaw", "Value")):
             self.assertIn(f"EncodeDb{codec}(stRow.{member})", generated)
-            self.assertIn(f"DecodeDb{codec}(stBlob, stRow.{member})", generated)
+            self.assertIn(f"DecodeDb{codec}(sBytes, stRow.{member})", generated)
         self.assertIn('"vNumbers"', generated)
         self.assertIn('pMember == &Row::vNumbers', generated)
         self.assertIn('"stChild"', generated)
@@ -283,7 +283,7 @@ class FieldNamesTest(unittest.TestCase):
                                       ("stRaw", "MEDIUMBLOB", "false"),
                                       ("stChild", "MEDIUMTEXT", "false")):
             codec = "Json" if member == "stChild" else "Value"
-            self.assertIn(f'DecodeDb{codec}(stBlob, stRow.{member});\n                }}, "{sql_type}", {key}}}', generated)
+            self.assertIn(f'DecodeDb{codec}(sBytes, stRow.{member});\n                }}, "{sql_type}", {key}}}', generated)
         self.assertIn('"iId"', generated)
         self.assertIn('pMember == &Row::iId', generated)
         self.assertIn('"sZone"', generated)

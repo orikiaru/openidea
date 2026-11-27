@@ -9,10 +9,9 @@
 #include "oi_thread.h"
 #include "oi_log.h"
 #include "test_board.h"
-#include <charconv>
+#include <iterator>
 #include <cstring>
 #include <cstdlib>
-#include <variant>
 #include <limits>
 #include <random>
 
@@ -31,55 +30,13 @@ void TestDb::Expect(int32_t& iBad, bool bOk, const char* pLabel)
 	}
 }
 
-::OI::Db::Blob TestDb::TextBlob(const std::string& sText)
-{
-	return ::OI::Db::Blob(sText.begin(), sText.end());
-}
-
-std::optional<::OI::Db::Blob> TestDb::CellOf(const ::OI::Db::Parameter& stParameter)
-{
-	if (std::holds_alternative<std::nullptr_t>(stParameter))
-	{
-		return std::nullopt;
-	}
-	if (const auto* pValue = std::get_if<int64_t>(&stParameter))
-	{
-		return TextBlob(std::to_string(*pValue));
-	}
-	if (const auto* pValue = std::get_if<uint64_t>(&stParameter))
-	{
-		return TextBlob(std::to_string(*pValue));
-	}
-	if (const auto* pValue = std::get_if<double>(&stParameter))
-	{
-		char vText[64];
-		const std::to_chars_result stWritten = std::to_chars(vText, vText + sizeof(vText), *pValue);
-		return ::OI::Db::Blob(vText, stWritten.ptr);
-	}
-	if (const auto* pValue = std::get_if<std::string>(&stParameter))
-	{
-		return TextBlob(*pValue);
-	}
-	return std::get<::OI::Db::Blob>(stParameter);
-}
-
-::OI::Db::CellMap TestDb::CellsOf(const ::OI::Db::ParameterMap& mParameters)
-{
-	::OI::Db::CellMap mCells;
-	for (const auto& [sColumn, stParameter] : mParameters)
-	{
-		mCells[sColumn] = CellOf(stParameter);
-	}
-	return mCells;
-}
-
 // 每个数据库字段都放了边界值：内嵌 NUL 和 0xff、整数两端、空串 key。sCache 是 [nodb]。
 ::OI::RpcData::DbSample TestDb::MakeFullRow()
 {
 	::OI::RpcData::DbSample stRow;
 	stRow.iId = 1;
 	stRow.sName = std::string("a\0b\xff", 4);
-	stRow.iSecret = -7;
+	stRow.iSecret = INT32_MIN;
 	stRow.sCache = "skip";
 	stRow.iToken = (std::numeric_limits<uint64_t>::max)();
 	stRow.dScore = 1.5;
@@ -95,6 +52,20 @@ std::optional<::OI::Db::Blob> TestDb::CellOf(const ::OI::Db::Parameter& stParame
 	stRow.mJsonFlags = {{"k", 3}};
 	stRow.stJsonChild.iNumber = 6;
 	stRow.stJsonChild.sText = "json";
+	stRow.iMask = UINT8_MAX;
+	stRow.iOffset = INT16_MIN;
+	stRow.iPort = UINT16_MAX;
+	stRow.iCount = UINT32_MAX;
+	stRow.iBalance = INT64_MAX;
+	stRow.sCode = "AB";
+	stRow.sLabel = "text";
+	stRow.sFixed = std::string("a\0b", 3);
+	stRow.sDescription = "details";
+	stRow.sArticle = "article";
+	stRow.stData = ::OI::Base::Bytes("a\0", 2);
+	stRow.stArchive = ::OI::Base::Bytes("\xff", 1);
+	stRow.mGroups = {{"g", {3, -3}}};
+	stRow.vJsonGroups = {{{"k", 5}}};
 	return stRow;
 }
 
@@ -105,6 +76,10 @@ std::optional<::OI::Db::Blob> TestDb::CellOf(const ::OI::Db::Parameter& stParame
 	stRow.iId = (std::numeric_limits<int64_t>::min)();
 	stRow.iSecret = (std::numeric_limits<int32_t>::max)();
 	stRow.iFlag = (std::numeric_limits<int8_t>::max)();
+	stRow.iOffset = INT16_MAX;
+	stRow.iBalance = INT64_MIN;
+	stRow.sCode = "Z";
+	stRow.sFixed = std::string(3, '\0');
 	return stRow;
 }
 
@@ -128,7 +103,22 @@ bool TestDb::SameRow(const ::OI::RpcData::DbSample& stFirst, const ::OI::RpcData
 	    {"vJsonNumbers", stFirst.vJsonNumbers == stSecond.vJsonNumbers},
 	    {"mJsonFlags", stFirst.mJsonFlags == stSecond.mJsonFlags},
 	    {"stJsonChild", stFirst.stJsonChild.iNumber == stSecond.stJsonChild.iNumber && stFirst.stJsonChild.sText == stSecond.stJsonChild.sText},
+	    {"iMask", stFirst.iMask == stSecond.iMask},
+	    {"iOffset", stFirst.iOffset == stSecond.iOffset},
+	    {"iPort", stFirst.iPort == stSecond.iPort},
+	    {"iCount", stFirst.iCount == stSecond.iCount},
+	    {"iBalance", stFirst.iBalance == stSecond.iBalance},
+	    {"sCode", stFirst.sCode == stSecond.sCode},
+	    {"sLabel", stFirst.sLabel == stSecond.sLabel},
+	    {"sFixed", stFirst.sFixed == stSecond.sFixed},
+	    {"sDescription", stFirst.sDescription == stSecond.sDescription},
+	    {"sArticle", stFirst.sArticle == stSecond.sArticle},
+	    {"stData", stFirst.stData.Size() == stSecond.stData.Size() && std::memcmp(stFirst.stData.Data(), stSecond.stData.Data(), stFirst.stData.Size()) == 0},
+	    {"stArchive", stFirst.stArchive.Size() == stSecond.stArchive.Size() && std::memcmp(stFirst.stArchive.Data(), stSecond.stArchive.Data(), stFirst.stArchive.Size()) == 0},
+	    {"mGroups", stFirst.mGroups == stSecond.mGroups},
+	    {"vJsonGroups", stFirst.vJsonGroups == stSecond.vJsonGroups},
 	};
+	static_assert(std::size(vFields) == ::OI::RpcData::DbSample::DbFieldCount);
 	bool bSame = true;
 	for (const auto& [pName, bEqual] : vFields)
 	{
@@ -154,115 +144,76 @@ void TestDb::Start()
 	});
 }
 
+int32_t TestDb::CheckCellPredicates()
+{
+	using OI::Db::Cell;
+	int32_t iBad = 0;
+	const auto fnCheck = [this, pBad = &iBad](const char* pLabel, auto fnIs, auto fnAs, const std::string& sValid,
+	                         const auto& stExpected, std::optional<std::string> stInvalid)
+	{
+		const OI::Db::Row stRow{{{"valid", sValid}, {"bad", std::move(stInvalid)}, {"null", std::nullopt}}};
+		const auto stValid = stRow.at("valid");
+		const auto stBad = stRow.at("bad");
+		const auto stNull = stRow.at("null");
+		Expect(*pBad, !stRow.find("missing") && stNull.is_null() && !(stNull.*fnIs)(), pLabel);
+		Expect(*pBad, (stValid.*fnIs)() && (stValid.*fnAs)() == stExpected, pLabel);
+		Expect(*pBad, !(stBad.*fnIs)(), pLabel);
+		bool bThrew = false;
+		try
+		{
+			(void)(stBad.*fnAs)();
+		}
+		catch (const OI::Db::RowDecodeError&)
+		{
+			bThrew = true;
+		}
+		Expect(*pBad, bThrew, pLabel);
+	};
+	fnCheck("string", &Cell::is_string, &Cell::as_string, std::string("a\0b", 3), std::string("a\0b", 3), std::nullopt);
+	fnCheck("bool", &Cell::is_bool, &Cell::as_bool, "1", true, "2");
+	fnCheck("int8", &Cell::is_int8, &Cell::as_int8, "-128", INT8_MIN, "128");
+	fnCheck("uint8", &Cell::is_uint8, &Cell::as_uint8, "255", UINT8_MAX, "256");
+	fnCheck("int16", &Cell::is_int16, &Cell::as_int16, "-32768", INT16_MIN, "32768");
+	fnCheck("uint16", &Cell::is_uint16, &Cell::as_uint16, "65535", UINT16_MAX, "65536");
+	fnCheck("int32", &Cell::is_int32, &Cell::as_int32, "-2147483648", INT32_MIN, "2147483648");
+	fnCheck("uint32", &Cell::is_uint32, &Cell::as_uint32, "4294967295", UINT32_MAX, "4294967296");
+	fnCheck("int64", &Cell::is_int64, &Cell::as_int64, "-9223372036854775808", INT64_MIN, "9223372036854775808");
+	fnCheck("uint64", &Cell::is_uint64, &Cell::as_uint64, "18446744073709551615", UINT64_MAX, "-1");
+	fnCheck("float", &Cell::is_float, &Cell::as_float, "1.25", 1.25f, "1e100");
+	fnCheck("double", &Cell::is_double, &Cell::as_double, "-0.125", -0.125, "1.2x");
+	LOG_TRACE("mysql cell predicates bad=%d", iBad);
+	return iBad;
+}
+
 int32_t TestDb::CheckRowMapping()
 {
 	using ::OI::RpcData::DbSample;
-	int32_t iBad = 0;
+	int32_t iBad = CheckCellPredicates();
 	try
 	{
 		const DbSample stFull = MakeFullRow();
-		const DbSample stEdge = MakeEdgeRow();
-
-		Expect(iBad, std::string(DbSample::DbColumnList()) == "`id`,`sName`,`iSecret`,`iToken`,`dScore`,`fRatio`,`stPayload`,"
-		                                                      "`vNumbers`,`mFlags`,`stChild`,`iFlag`,`bActive`,`vJsonNumbers`,`notes`,`stJsonChild`" &&
-		                 std::string(DbSample::DbPlaceholders()) == "?,?,?,?,?,?,?,?,?,?,?,?,?,?,?" && ::OI::Db::FieldCount<DbSample>() == 15,
-		    "column list");
-
-		// 按列名取参数：标量按字段类型绑定，[dbjson] 是 JSON 文本，其余复杂字段是 PB blob，[nodb] 不出现。
-		const ::OI::Db::ParameterMap mParameters = stFull.ToDbMap();
-		Expect(iBad, mParameters.size() == 15 && mParameters.count("sCache") == 0 && mParameters.count("iId") == 0, "parameter map columns");
-		Expect(iBad, std::get<int64_t>(mParameters.at("id")) == 1 && std::get<std::string>(mParameters.at("sName")) == stFull.sName && std::get<int64_t>(mParameters.at("iSecret")) == -7 && std::get<uint64_t>(mParameters.at("iToken")) == stFull.iToken && std::get<double>(mParameters.at("dScore")) == 1.5 && std::get<double>(mParameters.at("fRatio")) == 0.75 && std::get<::OI::Db::Blob>(mParameters.at("stPayload")) == ::OI::Db::Blob({0x00, 0xff, 'x'}) && std::get<int64_t>(mParameters.at("iFlag")) == -128 && std::get<int64_t>(mParameters.at("bActive")) == 1,
-		    "parameter map scalars");
-		DbSample stDecoded;
-		Expect(iBad, ::OI::Db::FromDbBlob(std::get<::OI::Db::Blob>(mParameters.at("vNumbers")), stDecoded.vNumbers) && ::OI::Db::FromDbBlob(std::get<::OI::Db::Blob>(mParameters.at("mFlags")), stDecoded.mFlags) && ::OI::Db::FromDbBlob(std::get<::OI::Db::Blob>(mParameters.at("stChild")), stDecoded.stChild) && ::OI::Rpc::FromJsonText(std::get<std::string>(mParameters.at("vJsonNumbers")), stDecoded.vJsonNumbers) && ::OI::Rpc::FromJsonText(std::get<std::string>(mParameters.at("notes")), stDecoded.mJsonFlags) && ::OI::Rpc::FromJsonText(std::get<std::string>(mParameters.at("stJsonChild")), stDecoded.stJsonChild) && stDecoded.vNumbers == stFull.vNumbers && stDecoded.mFlags == stFull.mFlags && stDecoded.stChild.sText == stFull.stChild.sText && stDecoded.vJsonNumbers == stFull.vJsonNumbers && stDecoded.mJsonFlags == stFull.mJsonFlags && stDecoded.stJsonChild.sText == stFull.stJsonChild.sText,
-		    "parameter map complex values");
-
-		// 整行参数的顺序就是 DbColumnList 的顺序。
-		std::vector<std::string> vNames;
-		std::string sColumn;
-		for (const char iChar : std::string(DbSample::DbColumnList()))
-		{
-			if (iChar == ',')
-			{
-				vNames.push_back(sColumn);
-				sColumn.clear();
-			}
-			else if (iChar != '`')
-			{
-				sColumn += iChar;
-			}
-		}
-		vNames.push_back(sColumn);
-		std::vector<::OI::Db::Parameter> vWhole;
-		stFull.AppendDbParameters(vWhole);
-		bool bOrdered = vWhole.size() == vNames.size();
-		for (size_t iIndex = 0; bOrdered && iIndex < vNames.size(); ++iIndex)
-		{
-			bOrdered = vWhole[iIndex] == mParameters.at(vNames[iIndex]);
-		}
-		Expect(iBad, bOrdered, "row parameters follow column list");
-
-		// 写进去的参数按库里取回的文本还原，再按列名读回，两头的边界值都不变。
-		for (const DbSample* pSource : {&stFull, &stEdge})
-		{
-			::OI::Db::CellMap mCells = CellsOf(pSource->ToDbMap());
-			mCells["extra"] = TextBlob("ignored");
-			DbSample stLoaded;
-			stLoaded.sCache = "keep";
-			Expect(iBad, stLoaded.FromDbMap(mCells) && SameRow(stLoaded, *pSource) && stLoaded.sCache == "keep",
-			    pSource == &stFull ? "cell map full row" : "cell map edge row");
-		}
-
-		// 查询结果的列顺序和协议无关，按列名对上；列名重复整行拒绝。
-		const ::OI::Db::CellMap mFullCells = CellsOf(mParameters);
-		::OI::Db::Result stResult;
-		stResult.vRows.emplace_back();
-		for (auto it = mFullCells.rbegin(); it != mFullCells.rend(); ++it)
-		{
-			stResult.vColumns.push_back(it->first);
-			stResult.vRows[0].push_back(it->second);
-		}
-		::OI::Db::CellMap mFromResult;
-		DbSample stByMap;
-		DbSample stByRow;
-		Expect(iBad, ::OI::Db::RowCells(stResult, 0, mFromResult) && stByMap.FromDbMap(mFromResult) && stByRow.FromDbRow(stResult.vColumns, stResult.vRows[0]) && SameRow(stByMap, stFull) && SameRow(stByRow, stFull),
-		    "result row by column name");
-		::OI::Db::Result stMany = stResult;
-		stMany.vRows.push_back(stMany.vRows[0]);
-		std::vector<DbSample> vDecoded;
-		Expect(iBad, ::OI::Db::FromRows(stMany, vDecoded) == OI_OK && vDecoded.size() == 2 && SameRow(vDecoded[0], stFull) && SameRow(vDecoded[1], stFull),
-		    "result rows");
-		stMany.vColumns.push_back(stMany.vColumns[0]);
-		stMany.vRows[1].push_back(stMany.vRows[1][0]);
-		std::vector<DbSample> vKept{stEdge};
-		Expect(iBad, ::OI::Db::FromRows(stMany, vKept) == OI_ERR_DECODE && vKept.size() == 1 && SameRow(vKept[0], stEdge),
-		    "result rows reject");
-		::OI::Db::CellMap mUntouched = mFromResult;
-		Expect(iBad, !::OI::Db::RowCells(stResult, 1, mUntouched) && mUntouched == mFromResult, "result row out of range");
-		stResult.vColumns.push_back("id");
-		stResult.vRows[0].push_back(TextBlob("2"));
-		DbSample stDuplicate = stFull;
-		Expect(iBad, !::OI::Db::RowCells(stResult, 0, mUntouched) && mUntouched == mFromResult && !stDuplicate.FromDbRow(stResult.vColumns, stResult.vRows[0]) && SameRow(stDuplicate, stFull),
-		    "result duplicate column");
+		const auto mParameters = stFull.ToDbMap();
+		Expect(iBad, mParameters.at("id").is_signed() && mParameters.at("iToken").is_unsigned() && mParameters.at("dScore").is_real() && mParameters.at("sName").is_text() && mParameters.at("stPayload").is_binary() && mParameters.at("bActive").is_bool() && OI::Db::Parameter(nullptr).is_null(), "native parameter kinds");
+		Expect(iBad, !mParameters.contains("sCache") && !mParameters.contains("iId"), "database field aliases and exclusions");
 
 		// 只给部分列，只改这几个字段。
 		DbSample stPartial = stFull;
 		stPartial.sCache = "keep";
-		Expect(iBad, stPartial.FromDbMap({{"sName", TextBlob("z")}, {"notes", TextBlob("{\"n\":5}")}}) && stPartial.sName == "z" && stPartial.mJsonFlags == std::map<std::string, int32_t>{{"n", 5}} && stPartial.iId == stFull.iId && stPartial.vNumbers == stFull.vNumbers && stPartial.sCache == "keep",
+		Expect(iBad, stPartial.FromDbMap({{"sName", "z"}, {"notes", "{\"n\":5}"}}) && stPartial.sName == "z" && stPartial.mJsonFlags == std::map<std::string, int32_t>{{"n", 5}} && stPartial.iId == stFull.iId && stPartial.vNumbers == stFull.vNumbers && stPartial.sCache == "keep",
 		    "partial cell map");
 
 		// 任一列解不开都整行拒绝，对象保持原值。
 		const std::vector<std::pair<std::string, ::OI::Db::CellMap>> vRejected = {
-		    {"reject null", {{"sName", TextBlob("y")}, {"id", std::nullopt}}},
-		    {"reject int8 range", {{"iFlag", TextBlob("128")}}},
-		    {"reject uint64 sign", {{"iToken", TextBlob("-1")}}},
-		    {"reject integer text", {{"iSecret", TextBlob("1x")}}},
-		    {"reject bool", {{"bActive", TextBlob("2")}}},
-		    {"reject real", {{"dScore", TextBlob("nan")}}},
-		    {"reject pb blob", {{"vNumbers", ::OI::Db::Blob({0xff})}}},
-		    {"reject child blob", {{"stChild", ::OI::Db::Blob({0x01, 0x00, 0x00, 0x00})}}},
-		    {"reject json", {{"notes", TextBlob("{bad")}}},
-		    {"reject json shape", {{"vJsonNumbers", TextBlob("{}")}}},
+		    {"reject null", {{"sName", "y"}, {"id", std::nullopt}}},
+		    {"reject int8 range", {{"iFlag", "128"}}},
+		    {"reject uint64 sign", {{"iToken", "-1"}}},
+		    {"reject integer text", {{"iSecret", "1x"}}},
+		    {"reject bool", {{"bActive", "2"}}},
+		    {"reject real", {{"dScore", "nan"}}},
+		    {"reject pb blob", {{"vNumbers", std::string("\xff", 1)}}},
+		    {"reject child blob", {{"stChild", std::string("\x01\0\0\0", 4)}}},
+		    {"reject json", {{"notes", "{bad"}}},
+		    {"reject json shape", {{"vJsonNumbers", "{}"}}},
 		};
 		for (const auto& [sLabel, mCells] : vRejected)
 		{
@@ -283,66 +234,6 @@ int32_t TestDb::CheckRowMapping()
 		    "pick nodb rejected");
 		Expect(iBad, ::OI::Db::Pick(stFull, stKept, &DbSample::iId, &DbSample::iId) == OI_ERR_INVALID_ARGUMENT && stKept.sColumns == stPicked.sColumns,
 		    "pick duplicate rejected");
-
-		// 生成的语句逐字比对：列类型来自字段类型和 [dbtype]，主键来自 [dbkey]，参数和问号一一对应。
-		const std::string sColumnList = DbSample::DbColumnList();
-		const std::string sNonKeyAssignments = "`sName`=?,`iSecret`=?,`iToken`=?,`dScore`=?,`fRatio`=?,`stPayload`=?,`vNumbers`=?,"
-		                                       "`mFlags`=?,`stChild`=?,`iFlag`=?,`bActive`=?,`vJsonNumbers`=?,`notes`=?,`stJsonChild`=?";
-		std::vector<::OI::Db::Parameter> vNonKey(vWhole.begin() + 1, vWhole.end());
-		::OI::Db::Statement stCreate;
-		Expect(iBad, ::OI::Db::BuildCreateTable<DbSample>("t_1", stCreate) == OI_OK && stCreate.sSql == "CREATE TABLE IF NOT EXISTS `t_1` (`id` BIGINT NOT NULL, `sName` VARBINARY(64) NOT NULL, `iSecret` INT NOT NULL, "
-		                                                                                                "`iToken` BIGINT UNSIGNED NOT NULL, `dScore` DOUBLE NOT NULL, `fRatio` DOUBLE NOT NULL, `stPayload` LONGBLOB NOT NULL, "
-		                                                                                                "`vNumbers` LONGBLOB NOT NULL, `mFlags` LONGBLOB NOT NULL, `stChild` LONGBLOB NOT NULL, `iFlag` TINYINT NOT NULL, "
-		                                                                                                "`bActive` TINYINT NOT NULL, `vJsonNumbers` LONGTEXT NOT NULL, `notes` TEXT NOT NULL, `stJsonChild` LONGTEXT NOT NULL, "
-		                                                                                                "PRIMARY KEY (`id`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4" &&
-		                 stCreate.vParameters.empty(),
-		    "build create table");
-		::OI::Db::Statement stInsert;
-		Expect(iBad, ::OI::Db::BuildInsert("t_1", stFull, stInsert) == OI_OK && stInsert.sSql == "INSERT INTO `t_1` (" + sColumnList + ") VALUES (" + DbSample::DbPlaceholders() + ")" && stInsert.vParameters == vWhole,
-		    "build insert");
-		::OI::Db::Statement stUpsert;
-		std::vector<::OI::Db::Parameter> vUpsertParameters = vWhole;
-		vUpsertParameters.insert(vUpsertParameters.end(), vNonKey.begin(), vNonKey.end());
-		Expect(iBad, ::OI::Db::BuildUpsert("t_1", stFull, stUpsert) == OI_OK && stUpsert.sSql == "INSERT INTO `t_1` (" + sColumnList + ") VALUES (" + DbSample::DbPlaceholders() + ") ON DUPLICATE KEY UPDATE " + sNonKeyAssignments && stUpsert.vParameters == vUpsertParameters,
-		    "build upsert");
-		const std::vector<::OI::Db::Parameter> vKey{mParameters.at("id")};
-		::OI::Db::Statement stSelect;
-		Expect(iBad, ::OI::Db::BuildSelectByKey("t_1", stFull, stSelect) == OI_OK && stSelect.sSql == "SELECT " + sColumnList + " FROM `t_1` WHERE `id`=?" && stSelect.vParameters == vKey,
-		    "build select by key");
-		::OI::Db::Statement stSelectSome;
-		Expect(iBad, ::OI::Db::BuildSelectByKey("t_1", stFull, stSelectSome, &DbSample::mJsonFlags, &DbSample::sName) == OI_OK && stSelectSome.sSql == "SELECT `notes`,`sName` FROM `t_1` WHERE `id`=?" && stSelectSome.vParameters == vKey,
-		    "build select picked columns");
-		::OI::Db::Statement stUpdateSome;
-		Expect(iBad, ::OI::Db::BuildUpdateByKey("t_1", stFull, stUpdateSome, &DbSample::sName, &DbSample::dScore) == OI_OK && stUpdateSome.sSql == "UPDATE `t_1` SET `sName`=?,`dScore`=? WHERE `id`=?" && stUpdateSome.vParameters == std::vector<::OI::Db::Parameter>{mParameters.at("sName"), mParameters.at("dScore"), mParameters.at("id")},
-		    "build update picked columns");
-		::OI::Db::Statement stUpdateAll;
-		std::vector<::OI::Db::Parameter> vUpdateAllParameters = vNonKey;
-		vUpdateAllParameters.push_back(mParameters.at("id"));
-		Expect(iBad, ::OI::Db::BuildUpdateByKey("t_1", stFull, stUpdateAll) == OI_OK && stUpdateAll.sSql == "UPDATE `t_1` SET " + sNonKeyAssignments + " WHERE `id`=?" && stUpdateAll.vParameters == vUpdateAllParameters,
-		    "build update all columns");
-		::OI::Db::Statement stDelete;
-		Expect(iBad, ::OI::Db::BuildDeleteByKey("t_1", stFull, stDelete) == OI_OK && stDelete.sSql == "DELETE FROM `t_1` WHERE `id`=?" && stDelete.vParameters == vKey,
-		    "build delete by key");
-
-		// 表名只认字母、数字、下划线；主键不能改；[nodb] 和重复成员拒绝。失败时语句不变。
-		const ::OI::Db::Statement stOriginal = stDelete;
-		const auto fnUnchanged = [stOriginal](const ::OI::Db::Statement& stStatement)
-		{
-			return stStatement.sSql == stOriginal.sSql && stStatement.vParameters == stOriginal.vParameters;
-		};
-		for (const std::string& sBadTable : {std::string(""), std::string("t-1"), std::string("a`b"), std::string("t 1"), std::string(65, 't')})
-		{
-			::OI::Db::Statement stRejected = stOriginal;
-			Expect(iBad, ::OI::Db::BuildCreateTable<DbSample>(sBadTable, stRejected) == OI_ERR_INVALID_ARGUMENT && ::OI::Db::BuildInsert(sBadTable, stFull, stRejected) == OI_ERR_INVALID_ARGUMENT && ::OI::Db::BuildUpsert(sBadTable, stFull, stRejected) == OI_ERR_INVALID_ARGUMENT && ::OI::Db::BuildSelectByKey(sBadTable, stFull, stRejected) == OI_ERR_INVALID_ARGUMENT && ::OI::Db::BuildUpdateByKey(sBadTable, stFull, stRejected) == OI_ERR_INVALID_ARGUMENT && ::OI::Db::BuildDeleteByKey(sBadTable, stFull, stRejected) == OI_ERR_INVALID_ARGUMENT && fnUnchanged(stRejected),
-			    "build rejects bad table name");
-		}
-		::OI::Db::Statement stRejected = stOriginal;
-		Expect(iBad, ::OI::Db::BuildUpdateByKey("t_1", stFull, stRejected, &DbSample::iId) == OI_ERR_INVALID_ARGUMENT && fnUnchanged(stRejected),
-		    "build update rejects key column");
-		Expect(iBad, ::OI::Db::BuildUpdateByKey("t_1", stFull, stRejected, &DbSample::sName, &DbSample::sCache) == OI_ERR_INVALID_ARGUMENT && fnUnchanged(stRejected),
-		    "build update rejects nodb member");
-		Expect(iBad, ::OI::Db::BuildSelectByKey("t_1", stFull, stRejected, &DbSample::sName, &DbSample::sName) == OI_ERR_INVALID_ARGUMENT && fnUnchanged(stRejected),
-		    "build select rejects duplicate member");
 
 		// PB 整结构往返，包括 [nodb] 和 [nojson] 字段；不认识的字段号按长度跳过。
 		::OI::Base::BytesStream stStream;
@@ -408,66 +299,214 @@ int32_t TestDb::CheckRowMapping()
 	return iBad;
 }
 
-OI::Coro::TaskResult<int32_t> TestDb::LoadRow(OI::Db::Client& stMysql, const std::string& sTable, ::OI::RpcData::DbSample& stRow)
+// 用相反记录的值初始化输出。任何漏解的字段都会与预期不同。
+OI::Coro::TaskResult<int32_t> TestDb::CheckBatchRead(OI::Db::Client& stMysql, const std::string& sTable, const std::vector<OI::RpcData::DbSample>& vExpected)
 {
-	OI::Db::Statement stSelect;
-	const int32_t iBuild = ::OI::Db::BuildSelectByKey(sTable, stRow, stSelect);
-	if (iBuild != OI_OK)
-	{
-		co_return iBuild;
-	}
-	OI::Db::Result stResult;
 	OI::Db::Error stError;
-	const int32_t iStatus = co_await stMysql.Call(std::move(stSelect), stResult, stError);
-	if (iStatus != OI_OK)
+	std::vector<OI::RpcData::DbSample> vRead{vExpected[0], vExpected[1]};
+	std::swap(vRead[0].iId, vRead[1].iId);
+	const int32_t iCode = co_await stMysql.Select(sTable, vRead, stError);
+	if (iCode != OI_OK || !SameRow(vRead[0], vExpected[1]) || !SameRow(vRead[1], vExpected[0]))
 	{
-		LOG_TRACE("mysql row load failed id=%lld status=%d stage=%s native=%u", static_cast<long long>(stRow.iId), iStatus, stError.sStage.c_str(), stError.iNativeCode);
-		co_return iStatus;
+		LOG_TRACE("mysql batch read failed status=%d stage=%s", iCode, stError.sStage.c_str());
+		co_return 1;
 	}
-	::OI::Db::CellMap mCells;
-	if (stResult.vRows.size() != 1 || !::OI::Db::RowCells(stResult, 0, mCells))
-	{
-		co_return OI_ERR_NOT_FOUND;
-	}
-	if (!stRow.FromDbMap(mCells))
-	{
-		co_return OI_ERR_DECODE;
-	}
-	co_return OI_OK;
+	co_return 0;
 }
 
-OI::Coro::TaskResult<int32_t> TestDb::CheckMysqlRows(OI::Db::Client& stMysql, const std::string& sTable)
+OI::Coro::TaskResult<int32_t> TestDb::CheckBatchCrud(OI::Db::Client& stMysql, const std::string& sTable)
+{
+	using OI::RpcData::DbSample;
+	int32_t iBad = 0;
+	OI::Db::Error stError;
+	std::vector<DbSample> vRows{MakeFullRow(), MakeEdgeRow()};
+	vRows[0].iId = 81;
+	vRows[1].iId = 1; // 已存在，第二次 INSERT 必须回滚第一次。
+	int32_t iCode = co_await stMysql.Insert(sTable, vRows, stError);
+	Expect(iBad, iCode == OI_ERR_EXIST && stError.iNativeCode == 1062 && stError.sSqlState == "23000", "batch duplicate key");
+	iCode = co_await stMysql.Select(sTable, vRows[0], stError);
+	Expect(iBad, iCode == OI_ERR_NOT_FOUND, "batch insert rollback");
+
+	vRows[1].iId = 82;
+	iCode = co_await stMysql.Insert(sTable, vRows, stError);
+	Expect(iBad, iCode == OI_OK, "batch insert all types");
+	iBad += co_await CheckBatchRead(stMysql, sTable, vRows);
+
+	std::swap(vRows[0].iId, vRows[1].iId);
+	iCode = co_await stMysql.Update(sTable, vRows, stError);
+	Expect(iBad, iCode == OI_OK, "batch update all types");
+	iBad += co_await CheckBatchRead(stMysql, sTable, vRows);
+
+	iCode = co_await stMysql.Delete(sTable, vRows[0], stError);
+	Expect(iBad, iCode == OI_OK, "delete before batch upsert");
+	iCode = co_await stMysql.Select(sTable, vRows[0], stError);
+	Expect(iBad, iCode == OI_ERR_NOT_FOUND, "deleted key before upsert");
+	std::swap(vRows[0].iId, vRows[1].iId);
+	iCode = co_await stMysql.Upsert(sTable, vRows, stError);
+	Expect(iBad, iCode == OI_OK, "batch upsert all types for existing and missing keys");
+	iBad += co_await CheckBatchRead(stMysql, sTable, vRows);
+
+	iCode = co_await stMysql.Delete(sTable, vRows, stError);
+	Expect(iBad, iCode == OI_OK, "batch delete all types");
+	for (auto& stRow : vRows)
+	{
+		iCode = co_await stMysql.Select(sTable, stRow, stError);
+		Expect(iBad, iCode == OI_ERR_NOT_FOUND, "each batch key deleted");
+	}
+	vRows[0].iId = 1;
+	vRows[0].sName = "untouched";
+	iCode = co_await stMysql.Select(sTable, vRows, stError);
+	Expect(iBad, iCode == OI_ERR_NOT_FOUND && vRows[0].sName == "untouched", "batch missing key preserves output");
+	LOG_TRACE("mysql all field types batch bad=%d", iBad);
+	co_return iBad;
+}
+
+OI::Coro::TaskResult<int32_t> TestDb::CheckColumnTypes(OI::Db::Client& stMysql, const std::string& sTable)
+{
+	OI::Db::Result stResult;
+	OI::Db::Error stError;
+	std::vector<OI::Db::Parameter> vParameters{sTable};
+	const int32_t iCode = co_await stMysql.Call("SELECT COLUMN_NAME AS col, DATA_TYPE AS kind FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=?", std::move(vParameters), stResult, stError);
+	if (iCode != OI_OK)
+	{
+		LOG_TRACE("mysql column metadata failed status=%d stage=%s", iCode, stError.sStage.c_str());
+		co_return 1;
+	}
+	const std::map<std::string, std::string> mExpected{
+	    {"id", "bigint"}, {"sName", "varbinary"}, {"iSecret", "int"}, {"iToken", "bigint"}, {"dScore", "double"}, {"fRatio", "double"},
+	    {"stPayload", "longblob"}, {"vNumbers", "longblob"}, {"mFlags", "longblob"}, {"stChild", "longblob"}, {"iFlag", "tinyint"},
+	    {"bActive", "tinyint"}, {"vJsonNumbers", "longtext"}, {"notes", "text"}, {"stJsonChild", "longtext"},
+	    {"iMask", "tinyint"}, {"iOffset", "smallint"}, {"iPort", "smallint"}, {"iCount", "int"}, {"iBalance", "bigint"},
+	    {"sCode", "char"}, {"sLabel", "varchar"}, {"sFixed", "binary"}, {"sDescription", "mediumtext"}, {"sArticle", "longtext"},
+	    {"stData", "blob"}, {"stArchive", "mediumblob"}, {"mGroups", "longblob"}, {"vJsonGroups", "longtext"}};
+	std::map<std::string, std::string> mActual;
+	for (const auto& stRow : stResult.vRows)
+	{
+		mActual.emplace(stRow.at("col").as_string(), stRow.at("kind").as_string());
+	}
+	int32_t iBad = 0;
+	Expect(iBad, mActual == mExpected, "actual column names and SQL types");
+
+	const std::string sSql = "SELECT * FROM " + OI::Db::QuoteName(sTable) + " WHERE id=1";
+	const int32_t iRead = co_await stMysql.Call(sSql, {}, stResult, stError);
+	if (iRead != OI_OK || stResult.vRows.size() != 1)
+	{
+		co_return iBad + 1;
+	}
+	const auto& stRow = stResult.vRows.front();
+	Expect(iBad, stRow.at("iFlag").as_int8() == INT8_MIN && stRow.at("iMask").as_uint8() == UINT8_MAX, "named 8-bit integers");
+	Expect(iBad, stRow.at("iOffset").as_int16() == INT16_MIN && stRow.at("iPort").as_uint16() == UINT16_MAX, "named 16-bit integers");
+	const auto stCount = stRow.find("iCount");
+	Expect(iBad, stCount && stCount->is_uint32() && stCount->as_uint32() == UINT32_MAX && stRow.at("iSecret").as_int32() == INT32_MIN, "named 32-bit integers");
+	Expect(iBad, stRow.at("iBalance").as_int64() == INT64_MAX && stRow.at("iToken").as_uint64() == UINT64_MAX, "named 64-bit integers");
+	Expect(iBad, stRow.at("bActive").as_bool() && stRow.at("fRatio").as_float() == 0.75f && stRow.at("dScore").as_double() == 1.5, "named bool and reals");
+	Expect(iBad, stRow.at("sName").as_string() == std::string("a\0b\xff", 4) && stRow.at("stPayload").as_string() == std::string("\0\xffx", 3), "named text and bytes");
+	co_return iBad;
+}
+
+OI::Coro::TaskResult<int32_t> TestDb::ReadRequiredId(OI::Db::Client& stMysql, std::string sSql, uint32_t& iId){
+    OI_DB_TRY{
+        OI::Db::Error stError;
+OI::Db::Result stResult;
+const int32_t iCode = co_await stMysql.Call(std::move(sSql), {}, stResult, stError);
+stError.ThrowIfFailed(iCode);
+if (stResult.vRows.empty())
+{
+	co_return OI_ERR_NOT_FOUND;
+}
+iId = stResult.vRows.front().at("required_id").as_uint32();
+co_return OI_OK;
+}
+OI_DB_CATCH
+}
+
+#ifdef OI_ENABLE_MYSQL
+OI::Coro::TaskResult<int32_t> TestDb::CheckDbErrors(OI::Db::Client& stMysql, const OI::Mysql::Config& stConfig)
+{
+	int32_t iBad = 0;
+	uint32_t iId = 0;
+	int32_t iCode = co_await ReadRequiredId(stMysql, "SELECT 77 AS required_id", iId);
+	Expect(iBad, iCode == OI_OK && iId == 77, "default database handler success");
+	iCode = co_await ReadRequiredId(stMysql, "SELECT 1 AS other", iId);
+	Expect(iBad, iCode == OI_ERR_DECODE && iId == 77, "default database handler missing column");
+	iCode = co_await ReadRequiredId(stMysql, "SELECT missing_db_macro_column", iId);
+	Expect(iBad, iCode == OI_ERR_DB && iId == 77, "default database handler SQL error");
+
+	OI::Mysql::Config stInvalid = stConfig;
+	stInvalid.sUser = "oi_missing_regression_user";
+	stInvalid.sPassword = "oi_test_credential";
+	OI::Db::Client stDenied(OI::Mysql::MakeDriver(stInvalid), 1);
+	iCode = co_await ReadRequiredId(stDenied, "SELECT 1 AS required_id", iId);
+	Expect(iBad, iCode == OI_ERR_CONNECT && iId == 77, "default database handler login rejected");
+	iCode = co_await stDenied.Close();
+	Expect(iBad, iCode == OI_OK, "denied client closes");
+
+	const char* pRefusedPort = std::getenv("OI_TEST_DB_REFUSED_PORT");
+	if (pRefusedPort)
+	{
+		OI::Mysql::Config stRefusedConfig = stConfig;
+		stRefusedConfig.sHost = "127.0.0.1";
+		stRefusedConfig.iPort = static_cast<uint32_t>(std::stoul(pRefusedPort));
+		OI::Db::Client stRefused(OI::Mysql::MakeDriver(stRefusedConfig), 1);
+		iCode = co_await ReadRequiredId(stRefused, "SELECT 1 AS required_id", iId);
+		Expect(iBad, iCode == OI_ERR_CONNECT && iId == 77, "default database handler TCP refused");
+		iCode = co_await stRefused.Close();
+		Expect(iBad, iCode == OI_OK, "refused client closes");
+	}
+	const auto fnUnexpected = []() -> OI::Coro::TaskResult<int32_t>
+	{
+		OI_DB_TRY
+		{
+			throw std::runtime_error("oi_private_exception_probe");
+		}
+		OI_DB_CATCH
+	};
+	iCode = co_await fnUnexpected();
+	Expect(iBad, iCode == OI_ERR_FAIL, "default database handler unexpected exception");
+	LOG_TRACE("mysql error handling bad=%d", iBad);
+	co_return iBad;
+}
+#endif
+
+OI::Coro::TaskResult<int32_t> TestDb::CheckMysqlRows(OI::Db::Client& stMysql, const std::string& sBaseTable, const std::string& sDatabase)
 {
 	using ::OI::RpcData::DbSample;
 	int32_t iBad = 0;
+	const std::string sTable = sBaseTable + "_row";
 	OI::Db::Result stResult;
 	OI::Db::Error stError;
 	int32_t iStatus = OI_OK;
 	bool bCreated = false;
 	try
 	{
-		OI::Db::Statement stCreate;
-		const int32_t iCreate = ::OI::Db::BuildCreateTable<DbSample>(sTable, stCreate);
-		if (iCreate != OI_OK)
-		{
-			LOG_TRACE("mysql check failed label=build create table code=%d table=%s", iCreate, sTable.c_str());
-			co_return iBad + 1;
-		}
-		iStatus = co_await stMysql.Call(std::move(stCreate), stResult, stError);
+		iStatus = co_await stMysql.CreateTable<DbSample>(sTable, stError);
 		if (iStatus != OI_OK)
 		{
 			LOG_TRACE("mysql row table create failed status=%d stage=%s native=%u", iStatus, stError.sStage.c_str(), stError.iNativeCode);
 			co_return iBad + 1;
 		}
 		bCreated = true;
+		const std::string sQuoted = ::OI::Db::QuoteName(sTable);
+		iStatus = co_await stMysql.Call("ALTER TABLE " + sQuoted + " MODIFY `sName` VARBINARY(64) NOT NULL FIRST", {}, stResult, stError);
+		Expect(iBad, iStatus == OI_OK, "mysql physical column order differs from schema");
 
+		DbSample stInvalid = MakeFullRow();
+		iStatus = co_await stMysql.Update(sTable, stInvalid, stError, &DbSample::iId);
+		Expect(iBad, iStatus == OI_ERR_INVALID_ARGUMENT, "reject key update");
+		iStatus = co_await stMysql.Update(sTable, stInvalid, stError, &DbSample::sCache);
+		Expect(iBad, iStatus == OI_ERR_INVALID_ARGUMENT, "reject non-database member");
+		iStatus = co_await stMysql.Select(sTable, stInvalid, stError, &DbSample::sName, &DbSample::sName);
+		Expect(iBad, iStatus == OI_ERR_INVALID_ARGUMENT, "reject duplicate selected member");
+		const std::vector<std::string> vInvalidTables{"", "bad`name", std::string(65, 'x')};
+		for (const std::string& sInvalid : vInvalidTables)
+		{
+			iStatus = co_await stMysql.Insert(sInvalid, stInvalid, stError);
+			Expect(iBad, iStatus == OI_ERR_INVALID_ARGUMENT && stError.sStage == "build_statement", "reject invalid table name");
+		}
 		const std::vector<DbSample> vRows{MakeFullRow(), MakeEdgeRow()};
 		for (const DbSample& stRow : vRows)
 		{
-			OI::Db::Statement stInsert;
-			const int32_t iBuild = ::OI::Db::BuildInsert(sTable, stRow, stInsert);
-			Expect(iBad, iBuild == OI_OK, "build insert");
-			iStatus = co_await stMysql.Call(std::move(stInsert), stResult, stError);
+			iStatus = co_await stMysql.Insert(sTable, stRow, stResult, stError);
 			if (iStatus != OI_OK || stResult.iAffected != 1)
 			{
 				LOG_TRACE("mysql row insert failed id=%lld status=%d stage=%s native=%u", static_cast<long long>(stRow.iId), iStatus, stError.sStage.c_str(), stError.iNativeCode);
@@ -475,23 +514,47 @@ OI::Coro::TaskResult<int32_t> TestDb::CheckMysqlRows(OI::Db::Client& stMysql, co
 			}
 		}
 
+		iBad += co_await CheckColumnTypes(stMysql, sTable);
+
 		// 主键重复的 INSERT 由库拒绝，原生错误必须是 ER_DUP_ENTRY（1062），连接错误等别的失败不算。
-		OI::Db::Statement stDuplicate;
-		const int32_t iDuplicate = ::OI::Db::BuildInsert(sTable, vRows[0], stDuplicate);
-		iStatus = co_await stMysql.Call(std::move(stDuplicate), stResult, stError);
+		iStatus = co_await stMysql.Insert(sTable, vRows[0], stError);
 		if (iStatus == OI_OK || stError.iNativeCode != 1062)
 		{
 			LOG_TRACE("mysql duplicate key status=%d stage=%s native=%u", iStatus, stError.sStage.c_str(), stError.iNativeCode);
 		}
-		Expect(iBad, iDuplicate == OI_OK && iStatus != OI_OK && stError.iNativeCode == 1062, "mysql duplicate key rejected");
+		Expect(iBad, iStatus == OI_ERR_EXIST && stError.iNativeCode == 1062 && stError.sSqlState == "23000", "mysql duplicate key rejected");
+
+		// 同一客户端先后执行两条查询。稍后才解码联表结果，错误仍须指向列的原表。
+		const std::string sBaseQuoted = OI::Db::QuoteName(sBaseTable);
+		OI::Db::Result stJoined;
+		const std::string sJoin = "SELECT a.sName AS business_id, b.v AS metric FROM " + sQuoted + " AS a CROSS JOIN " + sBaseQuoted + " AS b WHERE a.id=1 LIMIT 1";
+		const int32_t iJoin = co_await stMysql.Call(sJoin, {}, stJoined, stError);
+		const int32_t iLater = co_await stMysql.Call("SELECT v FROM " + sBaseQuoted + " LIMIT 1", {}, stResult, stError);
+		const auto fnBusinessId = [](const OI::Db::Row& stRow)
+		{
+			return stRow.at("business_id").as_uint32();
+		};
+		const auto fnMissingId = [](const OI::Db::Row& stRow)
+		{
+			return stRow.at("missing_id").as_uint32();
+		};
+		std::vector<uint32_t> vIds{77};
+		const std::string sDatabaseLabel = "database=" + sDatabase + " table=";
+		Expect(iBad, iJoin == OI_OK && iLater == OI_OK && stJoined.DecodeRows(vIds, stError, fnBusinessId) == OI_ERR_DECODE && stError.sMessage == sDatabaseLabel + sTable + " column=business_id invalid uint32" && vIds == std::vector<uint32_t>{77}, "deferred decode uses original table");
+		Expect(iBad, stResult.DecodeRows(vIds, stError, fnMissingId) == OI_ERR_DECODE && stError.sMessage == sDatabaseLabel + sBaseTable + " column=missing_id missing", "missing column from single table");
+		Expect(iBad, stJoined.DecodeRows(vIds, stError, fnMissingId) == OI_ERR_DECODE && stError.sMessage == sDatabaseLabel + sBaseTable + "," + sTable + " column=missing_id missing", "missing column from join");
 
 		// 按主键读回，[nodb] 字段不被覆盖。
 		for (const DbSample& stRow : vRows)
 		{
-			DbSample stLoaded;
+			DbSample stLoaded = vRows[0];
+			if (stRow.iId == vRows[0].iId)
+			{
+				stLoaded = vRows[1];
+			}
 			stLoaded.iId = stRow.iId;
 			stLoaded.sCache = "keep";
-			const int32_t iLoad = co_await LoadRow(stMysql, sTable, stLoaded);
+			const int32_t iLoad = co_await stMysql.Select(sTable, stLoaded, stError);
 			Expect(iBad, iLoad == OI_OK && SameRow(stLoaded, stRow) && stLoaded.sCache == "keep",
 			    stRow.iId == 1 ? "mysql full row roundtrip" : "mysql edge row roundtrip");
 		}
@@ -504,16 +567,14 @@ OI::Coro::TaskResult<int32_t> TestDb::CheckMysqlRows(OI::Db::Client& stMysql, co
 		stChanged.vNumbers.clear();
 		DbSample stUnsaved = stChanged;
 		stUnsaved.iSecret = 99;
-		OI::Db::Statement stUpdate;
-		const int32_t iUpdate = ::OI::Db::BuildUpdateByKey(sTable, stUnsaved, stUpdate, &DbSample::sName, &DbSample::dScore, &DbSample::mJsonFlags, &DbSample::vNumbers);
-		iStatus = co_await stMysql.Call(std::move(stUpdate), stResult, stError);
-		Expect(iBad, iUpdate == OI_OK && iStatus == OI_OK && stResult.iAffected == 1, "mysql pick update");
+		iStatus = co_await stMysql.Update(sTable, stUnsaved, stResult, stError, &DbSample::sName, &DbSample::dScore, &DbSample::mJsonFlags, &DbSample::vNumbers);
+		Expect(iBad, iStatus == OI_OK && stResult.iAffected == 1, "mysql pick update");
 		DbSample stChangedLoaded;
 		stChangedLoaded.iId = stChanged.iId;
-		const int32_t iChangedLoad = co_await LoadRow(stMysql, sTable, stChangedLoaded);
+		const int32_t iChangedLoad = co_await stMysql.Select(sTable, stChangedLoaded, stError);
 		DbSample stEdgeLoaded;
 		stEdgeLoaded.iId = vRows[1].iId;
-		const int32_t iEdgeLoad = co_await LoadRow(stMysql, sTable, stEdgeLoaded);
+		const int32_t iEdgeLoad = co_await stMysql.Select(sTable, stEdgeLoaded, stError);
 		Expect(iBad, iChangedLoad == OI_OK && iEdgeLoad == OI_OK && SameRow(stChangedLoaded, stChanged) && SameRow(stEdgeLoaded, vRows[1]),
 		    "mysql pick update keeps other columns");
 
@@ -521,111 +582,85 @@ OI::Coro::TaskResult<int32_t> TestDb::CheckMysqlRows(OI::Db::Client& stMysql, co
 		DbSample stInvalidJson = stChanged;
 		stInvalidJson.mJsonFlags = {{std::string("\xFF", 1), 1}};
 		stInvalidJson.sName = "valid-picked-update";
-		OI::Db::Statement stInvalidAll;
-		const int32_t iInvalidAll = ::OI::Db::BuildUpdateByKey(sTable, stInvalidJson, stInvalidAll);
-		OI::Db::Statement stInvalidPicked;
-		const int32_t iInvalidPicked = ::OI::Db::BuildUpdateByKey(sTable, stInvalidJson, stInvalidPicked, &DbSample::mJsonFlags);
-		OI::Db::Statement stInvalidInsert;
-		const int32_t iInvalidInsert = ::OI::Db::BuildInsert(sTable, stInvalidJson, stInvalidInsert);
-		OI::Db::Statement stInvalidUpsert;
-		const int32_t iInvalidUpsert = ::OI::Db::BuildUpsert(sTable, stInvalidJson, stInvalidUpsert);
+		const int32_t iInvalidAll = co_await stMysql.Update(sTable, stInvalidJson, stError);
+		const int32_t iInvalidPicked = co_await stMysql.Update(sTable, stInvalidJson, stError, &DbSample::mJsonFlags);
+		const int32_t iInvalidInsert = co_await stMysql.Insert(sTable, stInvalidJson, stError);
+		const int32_t iInvalidUpsert = co_await stMysql.Upsert(sTable, stInvalidJson, stError);
 		DbSample stAfterRejected;
 		stAfterRejected.iId = stChanged.iId;
-		const int32_t iRejectedLoad = co_await LoadRow(stMysql, sTable, stAfterRejected);
+		const int32_t iRejectedLoad = co_await stMysql.Select(sTable, stAfterRejected, stError);
 		Expect(iBad, iInvalidAll == OI_ERR_INVALID_ARGUMENT && iInvalidPicked == OI_ERR_INVALID_ARGUMENT && iInvalidInsert == OI_ERR_INVALID_ARGUMENT && iInvalidUpsert == OI_ERR_INVALID_ARGUMENT && iRejectedLoad == OI_OK && SameRow(stAfterRejected, stChanged), "mysql invalid json rejected keeps row");
-		OI::Db::Statement stValidPicked;
-		const int32_t iValidPicked = ::OI::Db::BuildUpdateByKey(sTable, stInvalidJson, stValidPicked, &DbSample::sName);
-		if (iValidPicked == OI_OK)
-		{
-			iStatus = co_await stMysql.Call(std::move(stValidPicked), stResult, stError);
-		}
-		else
-		{
-			iStatus = iValidPicked;
-		}
-		const uint64_t iPickedAffected = stResult.iAffected;
+		iStatus = co_await stMysql.Update(sTable, stInvalidJson, stError, &DbSample::sName);
 		stChanged.sName = stInvalidJson.sName;
 		DbSample stAfterPicked;
 		stAfterPicked.iId = stChanged.iId;
-		const int32_t iPickedLoad = co_await LoadRow(stMysql, sTable, stAfterPicked);
-		Expect(iBad, iValidPicked == OI_OK && iStatus == OI_OK && iPickedAffected == 1 && iPickedLoad == OI_OK && SameRow(stAfterPicked, stChanged), "mysql unpicked invalid json update roundtrip");
+		const int32_t iPickedLoad = co_await stMysql.Select(sTable, stAfterPicked, stError);
+		Expect(iBad, iStatus == OI_OK && iPickedLoad == OI_OK && SameRow(stAfterPicked, stChanged), "mysql unpicked invalid json update roundtrip");
 
 		// 按成员指针只读几列，写回只改这几个字段。
-		OI::Db::Statement stPartial;
-		const int32_t iPartial = ::OI::Db::BuildSelectByKey(sTable, stChanged, stPartial, &DbSample::sName, &DbSample::mJsonFlags);
-		iStatus = co_await stMysql.Call(std::move(stPartial), stResult, stError);
-		::OI::Db::CellMap mPartialCells;
 		DbSample stMixed = vRows[1];
-		Expect(iBad, iPartial == OI_OK && iStatus == OI_OK && ::OI::Db::RowCells(stResult, 0, mPartialCells) && mPartialCells.size() == 2 && stMixed.FromDbMap(mPartialCells) && stMixed.sName == stChanged.sName && stMixed.mJsonFlags == stChanged.mJsonFlags && stMixed.iId == vRows[1].iId && stMixed.vJsonNumbers == vRows[1].vJsonNumbers,
+		stMixed.iId = stChanged.iId;
+		iStatus = co_await stMysql.Select(sTable, stMixed, stError, &DbSample::mJsonFlags, &DbSample::sName);
+		Expect(iBad, iStatus == OI_OK && stMixed.sName == stChanged.sName && stMixed.mJsonFlags == stChanged.mJsonFlags && stMixed.iId == stChanged.iId && stMixed.vJsonNumbers == vRows[1].vJsonNumbers,
 		    "mysql pick select");
 
-		// upsert：主键已存在改写其余列，不存在就插入。
-		DbSample stUpserted = stChanged;
-		stUpserted.iSecret = -1;
-		stUpserted.stChild.sText = "upsert";
-		stUpserted.bActive = false;
-		OI::Db::Statement stUpsert;
-		const int32_t iUpsert = ::OI::Db::BuildUpsert(sTable, stUpserted, stUpsert);
-		iStatus = co_await stMysql.Call(std::move(stUpsert), stResult, stError);
-		DbSample stUpsertLoaded;
+		// 写入另一组字段值，然后逐字段读回。用相反的初值防止漏读默认值。
+		DbSample stUpserted = MakeEdgeRow();
+		stUpserted.iId = stChanged.iId;
+		iStatus = co_await stMysql.Upsert(sTable, stUpserted, stError);
+		DbSample stUpsertLoaded = MakeFullRow();
 		stUpsertLoaded.iId = stUpserted.iId;
-		const int32_t iUpsertLoad = co_await LoadRow(stMysql, sTable, stUpsertLoaded);
-		Expect(iBad, iUpsert == OI_OK && iStatus == OI_OK && iUpsertLoad == OI_OK && SameRow(stUpsertLoaded, stUpserted), "mysql upsert existing row");
+		const int32_t iUpsertLoad = co_await stMysql.Select(sTable, stUpsertLoaded, stError);
+		Expect(iBad, iStatus == OI_OK && iUpsertLoad == OI_OK && SameRow(stUpsertLoaded, stUpserted), "mysql upsert existing row");
 
 		DbSample stFresh = MakeEdgeRow();
 		stFresh.iId = 7;
 		stFresh.sName = "fresh";
-		OI::Db::Statement stUpsertFresh;
-		const int32_t iUpsertFresh = ::OI::Db::BuildUpsert(sTable, stFresh, stUpsertFresh);
-		iStatus = co_await stMysql.Call(std::move(stUpsertFresh), stResult, stError);
+		iStatus = co_await stMysql.Upsert(sTable, stFresh, stResult, stError);
 		const uint64_t iFreshAffected = stResult.iAffected;
 		DbSample stFreshLoaded;
 		stFreshLoaded.iId = stFresh.iId;
-		const int32_t iFreshLoad = co_await LoadRow(stMysql, sTable, stFreshLoaded);
-		Expect(iBad, iUpsertFresh == OI_OK && iStatus == OI_OK && iFreshAffected == 1 && iFreshLoad == OI_OK && SameRow(stFreshLoaded, stFresh),
+		const int32_t iFreshLoad = co_await stMysql.Select(sTable, stFreshLoaded, stError);
+		Expect(iBad, iStatus == OI_OK && iFreshAffected == 1 && iFreshLoad == OI_OK && SameRow(stFreshLoaded, stFresh),
 		    "mysql upsert new row");
 
 		// 不挑成员就改全部非主键列。
 		DbSample stWhole = MakeFullRow();
 		stWhole.iId = vRows[1].iId;
 		stWhole.sName = "whole";
-		OI::Db::Statement stUpdateAll;
-		const int32_t iUpdateAll = ::OI::Db::BuildUpdateByKey(sTable, stWhole, stUpdateAll);
-		iStatus = co_await stMysql.Call(std::move(stUpdateAll), stResult, stError);
+		iStatus = co_await stMysql.Update(sTable, stWhole, stResult, stError);
 		const uint64_t iWholeAffected = stResult.iAffected;
 		DbSample stWholeLoaded;
 		stWholeLoaded.iId = stWhole.iId;
-		const int32_t iWholeLoad = co_await LoadRow(stMysql, sTable, stWholeLoaded);
-		Expect(iBad, iUpdateAll == OI_OK && iStatus == OI_OK && iWholeAffected == 1 && iWholeLoad == OI_OK && SameRow(stWholeLoaded, stWhole),
+		const int32_t iWholeLoad = co_await stMysql.Select(sTable, stWholeLoaded, stError);
+		Expect(iBad, iStatus == OI_OK && iWholeAffected == 1 && iWholeLoad == OI_OK && SameRow(stWholeLoaded, stWhole),
 		    "mysql update all columns");
 
 		// 按主键删，删完读不到。
-		OI::Db::Statement stDelete;
-		const int32_t iDelete = ::OI::Db::BuildDeleteByKey(sTable, stFresh, stDelete);
-		iStatus = co_await stMysql.Call(std::move(stDelete), stResult, stError);
+		iStatus = co_await stMysql.Delete(sTable, stFresh, stResult, stError);
 		const uint64_t iDeleteAffected = stResult.iAffected;
 		DbSample stDeleted;
 		stDeleted.iId = stFresh.iId;
-		const int32_t iDeletedLoad = co_await LoadRow(stMysql, sTable, stDeleted);
-		Expect(iBad, iDelete == OI_OK && iStatus == OI_OK && iDeleteAffected == 1 && iDeletedLoad == OI_ERR_NOT_FOUND, "mysql delete by key");
+		const int32_t iDeletedLoad = co_await stMysql.Select(sTable, stDeleted, stError);
+		Expect(iBad, iStatus == OI_OK && iDeleteAffected == 1 && iDeletedLoad == OI_ERR_NOT_FOUND, "mysql delete by key");
+
+		iBad += co_await CheckBatchCrud(stMysql, sTable);
 
 		// 故障注入用手写 SQL：库里的 NULL 和坏 PB blob 读回时整行拒绝，对象保持原值。
-		const std::string sQuoted = ::OI::Db::QuoteName(sTable);
-		OI::Db::Statement stAllowNull{"ALTER TABLE " + sQuoted + " MODIFY `sName` VARBINARY(64) NULL", {}};
-		iStatus = co_await stMysql.Call(std::move(stAllowNull), stResult, stError);
+		iStatus = co_await stMysql.Call("ALTER TABLE " + sQuoted + " MODIFY `sName` VARBINARY(64) NULL", {}, stResult, stError);
 		Expect(iBad, iStatus == OI_OK, "mysql allow null");
-		OI::Db::Statement stNull{"UPDATE " + sQuoted + " SET `sName`=NULL WHERE `id`=?", {stUpserted.iId}};
-		iStatus = co_await stMysql.Call(std::move(stNull), stResult, stError);
+		std::vector<OI::Db::Parameter> vKey{stUpserted.iId};
+		iStatus = co_await stMysql.Call("UPDATE " + sQuoted + " SET `sName`=NULL WHERE `id`=?", std::move(vKey), stResult, stError);
 		Expect(iBad, iStatus == OI_OK && stResult.iAffected == 1, "mysql set null");
 		DbSample stKeptNull = stUpserted;
-		const int32_t iNullLoad = co_await LoadRow(stMysql, sTable, stKeptNull);
+		const int32_t iNullLoad = co_await stMysql.Select(sTable, stKeptNull, stError);
 		Expect(iBad, iNullLoad == OI_ERR_DECODE && SameRow(stKeptNull, stUpserted), "mysql null rejected");
 
-		OI::Db::Statement stBroken{"UPDATE " + sQuoted + " SET `sName`=?, `vNumbers`=? WHERE `id`=?", {std::string("ok"), ::OI::Db::Blob({0xff}), stUpserted.iId}};
-		iStatus = co_await stMysql.Call(std::move(stBroken), stResult, stError);
+		std::vector<OI::Db::Parameter> vBroken{"ok", OI::Db::Parameter::Binary(std::string(1, static_cast<char>(0xff))), stUpserted.iId};
+		iStatus = co_await stMysql.Call("UPDATE " + sQuoted + " SET `sName`=?, `vNumbers`=? WHERE `id`=?", std::move(vBroken), stResult, stError);
 		Expect(iBad, iStatus == OI_OK && stResult.iAffected == 1, "mysql set bad blob");
 		DbSample stKeptBroken = stUpserted;
-		const int32_t iBrokenLoad = co_await LoadRow(stMysql, sTable, stKeptBroken);
+		const int32_t iBrokenLoad = co_await stMysql.Select(sTable, stKeptBroken, stError);
 		Expect(iBad, iBrokenLoad == OI_ERR_DECODE && SameRow(stKeptBroken, stUpserted), "mysql bad blob rejected");
 	}
 	catch (const std::exception& stException)
@@ -637,8 +672,7 @@ OI::Coro::TaskResult<int32_t> TestDb::CheckMysqlRows(OI::Db::Client& stMysql, co
 	{
 		try
 		{
-			OI::Db::Statement stDrop{"DROP TABLE " + ::OI::Db::QuoteName(sTable), {}};
-			iStatus = co_await stMysql.Call(std::move(stDrop), stResult, stError);
+			iStatus = co_await stMysql.Call("DROP TABLE " + ::OI::Db::QuoteName(sTable), {}, stResult, stError);
 			if (iStatus != OI_OK)
 			{
 				LOG_TRACE("mysql row table drop failed status=%d stage=%s native=%u table=%s", iStatus, stError.sStage.c_str(), stError.iNativeCode, sTable.c_str());
@@ -698,86 +732,99 @@ OI::Coro::Task TestDb::Run()
 		OI::Db::Client stLimited(OI::Mysql::MakeDriver(stLimitedConfig), 1);
 		try
 		{
-			const auto fnValue = [](const std::optional<OI::Db::Blob>& stValue, const std::string& sExpected)
-			{
-				return stValue && *stValue == OI::Db::Blob(sExpected.begin(), sExpected.end());
-			};
-			OI::Db::Statement stRepeatedId{"SELECT CONNECTION_ID()", {}};
+			const std::string sRepeatedId = "SELECT CONNECTION_ID() AS id";
 			OI::Db::Result stRepeatedResult;
-			iStatus = co_await stMysql.Call(stRepeatedId, stRepeatedResult, stError);
-			if (iStatus != OI_OK || stRepeatedResult.vRows.size() != 1 || stRepeatedResult.vRows[0].size() != 1 ||
-			    !stRepeatedResult.vRows[0][0] || stRepeatedResult.vRows[0][0]->empty())
+			iStatus = co_await stMysql.Call(sRepeatedId, {}, stRepeatedResult, stError);
+			if (iStatus != OI_OK || stRepeatedResult.vRows.size() != 1 || stRepeatedResult.vRows[0].mCells.size() != 1 ||
+			    stRepeatedResult.vRows[0].at("id").as_uint64() == 0)
 			{
 				LOG_TRACE("mysql repeated connection id failed status=%d", iStatus);
 				++iBad;
 			}
 			const auto vExpectedId = stRepeatedResult.vRows;
-			OI::Db::Statement stParameters;
-			stParameters.sSql = "SELECT ?, ?, ?, ?, ?, ?, ?, ?";
-			stParameters.vParameters = {std::string("a\0b", 3), nullptr, std::string(), OI::Db::Blob(),
+			const std::string sParameters = "SELECT ? AS binary_value, ? AS null_value, ? AS empty_text, ? AS empty_blob, ? AS min_signed, ? AS max_signed, ? AS min_unsigned, ? AS max_unsigned";
+			const std::vector<OI::Db::Parameter> vParameters = {std::string("a\0b", 3), nullptr, std::string(), OI::Db::Blob(),
 			    std::numeric_limits<int64_t>::min(), std::numeric_limits<int64_t>::max(),
 			    uint64_t{0}, std::numeric_limits<uint64_t>::max()};
 			for (int32_t iRound = 0; iRound < 8; ++iRound)
 			{
-				iStatus = co_await stMysql.Call(stParameters, stResult, stError);
-				if (iStatus != OI_OK || stResult.vRows.size() != 1 || stResult.vRows[0].size() != 8 ||
-				    !fnValue(stResult.vRows[0][0], std::string("a\0b", 3)) || stResult.vRows[0][1].has_value() ||
-				    !fnValue(stResult.vRows[0][2], "") || !fnValue(stResult.vRows[0][3], "") ||
-				    !fnValue(stResult.vRows[0][4], "-9223372036854775808") ||
-				    !fnValue(stResult.vRows[0][5], "9223372036854775807") || !fnValue(stResult.vRows[0][6], "0") ||
-				    !fnValue(stResult.vRows[0][7], "18446744073709551615"))
+				iStatus = co_await stMysql.Call(sParameters, vParameters, stResult, stError);
+				bool bValuesMatch = false;
+				if (iStatus == OI_OK && stResult.vRows.size() == 1)
+				{
+					const auto& stRow = stResult.vRows.front();
+					bValuesMatch = stRow.at("binary_value").as_string() == std::string("a\0b", 3) && stRow.at("null_value").is_null() &&
+					               stRow.at("empty_text").as_string().empty() && stRow.at("empty_blob").as_string().empty() &&
+					               stRow.at("min_signed").as_int64() == std::numeric_limits<int64_t>::min() && stRow.at("max_signed").as_int64() == std::numeric_limits<int64_t>::max() &&
+					               stRow.at("min_unsigned").as_uint64() == 0 && stRow.at("max_unsigned").as_uint64() == std::numeric_limits<uint64_t>::max();
+				}
+				if (!bValuesMatch)
 				{
 					LOG_TRACE("mysql parameters round=%d failed status=%d stage=%s native=%u", iRound, iStatus, stError.sStage.c_str(), stError.iNativeCode);
 					++iBad;
 				}
-				iStatus = co_await stMysql.Call(stRepeatedId, stRepeatedResult, stError);
+				iStatus = co_await stMysql.Call(sRepeatedId, {}, stRepeatedResult, stError);
 				if (iStatus != OI_OK || stRepeatedResult.vRows != vExpectedId)
 				{
 					LOG_TRACE("mysql repeated connection reuse round=%d failed status=%d", iRound, iStatus);
 					++iBad;
 				}
 			}
-			OI::Db::Statement stConnectionId{"SELECT CONNECTION_ID()", {}};
-			iStatus = co_await stMysql.Call(stConnectionId, stResult, stError);
+			const auto fnReadId = [](const OI::Db::Row& stRow)
+			{
+				return stRow.at("id").as_uint32();
+			};
+			iStatus = co_await stMysql.Call("SELECT '4294967295' AS id", {}, stResult, stError);
+			std::vector<uint32_t> vIds;
+			Expect(iBad, iStatus == OI_OK && stResult.DecodeRows(vIds, stError, fnReadId) == OI_OK && vIds == std::vector<uint32_t>{UINT32_MAX}, "named uint32 max");
+			const std::vector<std::pair<std::string, std::string>> vBadProjections = {
+			    {"SELECT 1 AS other", "id missing"},
+			    {"SELECT NULL AS id", "id is NULL"},
+			    {"SELECT '1' AS id UNION ALL SELECT '4294967296'", "id invalid uint32"},
+			    {"SELECT '-1' AS id", "id invalid uint32"},
+			    {"SELECT '1x' AS id", "id invalid uint32"}};
+			for (const auto& [sSql, sReason] : vBadProjections)
+			{
+				iStatus = co_await stMysql.Call(sSql, {}, stResult, stError);
+				Expect(iBad, iStatus == OI_OK && stResult.DecodeRows(vIds, stError, fnReadId) == OI_ERR_DECODE && stError.sStage == "decode_row" && stError.sMessage == "database=" + stConfig.sDatabase + " table=<unknown> column=" + sReason && vIds == std::vector<uint32_t>{UINT32_MAX}, "named projection failure preserves output");
+			}
+			const std::string sConnectionId = "SELECT CONNECTION_ID() AS id";
+			iStatus = co_await stMysql.Call(sConnectionId, {}, stResult, stError);
 			OI::Db::Result stFirstId = stResult;
-			if (iStatus != OI_OK || stFirstId.vRows.size() != 1 || stFirstId.vRows[0].size() != 1 ||
-			    !stFirstId.vRows[0][0] || stFirstId.vRows[0][0]->empty())
+			if (iStatus != OI_OK || stFirstId.vRows.size() != 1 || stFirstId.vRows[0].mCells.size() != 1 ||
+			    stFirstId.vRows[0].at("id").as_uint64() == 0)
 			{
 				LOG_TRACE("mysql first connection id failed status=%d", iStatus);
 				++iBad;
 			}
-			iStatus = co_await stMysql.Call(stConnectionId, stResult, stError);
+			iStatus = co_await stMysql.Call(sConnectionId, {}, stResult, stError);
 			if (iStatus != OI_OK || stResult.vRows != stFirstId.vRows)
 			{
 				LOG_TRACE("mysql connection reuse failed status=%d", iStatus);
 				++iBad;
 			}
-			OI::Db::Statement stSetSession{"SET @oi_regression_session = 42", {}};
-			iStatus = co_await stMysql.Call(std::move(stSetSession), stResult, stError);
+			iStatus = co_await stMysql.Call("SET @oi_regression_session = 42", {}, stResult, stError);
 			if (iStatus != OI_OK)
 			{
 				LOG_TRACE("mysql session variable set failed status=%d stage=%s native=%u", iStatus, stError.sStage.c_str(), stError.iNativeCode);
 				++iBad;
 			}
-			OI::Db::Statement stSession{"SELECT @oi_regression_session", {}};
-			iStatus = co_await stMysql.Call(std::move(stSession), stResult, stError);
-			if (iStatus != OI_OK || stResult.vRows.size() != 1 || stResult.vRows[0].size() != 1 ||
-			    stResult.vRows[0][0].has_value())
+			iStatus = co_await stMysql.Call("SELECT @oi_regression_session AS session_value", {}, stResult, stError);
+			if (iStatus != OI_OK || stResult.vRows.size() != 1 || stResult.vRows[0].mCells.size() != 1 ||
+			    !stResult.vRows[0].at("session_value").is_null())
 			{
 				LOG_TRACE("mysql session reset failed status=%d stage=%s native=%u", iStatus, stError.sStage.c_str(), stError.iNativeCode);
 				++iBad;
 			}
-			OI::Db::Statement stDatabase{"SELECT DATABASE()", {}};
-			iStatus = co_await stMysql.Call(std::move(stDatabase), stResult, stError);
-			if (iStatus != OI_OK || stResult.vRows.size() != 1 || stResult.vRows[0].size() != 1 ||
-			    !fnValue(stResult.vRows[0][0], stConfig.sDatabase))
+			iStatus = co_await stMysql.Call("SELECT DATABASE() AS database_name", {}, stResult, stError);
+			if (iStatus != OI_OK || stResult.vRows.size() != 1 || stResult.vRows[0].mCells.size() != 1 ||
+			    stResult.vRows[0].at("database_name").as_string() != stConfig.sDatabase)
 			{
 				LOG_TRACE("mysql schema reset failed status=%d stage=%s native=%u", iStatus, stError.sStage.c_str(), stError.iNativeCode);
 				++iBad;
 			}
 			// 自增主键：回滚不退还已分配的自增值，回滚后再插入拿到的编号能证明事务里第一条 INSERT 真的执行过。
-			OI::Db::Statement stCreate{"CREATE TABLE " + sQuotedTable + " (id BIGINT AUTO_INCREMENT PRIMARY KEY, v INT NOT NULL) ENGINE=InnoDB", {}};
-			iStatus = co_await stMysql.Call(std::move(stCreate), stResult, stError);
+			iStatus = co_await stMysql.Call("CREATE TABLE " + sQuotedTable + " (id BIGINT AUTO_INCREMENT PRIMARY KEY, v INT NOT NULL) ENGINE=InnoDB", {}, stResult, stError);
 			if (iStatus != OI_OK)
 			{
 				LOG_TRACE("mysql create test table failed status=%d stage=%s native=%u", iStatus, stError.sStage.c_str(), stError.iNativeCode);
@@ -786,13 +833,13 @@ OI::Coro::Task TestDb::Run()
 			else
 			{
 				bTableCreated = true;
-				std::vector<OI::Db::Statement> vStatements;
-				vStatements.push_back({"INSERT INTO " + sQuotedTable + " (v) VALUES (1)", {}});
-				vStatements.push_back({"INSERT INTO " + sQuotedTable + " (missing_column) VALUES (2)", {}});
+				OI::Db::Batch stBatch;
+				stBatch.Add("INSERT INTO " + sQuotedTable + " (v) VALUES (1)");
+				stBatch.Add("INSERT INTO " + sQuotedTable + " (missing_column) VALUES (2)");
 				// 失败时不写输出，哨兵必须原样保留。
 				std::vector<OI::Db::Result> vResults(1);
 				vResults[0].iAffected = 321;
-				iStatus = co_await stMysql.Transaction(std::move(vStatements), vResults, stError);
+				iStatus = co_await stMysql.Transaction(std::move(stBatch), vResults, stError);
 				// 失败必须来自第二条的未知列（ER_BAD_FIELD_ERROR 1054），BEGIN 或连接失败不算。
 				if (iStatus == OI_OK || stError.iNativeCode != 1054 || vResults.size() != 1 || vResults[0].iAffected != 321)
 				{
@@ -800,29 +847,27 @@ OI::Coro::Task TestDb::Run()
 					    stError.iNativeCode, vResults.size());
 					++iBad;
 				}
-				OI::Db::Statement stCount{"SELECT COUNT(*) FROM " + sQuotedTable, {}};
-				iStatus = co_await stMysql.Call(std::move(stCount), stResult, stError);
-				if (iStatus != OI_OK || stResult.vRows.size() != 1 || stResult.vRows[0].size() != 1 ||
-				    !fnValue(stResult.vRows[0][0], "0"))
+				int64_t iCount = -1;
+				iStatus = co_await stMysql.Scalar("SELECT COUNT(*) FROM " + sQuotedTable, {}, iCount, stError);
+				if (iStatus != OI_OK || iCount != 0)
 				{
 					LOG_TRACE("mysql transaction rollback or recovery failed status=%d stage=%s native=%u", iStatus, stError.sStage.c_str(), stError.iNativeCode);
 					++iBad;
 				}
 				// 第一条已执行并被回滚，占掉了自增值 1；第一条没执行的话这里会拿到 1。
-				OI::Db::Statement stAfter{"INSERT INTO " + sQuotedTable + " (v) VALUES (3)", {}};
-				iStatus = co_await stMysql.Call(std::move(stAfter), stResult, stError);
+				iStatus = co_await stMysql.Call("INSERT INTO " + sQuotedTable + " (v) VALUES (3)", {}, stResult, stError);
 				if (iStatus != OI_OK || stResult.iAffected != 1 || stResult.iInsertId != 2)
 				{
 					LOG_TRACE("mysql transaction first insert evidence status=%d affected=%llu insert_id=%llu native=%u", iStatus,
 					    static_cast<unsigned long long>(stResult.iAffected), static_cast<unsigned long long>(stResult.iInsertId), stError.iNativeCode);
 					++iBad;
 				}
-				std::vector<OI::Db::Statement> vCommitStatements;
-				vCommitStatements.push_back({"INSERT INTO " + sQuotedTable + " (v) VALUES (10)", {}});
-				vCommitStatements.push_back({"INSERT INTO " + sQuotedTable + " (v) VALUES (11)", {}});
+				OI::Db::Batch stCommitBatch;
+				stCommitBatch.Add("INSERT INTO " + sQuotedTable + " (v) VALUES (10)");
+				stCommitBatch.Add("INSERT INTO " + sQuotedTable + " (v) VALUES (11)");
 				std::vector<OI::Db::Result> vCommitResults(1);
 				vCommitResults[0].iAffected = 321;
-				iStatus = co_await stMysql.Transaction(std::move(vCommitStatements), vCommitResults, stError);
+				iStatus = co_await stMysql.Transaction(std::move(stCommitBatch), vCommitResults, stError);
 				if (iStatus != OI_OK || vCommitResults.size() != 2 || vCommitResults[0].iAffected != 1 ||
 				    vCommitResults[1].iAffected != 1 || vCommitResults[0].iInsertId != 3 || vCommitResults[1].iInsertId != 4)
 				{
@@ -831,43 +876,50 @@ OI::Coro::Task TestDb::Run()
 					++iBad;
 				}
 				OI::Db::Client stObserver(OI::Mysql::MakeDriver(stConfig), 1);
-				OI::Db::Statement stCommitted{"SELECT COUNT(*) FROM " + sQuotedTable + " WHERE v IN (10, 11)", {}};
-				iStatus = co_await stObserver.Call(std::move(stCommitted), stResult, stError);
-				if (iStatus != OI_OK || stResult.vRows.size() != 1 || stResult.vRows[0].size() != 1 ||
-				    !fnValue(stResult.vRows[0][0], "2"))
+				int64_t iCommitted = -1;
+				iStatus = co_await stObserver.Scalar("SELECT COUNT(*) FROM " + sQuotedTable + " WHERE v IN (10, 11)", {}, iCommitted, stError);
+				if (iStatus != OI_OK || iCommitted != 2)
 				{
 					LOG_TRACE("mysql transaction commit persistence failed status=%d stage=%s native=%u", iStatus,
 					    stError.sStage.c_str(), stError.iNativeCode);
 					++iBad;
 				}
 			}
-			OI::Db::Statement stBad{"SELECT missing_column", {}};
-			iStatus = co_await stMysql.Call(std::move(stBad), stResult, stError);
+			iStatus = co_await stMysql.Call("SELECT missing_column", {}, stResult, stError);
 			if (iStatus == OI_OK || stError.iNativeCode != 1054)
 			{
 				LOG_TRACE("mysql bad SQL status=%d stage=%s native=%u", iStatus, stError.sStage.c_str(), stError.iNativeCode);
 				++iBad;
 			}
-			OI::Db::Statement stRecover{"SELECT 1", {}};
-			iStatus = co_await stMysql.Call(std::move(stRecover), stResult, stError);
-			if (iStatus != OI_OK || stResult.vRows.size() != 1 || stResult.vRows[0].size() != 1 ||
-			    !fnValue(stResult.vRows[0][0], "1"))
+			int64_t iRecovered = -1;
+			iStatus = co_await stMysql.Scalar("SELECT 1", {}, iRecovered, stError);
+			if (iStatus != OI_OK || iRecovered != 1)
 			{
 				LOG_TRACE("mysql bad SQL recovery failed status=%d stage=%s native=%u", iStatus, stError.sStage.c_str(), stError.iNativeCode);
 				++iBad;
 			}
+			int64_t iScalar = 77;
+			static constexpr const char* vInvalidSql[] = {"SELECT 1 WHERE FALSE", "SELECT 1 UNION ALL SELECT 2", "SELECT 1 AS a, 2 AS b", "SELECT NULL", "SELECT 'bad'"};
+			for (const char* pSql : vInvalidSql)
+			{
+				iStatus = co_await stMysql.Scalar(pSql, {}, iScalar, stError);
+				Expect(iBad, iStatus == OI_ERR_DECODE && iScalar == 77, "bad scalar preserves output");
+			}
+			iStatus = co_await stMysql.Call("SELECT 1 AS dup, 2 AS dup WHERE FALSE", {}, stResult, stError);
+			Expect(iBad, iStatus == OI_ERR_DECODE && stError.sStage == "duplicate_column", "duplicate names rejected on empty result");
 			OI::Db::Result stSentinel;
 			stSentinel.iAffected = 123;
-			stSentinel.vColumns.push_back("sentinel");
-			OI::Db::Statement stLimitedQuery{"SELECT 'too large'", {}};
-			iStatus = co_await stLimited.Call(std::move(stLimitedQuery), stSentinel, stError);
+			stSentinel.vRows.emplace_back();
+			stSentinel.vRows.front().mCells["sentinel"] = std::nullopt;
+			iStatus = co_await stLimited.Call("SELECT 'too large'", {}, stSentinel, stError);
 			if (iStatus == OI_OK || stError.sStage != "result_limit" || stSentinel.iAffected != 123 ||
-			    stSentinel.vColumns != std::vector<std::string>{"sentinel"} || !stSentinel.vRows.empty())
+			    stSentinel.vRows.size() != 1 || !stSentinel.vRows.front().mCells.contains("sentinel"))
 			{
 				LOG_TRACE("mysql result limit failed status=%d stage=%s", iStatus, stError.sStage.c_str());
 				++iBad;
 			}
-			iBad += co_await CheckMysqlRows(stMysql, sTable + "_row");
+			iBad += co_await CheckMysqlRows(stMysql, sTable, stConfig.sDatabase);
+			iBad += co_await CheckDbErrors(stMysql, stConfig);
 		}
 		catch (const std::exception&)
 		{
@@ -890,10 +942,9 @@ OI::Coro::Task TestDb::Run()
 		}
 		if (bTableCreated)
 		{
-			OI::Db::Statement stDrop{"DROP TABLE " + sQuotedTable, {}};
 			try
 			{
-				iStatus = co_await stMysql.Call(std::move(stDrop), stResult, stError);
+				iStatus = co_await stMysql.Call("DROP TABLE " + sQuotedTable, {}, stResult, stError);
 				if (iStatus != OI_OK)
 				{
 					LOG_TRACE("mysql drop test table failed status=%d stage=%s native=%u table=%s", iStatus, stError.sStage.c_str(), stError.iNativeCode, sTable.c_str());

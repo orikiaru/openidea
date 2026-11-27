@@ -173,6 +173,28 @@ inline bool FromJsonValue(const Json::Value& stInput, ::OI::Base::Bytes& stOutpu
 	return true;
 }
 
+// 容器可以相互嵌套。实例化元素编解码前，所有可选重载必须已声明。
+template <typename V>
+bool FromJsonValue(const Json::Value& stInput, std::map<std::string, V>& stOutput);
+template <typename V>
+void ToJsonValue(Json::Value& stOutput, const std::map<std::string, V>& stInput);
+template <typename V>
+bool FromJsonValue(const Json::Value& stInput, std::map<int32_t, V>& stOutput);
+template <typename V>
+void ToJsonValue(Json::Value& stOutput, const std::map<int32_t, V>& stInput);
+template <typename V>
+bool FromJsonValue(const Json::Value& stInput, std::map<uint32_t, V>& stOutput);
+template <typename V>
+void ToJsonValue(Json::Value& stOutput, const std::map<uint32_t, V>& stInput);
+template <typename V>
+bool FromJsonValue(const Json::Value& stInput, std::map<uint64_t, V>& stOutput);
+template <typename V>
+void ToJsonValue(Json::Value& stOutput, const std::map<uint64_t, V>& stInput);
+template <typename T>
+auto FromJsonValue(const Json::Value& stInput, T& stOutput) -> decltype(stOutput.FromJson(stInput));
+template <typename T>
+auto ToJsonValue(Json::Value& stOutput, const T& stInput) -> decltype(stInput.ToJson(stOutput));
+
 template <typename T>
 bool FromJsonValue(const Json::Value& stInput, std::vector<T>& stOutput)
 {

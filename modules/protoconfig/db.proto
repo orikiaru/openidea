@@ -26,4 +26,18 @@ rpcdata DbSample json db {
     13 [dbjson] vector<int32_t> vJsonNumbers;
     14 [db notes] [dbjson] [dbtype TEXT] map<string, int32_t> mJsonFlags;
     15 [dbjson] DbChild stJsonChild;
+    16 uint8_t iMask;
+    17 int16_t iOffset;
+    18 uint16_t iPort;
+    19 uint32_t iCount;
+    20 int64_t iBalance;
+    21 [dbtype CHAR 4] string sCode;
+    22 [dbtype VARCHAR 16] string sLabel;
+    23 [dbtype BINARY 3] string sFixed;
+    24 [dbtype MEDIUMTEXT] string sDescription;
+    25 [dbtype LONGTEXT] string sArticle;
+    26 [dbtype BLOB] Bytes stData;
+    27 [dbtype MEDIUMBLOB] Bytes stArchive;
+    28 map<string, vector<int32_t>> mGroups;
+    29 [dbjson] vector<map<string, int32_t>> vJsonGroups;
 }
