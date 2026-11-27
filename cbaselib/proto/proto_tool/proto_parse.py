@@ -133,7 +133,37 @@ class ProtocolGen:
         for path in self.xml_paths:
             if not self.LoadFile(path):
                 return False
-        return self.CheckEnums() and self.CheckRpcPayloads() and self.CheckKeyComparators()
+        return self.CheckEnums() and self.CheckRpcPayloads() and self.CheckValueCycles() and self.CheckKeyComparators()
+
+    def CheckValueCycles(self)->bool:
+        # Only a direct value field embeds the other object in its own layout.
+        types = {data.GetName(): data for data in self.serialize_datas
+                 if data.GetType() == SerializeDataType.RPC_DATA}
+        dependencies = {}
+        for name, data in types.items():
+            field_types = (NormType(member.GetType()) for member in data.members)
+            dependencies[name] = [field for field in field_types if field in types]
+        finished = set()
+        for name in types:
+            if name in finished:
+                continue
+            path = {name: 0}
+            stack = [(name, iter(dependencies[name]))]
+            while stack:
+                current, children = stack[-1]
+                child = next(children, None)
+                if child is None:
+                    finished.add(current)
+                    del path[current]
+                    stack.pop()
+                elif child in path:
+                    cycle = [node for node, _ in stack[path[child]:]] + [child]
+                    loginfo("rpcdata value cycle: ", " -> ".join(cycle))
+                    return False
+                elif child not in finished:
+                    path[child] = len(stack)
+                    stack.append((child, iter(dependencies[child])))
+        return True
 
     def LoadFile(self, path)->bool:
         if not os.path.exists(path):

@@ -97,6 +97,27 @@ class LaneBusyTests(unittest.TestCase):
 
 
 class SyncAndBuildTests(unittest.TestCase):
+    def test_fast_lane_duration_excludes_wait_for_slow_lane(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            argv = ["parallel_matrix.py", "--windows-redis-binary", "unused", "--artifacts", temp,
+                    "--lane", "windows-mt", "--lane", "windows-st"]
+            popen = subprocess.Popen
+            def launch(command, **kwargs):
+                slow = command[command.index("--mode") + 1] == "mt"
+                child = ("import time, pathlib\nend=time.monotonic()+10\n"
+                         "while not pathlib.Path('ready').exists() and time.monotonic()<end: time.sleep(.01)\n"
+                         "assert pathlib.Path('ready').exists()\ntime.sleep(.6)"
+                         if slow else "import pathlib, sys; pathlib.Path('ready').touch(); sys.exit(7)")
+                return popen([sys.executable, "-c", child], cwd=root, stdout=kwargs["stdout"], stderr=kwargs["stderr"])
+            with mock.patch.object(sys, "argv", argv), mock.patch.object(matrix, "lane_users", return_value=[]), \
+                    mock.patch.object(matrix, "sync_windows"), mock.patch.object(matrix.subprocess, "Popen", side_effect=launch):
+                self.assertEqual(matrix.main(), 1)
+            report = json.loads((root / "parallel.json").read_text(encoding="utf-8"))
+            slow, fast = report["windows-mt"], report["windows-st"]
+            self.assertEqual((slow["exit_code"], fast["exit_code"]), (0, 7))
+            self.assertGreater(slow["seconds"] - fast["seconds"], 0.3)
+
     def test_private_directories_are_excluded_and_windows_overlap_rejected(self):
         self.assertIn(".local", matrix.EXCLUDED_DIRS)
         self.assertIn(".codex", matrix.EXCLUDED_DIRS)

@@ -5,6 +5,7 @@ Windows 侧 Redis 用原生 redis-server.exe；WSL 转发在大流量下会卡�
 同一路副本已有进程在用时拒绝启动，不同步、不杀进程；先用 kill_test_procs.py --lane 清掉再跑。
 """
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
 import posixpath
@@ -128,6 +129,11 @@ def write_results(path, results):
             temporary.unlink(missing_ok=True)
 
 
+def wait_for_lane(process, started):
+    code = process.wait()
+    return {"exit_code": code, "seconds": round(time.monotonic() - started, 1)}
+
+
 def main():
     use_utf8_children()
     parser = argparse.ArgumentParser(description=__doc__)
@@ -176,6 +182,8 @@ def main():
         raise
 
     processes = []
+    waiters = ThreadPoolExecutor(max_workers=len(selected))
+    lanes = {}
     try:
         for platform, mode, offset in selected:
             lane = "%s-%s" % (platform, mode)
@@ -203,17 +211,18 @@ def main():
             print("START", lane, "port_offset=%d" % offset, flush=True)
             log = (artifacts / (lane + ".log")).open("w", encoding="utf-8")
             try:
+                started = time.monotonic()
                 process = subprocess.Popen(command, cwd=cwd, stdout=log, stderr=subprocess.STDOUT)
             except BaseException:
                 log.close()
                 raise
-            processes.append((lane, process, log, time.monotonic()))
+            processes.append((process, log))
+            lanes[waiters.submit(wait_for_lane, process, started)] = lane
 
-        for lane, process, log, started in processes:
-            code = process.wait()
-            log.close()
-            results[lane] = {"exit_code": code, "seconds": round(time.monotonic() - started, 1)}
-            print("PASS" if code == 0 else "FAIL", lane, "seconds=%.1f" % results[lane]["seconds"],
+        for future in as_completed(lanes):
+            lane = lanes[future]
+            results[lane] = future.result()
+            print("PASS" if results[lane]["exit_code"] == 0 else "FAIL", lane, "seconds=%.1f" % results[lane]["seconds"],
                   "log=", artifacts / (lane + ".log"), flush=True)
     except BaseException as error:
         for result in results.values():
@@ -222,7 +231,7 @@ def main():
         raise
     finally:
         # 启动或等待中出错时，只回收本进程已经拉起的 lane，不碰别人的。
-        for lane, process, log, started in processes:
+        for process, log in processes:
             if process.poll() is None:
                 process.terminate()
                 try:
@@ -232,6 +241,7 @@ def main():
                     process.wait(timeout=10)
             if not log.closed:
                 log.close()
+        waiters.shutdown()
         write_results(results_path, results)
     return int(any(item["exit_code"] for item in results.values()))
 

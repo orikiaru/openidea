@@ -520,6 +520,26 @@ class ModuleGeneratorTest(unittest.TestCase):
             self.assertIn('#include "oi_rpcdata_barextra.h"', container)
             self.assertNotIn('#include "oi_rpcdata_bar.h"', container)
 
+    def test_generator_rejects_direct_value_cycles_before_writing(self):
+        generator = Path(__file__).resolve().parents[1] / "cbaselib/proto/proto_tool/main.py"
+        for schema, cycle in (("rpcdata Row { 0 Row stParent; }", "Row -> Row"),
+                              ("rpcdata Row { 0 Child stChild; }\nrpcdata Child { 0 Row stParent; }",
+                               "Row -> Child -> Row"),
+                              ("rpcdata Row { 0 vector<Row> vChildren; }", None)):
+            with self.subTest(schema=schema), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                spec, output = root / "types.proto", root / "out"
+                spec.write_text(schema, encoding="utf-8")
+                result = subprocess.run([sys.executable, str(generator), "--data-only", str(spec), str(output)],
+                                        capture_output=True, text=True, encoding="utf-8")
+                if cycle:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(cycle, result.stdout + result.stderr)
+                    self.assertFalse(list(output.glob("*.h")))
+                else:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertTrue((output / "oi_rpcdata_row.h").is_file())
+
     def test_generator_rejects_case_insensitive_output_collision(self):
         root = Path(__file__).resolve().parents[1]
         for split in (False, True):
