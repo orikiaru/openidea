@@ -1,5 +1,4 @@
 #include <stdio.h>
-#include <exception>
 #include <cstring>
 #include <thread>
 #include <uv.h>
@@ -248,52 +247,28 @@ int main(int iArgumentCount, char* vArguments[])
 		::OI::Base::StopFramework();
 		return iCode;
 	}
-	iCode = ::OI::Log::Init();
-	if (iCode != OI_OK)
+	return ::OI::Base::RunFramework([]() -> int32_t
 	{
-		fprintf(stderr, "Log Init failed: code=%d\n", iCode);
-		::OI::Base::StopFramework();
-		return iCode;
-	}
-
-	iCode = [&]() -> int32_t
-	{
-		try
+		int32_t iStatus = ::OI::Log::Init();
+		if (iStatus != OI_OK)
 		{
-			iCode = IpcClient::GetInstance().Init();
-			if (iCode != OI_OK)
-			{
-				fprintf(stderr, "IpcClient Init failed: code=%d\n", iCode);
-				return iCode;
-			}
-			if (TestHold::GetInstance().RunsWithoutIpc())
-			{
-				TestHold::GetInstance().Start(INVALID_SID);
-			}
-			else
-			{
-				IpcClient::GetInstance().StartClient();
-			}
+			fprintf(stderr, "Log Init failed: code=%d\n", iStatus);
+			return iStatus;
 		}
-		catch (const std::exception& stError)
+		iStatus = IpcClient::GetInstance().Init();
+		if (iStatus != OI_OK)
 		{
-			fprintf(stderr, "module init failed: %s\n", stError.what());
-			fflush(stderr);
-			return OI_ERR_FAIL;
+			fprintf(stderr, "IpcClient Init failed: code=%d\n", iStatus);
+			return iStatus;
 		}
-		catch (...)
+		if (TestHold::GetInstance().RunsWithoutIpc())
 		{
-			fprintf(stderr, "module init failed: unknown exception\n");
-			fflush(stderr);
-			return OI_ERR_FAIL;
+			TestHold::GetInstance().Start(INVALID_SID);
+		}
+		else
+		{
+			IpcClient::GetInstance().StartClient();
 		}
 		return OI_OK;
-	}();
-	if (iCode != OI_OK)
-	{
-		::OI::Base::StopFramework();
-		return iCode;
-	}
-
-	return ::OI::Base::RunFramework();
+	});
 }

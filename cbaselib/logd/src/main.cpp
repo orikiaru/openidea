@@ -1,5 +1,4 @@
 #include <cstdio>
-#include <exception>
 #include <cstring>
 #include "oi_net.h"
 #include "oi_base.h"
@@ -38,61 +37,35 @@ int main(int iArgumentCount, char* vArguments[])
 	}
 
 	LogManager* pLogManager = nullptr;
-	iCode = [&]() -> int32_t
+	iCode = ::OI::Base::RunFramework([&pLogManager]() -> int32_t
 	{
-		try
+		// 写线程起来之前的日志只打 stdout
+		pLogManager = &LogManager::GetInstance();
+		int32_t iStatus = pLogManager->Init();
+		if (iStatus != OI_OK)
 		{
-			// 写线程起来之前的日志只打 stdout
-			pLogManager = &LogManager::GetInstance();
-			iCode = pLogManager->Init();
-			if (iCode != OI_OK)
-			{
-				fprintf(stderr, "LogManager Init failed: code=%d\n", iCode);
-				return iCode;
-			}
-			::OI::Log::InitLocal(WriteSelfLog);
-			iCode = LogServer::GetInstance().Init();
-			if (iCode != OI_OK)
-			{
-				fprintf(stderr, "LogServer Init failed: code=%d\n", iCode);
-				return iCode;
-			}
-			iCode = LogServer::GetInstance().StartServer();
-			if (iCode != OI_OK)
-			{
-				fprintf(stderr, "LogServer StartServer failed: code=%d\n", iCode);
-				return iCode;
-			}
+			fprintf(stderr, "LogManager Init failed: code=%d\n", iStatus);
+			return iStatus;
 		}
-		catch (const std::exception& stError)
+		::OI::Log::InitLocal(WriteSelfLog);
+		iStatus = LogServer::GetInstance().Init();
+		if (iStatus != OI_OK)
 		{
-			fprintf(stderr, "module init failed: %s\n", stError.what());
-			fflush(stderr);
-			return OI_ERR_FAIL;
+			fprintf(stderr, "LogServer Init failed: code=%d\n", iStatus);
+			return iStatus;
 		}
-		catch (...)
+		iStatus = LogServer::GetInstance().StartServer();
+		if (iStatus != OI_OK)
 		{
-			fprintf(stderr, "module init failed: unknown exception\n");
-			fflush(stderr);
-			return OI_ERR_FAIL;
+			fprintf(stderr, "LogServer StartServer failed: code=%d\n", iStatus);
+			return iStatus;
 		}
 		return OI_OK;
-	}();
-	if (iCode != OI_OK)
-	{
-		::OI::Base::StopFramework();
-		::OI::Log::InitLocal(NULL);
-		if (pLogManager)
-		{
-			pLogManager->Stop();
-		}
-		return iCode;
-	}
-
-	iCode = ::OI::Base::RunFramework();
-
-	//网络和工人都停了，不会再进日志。写线程把剩下的写完再退出。
+	});
 	::OI::Log::InitLocal(NULL);
-	LogManager::GetInstance().Stop();
+	if (pLogManager)
+	{
+		pLogManager->Stop();
+	}
 	return iCode;
 }

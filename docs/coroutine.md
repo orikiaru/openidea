@@ -18,7 +18,7 @@
 
 ### 单次 RPC 用带回复的那套
 
-平时按服务名调用：`RouteManager::GetInstance().Call(服务名, 请求, 回复, 时长)`，要打某个分区再传分区号。把回复对象传进去，`co_await` 得到 `int32_t`。先看返回码，再读回复。非 `0` 时回复保持调用前的值。`CallAll`、`CallMany` 仍返回每格的 `RpcResult`。
+平时按服务名调用：`RouteManager::GetInstance().Call(服务名, 请求, 回复, 时长)`，要打某个分区再传分区号。把回复对象传进去，`co_await` 得到 `int32_t`。先看返回码，再读回复。非 `0` 时回复保持调用前的值。`CallAll`、`CallMany` 从请求类型推导回复类型，仍返回每格的 `RpcResult`；也可保留显式 `<Res>` 写法。
 
 直连 `ProtoClientManager::Call`、`RpcCall(管理器, sid, ...)` 只用于有状态的对端，例如玩家连接。回归里的 `IpcClient` 是固定测试连接，新业务不要拿它当调用范例。
 
@@ -125,7 +125,7 @@ RegisterRpcHandler([](const ::OI::RpcData::AllEchoReq& stRequest, ::OI::RpcData:
 
 新接口的时长参数是 `OI::Timer::MS`，用 `OI::Timer::Milliseconds(500)`、`Seconds(10)`、`Minutes`、`Hours`、`Days` 构造，默认 `Seconds(180)`。超时统一使用带单位的时长类型，不再接受裸整数秒。由 `RpcCallManager::OnTickUpdate` 每跳扫描，分桶仍按 200 毫秒刻度，桶内按精确截止时间判断，因此 `MS` 不代表毫秒级唤醒精度；精度取决于时间轮一跳（`offset_ms`，正常 10–50 毫秒）。非正超时打错误日志并改成 30 秒，不再一直等；断连仍会结束等待。`yield` 接受毫秒整数，也接受 `MS`。
 
-按服务名调用不传 `sessionid`，见 [服务注册](registry.md)，时序见 [单线程](sequence-diagram/single-thread/route.md) 和 [多线程](sequence-diagram/multi-thread/route.md)。入口是 `OI::Rpc::RouteManager::GetInstance()`：`Call(名字, req, res)` 任选一台，`Call(名字, 分区号, req, res)` 打这个分区，`CallAll<Res>(名字, req)` 打当前名单上的每一份，`CallMany<Res>(名字, 分区号列表, req)` 打给出的分区。调用时记下 `RpcDeadline`，查询、建连和回包共用这一份预算，发出去时只剩剩余毫秒。选实例时挂起等注册表缓存，不占线程。`CallAll` 和 `CallMany` 先全部发出，再逐个等，返回每格的 `RpcResult`。单次 `Call` 返回 `TaskResult<int32_t>`，调用时就开始选实例并发请求；同一个对象可以给多个协程等，请求只发一次，大家拿同一份结果。
+按服务名调用不传 `sessionid`，见 [服务注册](registry.md)，时序见 [单线程](sequence-diagram/single-thread/route.md) 和 [多线程](sequence-diagram/multi-thread/route.md)。入口是 `OI::Rpc::RouteManager::GetInstance()`：`Call(名字, req, res)` 任选一台，`Call(名字, 分区号, req, res)` 打这个分区，`CallAll(名字, req)` 打当前名单上的每一份，`CallMany(名字, 分区号列表, req)` 打给出的分区。调用时记下 `RpcDeadline`，查询、建连和回包共用这一份预算，发出去时只剩剩余毫秒。选实例时挂起等注册表缓存，不占线程。`CallAll` 和 `CallMany` 先全部发出，再逐个等，返回每格的 `RpcResult`。单次 `Call` 返回 `TaskResult<int32_t>`，调用时就开始选实例并发请求；同一个对象可以给多个协程等，请求只发一次，大家拿同一份结果。
 
 ```cpp
 OI::Coro::StartTask([n](OI::Coro::Token) {
@@ -218,7 +218,7 @@ if (iRet != 0)
 // 此处直接使用 stResponse。
 ```
 
-上面是平时的写法。`ProtoClientManager::Call(req, res, duration)` 使用这个客户端自己的连接，只用于有状态的对端，例如玩家连接。按服务名走 `RouteManager::Call(sName, req, res, duration)`，指定分区走 `RouteManager::Call(sName, iZoneId, req, res, duration)`。自由函数 `RpcCall(client, req, res, duration)` 打这台客户端的连接；显式会话用 `RpcCall(manager, sid, req, res, duration)`。这些单次接口都不需要显式响应模板参数。同名多台直连用 `ProtoMultiClientManager`：`Call(实例号, req, res)`、`CallAny(req, res)`、`CallMany<Res>(实例号列表, req)`、`CallAll<Res>(req)`。命名接口从入口保存单调时钟截止时间，读本地缓存、连接前排队和回包共用剩余预算；预算用尽后不再发送请求。还没拉到过时，最多再等 min(剩余预算, 3000ms)，等下一次 `OnSecondUpdate` 把名单写入缓存。非正 RPC 时长会先打错误日志并改成 30 秒，查询、排队和回包都用这份预算。实际唤醒仍受时间轮/调度粒度影响。
+上面是平时的写法。`ProtoClientManager::Call(req, res, duration)` 使用这个客户端自己的连接，只用于有状态的对端，例如玩家连接。按服务名走 `RouteManager::Call(sName, req, res, duration)`，指定分区走 `RouteManager::Call(sName, iZoneId, req, res, duration)`。自由函数 `RpcCall(client, req, res, duration)` 打这台客户端的连接；显式会话用 `RpcCall(manager, sid, req, res, duration)`。这些单次接口都不需要显式响应模板参数。同名多台直连用 `ProtoMultiClientManager`：`Call(实例号, req, res)`、`CallAny(req, res)`、`CallMany(实例号列表, req)`、`CallAll(req)`。命名接口从入口保存单调时钟截止时间，读本地缓存、连接前排队和回包共用剩余预算；预算用尽后不再发送请求。还没拉到过时，最多再等 min(剩余预算, 3000ms)，等下一次 `OnSecondUpdate` 把名单写入缓存。非正 RPC 时长会先打错误日志并改成 30 秒，查询、排队和回包都用这份预算。实际唤醒仍受时间轮/调度粒度影响。
 
 可以先保存任务、后等待，也可以将任务按值交给多个协程等待：请求只发一次、响应只写一次，重复等待返回保存的状态码，不会再次修改响应。协程内跨挂起点使用的局部响应在协程帧中存活。响应和管理器必须覆盖任务的执行期，**丢弃任务对象不会取消请求**，因此输出引用版必须等待完成再离开响应作用域；不能把同一响应交给多个独立请求并发写。请求创建后可修改或销毁原值；大请求可以 `std::move` 移交。
 

@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <functional>
 
 namespace OI
 {
@@ -16,5 +17,7 @@ int32_t StartFramework(const char* pConfigPath);
 void StopFramework();
 // 跑任务、定时器和协程，直到 RequestStop 或收到退出信号。线程都 join 完才返回退出码。
 int RunFramework();
+// StartFramework 成功后调用。模块初始化失败时停止 poll 并返回原错误码，抛异常返回 OI_ERR_FAIL。
+int RunFramework(const std::function<int32_t()>& fnInit);
 }
 }

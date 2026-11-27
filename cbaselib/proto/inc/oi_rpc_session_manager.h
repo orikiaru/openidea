@@ -413,20 +413,22 @@ class ProtoMultiClientManager : public ProtoSessionManager
 		return PeerCall::RunOutput<Req>(AnySender(), std::optional<Req>(std::in_place, std::move(stRequest)), stResponse, stTimeout);
 	}
 	// 按发送这一刻的名单给每台各发一份，先全部发出再等。结果按实例号升序，带实例号。
-	template <typename Res, typename Req>
+	template <typename ExplicitRes = void, typename Req>
 	auto CallAll(const Req& stRequest, ::OI::Timer::MS stTimeout = ::OI::Timer::Seconds(180))
 	{
-		static_assert(std::is_same_v<Res, typename RpcProtoId<Req>::Response>, "RPC response type does not match the request");
+		using Res = typename RpcProtoId<Req>::Response;
+		static_assert(std::is_void_v<ExplicitRes> || std::is_same_v<ExplicitRes, Res>, "RPC response type does not match the request");
 		std::vector<int32_t> vIds;
 		ServiceRoute stRoute;
 		AllSenders(vIds, stRoute);
 		return PeerCall::RunBatch<Res>(std::move(vIds), std::move(stRoute), stRequest, RpcDeadline(stTimeout));
 	}
 	// 只打这些实例，先全部发出再等。结果顺序和实例号一致，名单里没有的那一格记 OI_ERR_CONNECT。
-	template <typename Res, typename Req>
+	template <typename ExplicitRes = void, typename Req>
 	auto CallMany(const std::vector<int32_t>& vInstanceIds, const Req& stRequest, ::OI::Timer::MS stTimeout = ::OI::Timer::Seconds(180))
 	{
-		static_assert(std::is_same_v<Res, typename RpcProtoId<Req>::Response>, "RPC response type does not match the request");
+		using Res = typename RpcProtoId<Req>::Response;
+		static_assert(std::is_void_v<ExplicitRes> || std::is_same_v<ExplicitRes, Res>, "RPC response type does not match the request");
 		ServiceRoute stRoute;
 		ManySenders(vInstanceIds, stRoute);
 		return RouteCall::Send<Res>(std::move(stRoute), stRequest, RpcDeadline(stTimeout), vInstanceIds.size());
@@ -491,17 +493,19 @@ class RouteManager final : public ProtoSessionManager
 		    stResponse, stTimeout);
 	}
 	// 按发送这一刻的名单给每台各发一份，先全部发出再等。结果按实例号升序；选路失败时只有一格。
-	template <typename Res, typename Req>
+	template <typename ExplicitRes = void, typename Req>
 	auto CallAll(std::string sName, const Req& stRequest, ::OI::Timer::MS stTimeout = ::OI::Timer::Seconds(180))
 	{
-		static_assert(std::is_same_v<Res, typename RpcProtoId<Req>::Response>, "RPC response type does not match the request");
+		using Res = typename RpcProtoId<Req>::Response;
+		static_assert(std::is_void_v<ExplicitRes> || std::is_same_v<ExplicitRes, Res>, "RPC response type does not match the request");
 		return RouteCall::Call<Res>(RouteAwaiter::Kind::Named, std::move(sName), ServicePick::All, {}, stRequest, stTimeout);
 	}
 	// 只打这些分区，结果顺序和分区号一致。没登记的那一格记连接失败。
-	template <typename Res, typename Req>
+	template <typename ExplicitRes = void, typename Req>
 	auto CallMany(std::string sName, const std::vector<int32_t>& vZoneIds, const Req& stRequest, ::OI::Timer::MS stTimeout = ::OI::Timer::Seconds(180))
 	{
-		static_assert(std::is_same_v<Res, typename RpcProtoId<Req>::Response>, "RPC response type does not match the request");
+		using Res = typename RpcProtoId<Req>::Response;
+		static_assert(std::is_void_v<ExplicitRes> || std::is_same_v<ExplicitRes, Res>, "RPC response type does not match the request");
 		return RouteCall::Call<Res>(RouteAwaiter::Kind::Zones, std::move(sName), ServicePick::Any, vZoneIds, stRequest, stTimeout);
 	}
 

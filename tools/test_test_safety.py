@@ -571,6 +571,8 @@ class RegressionCleanupTests(unittest.TestCase):
         client = subprocess.CompletedProcess([], 1, "bad=1", "original client failure")
         with patch.object(self.web, "check_web_bind_restart"), \
              patch.object(self.web, "check_web_small_send_queue"), \
+             patch.object(self.web, "check_ipc_second_listener"), \
+             patch.object(self.web, "check_web_upstream_failures"), \
              patch.object(self.procs.shutil, "copy2", side_effect=copy), \
              patch.object(self.web, "launch", return_value=server), \
              patch.object(self.web, "record_process"), \
@@ -601,7 +603,8 @@ class RegressionCleanupTests(unittest.TestCase):
                 fixture.connections.extend(([object()] * 9) if reuse else [object() for _ in range(9)])
                 fixture.calls += 1
             return client
-        with patch.multiple(self.web, check_web_bind_restart=Mock(), check_web_small_send_queue=Mock()), \
+        with patch.multiple(self.web, check_web_bind_restart=Mock(), check_web_small_send_queue=Mock(),
+                            check_ipc_second_listener=Mock(), check_web_upstream_failures=Mock()), \
              patch.object(self.procs.shutil, "copy2"), \
              patch.object(self.web, "launch", return_value=self.first), \
              patch.object(self.web, "record_process"), \

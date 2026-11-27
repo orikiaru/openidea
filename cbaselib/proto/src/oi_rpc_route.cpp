@@ -374,17 +374,41 @@ ServiceRoute RouteAwaiter::await_resume()
 	if (stDeadline.Expired() || iCode == OI_ERR_TIMEOUT)
 	{
 		stRoute.iStatus = ServiceRouteStatus::Timeout;
-		return std::move(stRoute);
 	}
-	if (bResolved)
+	else if (!bResolved)
 	{
-		return std::move(stRoute);
+		auto& stManager = RouteManager::GetInstance();
+		stRoute = iKind == Kind::Zones ? stManager.ResolveZones(sName, vZoneNames, iCode, vList) : stManager.Resolve(sName, iPick, sZone, iCode, vList);
 	}
-	if (iKind == Kind::Zones)
+	if (stRoute.iStatus != ServiceRouteStatus::Ok)
 	{
-		return RouteManager::GetInstance().ResolveZones(sName, vZoneNames, iCode, vList);
+		const char* pReason = "offline";
+		switch (stRoute.iStatus)
+		{
+		case ServiceRouteStatus::BadName:
+			pReason = "invalid_target";
+			break;
+		case ServiceRouteStatus::WrongKind:
+			pReason = "wrong_kind";
+			break;
+		case ServiceRouteStatus::Timeout:
+			pReason = "timeout";
+			break;
+		case ServiceRouteStatus::Busy:
+			pReason = "busy";
+			break;
+		default:
+			break;
+		}
+		const char* pZone = sZone.empty() ? "-" : sZone.c_str();
+		if (iKind == Kind::Zones && !vZoneNames.empty())
+		{
+			pZone = vZoneNames.front().c_str();
+		}
+		fprintf(stderr, "rpc stage=route reason=%s service=%.96s zone=%.32s zones=%zu code=%d\n",
+		    pReason, ValidToken(sName) ? sName.c_str() : "<invalid>", pZone, vZones.size(), RouteCall::Error(stRoute.iStatus));
 	}
-	return RouteManager::GetInstance().Resolve(sName, iPick, sZone, iCode, vList);
+	return std::move(stRoute);
 }
 
 bool RouteAwaiter::ReadCache(int64_t iTimeoutMilliseconds)

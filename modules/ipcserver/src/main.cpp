@@ -1,5 +1,4 @@
 #include <stdio.h>
-#include <exception>
 #include "oi_net.h"
 #include "oi_base.h"
 #include "ipcserver.h"
@@ -23,66 +22,42 @@ int main(int iArgumentCount, char* vArguments[])
 		fprintf(stderr, "StartFramework failed: code=%d\n", iCode);
 		return iCode;
 	}
-	iCode = ::OI::Log::Init();
-	if (iCode != OI_OK)
+	return ::OI::Base::RunFramework([]() -> int32_t
 	{
-		fprintf(stderr, "Log Init failed: code=%d\n", iCode);
-		::OI::Base::StopFramework();
-		return iCode;
-	}
-
-	iCode = [&]() -> int32_t
-	{
-		try
+		int32_t iStatus = ::OI::Log::Init();
+		if (iStatus != OI_OK)
 		{
-			iCode = IpcServer::GetInstance().Init();
-			if (iCode != OI_OK)
-			{
-				fprintf(stderr, "IpcServer Init failed: code=%d\n", iCode);
-				return iCode;
-			}
-			iCode = IpcServer::GetInstance().StartServer();
-			if (iCode != OI_OK)
-			{
-				fprintf(stderr, "IpcServer StartServer failed: code=%d\n", iCode);
-				return iCode;
-			}
-			iCode = IpcUdp::GetInstance().Init();
-			if (iCode != OI_OK)
-			{
-				fprintf(stderr, "IpcUdp Init failed: code=%d\n", iCode);
-				return iCode;
-			}
-			iCode = IpcUdp::GetInstance().StartServer();
-			if (iCode != OI_OK)
-			{
-				fprintf(stderr, "IpcUdp StartServer failed: code=%d\n", iCode);
-				return iCode;
-			}
-			printf("ipc udp listen port=%u\n", (unsigned)IpcUdp::GetInstance().LocalPort());
-			printf("ipc server listen\n");
-			fflush(stdout);
-			IpcServer::GetInstance().StartHttpProbe();
+			fprintf(stderr, "Log Init failed: code=%d\n", iStatus);
+			return iStatus;
 		}
-		catch (const std::exception& stError)
+		iStatus = IpcServer::GetInstance().Init();
+		if (iStatus != OI_OK)
 		{
-			fprintf(stderr, "module init failed: %s\n", stError.what());
-			fflush(stderr);
-			return OI_ERR_FAIL;
+			fprintf(stderr, "IpcServer Init failed: code=%d\n", iStatus);
+			return iStatus;
 		}
-		catch (...)
+		iStatus = IpcServer::GetInstance().StartServer();
+		if (iStatus != OI_OK)
 		{
-			fprintf(stderr, "module init failed: unknown exception\n");
-			fflush(stderr);
-			return OI_ERR_FAIL;
+			fprintf(stderr, "IpcServer StartServer failed: code=%d\n", iStatus);
+			return iStatus;
 		}
+		iStatus = IpcUdp::GetInstance().Init();
+		if (iStatus != OI_OK)
+		{
+			fprintf(stderr, "IpcUdp Init failed: code=%d\n", iStatus);
+			return iStatus;
+		}
+		iStatus = IpcUdp::GetInstance().StartServer();
+		if (iStatus != OI_OK)
+		{
+			fprintf(stderr, "IpcUdp StartServer failed: code=%d\n", iStatus);
+			return iStatus;
+		}
+		printf("ipc udp listen port=%u\n", (unsigned)IpcUdp::GetInstance().LocalPort());
+		printf("ipc server listen\n");
+		fflush(stdout);
+		IpcServer::GetInstance().StartHttpProbe();
 		return OI_OK;
-	}();
-	if (iCode != OI_OK)
-	{
-		::OI::Base::StopFramework();
-		return iCode;
-	}
-
-	return ::OI::Base::RunFramework();
+	});
 }

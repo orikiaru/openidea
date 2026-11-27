@@ -327,6 +327,8 @@ class HoldCase(Case):
             assert "hold registry pairing bad=0" in text
             assert "hold route target stability bad=0" in text
             assert re.search(r"hold service rpc global=1 any=1 zone=1 batch=2 many=2 slot=1 elapsed_ms=\d+ wrong=1 miss=1 bad=0", text)
+            assert "rpc stage=route reason=wrong_kind service=ipcserver zone=1001 zones=0 code=-1" in text
+            assert "rpc stage=route reason=offline service=gameserver zone=9999 zones=0 code=-3" in text
             assert "hold named rpc ownership success=8 rejected=0 bad=0" in text
             assert "hold route notify single=1 zone=1 zone_other=0 negative=-1 all=2 many=2 missing_reported=1 absent_reported=1 reconnect=1 bad=0" in text
             assert "task failed: route notification failed service=gameserver zones=1003 protocol=3006 failed=1/3 code=-3" in text

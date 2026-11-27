@@ -2,6 +2,17 @@
 
 全量四组都通过时，改写下面的「全量」，只留最近一次。写明日期、平台、线程模式、通过项数，以及机器的 CPU 型号和实测频率。只跑了部分用例不要写成全量通过。操作步骤仍在 [testing.md](testing.md)。
 
+## 应用启动与错误诊断验收（2026-11-27）
+
+本轮受测 HEAD `b5a27ecca98f9053d72fb851bfdde38f482def60` 加工作区改动；四路全量的 poll 基线不完全相同，不能记为拟提交树四路全量。Windows MT/ST 和远程 Linux MT 全量含本地未提交的 `oi_poll.cpp` 差异（SHA-256 `50c2e641123e266e60a3f23a9694ff9d3d30227473127c7715f57c45f2ae0016`）；远程 Linux ST 全量及其余三路定向补验使用 HEAD 版 poll（SHA-256 `5586b5860e9f783ff230c96b9111cc354c3181baaecff0920b3c5c868f91c3b9`）。
+
+- Windows MSVC x64 Release MT/ST 全量矩阵均通过，分别 25 项通过、Unix 专属 `tcp-error-rearm` 跳过；耗时 681.7/685.2 秒，CPU Intel Core i9-11900K，测后 CIM 3504 MHz。结果在 `.local/appopt-final-20261127/windows-mt`、`.local/appopt-final-20261127/windows-st`。两路均实际输出第二监听失败后释放及重启、Web 上游异常的通过标记。
+- 远程 Linux GCC 13 Release MT 的工作树全量 26/26 及 ASan/UBSan 通过，CPU Xeon Platinum 8255C，测后采样 2494.140 MHz；结果为 `~/openidea-test-results/appopt-final-mt-20261127`。HEAD 版 poll 另跑 hold、web、tcp-error-rearm 均通过，结果分别为 `~/openidea-test-results/appopt-commit-mt-hold`、`appopt-commit-mt-web`、`appopt-commit-mt-tcp`。
+- 远程 Linux GCC 13 Release ST 的拟提交树全量 26/26 及 ASan/UBSan 通过，CPU Xeon Gold 6271C，测后采样 2593.904 MHz；结果为 `~/openidea-test-results/appopt-commit-st-20261127`。其中 hold、web、tcp-error-rearm 均通过。
+- Windows MT/ST 的拟提交树 hold、web 业务均通过，结果在 `.local/appopt-commit-windows-{mt,st}-{hold,web}`。ST hold 矩阵的配置探针一次返回 41 但输出为空，web 矩阵重测通过；独立重复两种参数顺序各 100 次时，`--test-hooks --config` 出现 2 次相同空输出，原因未确认，证据在 `.local/appopt-commit-windows-st-config-repeat.json`。
+- 首轮四路因第二监听失败进程的预期非零退出被清理器误判而失败；修复后第二轮业务均通过，但旧安全单测未 mock 新增探针而失败。更新 mock 后上述最终矩阵和定向检查通过，原结果保留。四路前后按归属清理通过。
+- 四路业务 Redis 用例均通过；安全脚本单元测试中未传 Redis 可执行文件的单项跳过不是业务 Redis 跳过。本轮 Windows、Linux MT/ST 均未运行 MySQL 或静态路由专项。Linux 两路全量运行 ASan/UBSan；Windows 不运行该 Linux 探针。
+
 ## 日志文件与测试工具复验（2026-11-26，本轮矩阵未四路通过）
 
 本轮四路业务 `all` 均通过，日志跨日、断连合同、慢盘和写满定向用例也在 Windows、远程 Linux 的单/多线程通过；不能据此把四路矩阵记为全量通过。此前「全量」记录保留。

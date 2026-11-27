@@ -1,5 +1,4 @@
 #include <stdio.h>
-#include <exception>
 #include "oi_net.h"
 #include "oi_base.h"
 #include "redis_server.h"
@@ -12,52 +11,28 @@ int main(int iArgumentCount, char* vArguments[])
 		fprintf(stderr, "StartFramework failed: code=%d\n", iCode);
 		return iCode;
 	}
-	iCode = ::OI::Log::Init();
-	if (iCode != OI_OK)
+	return ::OI::Base::RunFramework([]() -> int32_t
 	{
-		fprintf(stderr, "Log Init failed: code=%d\n", iCode);
-		::OI::Base::StopFramework();
-		return iCode;
-	}
-
-	iCode = [&]() -> int32_t
-	{
-		try
+		int32_t iStatus = ::OI::Log::Init();
+		if (iStatus != OI_OK)
 		{
-			iCode = RedisServer::GetInstance().Init();
-			if (iCode != OI_OK)
-			{
-				fprintf(stderr, "RedisServer Init failed: code=%d\n", iCode);
-				return iCode;
-			}
-			iCode = RedisServer::GetInstance().StartServer();
-			if (iCode != OI_OK)
-			{
-				fprintf(stderr, "RedisServer StartServer failed: code=%d\n", iCode);
-				return iCode;
-			}
-			printf("redis server listen\n");
-			fflush(stdout);
+			fprintf(stderr, "Log Init failed: code=%d\n", iStatus);
+			return iStatus;
 		}
-		catch (const std::exception& stError)
+		iStatus = RedisServer::GetInstance().Init();
+		if (iStatus != OI_OK)
 		{
-			fprintf(stderr, "module init failed: %s\n", stError.what());
-			fflush(stderr);
-			return OI_ERR_FAIL;
+			fprintf(stderr, "RedisServer Init failed: code=%d\n", iStatus);
+			return iStatus;
 		}
-		catch (...)
+		iStatus = RedisServer::GetInstance().StartServer();
+		if (iStatus != OI_OK)
 		{
-			fprintf(stderr, "module init failed: unknown exception\n");
-			fflush(stderr);
-			return OI_ERR_FAIL;
+			fprintf(stderr, "RedisServer StartServer failed: code=%d\n", iStatus);
+			return iStatus;
 		}
+		printf("redis server listen\n");
+		fflush(stdout);
 		return OI_OK;
-	}();
-	if (iCode != OI_OK)
-	{
-		::OI::Base::StopFramework();
-		return iCode;
-	}
-
-	return ::OI::Base::RunFramework();
+	});
 }

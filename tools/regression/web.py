@@ -15,6 +15,7 @@ from .config import replace, shift_ports
 from .probes import EnvironmentBlocked
 from .procs import REPO, cleanup_owned, copy_runtime_libraries, regression_directory
 from .test_bodyless import check_http_bodyless
+from .startup_checks import check_ipc_second_listener, check_web_upstream_failures
 from .web_server_checks import (
     check_web_bind_restart,
     check_web_json,
@@ -34,6 +35,8 @@ from .web_client_fixtures import (
 
 
 def run_web(args):
+    check_ipc_second_listener(args)
+    check_web_upstream_failures(args)
     check_web_bind_restart(args)
     check_web_small_send_queue(args)
     # 仍使用模块自带的 WebClient 用例，验证别名键和未改名键的 HTTP/JSON/二进制收发。

@@ -236,9 +236,15 @@ OI::Coro::Task WebServer::Query(const Request& stRequest, Response& stReply)
 			std::fflush(stdout);
 		}
 		const int32_t iCode = co_await OI::Rpc::RpcCall(WebRpc::GetInstance(), stCall, stResult, OI::Timer::Seconds(5));
-		if (iCode != OI_OK || stResult.iMark != stCall.iMark)
+		if (iCode != OI_OK)
 		{
-			std::fprintf(stderr, "web upstream RPC failed code=%d\n", iCode);
+			std::fprintf(stderr, "web upstream RPC call failed code=%d\n", iCode);
+			stReply.iStatus = 502;
+			co_return;
+		}
+		if (stResult.iMark != stCall.iMark)
+		{
+			std::fprintf(stderr, "web upstream RPC reply mismatch expected=%d received=%d\n", stCall.iMark, stResult.iMark);
 			stReply.iStatus = 502;
 			co_return;
 		}

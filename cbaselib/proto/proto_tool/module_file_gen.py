@@ -16,7 +16,6 @@ class ModuleFileGen:
         self.module_relative_config_path = "../config"
         
         self.common_header = '''#include <stdio.h>
-#include <exception>
 #include "oi_net.h"
 #include "oi_base.h"
 '''
@@ -95,7 +94,7 @@ class ModuleFileGen:
         
         module_config_path = self.GetModuleConfigPath()
         
-        module_components_init = "".join("            " + line[4:] if line.strip() else line
+        module_components_init = "".join("        " + line[4:] if line.strip() else line
                                          for line in self.GetComponentInits().splitlines(keepends=True))
         
         module_components_config = self.GetComponentConfig()
@@ -163,44 +162,16 @@ int main(int argc, char* argv[])
         return iCode;
     }
 
-    //初始化日志服务
-    iCode = ::OI::Log::Init();
-    if (iCode != OI_OK)
+    return ::OI::Base::RunFramework([]() -> int32_t
     {
-        fprintf(stderr, "Log Init failed: code=%d\n", iCode);
-        ::OI::Base::StopFramework();
-        return iCode;
-    }
-
-    //添加组件逻辑,如网络组件,自定义单例对象等初始化逻辑。处理函数重复登记等启动错误会抛异常，这里统一接住
-    iCode = [&]() -> int32_t
-    {
-        try
+        int32_t iCode = ::OI::Log::Init();
+        if (iCode != OI_OK)
         {
-__MODULE_COMPONENTS_INIT__        }
-        catch (const std::exception& stError)
-        {
-            fprintf(stderr, "module init failed: %s\n", stError.what());
-            fflush(stderr);
-            return OI_ERR_FAIL;
+            fprintf(stderr, "Log Init failed: code=%d\n", iCode);
+            return iCode;
         }
-        catch (...)
-        {
-            fprintf(stderr, "module init failed: unknown exception\n");
-            fflush(stderr);
-            return OI_ERR_FAIL;
-        }
-        return OI_OK;
-    }();
-    if (iCode != OI_OK)
-    {
-        // 提前退出前先停 poll 线程，静态析构时不会再有线程访问会话和管理器
-        ::OI::Base::StopFramework();
-        return iCode;
-    }
-
-    //跑任务、定时器和协程。收到退出信号或 RequestStop 后 join 完线程再返回
-    return ::OI::Base::RunFramework();
+__MODULE_COMPONENTS_INIT__        return OI_OK;
+    });
 }
         '''
         file_data = self.DoReplace(file_data)

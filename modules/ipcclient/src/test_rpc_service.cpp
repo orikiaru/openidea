@@ -284,7 +284,7 @@ OI::Coro::TaskResult<int> TestRpcService::CheckNamedServiceRpc()
 		const int32_t iGlobalCode = co_await stRoute.Call("ipcserver", stRequest, stGlobalRes, ::OI::Timer::Seconds(3));
 		const int32_t iAnyCode = co_await stRoute.Call("gameserver", stRequest, stAnyRes, ::OI::Timer::Seconds(3));
 		const int32_t iZoneCode = co_await stRoute.Call("gameserver", 1001, stRequest, stZoneRes, ::OI::Timer::Seconds(3));
-		auto vBatch = co_await stRoute.CallAll<::OI::RpcData::AllEchoRes>("gameserver", stRequest, ::OI::Timer::Seconds(3));
+		auto vBatch = co_await stRoute.CallAll("gameserver", stRequest, ::OI::Timer::Seconds(3));
 		iGlobal = iGlobalCode == 0 && stGlobalRes.iCode == 1 ? 1 : 0;
 		iAny = iAnyCode == 0 && stAnyRes.iCode == 1 ? 1 : 0;
 		iZone = iZoneCode == 0 && stZoneRes.iCode == 1 ? 1 : 0;
@@ -321,7 +321,7 @@ OI::Coro::TaskResult<int> TestRpcService::CheckNamedServiceRpc()
 		++iBad;
 	}
 	std::vector<int32_t> vBothZones{1001, 1002};
-	auto vMany = co_await stRoute.CallMany<::OI::RpcData::AllEchoRes>("gameserver", vBothZones, stRequest, ::OI::Timer::Seconds(3));
+	auto vMany = co_await stRoute.CallMany("gameserver", vBothZones, stRequest, ::OI::Timer::Seconds(3));
 	int iMany = 0;
 	if (vMany.size() == vBothZones.size())
 	{
@@ -336,6 +336,12 @@ OI::Coro::TaskResult<int> TestRpcService::CheckNamedServiceRpc()
 	std::vector<int32_t> vPartialZones{1001, 9999};
 	auto vPartial = co_await stRoute.CallMany<::OI::RpcData::AllEchoRes>("gameserver", vPartialZones, stRequest, ::OI::Timer::Seconds(3));
 	int iSlot = vPartial.size() == 2 && vPartial[0].GetRet() == 0 && vPartial[0].GetRes().iCode == 1 && vPartial[1].GetRet() == OI_ERR_CONNECT ? 1 : 0;
+	auto vInferred = co_await stRoute.CallMany("gameserver", vPartialZones, stRequest, ::OI::Timer::Seconds(3));
+	static_assert(std::is_same_v<decltype(vPartial), decltype(vInferred)>);
+	if (vInferred.size() != 2 || vInferred[0].GetRet() != 0 || vInferred[0].GetRes().iCode != 1 || vInferred[1].GetRet() != OI_ERR_CONNECT)
+	{
+		iSlot = 0;
+	}
 	auto vEmptyMany = co_await stRoute.CallMany<::OI::RpcData::AllEchoRes>("gameserver", std::vector<int32_t>{}, stRequest, ::OI::Timer::Seconds(3));
 	auto vGlobalMany = co_await stRoute.CallMany<::OI::RpcData::AllEchoRes>("ipcserver", vBothZones, stRequest, ::OI::Timer::Seconds(3));
 	if (iMany != 2 || iSlot != 1 || !vEmptyMany.empty() || vGlobalMany.size() != 2 ||

@@ -1,6 +1,7 @@
 #include "oi_app.h"
 #include <stdio.h>
 #include <cstring>
+#include <exception>
 #include "oi_config.h"
 #include "oi_thread.h"
 #include "oi_timer_manager.h"
@@ -95,6 +96,29 @@ int RunFramework()
 	SingletonUpdates::Instance().Start();
 	::OI::Thread::ThreadPool::GetInstance().StartWork();
 	return ::OI::Thread::ThreadPool::GetInstance().ExitCode();
+}
+
+int RunFramework(const std::function<int32_t()>& fnInit)
+{
+	int32_t iCode = OI_ERR_FAIL;
+	try
+	{
+		iCode = fnInit();
+	}
+	catch (const std::exception& stError)
+	{
+		fprintf(stderr, "module init failed: %s\n", stError.what());
+	}
+	catch (...)
+	{
+		fprintf(stderr, "module init failed: unknown exception\n");
+	}
+	if (iCode != OI_OK)
+	{
+		StopFramework();
+		return iCode;
+	}
+	return RunFramework();
 }
 }
 }

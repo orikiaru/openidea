@@ -88,8 +88,8 @@ Redis 连不上或卡住时，登记和续期回失败，客户端下一次心�
 | --- | --- |
 | `Call(名字, req, res)` | 任选一台，优先已连上的。 |
 | `Call(名字, 分区号, req, res)` | 打这个分区里实例号最小的一台。全局服不接受分区号。分区号为负返回 `OI_ERR_FAIL`，不发请求。 |
-| `CallAll<Res>(名字, req)` | 协程挂起读本地缓存，没拉到过就等下一次秒更新，再同时发给每一份。等待不占线程，上限 min(剩余预算, 3000ms)。结果按实例号升序；选路失败时只有一格。 |
-| `CallMany<Res>(名字, 分区号列表, req)` | 只打 `vector<int32_t>` 里的这些分区，结果数量、顺序始终和列表一致，重复分区也保留。没登记的那一格是 `OI_ERR_CONNECT`。选路超时等整体错误填入每一格；负数分区号、全局服带分区号每格为 `OI_ERR_FAIL`。空列表返回空结果。 |
+| `CallAll(名字, req)` | 协程挂起读本地缓存，没拉到过就等下一次秒更新，再同时发给每一份。等待不占线程，上限 min(剩余预算, 3000ms)。结果按实例号升序；选路失败时只有一格。 |
+| `CallMany(名字, 分区号列表, req)` | 只打 `vector<int32_t>` 里的这些分区，结果数量、顺序始终和列表一致，重复分区也保留。没登记的那一格是 `OI_ERR_CONNECT`。选路超时等整体错误填入每一格；负数分区号、全局服带分区号每格为 `OI_ERR_FAIL`。空列表返回空结果。 |
 
 路由上的单向消息和上面四个调用对应，默认超时 180 秒：`Notify(名字, msg)` 任选一台，`Notify(名字, 分区号, msg)` 指定分区，`NotifyAll(名字, msg)` 发给这一刻名单里的每一台，`NotifyMany(名字, 分区号列表, msg)` 只发这些分区。返回 `OI_OK` 只表示任务已启动。分区号为负同步返回 `OI_ERR_FAIL`，不启动任务。选路、发送或回执失败由协程任务错误处理器报告（`OI::Coro::ReportTaskError` / `OI::Coro::SetTaskErrorHandler`）。不存在的服务或分区走这条路径，路由失败映射为 `OI_ERR_CONNECT`。这些连接是 `PeerConnection`，断线后还没发出的通知先暂存，重连成功再补发。
 
@@ -117,8 +117,8 @@ Redis 连不上或卡住时，登记和续期回失败，客户端下一次心�
 | --- | --- |
 | `Call(实例号, req, res)` | 只打这一台。名单里没有回 `OI_ERR_CONNECT`；在名单里还没连上就暂存，连上补发。 |
 | `CallAny(req, res)` | 在已连上的实例里轮询，一台都没连上时在名单里轮询。 |
-| `CallMany<Res>(实例号列表, req)` | 只打这些实例，顺序和列表一致。名单里没有的那一格是 `OI_ERR_CONNECT`。 |
-| `CallAll<Res>(req)` | 按发送这一刻的名单每台一份，先全部发出再等。结果按实例号升序，每格带 `iInstanceId`。 |
+| `CallMany(实例号列表, req)` | 只打这些实例，顺序和列表一致。名单里没有的那一格是 `OI_ERR_CONNECT`。 |
+| `CallAll(req)` | 按发送这一刻的名单每台一份，先全部发出再等。结果按实例号升序，每格带 `iInstanceId`。 |
 | `NotifyPeer(实例号, msg)` | 向指定实例启动异步通知，名单里没有返回 `OI_ERR_CONNECT`，未连接时暂存并重连。 |
 | `NotifyAny(msg)` | 选路同 `CallAny`，名单为空返回 `OI_ERR_CONNECT`。 |
 | `NotifyAll(msg)` | 按这一刻的名单给每台各启动一条，返回启动了几条。线程不对返回错误码。未连接时暂存并重连。 |
@@ -157,11 +157,11 @@ OI::RpcData::AllEchoRes stAny;
 const int32_t iAny = co_await stRoute.Call("gameserver", req, stAny);
 OI::RpcData::AllEchoRes stOne;
 const int32_t iOne = co_await stRoute.Call("gameserver", 1001, req, stOne);
-auto vSome = co_await stRoute.CallMany<OI::RpcData::AllEchoRes>("gameserver", std::vector<int32_t>{1001, 1002}, req, OI::Timer::Seconds(3));
-auto vAll = co_await stRoute.CallAll<OI::RpcData::AllEchoRes>("gameserver", req);
+auto vSome = co_await stRoute.CallMany("gameserver", std::vector<int32_t>{1001, 1002}, req, OI::Timer::Seconds(3));
+auto vAll = co_await stRoute.CallAll("gameserver", req);
 ```
 
-服务名和分区号分开传，不拼 `名字.分区`，也不再解析 `名字.*`。`CallAll` 和 `CallMany` 自己先把这一批请求都发出去，再逐个等已经在途的等待器，然后把每台的结果一起交回来。调用方不写这个循环。总耗时取决于最慢的一台。某一台超时或断连只记在它自己的结果里。
+批量调用根据请求类型推导回复类型，旧的显式 `<回复类型>` 写法仍可用，两种写法的结果类型相同。服务名和分区号分开传，不拼 `名字.分区`，也不再解析 `名字.*`。`CallAll` 和 `CallMany` 自己先把这一批请求都发出去，再逐个等已经在途的等待器，然后把每台的结果一起交回来。调用方不写这个循环。总耗时取决于最慢的一台。某一台超时或断连只记在它自己的结果里。
 
 单次 `RpcCall` 仍把发送写在 `await_suspend` 里。一批调用不能先造一串还没发送的等待器再挨个 `co_await`，那样会等完一台才发下一台。`CallAll` 和 `CallMany` 在里面先 `Submit` 再等。构建或提交中途抛异常时，只等待已成功登记的调用，再向调用方抛出原异常；未登记项没有等待者可唤醒。
 
