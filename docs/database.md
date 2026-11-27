@@ -34,23 +34,23 @@ MySQL 配置必须指定非空数据库名、1 至 65535 的有效端口，以�
 
 ## 结构体单表操作
 
-`oi_db_table.h` 提供 `Client` 的单表入口，表名只认字母、数字、下划线，最长 64；无效输入返回 `OI_ERR_INVALID_ARGUMENT`。这些入口返回 `TaskResult<int32_t>`，逐条等待并检查状态码：
+`oi_db_table.h` 提供 `Client` 的单表入口。标记 `db` 的协议结构生成 `constexpr DbTableName()`，将完整结构名转小写，不插入下划线，例如 `DbSample` 对应 `dbsample`。建表、单条和批量增删改查、按成员选列、带写结果的重载以及 `SelectAll` 均可省略表名，使用该默认值。显式表名重载保留，用于自定义表；表名只认字母、数字、下划线，最长 64，无效时返回 `OI_ERR_INVALID_ARGUMENT`。这些入口返回 `TaskResult<int32_t>`，逐条等待并检查状态码：
 
 | 接口 | 操作 |
 | --- | --- |
-| `CreateTable<Row>(sTable, stError)` | 建表，列为 `NOT NULL`，使用全部 `[dbkey]` 主键 |
-| `Insert(sTable, stRow, stError)` | 整行插入，主键冲突由数据库报错 |
-| `Upsert(sTable, stRow, stError)` | 整行写入，主键存在时更新非主键列 |
-| `Select(sTable, stRow, stError, 成员...)` | 按行中主键查询，不传成员读整行 |
-| `SelectAll(sTable, vRows, stError)` | 查询整表并解码为行数组 |
-| `Update(sTable, stRow, stError, 成员...)` | 按主键更新，不传成员改全部非主键列 |
-| `Delete(sTable, stRow, stError)` | 按主键删除 |
+| `CreateTable<Row>(stError)` | 建表，列为 `NOT NULL`，使用全部 `[dbkey]` 主键 |
+| `Insert(stRow, stError)` | 整行插入，主键冲突由数据库报错 |
+| `Upsert(stRow, stError)` | 整行写入，主键存在时更新非主键列 |
+| `Select(stRow, stError, 成员...)` | 按行中主键查询，不传成员读整行 |
+| `SelectAll(vRows, stError)` | 查询整表并解码为行数组 |
+| `Update(stRow, stError, 成员...)` | 按主键更新，不传成员改全部非主键列 |
+| `Delete(stRow, stError)` | 按主键删除 |
 
 单对象 `Insert`、`Upsert`、`Update`、`Delete` 可在 `Error` 前额外传 `Result&`，成功后读取 `iAffected` 和 `iInsertId`；输出须活到任务真正结束。除建表外均支持行或行数组；数组写操作使用事务，空数组成功且不执行 SQL。数组查询按输入主键逐条读取，任一失败不覆盖输出。`Select` 找不到返回 `OI_ERR_NOT_FOUND`，多行或解码失败返回 `OI_ERR_DECODE`；成功才写回。`SelectAll` 只接收输出数组，不要求主键；`CreateTable`、`Upsert`、按键的 `Select`、`Update` 和 `Delete` 要求 `[dbkey]`，更新不能指定主键列。读取和更新可通过成员指针指定部分列。
 
 ```cpp
 OI::Db::Error stError;
-const int32_t iStatus = co_await stMysql.Update(sTable, stRow, stError, &Row::sName, &Row::dScore);
+const int32_t iStatus = co_await stMysql.Update(stRow, stError, &Row::sName, &Row::dScore);
 if (iStatus != OI_OK)
 {
     co_return iStatus;

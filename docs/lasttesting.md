@@ -23,22 +23,18 @@
 - 唤醒性能单线程专项：远程 Linux 的 100000 次串行空任务三轮平均分别为 13.590、13.840、13.800 微秒；真 MySQL 的 `mysql_direct_finish_to_resume` 为 1000 样本，p50/p95/p99 分别 15.241/25.457/32.247 微秒，逐段结果在 `st-wake-20261126-200353`。Windows ST 同一轮的串行空任务平均 39.265 微秒；独立 trace 的 `trace_total` p50/p95/p99 为 36.1/69.2/96.5 微秒。串行整链与独立打点采样分别记录，不将两者相减或混为同一测量。
 - Windows `web-stop` 单/多线程各做两轮 control、idle、stop：control 每轮完整接收 9437184 字节；idle 零退出后收到 RST；活跃响应停服每轮收到 8185 字节后 RST，诊断失败。结果位于 `.local/webstop-final-windows-mt`、`.local/webstop-final-windows-st`。这是已观察行为，停服是否应排空在途响应仍待定。
 
-## 全量（2026-11-28，数据库接口）
+## 全量（2026-11-28，数据库默认表名）
 
-受测 HEAD `0ee39708a255ed8a9fc9dd8a8b27a3b7c1a54a0f` 加工作区改动。四路 `all` 均通过，20 个非文档文件的 LF 归一化清单 SHA256 为 `0455631f00931194c741e4e786d545fd215ace3e01f0315db6e30dffff7e3e22`，四路隔离树逐项匹配。两路 WSL 的 ASan/UBSan 通过；四路测试前后按归属清理通过。
+受测 HEAD `a0f880ca054828870a9b8cdbaba1f37ba094a6b1` 加工作区改动。四路 `all` 均通过，7 个非文档文件的 LF 归一化清单 SHA256 为 `c14ccbafff60f91d1cbdf710f7166e65816432f25516231a76555ec2d894dbc5`，四路隔离树逐项匹配。两路 WSL 的 ASan/UBSan 通过；四路测试前后按归属清理通过。
 
 | 平台 | 线程 | CPU | 频率 MHz | `all` 结果 | 耗时 |
 | --- | --- | --- | ---: | --- | --- |
-| Windows MSVC x64 Release | 多线程 | AMD Ryzen 7 9800X3D | 4700（测后） | 25 通过、1 Unix 专项跳过 | 541.5 秒 |
-| Windows MSVC x64 Release | 单线程 | AMD Ryzen 7 9800X3D | 4700（测后） | 25 通过、1 Unix 专项跳过 | 574.8 秒 |
-| WSL Ubuntu 24.04 GCC 13.3 Release | 多线程 | AMD Ryzen 7 9800X3D | 4699.888 | 26/26，21 步骤通过 | 338.9 秒 |
-| WSL Ubuntu 24.04 GCC 13.3 Release | 单线程 | AMD Ryzen 7 9800X3D | 4699.888 | 26/26，20 步骤通过 | 295.6 秒 |
+| Windows MSVC x64 Release | 多线程 | AMD Ryzen 7 9800X3D | 4700（测后） | 25 通过、1 Unix 专项跳过 | 594.3 秒 |
+| Windows MSVC x64 Release | 单线程 | AMD Ryzen 7 9800X3D | 4700（测后） | 25 通过、1 Unix 专项跳过 | 634.4 秒 |
+| WSL Ubuntu 24.04 GCC 13.3 Release | 多线程 | AMD Ryzen 7 9800X3D | 4699.888 | 26/26 | 425.0 秒 |
+| WSL Ubuntu 24.04 GCC 13.3 Release | 单线程 | AMD Ryzen 7 9800X3D | 4699.888 | 26/26，20 步骤通过 | 364.2 秒 |
 
-Windows 跳过项为 Unix libuv POLLERR 专项 `tcp-error-rearm`；两路均输出 `hold captured tasks done=32 bad=0`、`web PASS` 和 `web-coro PASS`。结果目录为 `.local/db-isas-final-windows`、`.local/sql-final-mt6/linux-mt`、`.local/db-final6-linux-st/linux-st`。
-
-独立真 MySQL 和静态注册四路通过。Windows 两路均输出 `mysql cell predicates bad=0`、`mysql row mapping bad=0`、`mysql all field types batch bad=0`、`mysql rows bad=0`、`mysql error handling bad=0`、`mysql done bad=0`；日志实际输出的原生码有 SQL 1054、认证 1045、连接 2002，重复键 1062 由断言检查而非单独日志输出。Windows 真库结果为 `.local/db-isas-win-mt-mysql/mysql/ipcclient.out`、`.local/db-isas-win-st-mysql/mysql/ipcclient.out`。专项前后归属清理通过。
-
-前测 `.local/db-api-final-windows` 两路因注册服务仍用旧数据库接口构建失败，后已迁移；`.local/db-api-v2-windows` 业务通过但旧字段名称断言失败，后已同步；`.local/db-alltypes-windows` 两路因嵌套 JSON 容器的重载查找构建失败，后已修复并保留触发用例。另一次旧组合前测按版本切换中断，均不计本轮通过。
+Windows 跳过项为 Unix libuv POLLERR 专项 `tcp-error-rearm`。四路真 MySQL 和静态注册通过，均核对 `mysql default_table bad=0`；Windows 两路还输出 `mysql all field types batch bad=0`、`mysql done bad=0`。Windows 全量目录为 `.local/db-default-table-windows`，真库结果为 `.local/db-default-win-mt-mysql`、`.local/db-default-win-st-mysql`；WSL 结果为 `.local/default-table-mt/linux-mt`、`.local/db-default-linux-st/linux-st`。真库专项与 `all` 分开记账。
 
 ## 收包额度与解码预算复验（2026-11-25 晚，历史记录）
 

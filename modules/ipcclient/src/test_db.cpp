@@ -361,6 +361,75 @@ OI::Coro::TaskResult<int32_t> TestDb::CheckBatchCrud(OI::Db::Client& stMysql, co
 	co_return iBad;
 }
 
+OI::Coro::TaskResult<int32_t> TestDb::CheckDefaultTable(OI::Db::Client& stMysql, const std::string& sExplicitTable)
+{
+	using OI::RpcData::DbSample;
+	int32_t iBad = 0;
+	OI::Db::Error stError;
+	OI::Db::Result stResult;
+	int32_t iCode = co_await stMysql.CreateTable<DbSample>(stError);
+	if (iCode != OI_OK)
+	{
+		LOG_TRACE("mysql default table create failed status=%d stage=%s", iCode, stError.sStage.c_str());
+		co_return 1;
+	}
+
+	DbSample stRow = MakeFullRow();
+	stRow.sName = "default";
+	iCode = co_await stMysql.Insert(stRow, stResult, stError);
+	Expect(iBad, iCode == OI_OK && stResult.iAffected == 1, "default insert");
+	iCode = co_await stMysql.Insert(stRow, stError);
+	Expect(iBad, iCode == OI_ERR_EXIST && stError.iNativeCode == 1062, "default duplicate insert");
+
+	std::string sStored;
+	iCode = co_await stMysql.Scalar("SELECT sName FROM `dbsample` WHERE id=1", {}, sStored, stError);
+	Expect(iBad, iCode == OI_OK && sStored == "default", "lowercase physical table");
+	DbSample stOther = stRow;
+	iCode = co_await stMysql.Select(sExplicitTable, stOther, stError);
+	Expect(iBad, iCode == OI_OK && SameRow(stOther, MakeFullRow()), "same key in explicit table");
+
+	stRow.sName = "updated";
+	stRow.iCount = 42;
+	iCode = co_await stMysql.Update(stRow, stResult, stError, &DbSample::sName);
+	Expect(iBad, iCode == OI_OK && stResult.iAffected == 1, "default update result");
+	iCode = co_await stMysql.Select(stRow, stError, &DbSample::iCount);
+	Expect(iBad, iCode == OI_OK && stRow.iCount == UINT32_MAX && stRow.sName == "updated", "default projection");
+	stRow.iCount = 42;
+	iCode = co_await stMysql.Update(stRow, stError);
+	Expect(iBad, iCode == OI_OK, "default full update");
+	stRow.iCount = 43;
+	iCode = co_await stMysql.Upsert(stRow, stResult, stError);
+	Expect(iBad, iCode == OI_OK && stResult.iAffected == 2, "default upsert result");
+	iCode = co_await stMysql.Delete(stRow, stResult, stError);
+	Expect(iBad, iCode == OI_OK && stResult.iAffected == 1, "default delete result");
+
+	std::vector<DbSample> vRows{stRow, MakeEdgeRow()};
+	iCode = co_await stMysql.Insert(vRows, stError);
+	Expect(iBad, iCode == OI_OK, "default batch insert");
+	vRows[0].sName = "first";
+	vRows[1].sName = "second";
+	iCode = co_await stMysql.Update(vRows, stError, &DbSample::sName);
+	Expect(iBad, iCode == OI_OK, "default batch update");
+	std::swap(vRows[0].iId, vRows[1].iId);
+	iCode = co_await stMysql.Select(vRows, stError, &DbSample::sName);
+	Expect(iBad, iCode == OI_OK && vRows[0].sName == "second" && vRows[1].sName == "first", "default batch projection");
+	iCode = co_await stMysql.Delete(vRows, stError);
+	Expect(iBad, iCode == OI_OK, "default batch delete");
+	std::vector<DbSample> vRead;
+	iCode = co_await stMysql.SelectAll(vRead, stError);
+	Expect(iBad, iCode == OI_OK && vRead.empty(), "default table empty");
+	iCode = co_await stMysql.Upsert(vRows, stError);
+	Expect(iBad, iCode == OI_OK, "default batch upsert");
+	iCode = co_await stMysql.Delete(stRow, stError);
+	Expect(iBad, iCode == OI_OK, "default delete");
+	iCode = co_await stMysql.Upsert(stRow, stError);
+	Expect(iBad, iCode == OI_OK, "default upsert");
+	iCode = co_await stMysql.SelectAll(vRead, stError);
+	Expect(iBad, iCode == OI_OK && vRead.size() == 2, "default select all");
+	LOG_TRACE("mysql default_table bad=%d", iBad);
+	co_return iBad;
+}
+
 OI::Coro::TaskResult<int32_t> TestDb::CheckColumnTypes(OI::Db::Client& stMysql, const std::string& sTable)
 {
 	OI::Db::Result stResult;
@@ -514,6 +583,11 @@ OI::Coro::TaskResult<int32_t> TestDb::CheckMysqlRows(OI::Db::Client& stMysql, co
 			}
 		}
 
+		const char* pIsolated = std::getenv("OI_TEST_MYSQL_ISOLATED");
+		if (pIsolated && std::strcmp(pIsolated, "1") == 0)
+		{
+			iBad += co_await CheckDefaultTable(stMysql, sTable);
+		}
 		iBad += co_await CheckColumnTypes(stMysql, sTable);
 
 		// 主键重复的 INSERT 由库拒绝，原生错误必须是 ER_DUP_ENTRY（1062），连接错误等别的失败不算。

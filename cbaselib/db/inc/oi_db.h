@@ -337,6 +337,89 @@ class Client
 	[[nodiscard]] OI::Coro::TaskResult<int32_t> Select(const std::string& sTable, std::vector<C>& vRows, Error& stError, M C::*... pMembers) const;
 	template <typename C>
 	[[nodiscard]] OI::Coro::TaskResult<int32_t> SelectAll(const std::string& sTable, std::vector<C>& vRows, Error& stError) const;
+
+	// 使用生成结构的默认表名；SQL 构建和执行复用显式表名接口。
+	template <typename C>
+	[[nodiscard]] OI::Coro::TaskResult<int32_t> CreateTable(Error& stError) const
+	{
+		return CreateTable<C>(C::DbTableName(), stError);
+	}
+	template <typename C>
+	[[nodiscard]] OI::Coro::TaskResult<int32_t> Insert(const C& stRow, Error& stError) const
+	{
+		return Insert(C::DbTableName(), stRow, stError);
+	}
+	template <typename C>
+	[[nodiscard]] OI::Coro::TaskResult<int32_t> Insert(const C& stRow, Result& stResult, Error& stError) const
+	{
+		return Insert(C::DbTableName(), stRow, stResult, stError);
+	}
+	template <typename C>
+	[[nodiscard]] OI::Coro::TaskResult<int32_t> Insert(const std::vector<C>& vRows, Error& stError) const
+	{
+		return Insert(C::DbTableName(), vRows, stError);
+	}
+	template <typename C>
+	[[nodiscard]] OI::Coro::TaskResult<int32_t> Upsert(const C& stRow, Error& stError) const
+	{
+		return Upsert(C::DbTableName(), stRow, stError);
+	}
+	template <typename C>
+	[[nodiscard]] OI::Coro::TaskResult<int32_t> Upsert(const C& stRow, Result& stResult, Error& stError) const
+	{
+		return Upsert(C::DbTableName(), stRow, stResult, stError);
+	}
+	template <typename C>
+	[[nodiscard]] OI::Coro::TaskResult<int32_t> Upsert(const std::vector<C>& vRows, Error& stError) const
+	{
+		return Upsert(C::DbTableName(), vRows, stError);
+	}
+	template <typename C, typename... M>
+	[[nodiscard]] OI::Coro::TaskResult<int32_t> Update(const C& stRow, Error& stError, M C::*... pMembers) const
+	{
+		return Update(C::DbTableName(), stRow, stError, pMembers...);
+	}
+	template <typename C, typename... M>
+	[[nodiscard]] OI::Coro::TaskResult<int32_t> Update(const C& stRow, Result& stResult, Error& stError, M C::*... pMembers) const
+	{
+		return Update(C::DbTableName(), stRow, stResult, stError, pMembers...);
+	}
+	template <typename C, typename... M>
+	[[nodiscard]] OI::Coro::TaskResult<int32_t> Update(const std::vector<C>& vRows, Error& stError, M C::*... pMembers) const
+	{
+		return Update(C::DbTableName(), vRows, stError, pMembers...);
+	}
+	template <typename C>
+	[[nodiscard]] OI::Coro::TaskResult<int32_t> Delete(const C& stRow, Error& stError) const
+	{
+		return Delete(C::DbTableName(), stRow, stError);
+	}
+	template <typename C>
+	[[nodiscard]] OI::Coro::TaskResult<int32_t> Delete(const C& stRow, Result& stResult, Error& stError) const
+	{
+		return Delete(C::DbTableName(), stRow, stResult, stError);
+	}
+	template <typename C>
+	[[nodiscard]] OI::Coro::TaskResult<int32_t> Delete(const std::vector<C>& vRows, Error& stError) const
+	{
+		return Delete(C::DbTableName(), vRows, stError);
+	}
+	template <typename C, typename... M>
+	[[nodiscard]] OI::Coro::TaskResult<int32_t> Select(C& stRow, Error& stError, M C::*... pMembers) const
+	{
+		return Select(C::DbTableName(), stRow, stError, pMembers...);
+	}
+	template <typename C, typename... M>
+	[[nodiscard]] OI::Coro::TaskResult<int32_t> Select(std::vector<C>& vRows, Error& stError, M C::*... pMembers) const
+	{
+		return Select(C::DbTableName(), vRows, stError, pMembers...);
+	}
+	template <typename C>
+	[[nodiscard]] OI::Coro::TaskResult<int32_t> SelectAll(std::vector<C>& vRows, Error& stError) const
+	{
+		return SelectAll(C::DbTableName(), vRows, stError);
+	}
+
 	template <typename T>
 	[[nodiscard]] OI::Coro::TaskResult<int32_t> Scalar(std::string sSql, std::vector<Parameter> vParameters, T& stValue, Error& stError) const;
 	// Only transactional DML (and reads) on transactional tables is supported.

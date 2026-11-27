@@ -280,6 +280,10 @@ __COMPARE____JSON_METHODS____DB_METHODS__};
     def GetDbMethods(self):
         members = [member for member in self.data.members if member.db_name]
         lines = []
+        lines.append("    static constexpr const char* DbTableName()")
+        lines.append("    {")
+        lines.append('        return "%s";' % self.class_name.lower())
+        lines.append("    }")
         lines.append("    static constexpr size_t DbFieldCount = %d;" % len(members))
         lines.append("    static const std::array<::OI::Db::Field<%s>, %d>& DbFields()" % (self.class_name, len(members)))
         lines.append("    {")

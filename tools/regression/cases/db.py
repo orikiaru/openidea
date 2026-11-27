@@ -123,6 +123,8 @@ class DbCase(Case):
         elif case == "mysql":
             assert "mysql row mapping bad=0" in text
             assert "mysql cell predicates bad=0" in text
+            if os.environ.get("OI_TEST_MYSQL_ISOLATED") == "1":
+                assert "mysql default_table bad=0" in text
             assert "mysql all field types batch bad=0" in text
             assert "mysql error handling bad=0" in text
             assert re.search(r"database failure code=-11 database=\S+ table=<unknown> column=required_id missing", text)

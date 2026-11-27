@@ -188,6 +188,13 @@ class FieldNamesTest(unittest.TestCase):
         self.assertNotIn("pMember == &Example::sCache", generated)
         self.assertIn('#include "oi_db_row.h"', generated)
 
+    def test_default_db_table_uses_lowercase_structure_name(self):
+        plain, row = ParseProtoText("rpcdata Plain {} rpcdata HTTP2_Log db { 0 [dbkey] uint32_t iId; }")
+        generated = SerializeDataFileGen(row).GenDataFile()
+        self.assertIn('static constexpr const char* DbTableName()', generated)
+        self.assertIn('return "http2_log";', generated)
+        self.assertNotIn('DbTableName', SerializeDataFileGen(plain).GenDataFile())
+
     def test_invalid_and_duplicate_names(self):
         self.assertIsNone(ParseProtoText("rpcdata Bad { 0 int32_t count; }"))
         self.assertIsNone(ParseProtoText("rpcdata Bad json { 0 [json same] int32_t iOne; 1 [json same] int32_t iTwo; }"))

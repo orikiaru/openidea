@@ -18,6 +18,7 @@ class TestDb
 	int32_t CheckCellPredicates();
 	// 真表：生成语句建表、写入、按主键读改删、upsert，NULL 和坏值不改对象。
 	OI::Coro::TaskResult<int32_t> CheckMysqlRows(OI::Db::Client& stMysql, const std::string& sBaseTable, const std::string& sDatabase);
+	OI::Coro::TaskResult<int32_t> CheckDefaultTable(OI::Db::Client& stMysql, const std::string& sExplicitTable);
 	OI::Coro::TaskResult<int32_t> CheckBatchRead(OI::Db::Client& stMysql, const std::string& sTable, const std::vector<OI::RpcData::DbSample>& vExpected);
 	OI::Coro::TaskResult<int32_t> CheckBatchCrud(OI::Db::Client& stMysql, const std::string& sTable);
 	OI::Coro::TaskResult<int32_t> CheckColumnTypes(OI::Db::Client& stMysql, const std::string& sTable);

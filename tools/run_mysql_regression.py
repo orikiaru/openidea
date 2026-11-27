@@ -128,6 +128,8 @@ def main():
             env.update(OI_TEST_MYSQL_HOST="127.0.0.1", OI_TEST_MYSQL_PORT=str(port),
                        OI_TEST_MYSQL_USER="root", OI_TEST_MYSQL_PASSWORD="", OI_TEST_MYSQL_DATABASE="oi_regression")
             env["OI_TEST_MYSQL_CLIENT"] = str(mysql)
+            # The default table name is fixed. Only exercise it in this disposable schema.
+            env["OI_TEST_MYSQL_ISOLATED"] = "1"
             command = [sys.executable, str(REPO / "tools" / "run_regressions.py"), "--case", args.case,
                        "--bin-dir", str(args.bin_dir), "--port-offset", str(args.port_offset)]
             if args.artifacts:
