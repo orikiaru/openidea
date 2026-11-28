@@ -5,6 +5,8 @@
 #include "oi_rpcdata_peernotereq.h"
 #include "oi_rpcdata_peerprobereq.h"
 #include "oi_rpcdata_peerproberes.h"
+#include "oi_rpcdata_udpechoreq.h"
+#include "oi_rpcdata_udpechores.h"
 #include "rpc_ids.h"
 #include "test_board.h"
 #include <cstdio>
@@ -377,6 +379,30 @@ OI::Coro::TaskResult<int32_t> TestMulti::CheckRouteLimits(bool bConfigured)
 	co_return iBad;
 }
 
+OI::Coro::TaskResult<int32_t> TestMulti::CheckHostedService(int32_t iSequence)
+{
+	auto fnRoutable = []()
+	{
+		std::vector<OI::Base::ServiceInstance> vList;
+		if (!OI::Base::RegistryClient::GetInstance().Snapshot("IpcUdp", vList) || vList.size() != 1 || vList.front().iId != 2)
+		{
+			return false;
+		}
+		// 名单和已有路由连接组分别在秒更新生效；等到调用方的路由已恢复再发一次。
+		auto stRoute = OI::Rpc::RouteManager::GetInstance().Resolve("IpcUdp", OI::Rpc::ServicePick::Any, "", OI_OK, vList);
+		return stRoute.iStatus == OI::Rpc::ServiceRouteStatus::Ok;
+	};
+	const bool bRoutable = co_await WaitFor(fnRoutable, 6000);
+	OI::RpcData::UdpEchoReq stRequest;
+	stRequest.iSeq = iSequence;
+	stRequest.sData = "second listener";
+	OI::RpcData::UdpEchoRes stResponse;
+	const int32_t iCode = co_await OI::Rpc::RouteManager::GetInstance().Call("IpcUdp", stRequest, stResponse, OI::Timer::Seconds(3));
+	const bool bOk = bRoutable && iCode == OI_OK && stResponse.iSeq == iSequence && stResponse.sData == stRequest.sData;
+	std::printf("hosted service seq=%d code=%d bad=%d\n", iSequence, iCode, bOk ? 0 : 1);
+	co_return bOk ? 0 : 1;
+}
+
 OI::Coro::Task TestMulti::Pool()
 {
 	m_stPeers.Start();
@@ -430,6 +456,7 @@ OI::Coro::Task TestMulti::Pool()
 	{
 		iRouteBad = co_await CheckRouteLimits(false);
 	}
+	iRouteBad += co_await CheckHostedService(2731);
 	const int32_t iBadTotal = (bAny && bAllOk && bManyOk) ? iRouteBad : iRouteBad + 1;
 	std::printf("pool done bad=%d\n", iBadTotal);
 	std::fflush(stdout);
@@ -625,6 +652,7 @@ OI::Coro::Task TestMulti::Run()
 	    iPushOne, iPushTwo, iPushNone, iPushAny, m_stPeers.Notes(), m_stPeers.NoteBad());
 
 	// 脚本看到这行就杀掉 2 号。先断连接，注册表撤掉之后名单里也没了。
+	iBadTotal += co_await CheckHostedService(2731);
 	std::printf("multi request stop id=2\n");
 	std::fflush(stdout);
 	const bool bDown = co_await WaitFor([this]()
@@ -635,6 +663,17 @@ OI::Coro::Task TestMulti::Run()
 	{
 		return m_stPeers.InstanceIds() == std::vector<int32_t>{1};
 	}, 10000);
+	auto fnWithdrawn = []()
+	{
+		std::vector<OI::Base::ServiceInstance> vList;
+		return OI::Base::RegistryClient::GetInstance().Snapshot("IpcUdp", vList) && vList.empty();
+	};
+	const bool bWithdrawn = co_await WaitFor(fnWithdrawn, 10000);
+	std::printf("hosted service withdrawn=%d\n", bWithdrawn ? 1 : 0);
+	if (!bWithdrawn)
+	{
+		++iBadTotal;
+	}
 	const int32_t iStillOne = co_await ProbeOnce(m_stPeers, 1, 71, 0);
 	const int32_t iGoneTwo = co_await ProbeOnce(m_stPeers, 2, 72, 0);
 	fnReport("multi peer down disconnect=%d gone=%d one=%d two=%d bad=%d\n",
@@ -648,6 +687,7 @@ OI::Coro::Task TestMulti::Run()
 	{
 		return m_stPeers.InstanceIds() == std::vector<int32_t>{1, 2} && m_stPeers.Connects(2) >= 2;
 	}, 20000);
+	iBadTotal += co_await CheckHostedService(2732);
 	const int32_t iBackTwo = co_await ProbeOnce(m_stPeers, 2, 81, 0);
 	fnReport("multi peer back listed=%d two=%d connects=%d bad=%d\n", (bBack && iBackTwo == 2) ? 0 : 1, bBack ? 1 : 0, iBackTwo,
 	    m_stPeers.Connects(2));

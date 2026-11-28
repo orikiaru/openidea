@@ -160,7 +160,7 @@ static OI::Coro::TaskResult<bool> EchoOnce(sid_t iSessionId, int32_t iSeq, std::
 	stRequest.iSeq = iSeq;
 	stRequest.sData = sData;
 	::OI::RpcData::UdpEchoRes stResponse;
-	const int32_t iRet = co_await ::OI::Rpc::RpcCall(IpcUdp::GetInstance(), iSessionId, stRequest, stResponse, ::OI::Timer::Seconds(3));
+	const int32_t iRet = co_await IpcUdp::GetInstance().Call(iSessionId, stRequest, stResponse, ::OI::Timer::Seconds(3));
 	co_return iRet == OI_OK&& stResponse.iSeq == iSeq&& stResponse.sData == sData;
 }
 
@@ -169,7 +169,7 @@ static OI::Coro::TaskResult<std::string> Diagnose(sid_t iSessionId, int32_t iSeq
 	::OI::RpcData::UdpEchoReq stRequest;
 	stRequest.iSeq = iSeq;
 	::OI::RpcData::UdpEchoRes stResponse;
-	const int32_t iRet = co_await ::OI::Rpc::RpcCall(IpcUdp::GetInstance(), iSessionId, stRequest, stResponse, ::OI::Timer::Seconds(3));
+	const int32_t iRet = co_await IpcUdp::GetInstance().Call(iSessionId, stRequest, stResponse, ::OI::Timer::Seconds(3));
 	if (iRet == OI_OK)
 	{
 		co_return stResponse.sData;
@@ -743,7 +743,7 @@ OI::Coro::Task TestUdp::Run()
 	::OI::RpcData::UdpNoteReq stWrappedNote;
 	stWrappedNote.iSeq = 0;
 	::OI::RpcData::UdpNoteRes stWrappedResponse;
-	const int32_t iWrappedRet = co_await ::OI::Rpc::RpcCall(stManager, iSessionId, stWrappedNote, stWrappedResponse, ::OI::Timer::Seconds(3));
+	const int32_t iWrappedRet = co_await stManager.Call(iSessionId, stWrappedNote, stWrappedResponse, ::OI::Timer::Seconds(3));
 	fnReport("udp notify rpc receipt=%d bad=%d\n", iWrappedRet == OI_OK ? 0 : 1, iWrappedRet);
 
 	const std::string sRejected = co_await Diagnose(iSessionId, ::OI::RpcData::UDP_PROBE_REJECT);
@@ -759,7 +759,7 @@ OI::Coro::Task TestUdp::Run()
 	const int64_t iOversizedStartMilliseconds = ::OI::Timer::SteadyMilliseconds();
 	const int32_t iNotifyRet = stManager.Notify(iSessionId, stOversized);
 	::OI::RpcData::UdpEchoRes stOversizedResponse;
-	const int32_t iCallRet = co_await ::OI::Rpc::RpcCall(stManager, iSessionId, stOversized, stOversizedResponse, ::OI::Timer::Seconds(3));
+	const int32_t iCallRet = co_await stManager.Call(iSessionId, stOversized, stOversizedResponse, ::OI::Timer::Seconds(3));
 	const bool bImmediate = ::OI::Timer::SteadyMilliseconds() - iOversizedStartMilliseconds < 1000;
 	const bool bRecovered = co_await EchoOnce(iSessionId, 1000004, "after oversized");
 	fnReport("udp oversized notify=%d call=%d immediate=%d recovered=%d bad=%d\n",

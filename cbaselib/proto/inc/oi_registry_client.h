@@ -22,7 +22,7 @@ class RegistryClient : public ::OI::Rpc::ProtoSessionManager
 
   public:
 	virtual ~RegistryClient();
-	// 起服：StartServer 成功后由框架调用，同步登记本进程。无须登记时返回 OI_OK。
+	// 起服：StartServer 成功后由框架调用，同步登记当前管理器的监听地址。无须登记时返回 OI_OK。
 	int32_t Publish(const std::string& sSection, const std::string& sIp, const std::string& sPort);
 	// 起服：同步强制拉一次这个名字下的全部实例，写进本地缓存，之后由周期拉取维护。会占住调用线程。
 	// Publish、PullSync、Lookup 要真正等待时，在 poll 回调里（含定时器回调）调用会抛 logic_error。
@@ -60,7 +60,7 @@ class RegistryClient : public ::OI::Rpc::ProtoSessionManager
 	// 成功拉取后记下要不要上报本进程地址。
 	void NoteReport(bool bReport);
 	// 同步拉一次，只为了知道要不要上报。调用前要已经连上。
-	int32_t ProbeReport();
+	int32_t ProbeReport(const std::string& sName);
 	// 读心跳和拉取间隔，打开 OnTickUpdate。用过注册表才打开。
 	void Activate();
 	// 没连上就去连，然后等到连上或超时。
@@ -90,17 +90,18 @@ class RegistryClient : public ::OI::Rpc::ProtoSessionManager
 	std::atomic<sid_t> m_iSessionId;
 	bool m_bAddressReady;
 
-	// 本进程要登记的身份。
-	std::string m_sServiceName;
-	int32_t m_iServiceId;
-	std::string m_sServiceIp;
-	std::string m_sServicePort;
-	std::string m_sServiceZone;
-	std::atomic<bool> m_bPublished;
-	// 登记回包已经确认。
-	std::atomic<bool> m_bRegistered;
-	// 被别的进程占了，停止登记和心跳。
-	std::atomic<bool> m_bLost;
+	// 只在启动时追加。注册连接由进程共享，租约和接管状态属于各自的管理器。
+	struct Publication
+	{
+		ServiceInstance stService;
+		std::string sManager;
+		sid_t iRegisteredSession = INVALID_SID;
+		bool bLost = false;
+		bool bLegacyName = false;
+	};
+	std::vector<Publication> m_vPublications; // 由 m_stStateMutex 保护。
+	int32_t RegisterService(Publication& stPublication);
+	::OI::Coro::Task RenewServices(sid_t iSessionIdLocal);
 
 	std::atomic<bool> m_bActive;
 	// 有新名字要拉，下一次 OnTickUpdate 不等 pull_ms。

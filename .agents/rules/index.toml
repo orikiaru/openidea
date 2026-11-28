@@ -11,7 +11,7 @@
 id = "coroutine"
 doc = "docs/coroutine.md"
 section = "硬性约束"
-example = "`modules/ipcserver/src/ipcserver.cpp` 的 `RegisterRpcHandler`；`modules/ipcclient/src/test_echo.cpp` 的 `StartTask`；空等用 `modules/ipcclient/src/test_log.cpp` 的 `Pump` 里 `co_await OI::Coro::yield`"
+example = "`modules/ipcserver/src/ipcserver.cpp` 的 `HandleHold`；`modules/ipcclient/src/test_echo.cpp` 的 `StartTask`；空等用 `modules/ipcclient/src/test_log.cpp` 的 `Pump` 里 `co_await OI::Coro::yield`"
 keywords = ["协程", "Task", "StartTask", "TaskScope", "co_await", "yield", "让出", "挂起", "睡眠", "sleep", "sleep_for", "RunBlocking", "lambda", "捕获", "WhenAll"]
 paths = ["cbaselib/base/inc/oi_coro*.h", "cbaselib/base/src/oi_coro*.cpp"]
 content = ['\bco_await\b', '\bco_return\b', '\bStartTask\b', '\bTaskScope\b', '\bRunBlocking\b', 'Coro::yield', '\[\s*[&=]\s*[,\]]', '\bsleep_for\b', '\busleep\s*\(', '\bSleep\s*\(']
@@ -20,7 +20,7 @@ content = ['\bco_await\b', '\bco_return\b', '\bStartTask\b', '\bTaskScope\b', '\
 id = "rpc"
 doc = "docs/coroutine.md"
 section = "服务端和客户端"
-example = "同上，推迟回包用同文件的 `Hold`"
+example = "`modules/protoconfig/module.proto` 的组件声明；`modules/ipcserver/src/ipcserver.cpp` 的 `HandleHold`"
 keywords = ["RPC", "RpcCall", "RegisterRpcHandler", "RouteManager", "回包", "调用号", "CallAll", "CallMany"]
 paths = []
 content = ['\bRpcCall\b', '\bRegisterRpcHandler\b', '\bRouteManager\b']
@@ -29,7 +29,7 @@ content = ['\bRpcCall\b', '\bRegisterRpcHandler\b', '\bRouteManager\b']
 id = "notify"
 doc = "docs/cbaselib/notify.md"
 section = ""
-example = "`modules/ipcserver/src/ipcudp.cpp` 的 `RegisterNotifyHandler`；按服务名见 `docs/registry.md`；协程侧见 `docs/coroutine.md` 的单向消息"
+example = "`modules/protoconfig/module.proto` 的 `notify` 声明；`modules/ipcserver/src/ipcudp.cpp` 的 `HandleUdpNote`；按服务名见 `docs/registry.md`"
 keywords = ["单向消息", "Notify", "NotifyAll", "NotifyMany"]
 paths = []
 content = ['\bRegisterNotifyHandler\b', '\bNotify(All|Many)?\s*\(']

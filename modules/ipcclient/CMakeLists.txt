@@ -42,6 +42,7 @@ set(MODULE_SRCS
     )
 #可执行程序
 add_executable(ipcclient ${MODULE_SRCS})
+include(oi_module_components.cmake)
 
 #头文件目录
 target_include_directories(ipcclient

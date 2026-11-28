@@ -1,3 +1,4 @@
+#include "oi_module_components.h"
 #include <stdio.h>
 #include "oi_net.h"
 #include "oi_base.h"
@@ -14,6 +15,6 @@ int main(int iArgumentCount, char* vArguments[])
 	return ::OI::Base::RunFramework([]() -> int32_t
 	{
 		WebClient::GetInstance().Start();
-		return OI_OK;
+		return ModuleComponents::Start();
 	});
 }

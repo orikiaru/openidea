@@ -35,7 +35,9 @@ Redis 连不上或卡住时，登记和续期回失败，客户端下一次心�
 
 ## 登记和在线
 
-`id` 取 `[Service] id`，必须是正整数。监听方 `StartServer` 成功后同步发一次登记，最多等 1 秒。登记的是监听段上的 `advertise_ip` 和 `advertise_port`，没有再看 `Service` 下的同名项，都没有才用监听地址。绑在 `0.0.0.0`、`::`、`[::]` 或 `*`，又没配对外地址时不登记。登记值是 `ip port`，IPv6 的冒号留在地址里。`::1` 和 `[::1]` 文本不同，算两个地址。
+`id` 取 `[Service] id`，必须是正整数，分区也取进程配置。每个监听管理器默认按自己的配置段名登记，段上的 `service_name` 可指定别名，设为空串则不登记。旧配置的 `Service.name` 保留首个旧式监听的行为。监听方 `StartServer` 成功后同步发一次登记，最多等 1 秒；多个监听共用一个 registry 连接，各自登记和续租，调用方按名字访问。
+
+命名监听的对外 IP 先取监听地址，再依次由 `Service.advertise_ip` 和监听段的 `advertise_ip` 覆盖；端口取当前监听端口或该段的 `advertise_port`，不继承进程的 `advertise_port`。旧式监听仍可使用 `Service.advertise_port`。绑在 `0.0.0.0`、`::`、`[::]` 或 `*`，又没配对外地址时不登记。登记值是 `ip port`，IPv6 的冒号留在地址里。`::1` 和 `[::1]` 文本不同，算两个地址。
 
 登记请求里的地址若是 `0.0.0.0`、`::`、`[::]` 或 `*`，registry 拒绝，不写入 Redis，拉取快照也不收录。监听绑在这些地址上、又没配对外地址时，客户端仍不登记，监听保留。显式把 `advertise_ip` 配成这类地址则启动失败并关掉监听。静态名单里的同一类地址整表重载失败。
 
@@ -74,7 +76,7 @@ Redis 连不上或卡住时，登记和续期回失败，客户端下一次心�
 
 不能从框架里删。一个监听进程上同时有多条连接，回包、断连、Redis 把命令转回哪个客户端，都靠 `SessionManager::SendBytes(sid)` 这张表区分。
 
-客户端本来就是一条连接一个 `iSessionId`。业务里的 `RpcCall(mgr, sid, ...)` 可以收成按服务名调用，sid 留在管理器内部。服务端处理函数如果只填回包，签名里也可以不再出现 sid；`RpcHandlerBuilder::Run` 回包时仍拿着这次的 sid。`redisserver` 的 `Issue` / `OnReply` 把 sid 当成「这条客户端连接」用，这块拿不掉。
+客户端本来就是一条连接一个 `iSessionId`。普通业务按服务名调用，指定原连接回调时用 RPC 协议管理器的 `Call(sid, 请求, 回复, 时长)`。多实例管理器的实例号和 sid 不可混用。`RpcHandlerBuilder::Run` 回包时仍拿着这次的 sid；`redisserver` 的 `Issue` / `OnReply` 把 sid 当成「这条客户端连接」用，这块拿不掉。
 
 同一服务名有多份实例时，靠下面的全局服和分区服区分，不是把 sid 删掉。
 
@@ -138,14 +140,14 @@ Redis 连不上或卡住时，登记和续期回失败，客户端下一次心�
 
 应用只做三件事：声明自己是哪个服务（名字、全局还是分区、编码），登记处理函数，按服务名调用。连接、重连、未连上时的暂存、按名字选实例，都在框架里。
 
-回声已经是这种处理函数，注册在 `ipcserver` 的 `Init`：
+回声处理函数采用以下签名：
 
 ```cpp
-static int32_t HandleAllEcho(const OI::RpcData::AllEchoReq& stRequest, OI::RpcData::AllEchoRes& stResponse)
+OI::Rpc::RpcTask HandleAllEcho(const OI::Rpc::RpcContext&, const OI::RpcData::AllEchoReq& stRequest, OI::RpcData::AllEchoRes& stResponse)
 {
     stResponse.stData = stRequest.stData;
     stResponse.iCode = 1;
-    return 0;
+    co_return 0;
 }
 ```
 
@@ -167,7 +169,7 @@ auto vAll = co_await stRoute.CallAll("gameserver", req);
 
 日志、Redis、访问本框架里的 HTTP 服务，也是这种调用，编码留在框架里。应用不写会话子类。对外的 HTTP 网址，以及 `redisserver` 背后那台真正的 Redis，不是注册表里的服务，地址仍要配置。
 
-监听方的一条连接在框架内部仍是一个 `sessionid`。普通处理函数看不到它。需要顺着这条连接回呼时，处理函数第一个形参写 `const OI::Rpc::RpcContext& stContext`，用 `stContext.iSessionId` 和 `stContext.stManager`，只在这次处理期间有效。断连按管理器指针和 `sessionid` 一起摘等待，另一个管理器上的相同数字不受影响。
+监听方的一条连接在框架内部仍是一个 `sessionid`。仓库业务处理函数通过首参 `const OI::Rpc::RpcContext& stContext` 获取连接信息，顺着连接回呼时可用 `stContext.iSessionId` 和 `stContext.stManager`，只在这次处理期间有效。断连按管理器指针和 `sessionid` 一起摘等待，另一个管理器上的相同数字不受影响。
 
 批量调用把服务名拷进任务，任务跑起来再读本地缓存，没拉到过就等下一次秒更新，等待上限是 min(剩余预算, 3000ms)。这一等是挂起，不占线程。创建任务后可以修改或销毁原来的字符串。目标名单以当时的缓存为准，这次之后新登记的不补进这一批。路由连接池管理器常驻，不为每次调用新增共享所有权；连接失效仍由发送、断连和超时路径返回错误。
 
@@ -177,7 +179,7 @@ auto vAll = co_await stRoute.CallAll("gameserver", req);
 
 起服用 `Publish`、`PullSync`、`Lookup` 同步登记并强制拉一次，结果写入本地缓存。这三步要真正等待时，不能在 poll 回调（含定时器回调）里调用，会抛 `logic_error`。
 
-运行期不再按调用向 registry 发查询。`RegistryClient` 继承 `ProtoSessionManager`，声明在 `cbaselib/proto/inc/oi_registry_client.h`；`cbaselib/base/inc/oi_registry.h` 只保留 `ServiceInstance`、`ServiceTable`、`StaticRegistry`。它是单例，日历秒变化时启动 `OI::Coro::Task OnSecondUpdate(time_t)`，上一次没 `co_return` 就跳过这一秒：没连就连；到点登记或心跳；到 `Registry.pull_ms` 或 `Snapshot` 未命中催促时，把关注的名字整量拉一次。登记、心跳、拉取在这条协程里按顺序 `co_await OI::Rpc::RpcCall(*this, sid, 请求, 回复, 1000ms)`。拉取失败则下一秒重拉。`Snapshot` 只读这份缓存，还没拉到过返回 false，并记下这个名字；未命中不立刻拉取，由下一次秒更新拉。
+运行期不再按调用向 registry 发查询。`RegistryClient` 继承 `ProtoSessionManager`，声明在 `cbaselib/proto/inc/oi_registry_client.h`；`cbaselib/base/inc/oi_registry.h` 只保留 `ServiceInstance`、`ServiceTable`、`StaticRegistry`。它是单例，日历秒变化时启动 `OI::Coro::Task OnSecondUpdate(time_t)`，上一次没 `co_return` 就跳过这一秒：没连就连；到点登记或心跳；到 `Registry.pull_ms` 或 `Snapshot` 未命中催促时，把关注的名字整量拉一次。登记、心跳、拉取在这条协程里按顺序 `co_await Call(sid, 请求, 回复, OI::Timer::Milliseconds(1000))`。拉取失败则下一秒重拉。`Snapshot` 只读这份缓存，还没拉到过返回 false，并记下这个名字；未命中不立刻拉取，由下一次秒更新拉。
 
 路由发协议前读本地缓存。命中立即解析。没拉到过就每 10ms 复查，直到拉到或超过 min(剩余预算, 3000ms)，超时返回 `OI_ERR_TIMEOUT`。名单里没有目标时按不在线返回 `OI_ERR_CONNECT`。
 

@@ -1,3 +1,4 @@
+#include "oi_module_components.h"
 #include <stdio.h>
 #include "oi_net.h"
 #include "oi_base.h"
@@ -33,6 +34,6 @@ int main(int iArgumentCount, char* vArguments[])
 		}
 		printf("redis server listen\n");
 		fflush(stdout);
-		return OI_OK;
+		return ModuleComponents::Start();
 	});
 }

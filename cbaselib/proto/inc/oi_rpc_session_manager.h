@@ -159,6 +159,18 @@ class ProtoSessionManager : public ::OI::Net::SessionManager
 	{
 		return "ProtoSessionManager";
 	}
+	// 固定原会话。断开时直接失败，不排队到下次重连。
+	template <typename Req>
+	[[nodiscard]] auto Call(sid_t iSessionId, Req stRequest, typename RpcProtoId<Req>::Response& stResponse, ::OI::Timer::MS stTimeout = ::OI::Timer::Seconds(180))
+	{
+		return RpcCall(*this, iSessionId, std::move(stRequest), stResponse, stTimeout);
+	}
+	template <typename Req>
+	[[nodiscard]] auto Call(sid_t iSessionId, Req stRequest, ::OI::Timer::MS stTimeout = ::OI::Timer::Seconds(180))
+	    -> RpcValueAwaiter<Req, typename RpcProtoId<Req>::Response>
+	{
+		return RpcCall(*this, iSessionId, std::move(stRequest), stTimeout);
+	}
 	// 向这条会话发一条单向消息。sid 从 ConnectedSid、OpenPeer 或 RpcContext 来。
 	template <typename Msg>
 	int32_t Notify(sid_t iSessionId, const Msg& stMessage)
@@ -247,11 +259,18 @@ class ProtoClientManager : public ProtoSessionManager
 	void FlushHeldCalls(sid_t iSessionId);
 	void FailHeldCalls();
 	void OnDelSession(const ::OI::Net::Session* pSession) override;
-	// 在本管理器这条连接上调用，沿用首次建连排队和固定配置。自动配对响应类型，返回 TaskResult<int32_t>；输出须活到任务结束。
+	using ProtoSessionManager::Call;
+	// 省略 sid 时沿用本客户端的连接和排队策略；传入输出对象时须让它活到任务结束。
 	template <typename Req>
 	[[nodiscard]] auto Call(Req stRequest, typename RpcProtoId<Req>::Response& stResponse, ::OI::Timer::MS stTimeout = ::OI::Timer::Seconds(180))
 	{
 		return RpcCall(m_stSender, std::move(stRequest), stResponse, stTimeout);
+	}
+	template <typename Req>
+	[[nodiscard]] auto Call(Req stRequest, ::OI::Timer::MS stTimeout = ::OI::Timer::Seconds(180))
+	    -> RpcValueAwaiter<Req, typename RpcProtoId<Req>::Response>
+	{
+		return RpcCall(m_stSender, std::move(stRequest), stTimeout);
 	}
 	using ProtoSessionManager::Notify;
 	// 发到本管理器这条连接，没连上先暂存、连上补发，和 Call 一样。返回 OI_OK 只表示任务已启动，发送或回执失败由任务错误处理器报告。

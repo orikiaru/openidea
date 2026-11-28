@@ -53,5 +53,7 @@ def preflight_ports(case):
 
     for port in scene_ports.get(case, (LOGD_PORT, IPC_PORT, REDIS_SERVER_PORT, REDIS_PORT, REGISTRY_PORT) + GAME_PORTS):
         probe_port(port, socket.SOCK_STREAM)
+    if case in ("local", "multi", "registry-static"):
+        probe_port(UDP_PORT, socket.SOCK_STREAM)
     if case not in ("hold-timer", "hold-redis", "web-coro"):
         probe_port(UDP_PORT, socket.SOCK_DGRAM)

@@ -112,7 +112,7 @@ OI::Coro::TaskResult<int> TestRpcOutput::CheckReceiveLimit()
 	stExpected.serialize(stExactBody);
 	const size_t iExactSize = OI::Rpc::EncodePbFrame(OI::Rpc::RpcProtoId<OI::RpcData::AllEchoRes>::iValue, stExactBody).Size();
 	OI::RpcData::AllEchoRes stOutput;
-	const int32_t iExact = co_await OI::Rpc::RpcCall(stClient, stRequest, stOutput, OI::Timer::Seconds(10));
+	const int32_t iExact = co_await stClient.Call(stRequest, stOutput, OI::Timer::Seconds(10));
 	if (iExactSize != iLimit || iExact != OI_OK || stOutput.stData.sMessage != stRequest.stData.sMessage || stOutput.iCode != 1)
 	{
 		++iBad;
@@ -125,7 +125,7 @@ OI::Coro::TaskResult<int> TestRpcOutput::CheckReceiveLimit()
 	const size_t iOverSize = OI::Rpc::EncodePbFrame(OI::Rpc::RpcProtoId<OI::RpcData::AllEchoRes>::iValue, stOverBody).Size();
 	stOutput.stData.sMessage = "preserved";
 	stOutput.iCode = 713;
-	const int32_t iOver = co_await OI::Rpc::RpcCall(stClient, stRequest, stOutput, OI::Timer::Seconds(10));
+	const int32_t iOver = co_await stClient.Call(stRequest, stOutput, OI::Timer::Seconds(10));
 	// 回包超过本端接收额度：客户端断开连接，在途调用以连接错误结束，不能等到超时。
 	if (iOverSize != iLimit + 1 || iOver != OI_ERR_CONNECT || stOutput.stData.sMessage != "preserved" || stOutput.iCode != 713)
 	{
@@ -173,7 +173,7 @@ OI::Coro::TaskResult<int> TestRpcOutput::CheckDecodeBudget()
 	{
 		OI::RpcData::AllEchoRes stOutput;
 		stOutput.iCode = 713;
-		iCode = co_await OI::Rpc::RpcCall(stClient, stRequest, stOutput, OI::Timer::Seconds(30));
+		iCode = co_await stClient.Call(stRequest, stOutput, OI::Timer::Seconds(30));
 		if (iCode != OI_OK || stOutput.iCode != 1 || stOutput.stData.vWords != stRequest.stData.vWords)
 		{
 			++iBad;
@@ -198,7 +198,7 @@ OI::Coro::TaskResult<int> TestRpcOutput::CheckOutputRpcTask(sid_t iSessionId)
 		OI::RpcData::HoldReq stLocal;
 		stLocal.iDelayMilliseconds = 100;
 		stLocal.iMark = 731;
-		auto stTask = OI::Rpc::RpcCall(stClient, stLocal, *pOutput, OI::Timer::Seconds(3));
+		auto stTask = stClient.Call(stLocal, *pOutput, OI::Timer::Seconds(3));
 		stLocal.iMark = -731;
 		return stTask;
 	};
@@ -259,7 +259,7 @@ OI::Coro::TaskResult<int> TestRpcOutput::CheckOutputRpcTask(sid_t iSessionId)
 		++iBad;
 	}
 	stRequest.iMark = 734;
-	auto stPinned = OI::Rpc::RpcCall(stManager, iSessionId, stRequest, stOutput, OI::Timer::Seconds(3));
+	auto stPinned = stManager.Call(iSessionId, stRequest, stOutput, OI::Timer::Seconds(3));
 	static_assert(std::is_same_v<decltype(stPinned), OI::Coro::TaskResult<int32_t>>);
 	if (co_await stPinned != 0 || stOutput.iMark != 734)
 	{
@@ -267,7 +267,7 @@ OI::Coro::TaskResult<int> TestRpcOutput::CheckOutputRpcTask(sid_t iSessionId)
 	}
 	static DeferredRpcProbe stUnconnected;
 	const auto stBefore = OI::Rpc::RpcCallManager::GetInstance().WaitStats();
-	if (co_await OI::Rpc::RpcCall(stUnconnected, sid_t(12345), stRequest, stOutput, OI::Timer::Seconds(3)) != OI_ERR_CONNECT ||
+	if (co_await stUnconnected.Call(sid_t(12345), stRequest, stOutput, OI::Timer::Seconds(3)) != OI_ERR_CONNECT ||
 	    stOutput.iMark != 734 || OI::Rpc::RpcCallManager::GetInstance().WaitStats().iCalls != stBefore.iCalls)
 	{
 		++iBad;
@@ -312,8 +312,8 @@ OI::Coro::TaskResult<int> TestRpcOutput::CheckDeferredRpcSession()
 	stRequest.iMark = 31415;
 	OI::RpcData::HoldRes stOutput;
 	stOutput.iMark = -1;
-	auto stValueWait = OI::Rpc::RpcCall(stClient, stRequest, OI::Timer::Seconds(3));
-	auto stOutputWait = OI::Rpc::RpcCall(stClient, stRequest, stOutput, OI::Timer::Seconds(3));
+	auto stValueWait = stClient.Call(stRequest, OI::Timer::Seconds(3));
+	auto stOutputWait = stClient.Call(stRequest, stOutput, OI::Timer::Seconds(3));
 	int iBad = 0;
 	int iValueCode = OI_ERR_CONNECT;
 	int iOutputCode = OI_ERR_CONNECT;
@@ -333,7 +333,7 @@ OI::Coro::TaskResult<int> TestRpcOutput::CheckDeferredRpcSession()
 		{
 			++iBad;
 		}
-		auto stPinned = co_await OI::Rpc::RpcCall(stClient, INVALID_SID, stRequest, OI::Timer::Seconds(3));
+		auto stPinned = co_await stClient.Call(INVALID_SID, stRequest, OI::Timer::Seconds(3));
 		iPinnedCode = stPinned.GetRet();
 		if (iPinnedCode != OI_ERR_CONNECT)
 		{

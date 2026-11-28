@@ -24,6 +24,7 @@ class TestDb
 	OI::Coro::TaskResult<int32_t> CheckColumnTypes(OI::Db::Client& stMysql, const std::string& sTable);
 	OI::Coro::TaskResult<int32_t> ReadRequiredId(OI::Db::Client& stMysql, std::string sSql, uint32_t& iId);
 #ifdef OI_ENABLE_MYSQL
+	OI::Coro::TaskResult<int32_t> CheckAffectedRows(OI::Db::Client& stMysql, OI::Db::Client& stObserver, const std::string& sQuotedTable);
 	OI::Coro::TaskResult<int32_t> CheckNativeFloat(OI::Db::Client& stMysql, const std::string& sQuotedTable);
 	OI::Coro::TaskResult<int32_t> CheckDbErrors(OI::Db::Client& stMysql, const OI::Mysql::Config& stConfig);
 #endif

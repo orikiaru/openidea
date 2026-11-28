@@ -4,7 +4,20 @@
 module IpcClient {
 }
 
+component IpcServer Server {
+    rpc AllEcho;
+    rpc Hold bind BindHold; // 回归可注入会抛异常的回包编码器。
+    rpc PeerProbe;
+    notify PeerNote;
+    rpc Empty;
+}
+component IpcUdp Server {
+    rpc UdpEcho;
+    notify UdpNote;
+}
 module IpcServer {
+    component IpcServer;
+    component IpcUdp;
 }
 
 // 不挂协议组件。命令是 RESP，里面再调 hiredis。

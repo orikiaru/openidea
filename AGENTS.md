@@ -111,9 +111,11 @@ Redis 标准接口只提供单 key 接口，禁止隐式多 key 查询或自动�
 
 头文件名跟着功能走，框架头和对应的 cpp 都用 `oi_` 前缀，例如 `oi_rpc.h`、`oi_file.h`、`oi_thread.h`。三方库和 `port/win` 里的系统兼容头不用这个前缀。
 
-# 单次 RPC 用带回复的那套
+# RPC 和单向消息入口
 
-单次 RPC 按服务名用 `RouteManager::GetInstance().Call(服务名, 请求, 回复, 时长)` 带回复调用，先看返回码再读回复；直连只用于有状态的对端。细则见 `docs/coroutine.md` 的硬性约束。
+- 单次 RPC 按服务名用 `RouteManager::GetInstance().Call(服务名, 请求, 回复, 时长)`，先看返回码再读回复；单客户端有状态直连用管理器的 `Call(请求, 回复, 时长)`，沿用其连接策略。指定原连接反向 RPC 用 RPC 协议管理器的 `Call(sid, 请求, 回复, 时长)`，断开不改发到新连接。
+- 按服务、实例或原会话发单向消息分别使用 `RouteManager`、`ProtoMultiClientManager` 的通知入口或 `RpcContext::Notify` / 管理器的 `Notify(sid, 消息)`。多实例管理器的实例号与 sid 是不同标识，不得混用；其 `Call(实例号, ...)` 不用于指定 sid。底层 `RpcCall` / `RpcNotify` 保留兼容和框架专项用途。
+- `module.proto` 的组件声明列出本管理器接收的 RPC 和 notify，由生成器维护注册；生成及仓库随附业务 handler 统一返回 `RpcTask`，首参 `const RpcContext&`，RPC 后接请求与回复，notify 后接请求。框架手写接入仍兼容同步和不带 Context 的签名。详见 `docs/module.md`、`docs/coroutine.md` 和 `docs/cbaselib/notify.md`。
 
 # 应用层不要睡线程
 
@@ -133,9 +135,9 @@ Redis 标准接口只提供单 key 接口，禁止隐式多 key 查询或自动�
 
 | 关键词 | 文档 | 标准用例 |
 | --- | --- | --- |
-| 协程、Task、StartTask、TaskScope、co_await、yield、让出、挂起、睡眠、sleep、sleep_for、RunBlocking、lambda、捕获、WhenAll | `docs/coroutine.md` 的硬性约束 | `modules/ipcserver/src/ipcserver.cpp` 的 `RegisterRpcHandler`；`modules/ipcclient/src/test_echo.cpp` 的 `StartTask`；空等用 `modules/ipcclient/src/test_log.cpp` 的 `Pump` 里 `co_await OI::Coro::yield` |
-| RPC、RpcCall、RegisterRpcHandler、RouteManager、回包、调用号、CallAll、CallMany | `docs/coroutine.md` 的服务端和客户端 | 同上，推迟回包用同文件的 `Hold` |
-| 单向消息、Notify、NotifyAll、NotifyMany | `docs/cbaselib/notify.md` | `modules/ipcserver/src/ipcudp.cpp` 的 `RegisterNotifyHandler`；按服务名见 `docs/registry.md`；协程侧见 `docs/coroutine.md` 的单向消息 |
+| 协程、Task、StartTask、TaskScope、co_await、yield、让出、挂起、睡眠、sleep、sleep_for、RunBlocking、lambda、捕获、WhenAll | `docs/coroutine.md` 的硬性约束 | `modules/ipcserver/src/ipcserver.cpp` 的 `HandleHold`；`modules/ipcclient/src/test_echo.cpp` 的 `StartTask`；空等用 `modules/ipcclient/src/test_log.cpp` 的 `Pump` 里 `co_await OI::Coro::yield` |
+| RPC、RpcCall、RegisterRpcHandler、RouteManager、回包、调用号、CallAll、CallMany | `docs/coroutine.md` 的服务端和客户端 | `modules/protoconfig/module.proto` 的组件声明；`modules/ipcserver/src/ipcserver.cpp` 的 `HandleHold` |
+| 单向消息、Notify、NotifyAll、NotifyMany | `docs/cbaselib/notify.md` | `modules/protoconfig/module.proto` 的 `notify` 声明；`modules/ipcserver/src/ipcudp.cpp` 的 `HandleUdpNote`；按服务名见 `docs/registry.md` |
 | Redis、redisserver、RESP、CallRedis | `docs/cbaselib.md` 的 redis 段 | `modules/ipcclient/src/test_redis.cpp` 的 `Check` |
 | 定时器、时间轮、AddTimer、BaseTimer | `docs/timer.md` | `Hold` 里的 `co_await OI::Coro::yield` |
 | 周期任务、Update、心跳、定时拉取、单例循环、OnSecondUpdate、OnTickUpdate | `docs/timer.md` 的单例更新段 | `cbaselib/proto/src/oi_registry_client.cpp` 的 `RegistryClient::OnSecondUpdate`；`modules/ipcclient/src/test_timer.cpp` 的 `OnTickUpdate` |
@@ -180,6 +182,7 @@ Redis 标准接口只提供单 key 接口，禁止隐式多 key 查询或自动�
 - 覆盖基类虚函数（析构函数除外）时不写前导 `virtual`，在声明末尾写 `override`；`-Wsuggest-override` 强制检查，clang 把未使用的 lambda 捕获视为编译错误。
 - 不影响性能时以易读性为准，不为省行数增加理解成本或不必要层次；简单直观的二值选择可以保留。
 - 多层调用内的 lambda 必须先提为具名局部可调用对象或具名函数，启动或登记与把结果放入容器分步写，按需 `std::move` 保持原有开销。单层直接传回调可沿用。
+- 三元表达式只用来选择简单的值。按场景执行不同的复合校验时，展开成分支或独立用例。赋值、函数实参、日志和测试断言都遵守这条；换行或提取一个总的布尔变量仍然会把两套条件混在一起。
 - `return` / `co_return` 不把复合条件和三元选择、嵌套三元或复杂调用挤在一行；用分支早退或具名中间结果，保持原有求值顺序和短路行为。
 - 已有调用路径能直接表达时，沿用它。避免为省行数再包一层模板或转发函数。
 - 自有手写 C++（基础库、模块及自有平台兼容层）使用 Allman 风格，代码块左花括号单独换行。

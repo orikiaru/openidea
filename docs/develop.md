@@ -13,12 +13,13 @@
 - 配置在 mgr 的 `Init` 里读一次，存成成员。实体处理时由 mgr 按参数传进去，实体不自己读配置。
 - 要换会话类型就重写 `CloneSession`，不在通道外面挂一层自己的解析。
 - 框架缺能力就在 cbaselib 里补，补齐回归、跑全量，不在业务里绕。例：UDP 用 `type = "udp"` 的 `UDP_Channel`，见 [基础库](cbaselib.md) 的 net 段；会话上的单向发送用 `Notify(sid)` 或 `RpcContext::Notify`，按服务名和多连接用 `RouteManager`、`ProtoMultiClientManager` 的 `Notify`，见 [协程](coroutine.md) 的单向消息。`RpcNotify` 是按 sid 发送的底层函数。处理函数登记在接收该连接的管理器上：自己的 `Init` 里 `RegisterRpcHandler(&类::成员)`，别处写 `管理器.RegisterRpcHandler(&类::成员)`。
+- 应用按原连接回调时用 RPC 协议管理器的 `Call(sid, 请求, 回复, 时长)`；直连客户端用自身的 `Call(请求, 回复, 时长)`，按服务名或实例调用仍用对应入口。多实例管理器的实例号与 sid 不可混用；底层 `RpcCall` 保留兼容及专项用途。
 
 ## 2. 模块和代码组织
 
 - 一个 module 对应一个进程，业务代码都放在 `modules/<进程>/inc`、`src` 里。几个进程共用的东西放 `modules/include`，或者单独建目录，不放仓库根下的 `src`。
 - 基础库用 `framework.cmake`。本仓库根 `CMakeLists.txt` 和外部工程都 include 它，不在业务工程里再列一遍库。进程模块仍由调用方自己的 `module.proto` 生成后加入，见 [模块](module.md)。按功能接到具体接口见 [基础库](cbaselib.md) 的接入表。
-- 进程在 `protoconfig/module.proto` 里声明，由 `proto_tool` 生成骨架，见 [模块](module.md)。生成器只在文件不存在时才写，生成出来以后就在上面改。
+- 进程及其 server/client 组件在 `protoconfig/module.proto` 里声明，由 `proto_tool` 生成骨架，见 [模块](module.md)。业务文件保留已有内容；组件启动和构建清单由生成器更新。
 - 启动时可用 `--config <路径>` 指定配置文件，例如 `ipcserver --config "../config/my server.toml"`。相对路径以进程当前工作目录为准；未指定时仍使用各进程原来的默认路径。ipcserver 保留旧的首位置路径参数，同时指定时 `--config` 优先。路径缺失、为空、重复指定或下一项是 `--` 开头的选项会被拒绝；ipcclient 和 logd 的原有探针可放在配置参数前或后。
 - `StartFramework` 成功后，可将返回 `int32_t` 的模块初始化回调传给 `RunFramework(fnInit)`。回调返回 0 才进入主循环；返回非 0 时先停止并等待 poll 线程，再返回原错误码；抛异常时记录原因、停止 poll 并返回 `OI_ERR_FAIL`。无参数的 `RunFramework()` 仍可用于已完成初始化的调用方。
 - 不写类外的 C 风格函数，不用全局状态。对外可调用能力按职责放类成员；确需文件内自由辅助函数时用 `.cpp` 匿名名字空间或内部链接，公共头的 `inline` 或 `Detail` 名字空间不会限制外部调用。处理函数是组件的成员，在这个管理器上 `RegisterRpcHandler(&类::成员)` / `RegisterNotifyHandler(&类::成员)` 注册，不用友元把类外函数放进类里。请求处理表是 `ProtoSessionManager` 的私有锁和 map，按管理器各存一份，对外是 `BindRpcHandler` / `FindRpcHandler`。成员函数所属的类必须继承 `ProtoSessionManager`；登记时当前管理器必须是该类本身或其派生，否则抛 `std::logic_error`。

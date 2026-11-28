@@ -50,6 +50,7 @@ class TestMulti
 	MultiClient m_stFixed;
 	MultiClient m_stPeers;
 
+	static OI::Coro::TaskResult<int32_t> CheckHostedService(int32_t iSequence);
 	static OI::Coro::TaskResult<int32_t> CheckRouteLimits(bool bConfigured);
 	OI::Coro::Task Run();
 	// 本地名单或 registry 拉到的名单上，CallAny 要打到每一台，CallMany 里不存在的实例号回 CONNECT。

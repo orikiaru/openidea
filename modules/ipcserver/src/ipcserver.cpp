@@ -26,8 +26,9 @@ const std::string IpcServer::GetIDString()
 	return "IpcServer";
 }
 
-static int32_t HandleAllEcho(const OI::RpcData::AllEchoReq& stRequest, OI::RpcData::AllEchoRes& stResponse)
+::OI::Rpc::RpcTask IpcServer::HandleAllEcho(const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::AllEchoReq& stRequest, ::OI::RpcData::AllEchoRes& stResponse)
 {
+	(void)stContext;
 	stResponse.stData = stRequest.stData;
 	stResponse.iCode = 1;
 	if (stRequest.stData.sMessage.size() > 1024 * 1024 - 2048)
@@ -38,18 +39,20 @@ static int32_t HandleAllEcho(const OI::RpcData::AllEchoReq& stRequest, OI::RpcDa
 		const auto stFrame = OI::Rpc::EncodePbFrame(OI::Rpc::RpcProtoId<OI::RpcData::AllEchoRes>::iValue, stBody);
 		LOG_TRACE("hold receive limit server reply=%zu", stFrame.Size());
 	}
-	return 0;
+	co_return OI_OK;
 }
 
-static int32_t HandleEmpty(const OI::RpcData::EmptyReq& stRequest, OI::RpcData::EmptyRes& stResponse)
+::OI::Rpc::RpcTask IpcServer::HandleEmpty(const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::EmptyReq& stRequest, ::OI::RpcData::EmptyRes& stResponse)
 {
+	(void)stContext;
 	(void)stRequest;
 	(void)stResponse;
-	return 0;
+	co_return OI_OK;
 }
 
-static OI::Rpc::RpcTask HandleHold(const OI::RpcData::HoldReq& stRequest, OI::RpcData::HoldRes& stResponse)
+static ::OI::Rpc::RpcTask HandleHold(const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::HoldReq& stRequest, ::OI::RpcData::HoldRes& stResponse)
 {
+	(void)stContext;
 	if (stRequest.iDelayMilliseconds < 0)
 	{
 		co_return 1001; // 业务错误：延迟不能为负，回执不带响应体。
@@ -93,14 +96,15 @@ static OI::Rpc::RpcTask HandleEncodingRegression(const OI::Rpc::RpcContext& stCo
 	if (stRequest.iMark == -2147483598)
 	{
 		// 先回原请求，让客户端释放出站租约；反向 RPC 独立挂起。
-		OI::Coro::StartTask([pManager = &stContext.stManager, iSessionId = stContext.iSessionId]() -> OI::Coro::Task
+		OI::Coro::StartTask([iSessionId = stContext.iSessionId]() -> OI::Coro::Task
 		{
 			OI::RpcData::HoldReq stReverse;
 			stReverse.iMark = -2147483598;
 			stReverse.iDelayMilliseconds = 1000;
 			OI::RpcData::HoldRes stReply;
-			const int32_t iRet = co_await OI::Rpc::RpcCall(*pManager, iSessionId, stReverse, stReply, OI::Timer::Seconds(5));
-			std::printf("hold reverse reply bad=%d\n", iRet != 0 || stReply.iMark != stReverse.iMark ? 1 : 0);
+			const int32_t iRet = co_await IpcServer::GetInstance().Call(iSessionId, stReverse, stReply, OI::Timer::Seconds(5));
+			const bool bBad = iRet != OI_OK || stReply.iMark != stReverse.iMark;
+			std::printf("hold reverse reply bad=%d code=%d\n", bBad, iRet);
 			fflush(stdout);
 		});
 	}
@@ -108,7 +112,7 @@ static OI::Rpc::RpcTask HandleEncodingRegression(const OI::Rpc::RpcContext& stCo
 	{
 		throw std::runtime_error("injected server handler failure");
 	}
-	int32_t iResult = co_await HandleHold(stRequest, stResponse);
+	const int32_t iResult = co_await HandleHold(stContext, stRequest, stResponse);
 	stResponse.bThrow = stRequest.iMark == -2147483600;
 	stResponse.bMalformed = stRequest.iMark == -2147483597;
 	co_return iResult;
@@ -125,11 +129,14 @@ int32_t IpcServer::NoteCount(int32_t iTag)
 	return it->second;
 }
 
-int32_t IpcServer::HandlePeerNote(const ::OI::RpcData::PeerNoteReq& stRequest)
+::OI::Rpc::RpcTask IpcServer::HandlePeerNote(const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::PeerNoteReq& stRequest)
 {
-	::OI::Thread::MutexGuard stLock(m_stNoteLocker);
-	++m_mNoteCount[stRequest.iTag];
-	return OI_OK;
+	(void)stContext;
+	{
+		::OI::Thread::MutexGuard stLock(m_stNoteLocker);
+		++m_mNoteCount[stRequest.iTag];
+	}
+	co_return OI_OK;
 }
 
 ::OI::Rpc::RpcTask IpcServer::HandlePeerProbe(const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::PeerProbeReq& stRequest,
@@ -152,25 +159,8 @@ int32_t IpcServer::HandlePeerNote(const ::OI::RpcData::PeerNoteReq& stRequest)
 	co_return 0;
 }
 
-int32_t IpcServer::Init()
+void IpcServer::BindHold()
 {
-	bool bInitFail = false;
-	TryGetConfig("Regression.rpc_init_fail", bInitFail);
-	if (bInitFail)
-	{
-		return OI_ERR_FAIL;
-	}
-	TryGetConfig("Service.id", m_iServiceId);
-	RegisterRpcHandler(HandleAllEcho);
-	bool bDuplicateRegression = false;
-	TryGetConfig("Regression.rpc_duplicate_handler", bDuplicateRegression);
-	if (bDuplicateRegression)
-	{
-		RegisterRpcHandler(HandleAllEcho);
-	}
-	RegisterRpcHandler(HandleEmpty);
-	RegisterRpcHandler(&IpcServer::HandlePeerProbe);
-	RegisterNotifyHandler(&IpcServer::HandlePeerNote);
 	bool bEncodingRegression = false;
 	TryGetConfig("Regression.encoding_failure", bEncodingRegression);
 	if (bEncodingRegression)
@@ -182,6 +172,23 @@ int32_t IpcServer::Init()
 	else
 	{
 		RegisterRpcHandler(HandleHold);
+	}
+}
+
+int32_t IpcServer::Init()
+{
+	bool bInitFail = false;
+	TryGetConfig("Regression.rpc_init_fail", bInitFail);
+	if (bInitFail)
+	{
+		return OI_ERR_FAIL;
+	}
+	TryGetConfig("Service.id", m_iServiceId);
+	bool bDuplicateRegression = false;
+	TryGetConfig("Regression.rpc_duplicate_handler", bDuplicateRegression);
+	if (bDuplicateRegression)
+	{
+		RegisterRpcHandler(&IpcServer::HandleAllEcho);
 	}
 	bool bReadLimitRegression = false;
 	TryGetConfig("Regression.rpc_read_limit", bReadLimitRegression);

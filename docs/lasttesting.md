@@ -23,22 +23,24 @@
 - 唤醒性能单线程专项：远程 Linux 的 100000 次串行空任务三轮平均分别为 13.590、13.840、13.800 微秒；真 MySQL 的 `mysql_direct_finish_to_resume` 为 1000 样本，p50/p95/p99 分别 15.241/25.457/32.247 微秒，逐段结果在 `st-wake-20261126-200353`。Windows ST 同一轮的串行空任务平均 39.265 微秒；独立 trace 的 `trace_total` p50/p95/p99 为 36.1/69.2/96.5 微秒。串行整链与独立打点采样分别记录，不将两者相减或混为同一测量。
 - Windows `web-stop` 单/多线程各做两轮 control、idle、stop：control 每轮完整接收 9437184 字节；idle 零退出后收到 RST；活跃响应停服每轮收到 8185 字节后 RST，诊断失败。结果位于 `.local/webstop-final-windows-mt`、`.local/webstop-final-windows-st`。这是已观察行为，停服是否应排空在途响应仍待定。
 
-## 全量（2026-11-28，MySQL FLOAT 与 PB 列类型）
+## 全量（2026-11-28，模块组件与原连接调用）
 
-受测 HEAD `fdfe05f` 加工作树。四路测试前后按归属清理均成功。两平台 CPU 均为 AMD Ryzen 7 9800X3D；Windows CIM 读数 4700 MHz，WSL 预检读数 4699.9 MHz。
+受测版本为 `597052b4e06d` 加本轮工作树改动。最后只更新注册就绪夹具，各路使用原构建矩阵生成的二进制重跑 `all`。四路最终回归及前后归属清理均通过。下表耗时为各用例 `seconds` 之和。
 
-| 平台 | 线程 | `all` 结果 | 耗时 |
+| 平台 | 线程 | 最终 `all` | 用例耗时合计 |
 | --- | --- | --- | ---: |
-| Windows MSVC x64 Release | 多线程 | 25 通过、1 跳过 | 597.0 秒 |
-| Windows MSVC x64 Release | 单线程 | 25 通过、1 跳过 | 636.5 秒 |
-| WSL Ubuntu GCC 13.3 Release | 多线程 | 26/26 通过 | 362.5 秒 |
-| WSL Ubuntu GCC 13.3 Release | 单线程 | 26/26 通过 | 359.4 秒 |
+| Windows MSVC x64 Release | 多线程 | 25 通过、1 跳过 | 353.532 秒 |
+| Windows MSVC x64 Release | 单线程 | 25 通过、1 跳过 | 366.813 秒 |
+| WSL Ubuntu GCC 13 Release | 多线程 | 26/26 通过 | 198.444 秒 |
+| WSL Ubuntu GCC 13 Release | 单线程 | 26/26 通过 | 182.688 秒 |
 
-Windows 跳过 Unix 专属 `tcp-error-rearm`。Windows 两路另用真 MySQL 8.0.42 验证 MySQL、静态注册和迁移，均通过；WSL 两路的真 MySQL 8.0.46 和 ASan/UBSan 均通过。四路均有 native FLOAT roundtrip、row mapping、rows、done 的 `bad=0`，以及 mysql-export 7 tests OK。
+Windows 跳过 Unix 专属 `tcp-error-rearm`。两平台 CPU 均为 AMD Ryzen 7 9800X3D，Windows CIM 4700 MHz，WSL 采样 4699.902 MHz。最终夹具 SHA-256 为 `c071539a506477f23338848040aa9981d14564eb408f224fde59b44a890d4e44`。结果在 `.local/manager-call-all-final-{mt,st}`（Windows）和 `.local/manager-call-20261128-{mt,st}/all-final`（WSL）。
 
-旧驱动配合同一端到端用例在 WSL 单线程输出 `bad=9`：四个按位检查、四个宽读检查和一个标量检查失败，正常写入及 NULL 检查通过。旧生成器误放行三类 PB 字段的 `BINARY`；新版拒绝，`VARBINARY` 和 `BLOB` 对照通过。
+构建和工具矩阵与最终 `all` 分开计时：Windows MT/ST 原矩阵分别 578.6/586.1 秒，业务 `all` 各 25 通过、1 跳过，结果在 `.local/manager-call-windows-{mt,st}`；WSL MT 原矩阵 410.0 秒，WSL ST 首轮 `all` 为 25/26，注册就绪夹具遗漏初始租约，更新夹具后用同一二进制重跑如上。WSL 两路 ASan/UBSan、MySQL 和静态注册专项通过。Windows 原生 MySQL、迁移和静态注册 MT/ST 均退出 0，row mapping、transaction affected rows、rows、done 均 `bad=0`，在 `.local/manager-call-mysql-{mt,st}`。
 
-结果目录：Windows 为 `.local/float-final-20261128/{windows-mt,windows-st,mysql-mt,mysql-st}`；WSL 为 `.local/float-pb-20261128-wsl`，旧驱动对照为 `.local/float-old-driver-wsl`。
+百万次 empty 检查真实回包：Windows MT/ST 分别 `ms=30317` / `ms=30293`、均 `rpc_fail=0`，用例各 32.47 秒，见 `.local/manager-call-empty-{mt,st}`；WSL MT/ST 分别 24.73/24.69 秒，均 `rpc_fail=0`。四路服务端原始 hold 日志均有 `reverse reply bad=0 code=0`；四路覆盖 owner 轮换、快照和真实反向 RPC。生成/签名测试共 30 项；七个业务处理函数的签名检查以仅将 Empty 改回旧签名为负例，唯一失败项是 Empty，恢复后单项通过。
+
+早期快照 Windows ST 出现 logd 清理超时；WSL ST 曾遗漏初始租约；较早 WSL MT Redis late ping 2005 ms 超时，定向复测 1074 ms 成功但根因未明，见[原待办](../todonext.md#hold-的-redis-late-ping-偶发超时)。后续通过不抹去上述失败。Windows 专项前后按归属清理退出 0。
 
 ## 收包额度与解码预算复验（2026-11-25 晚，历史记录）
 

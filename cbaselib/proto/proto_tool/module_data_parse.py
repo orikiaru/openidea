@@ -4,7 +4,8 @@ from typing import Dict
 from common import loginfo
 from serialize_data_parse import SerializeData
 from proto_parse import ProtocolGen
-from proto_text import ProtoLexer
+from proto_text import ProtoLexer, ValidDeclName
+from dataclasses import dataclass
 
 NAME_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]*")
 
@@ -31,12 +32,22 @@ def ParseModuleText(text):
                 return None
             rpc_names = []
             while not lex.eof() and lex.peek_char() != "}":
-                if lex.ident() != "rpc":
-                    return lex.fail("expect rpc")
+                kind = lex.ident()
+                if kind not in ("rpc", "notify"):
+                    return lex.fail("expect rpc or notify")
                 rpc_name = lex.ident()
-                if rpc_name is None or not lex.punct(";"):
+                if rpc_name is None:
                     return None
-                rpc_names.append(rpc_name)
+                binder = None
+                if lex.peek_char() != ";":
+                    if lex.ident() != "bind":
+                        return lex.fail("expect ';' or 'bind <method>'")
+                    binder = lex.ident()
+                    if binder is None or not ValidDeclName(binder):
+                        return lex.fail("invalid registration method")
+                if not lex.punct(";"):
+                    return None
+                rpc_names.append((kind, rpc_name, binder))
             if not lex.punct("}"):
                 return None
             components.append((name, type_name, rpc_names))
@@ -70,6 +81,13 @@ class ComponentType(Enum):
     Server = 1
     Client = 2
 
+@dataclass
+class ProtocolHandler:
+    kind: str
+    protocol: SerializeData
+    binder: str = None
+
+
 class Component:
     def __init__(self) -> None:
         self.name = ""          #组件名
@@ -91,7 +109,7 @@ class Component:
             loginfo("ParseComponent Error Type Component = {} type = {}".format(self.name, self.type))
             return False
 
-        for pname in rpc_names:
+        for kind, pname, binder in rpc_names:
             if(pname in self.protos):
                 loginfo("ParseComponent Error Protocol Repeat Component=", self.name, "Protocol=", pname)
                 return False
@@ -99,7 +117,7 @@ class Component:
             if(not proto):
                 loginfo("ParseComponent Error NoProtocolExsit Component=", self.name, "Protocol=", pname)
                 return False
-            self.protos[pname] = proto
+            self.protos[pname] = ProtocolHandler(kind, proto, binder)
         return True
 
 
@@ -111,12 +129,15 @@ class Module:
 
     def Parse(self, component_names, component_map:Dict[str,Component]):
         for c_name in component_names:
+            if c_name.lower() in {name.lower() for name in self.components}:
+                loginfo("Duplicate component source in process", self.name, c_name)
+                return False
             if(not component_map.get(c_name)):
                 loginfo("ParseModule Error NoComponent Module=", self.name, "Component=", c_name)
                 return False
             self.components[c_name] = component_map[c_name]
-            for p in self.components[c_name].protos.values():
-                self.protos[p.GetName()] = p
+            for name, handler in self.components[c_name].protos.items():
+                self.protos[name] = handler.protocol
         return True
 
 
@@ -169,6 +190,9 @@ class ModuleGen:
         return True
 
     def ParseComponent(self, name, type_name, rpc_names):
+        if not ValidDeclName(name) or name.lower() in ("main", "oi_module_components", "modulecomponents"):
+            loginfo("Invalid C++ component name", name)
+            return False
         component = Component()
         if(not component.Parse(name, type_name, rpc_names, self.proto_gen)):
             loginfo("{}{}".format(component.name, "[Component ParseFault]"))

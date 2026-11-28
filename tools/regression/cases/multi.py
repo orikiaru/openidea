@@ -2,7 +2,12 @@
 import os
 import re
 import shutil
+import socket
+import struct
 import subprocess
+import time
+
+from registry_replacement_check import redis_get, snapshot
 
 from regression_platform import SUFFIX
 
@@ -38,7 +43,7 @@ class MultiCase(Case):
                 # 只去掉注册地址这三行。点号不能跨行，否则会把后面的 LogClient 一起删掉。
                 text = re.sub(
                     r'(?m)^\[Registry\]\nip = "[^"]*"\nport = "[^"]*"\ntype = "[^"]*"\n',
-                    '[Registry]\ninstances = [\n    "peerserver 1 127.0.0.1 %d",\n    "peerserver 2 127.0.0.1 %d",\n]\n' % ports.GAME_PORTS,
+                    '[Registry]\ninstances = [\n    "peerserver 1 127.0.0.1 %d",\n    "peerserver 2 127.0.0.1 %d",\n    "IpcUdp 2 127.0.0.1 %d",\n]\n' % (*ports.GAME_PORTS, ports.UDP_PORT),
                     text,
                     count=1)
         return text
@@ -51,10 +56,10 @@ class MultiCase(Case):
             raise EnvironmentBlocked("registry static needs OI_TEST_MYSQL_CLIENT or mysql on PATH")
         script = REPO / "module/mysql_script/framework/oi_service_instance.sql"
         seed = (
-            "DELETE FROM oi_service_instance WHERE `name`='peerserver'; "
+            "DELETE FROM oi_service_instance WHERE `name` IN ('peerserver','IpcUdp'); "
             "INSERT INTO oi_service_instance (`name`, `id`, `ip`, `port`, `zone`) VALUES "
-            "('peerserver', 1, '127.0.0.1', '%d', ''), ('peerserver', 2, '127.0.0.1', '%d', '');"
-        ) % ports.GAME_PORTS
+            "('peerserver', 1, '127.0.0.1', '%d', ''), ('peerserver', 2, '127.0.0.1', '%d', ''), ('IpcUdp', 2, '127.0.0.1', '%d', '');"
+        ) % (*ports.GAME_PORTS, ports.UDP_PORT)
         command = [mysql, "--no-defaults", "--protocol=tcp", "--host", os.environ["OI_TEST_MYSQL_HOST"],
                    "--port", os.environ["OI_TEST_MYSQL_PORT"], "--user", os.environ["OI_TEST_MYSQL_USER"],
                    "--database", os.environ["OI_TEST_MYSQL_DATABASE"]]
@@ -75,7 +80,13 @@ class MultiCase(Case):
             text = text.replace('name = "ipcserver"', 'name = "peerserver"', 1)
             text = re.sub(r"(?m)^id = 1$", "id = %d" % instance, text, count=1)
             text = text.replace('port = "%d"' % ports.IPC_PORT, 'port = "%d"' % port, 1)
-            text = text.replace('port = "%d"' % ports.UDP_PORT, 'port = "0"', 1)
+            if instance == 2:
+                # 同一进程开两个 TCP 监听，一个指定服务名，一个默认用管理器名。
+                text = text.replace('name = "peerserver"\n', '', 1)
+                text = text.replace('[IpcServer]', '[IpcServer]\nservice_name = "peerserver"', 1)
+                text = text.replace('type = "udp"', 'type = "tcp"', 1)
+            else:
+                text = text.replace('port = "%d"' % ports.UDP_PORT, 'port = "0"', 1)
             path = ctx.cfg / ("peerserver-%d.toml" % instance)
             if ctx.name == "local":
                 text = re.sub(
@@ -87,6 +98,42 @@ class MultiCase(Case):
             proc, output = ctx.start("peerserver-%d" % instance, [str(ctx.work / ("ipcserver" + SUFFIX)), str(path)])
             ctx.ready(proc, output, "ipc server listen")
             ctx.peers[instance] = proc
+
+        if ctx.name == "multi":
+            self.check_registry_reconnect(ctx)
+
+    @staticmethod
+    def check_registry_reconnect(ctx):
+        # Keep the process hosting both listeners alive. New ownership tokens prove
+        # it registered both names on the new connection before the client calls.
+        expected = {(b"peerserver", 1), (b"peerserver", 2), (b"IpcUdp", 2)}
+        keys = {entry: b"oi:{openidea.dev}:owner:%s:%d" % entry for entry in expected}
+
+        def wait_for_registrations(previous, stage):
+            deadline = time.monotonic() + 10
+            visible = set()
+            with socket.create_connection(("127.0.0.1", ports.REGISTRY_PORT), timeout=2) as observer:
+                while True:
+                    owners = {entry: redis_get(ports.REDIS_PORT, key) for entry, key in keys.items()}
+                    pending = [entry for entry, owner in owners.items() if not owner or owner == previous.get(entry)]
+                    if not pending:
+                        rows = snapshot(observer, allow_not_ready=True)
+                        if rows is not None:
+                            visible = {(row[0], struct.unpack("<i", row[1])[0]) for row in rows}
+                            if expected <= visible:
+                                return owners
+                    if time.monotonic() >= deadline:
+                        raise AssertionError(f"{stage}: pending owners={pending}, missing from snapshot={expected - visible}")
+                    time.sleep(0.05)
+
+        previous = wait_for_registrations({}, "before registry restart")
+        ctx.registry.kill()
+        ctx.registry.wait(timeout=10)
+        ctx.procs.remove(ctx.registry)
+        ctx.registry, ctx.registry_path = ctx.start("registry-again", [str(ctx.work / ("registry" + SUFFIX))])
+        ctx.ready(ctx.registry, ctx.registry_path, "registry server listen")
+        wait_for_registrations(previous, "after registry restart")
+        print("hosted services re-registered on registry reconnect PASS", flush=True)
 
     def on_poll(self, ctx):
         if ctx.mode == "multi" and not ctx.peer_restarted:
@@ -105,6 +152,7 @@ class MultiCase(Case):
     def check(self, ctx):
         case, text = ctx.name, ctx.text
         peer_stopped, peer_restarted = ctx.peer_stopped, ctx.peer_restarted
+        assert "hosted service seq=2731 code=0 bad=0" in text
         if ctx.mode == "pool":
             if case == "local":
                 assert "route limits configured=0 bad=0" in text
@@ -126,6 +174,8 @@ class MultiCase(Case):
             assert "multi notify batch all_started=2 all_got=2 many_started=2 many_got=2 reconnect=1 bad=0" in text
             assert "multi peer down disconnect=1 gone=1 one=1 two=-3 bad=0" in text
             assert re.search(r"multi peer back listed=1 two=2 connects=[2-9]\d* bad=0", text)
+            assert "hosted service withdrawn=1" in text
+            assert "hosted service seq=2732 code=0 bad=0" in text
             assert "multi done bad=0" in text
             assert peer_stopped and peer_restarted
         return False

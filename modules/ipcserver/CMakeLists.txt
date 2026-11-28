@@ -4,10 +4,11 @@ cmake_minimum_required(VERSION 2.6)
 
 #设置可执行程序依赖的源文件
 set(MODULE_SRCS
-        src/main.cpp src/ipcserver.cpp src/ipcudp.cpp
+        src/main.cpp
     )
 #可执行程序
 add_executable(ipcserver ${MODULE_SRCS})
+include(oi_module_components.cmake)
 
 #头文件目录
 target_include_directories(ipcserver

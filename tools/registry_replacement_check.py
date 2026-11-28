@@ -60,9 +60,12 @@ def redis_get(port, key):
         return value[:-2]
 
 
-def snapshot(stream, name=None):
+def snapshot(stream, name=None, allow_not_ready=False):
     names = struct.pack("<I", 0) if name is None else struct.pack("<II", 1, len(name)) + name
-    data = fields(rpc(stream, -1008, field(0, names), 3))[0]
+    reply = rpc(stream, -1008, field(0, names), 3, allow_not_ready=allow_not_ready)
+    if reply is None:
+        return None
+    data = fields(reply)[0]
     count = struct.unpack_from("<I", data)[0]
     offset = 4
     instances = []

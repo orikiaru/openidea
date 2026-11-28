@@ -64,12 +64,15 @@ bool TakeAdvertise(const std::string& sKey, std::string& sValue)
 	return true;
 }
 
-bool PublishAddress(const std::string& sSection, const std::string& sBindIp, const std::string& sBindPort, std::string& sIp, std::string& sPort)
+bool PublishAddress(const std::string& sSection, const std::string& sBindIp, const std::string& sBindPort, bool bLegacyName, std::string& sIp, std::string& sPort)
 {
 	sIp = sBindIp;
 	sPort = sBindPort;
 	TakeAdvertise("Service.advertise_ip", sIp);
-	TakeAdvertise("Service.advertise_port", sPort);
+	if (bLegacyName)
+	{
+		TakeAdvertise("Service.advertise_port", sPort);
+	}
 	TakeAdvertise(sSection + ".advertise_ip", sIp);
 	TakeAdvertise(sSection + ".advertise_port", sPort);
 	::OI::Net::NetAddr stAddr;
@@ -79,7 +82,7 @@ bool PublishAddress(const std::string& sSection, const std::string& sBindIp, con
 
 RegistryClient::RegistryClient()
     : m_bConnected(false), m_bConnecting(false), m_bFailed(false), m_iSessionId(INVALID_SID), m_bAddressReady(false),
-      m_iServiceId(0), m_bPublished(false), m_bRegistered(false), m_bLost(false), m_bActive(false), m_bPullWanted(false),
+      m_bActive(false), m_bPullWanted(false),
       m_bRefresh(false), m_iHeartbeatMilliseconds(1000), m_iPullMilliseconds(1000), m_iNextHeartbeatMilliseconds(0),
       m_iNextPullMilliseconds(0), m_bReportKnown(false), m_bReport(false)
 {
@@ -133,7 +136,7 @@ void RegistryClient::NoteReport(bool bReport)
 	m_bReportKnown.store(true, std::memory_order_release);
 }
 
-int32_t RegistryClient::ProbeReport()
+int32_t RegistryClient::ProbeReport(const std::string& sName)
 {
 	struct State
 	{
@@ -142,11 +145,7 @@ int32_t RegistryClient::ProbeReport()
 		bool bReport = false;
 	};
 	auto pState = std::make_shared<State>();
-	std::vector<std::string> vNames;
-	if (!m_sServiceName.empty())
-	{
-		vNames.push_back(m_sServiceName);
-	}
+	std::vector<std::string> vNames{sName};
 	::OI::RpcData::RegPull stRequest(std::move(vNames));
 	CallRegistry<::OI::RpcData::RegPull>(stRequest, kWaitMs, [this, pState](int32_t iCode, ::OI::RpcData::RegPullRes& stResponse)
 	{
@@ -470,46 +469,18 @@ void RegistryClient::Activate()
 	if (!m_bReportKnown.load(std::memory_order_acquire))
 	{
 		std::vector<std::string> vProbe;
-		if (!m_sServiceName.empty())
-		{
-			vProbe.push_back(m_sServiceName);
-		}
 		::OI::RpcData::RegPullRes stProbe;
-		const int32_t iProbe = co_await ::OI::Rpc::RpcCall(*this, m_iSessionId.load(), ::OI::RpcData::RegPull(vProbe), stProbe, ::OI::Timer::Milliseconds(kWaitMs));
+		const int32_t iProbe = co_await Call(m_iSessionId.load(), ::OI::RpcData::RegPull(vProbe), stProbe, ::OI::Timer::Milliseconds(kWaitMs));
 		if (iProbe == OI_OK)
 		{
 			NoteReport(!stProbe.bStatic);
 		}
 	}
 	// 每秒才跑一次，提前半秒算到点，间隔不会被拖成两秒。
-	const bool bSkipReport = m_bReportKnown.load(std::memory_order_acquire) && !m_bReport.load(std::memory_order_acquire);
-	if (!bSkipReport && m_bPublished.load() && !m_bLost.load() && iNowMilliseconds >= m_iNextHeartbeatMilliseconds)
+	if (m_bReportKnown.load(std::memory_order_acquire) && m_bReport.load() && iNowMilliseconds >= m_iNextHeartbeatMilliseconds)
 	{
 		m_iNextHeartbeatMilliseconds = iNowMilliseconds + m_iHeartbeatMilliseconds;
-		int32_t iCode = OI_ERR_FAIL;
-		if (m_bRegistered.load())
-		{
-			::OI::RpcData::RegHeartbeatRes stResponse;
-			iCode = co_await ::OI::Rpc::RpcCall(*this, m_iSessionId.load(), ::OI::RpcData::RegHeartbeat(m_sServiceName, m_iServiceId), stResponse, ::OI::Timer::Milliseconds(kWaitMs));
-			if (iCode != OI_OK)
-			{
-				// registry 重启过，或暂时不可用。下一次重新登记。
-				m_bRegistered = false;
-			}
-		}
-		else
-		{
-			::OI::RpcData::RegRegisterRes stResponse;
-			iCode = co_await ::OI::Rpc::RpcCall(*this, m_iSessionId.load(), ::OI::RpcData::RegRegister(m_sServiceName, m_iServiceId, m_sServiceIp, m_sServicePort, m_sServiceZone), stResponse, ::OI::Timer::Milliseconds(kWaitMs));
-			m_bRegistered = iCode == OI_OK;
-		}
-		if (iCode == OI_ERR_EXIST)
-		{
-			m_bLost = true;
-			fprintf(stderr, "registry %s id=%d 已被别的进程占用，停止登记\n", m_sServiceName.c_str(), m_iServiceId);
-			fflush(stderr);
-			LOG_ERROR("registry %s id=%d taken by another process, stop register", m_sServiceName.c_str(), m_iServiceId);
-		}
+		co_await RenewServices(m_iSessionId.load());
 	}
 	if (m_bPullWanted.exchange(false) || iNowMilliseconds >= m_iNextPullMilliseconds)
 	{
@@ -518,7 +489,7 @@ void RegistryClient::Activate()
 		if (!vNames.empty())
 		{
 			::OI::RpcData::RegPullRes stResponse;
-			const int32_t iCode = co_await ::OI::Rpc::RpcCall(*this, m_iSessionId.load(), ::OI::RpcData::RegPull(vNames), stResponse, ::OI::Timer::Milliseconds(kWaitMs));
+			const int32_t iCode = co_await Call(m_iSessionId.load(), ::OI::RpcData::RegPull(vNames), stResponse, ::OI::Timer::Milliseconds(kWaitMs));
 			// registry 暂时给不了名单，缓存保持原状，下一秒重拉。
 			if (iCode == OI_OK)
 			{
@@ -530,6 +501,54 @@ void RegistryClient::Activate()
 				m_iNextPullMilliseconds = 0;
 				LOG_TRACE("registry pull names=%zu code=%d", vNames.size(), iCode);
 			}
+		}
+	}
+}
+
+::OI::Coro::Task RegistryClient::RenewServices(sid_t iSessionIdLocal)
+{
+	for (size_t iIndex = 0;; ++iIndex)
+	{
+		Publication stPublication;
+		{
+			::OI::Thread::MutexGuard stLock(m_stStateMutex);
+			if (m_iSessionId.load() != iSessionIdLocal || iIndex >= m_vPublications.size())
+			{
+				co_return;
+			}
+			if (m_vPublications[iIndex].bLost)
+			{
+				continue;
+			}
+			stPublication = m_vPublications[iIndex];
+		}
+		const auto& stService = stPublication.stService;
+		int32_t iCode;
+		if (stPublication.iRegisteredSession == iSessionIdLocal)
+		{
+			::OI::RpcData::RegHeartbeatRes stResponse;
+			iCode = co_await Call(iSessionIdLocal, ::OI::RpcData::RegHeartbeat(stService.sName, stService.iId), stResponse, ::OI::Timer::Milliseconds(kWaitMs));
+		}
+		else
+		{
+			::OI::RpcData::RegRegister stRequest(stService.sName, stService.iId, stService.sIp, stService.sPort, stService.sZone);
+			::OI::RpcData::RegRegisterRes stResponse;
+			iCode = co_await Call(iSessionIdLocal, stRequest, stResponse, ::OI::Timer::Milliseconds(kWaitMs));
+		}
+		{
+			::OI::Thread::MutexGuard stLock(m_stStateMutex);
+			if (m_iSessionId.load() != iSessionIdLocal)
+			{
+				co_return;
+			}
+			auto& stCurrent = m_vPublications[iIndex];
+			stCurrent.iRegisteredSession = iCode == OI_OK ? iSessionIdLocal : INVALID_SID;
+			stCurrent.bLost = iCode == OI_ERR_EXIST;
+		}
+		if (iCode == OI_ERR_EXIST)
+		{
+			fprintf(stderr, "registry %s id=%d 已被别的进程占用，停止登记\n", stService.sName.c_str(), stService.iId);
+			LOG_ERROR("registry %s id=%d taken by another process, stop register", stService.sName.c_str(), stService.iId);
 		}
 	}
 }
@@ -559,7 +578,7 @@ void RegistryClient::OnDelSession(const ::OI::Net::Session* pSession)
 		}
 		m_iSessionId = INVALID_SID;
 		m_bConnected = false;
-		m_bRegistered = false;
+		m_bReportKnown = false;
 		m_bFailed = true;
 	}
 	Notify();
@@ -769,8 +788,22 @@ int32_t RegistryClient::Publish(const std::string& sSection, const std::string& 
 	{
 		return OI_OK;
 	}
-	std::string sNameLocal;
-	if (!::OI::Base::Config::GlobalConfig().GetAs("Service.name", sNameLocal) || sNameLocal.empty())
+	auto& stConfig = ::OI::Base::Config::GlobalConfig();
+	const std::string sManagerKey = sSection + ".service_name";
+	const bool bLegacyName = !stConfig.Contains(sManagerKey) && stConfig.Contains("Service.name");
+	std::string sNameLocal = sSection;
+	if (stConfig.Contains(sManagerKey) || bLegacyName)
+	{
+		if (!stConfig.GetAs(bLegacyName ? "Service.name" : sManagerKey, sNameLocal))
+		{
+			return OI_ERR_INVALID_ARGUMENT;
+		}
+		if (sNameLocal.empty())
+		{
+			return OI_OK;
+		}
+	}
+	else if (!stConfig.Contains("Service.id"))
 	{
 		return OI_OK;
 	}
@@ -809,7 +842,7 @@ int32_t RegistryClient::Publish(const std::string& sSection, const std::string& 
 	}
 	std::string sAdvertiseIp;
 	std::string sAdvertisePort;
-	const bool bPublish = PublishAddress(sSection, sIpLocal, sPortLocal, sAdvertiseIp, sAdvertisePort);
+	const bool bPublish = PublishAddress(sSection, sIpLocal, sPortLocal, bLegacyName, sAdvertiseIp, sAdvertisePort);
 	if (!::OI::Net::NetAddr::ValidServicePort(sAdvertisePort))
 	{
 		fprintf(stderr, "registry publish invalid advertise_port for %s\n", sSection.c_str());
@@ -831,45 +864,68 @@ int32_t RegistryClient::Publish(const std::string& sSection, const std::string& 
 		LOG_TRACE("registry publish %s skip bind %s:%s", sNameLocal.c_str(), sIpLocal.c_str(), sPortLocal.c_str());
 		return OI_OK;
 	}
-	if (m_bPublished.load())
+	if (m_eSource == Source::Registry)
 	{
-		if (m_sServiceIp != sAdvertiseIp || m_sServicePort != sAdvertisePort)
-		{
-			LOG_TRACE("registry publish %s keep %s:%s, skip %s:%s", sNameLocal.c_str(),
-			    m_sServiceIp.c_str(), m_sServicePort.c_str(), sAdvertiseIp.c_str(), sAdvertisePort.c_str());
-		}
-		return OI_OK;
+		RejectPollCallback("Publish");
 	}
+	::OI::Thread::MutexGuard stPublishLock(m_stPublishMutex);
+	{
+		::OI::Thread::MutexGuard stLock(m_stStateMutex);
+		for (const auto& stPrevious : m_vPublications)
+		{
+			if (stPrevious.stService.sName != sNameLocal)
+			{
+				continue;
+			}
+			if ((stPrevious.bLegacyName && bLegacyName) ||
+			    (stPrevious.sManager == sSection && stPrevious.stService.sIp == sAdvertiseIp && stPrevious.stService.sPort == sAdvertisePort))
+			{
+				return OI_OK;
+			}
+			fprintf(stderr, "registry duplicate service %s: managers %s and %s\n", sNameLocal.c_str(), stPrevious.sManager.c_str(), sSection.c_str());
+			return OI_ERR_EXIST;
+		}
+	}
+	Publication stPublication;
+	stPublication.sManager = sSection;
+	stPublication.bLegacyName = bLegacyName;
+	auto& stService = stPublication.stService;
+	stService.sName = sNameLocal;
+	stService.iId = iIdLocal;
+	stService.sIp = sAdvertiseIp;
+	stService.sPort = sAdvertisePort;
+	stService.sZone = sZoneLocal;
 	if (m_eSource == Source::Local)
 	{
 		m_stStatic.CheckSelf(sNameLocal, iIdLocal, sAdvertiseIp, sAdvertisePort);
-		Activate();
-		return OI_OK;
 	}
-	RejectPollCallback("Publish");
-	::OI::Thread::MutexGuard stPublishLock(m_stPublishMutex);
-	if (m_bPublished.load())
+	else
 	{
-		return OI_OK;
-	}
-	m_sServiceName = sNameLocal;
-	m_iServiceId = iIdLocal;
-	m_sServiceIp = sAdvertiseIp;
-	m_sServicePort = sAdvertisePort;
-	m_sServiceZone = sZoneLocal;
-	if (Ensure() == OI_OK)
-	{
-		ProbeReport();
-	}
-	if (m_bReportKnown.load(std::memory_order_acquire) && !m_bReport.load(std::memory_order_acquire))
-	{
+		const int32_t iStatus = RegisterService(stPublication);
+		if (iStatus != OI_OK)
 		{
-			::OI::Thread::MutexGuard stLock(m_stStateMutex);
-			m_bRegistered = false;
-			m_bPublished = true;
+			return iStatus;
 		}
-		LOG_TRACE("registry publish %s id=%d static, skip report", m_sServiceName.c_str(), m_iServiceId);
-		Activate();
+	}
+	{
+		::OI::Thread::MutexGuard stLock(m_stStateMutex);
+		m_vPublications.push_back(std::move(stPublication));
+	}
+	Activate();
+	return OI_OK;
+}
+
+int32_t RegistryClient::RegisterService(Publication& stPublication)
+{
+	const auto& stService = stPublication.stService;
+	int32_t iCodeLocal = Ensure();
+	if (iCodeLocal == OI_OK && !m_bReportKnown.load(std::memory_order_acquire))
+	{
+		iCodeLocal = ProbeReport(stService.sName);
+	}
+	if (m_bReportKnown.load(std::memory_order_acquire) && !m_bReport.load())
+	{
+		LOG_TRACE("registry publish %s id=%d static, skip report", stService.sName.c_str(), stService.iId);
 		return OI_OK;
 	}
 	struct State
@@ -878,12 +934,11 @@ int32_t RegistryClient::Publish(const std::string& sSection, const std::string& 
 		int32_t iCode = OI_ERR_FAIL;
 	};
 	auto pState = std::make_shared<State>();
-	int32_t iCodeLocal = Ensure();
 	sid_t iPublishSessionId = INVALID_SID;
 	if (iCodeLocal == OI_OK)
 	{
 		iPublishSessionId = m_iSessionId.load();
-		::OI::RpcData::RegRegister stRequest(m_sServiceName, m_iServiceId, m_sServiceIp, m_sServicePort, m_sServiceZone);
+		::OI::RpcData::RegRegister stRequest(stService.sName, stService.iId, stService.sIp, stService.sPort, stService.sZone);
 		CallRegistry<::OI::RpcData::RegRegister>(stRequest, kWaitMs, [this, pState](int32_t iCode, ::OI::RpcData::RegRegisterRes&)
 		{
 			pState->iCode = iCode;
@@ -898,25 +953,20 @@ int32_t RegistryClient::Publish(const std::string& sSection, const std::string& 
 	}
 	if (iCodeLocal == OI_ERR_EXIST)
 	{
-		fprintf(stderr, "registry publish %s id=%d 已经在线，拒绝启动\n", sNameLocal.c_str(), iIdLocal);
+		fprintf(stderr, "registry publish %s id=%d 已经在线，拒绝启动\n", stService.sName.c_str(), stService.iId);
 		fflush(stderr);
-		LOG_ERROR("registry publish %s id=%d already online", sNameLocal.c_str(), iIdLocal);
+		LOG_ERROR("registry publish %s id=%d already online", stService.sName.c_str(), stService.iId);
 		return OI_ERR_EXIST;
-	}
-	{
-		::OI::Thread::MutexGuard stLock(m_stStateMutex);
-		m_bRegistered = iCodeLocal == OI_OK && iPublishSessionId != INVALID_SID && m_iSessionId.load() == iPublishSessionId && m_bConnected.load();
-		m_bPublished = true;
 	}
 	if (iCodeLocal == OI_OK)
 	{
-		LOG_TRACE("registry publish %s id=%d %s:%s", sNameLocal.c_str(), iIdLocal, sAdvertiseIp.c_str(), sAdvertisePort.c_str());
+		stPublication.iRegisteredSession = iPublishSessionId;
+		LOG_TRACE("registry publish %s id=%d %s:%s", stService.sName.c_str(), stService.iId, stService.sIp.c_str(), stService.sPort.c_str());
 	}
 	else
 	{
-		LOG_ERROR("registry publish %s id=%d not confirmed code=%d, retry on update", sNameLocal.c_str(), iIdLocal, iCodeLocal);
+		LOG_ERROR("registry publish %s id=%d not confirmed code=%d, retry on update", stService.sName.c_str(), stService.iId, iCodeLocal);
 	}
-	Activate();
 	return OI_OK;
 }
 

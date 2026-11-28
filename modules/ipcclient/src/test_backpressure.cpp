@@ -63,7 +63,7 @@ OI::Coro::TaskResult<int> TestBackpressure::CheckDirectBackpressure()
 	OI::RpcData::AllEchoRes stOutput;
 	stOutput.stData.sMessage = "unchanged";
 	// 当前任务内调用立即启动，连接尚未开始，稳定进入建连前排队路径。
-	auto stQueued = OI::Rpc::RpcCall(stClient, stLarge, stOutput, OI::Timer::Seconds(3));
+	auto stQueued = stClient.Call(stLarge, stOutput, OI::Timer::Seconds(3));
 	const bool bConnected = (co_await stClient.StartClient()) == OI_OK;
 	const int32_t iQueuedRet = co_await stQueued;
 	if (!bConnected || iQueuedRet != OI_ERR_BUSY || stOutput.stData.sMessage != "unchanged")
@@ -71,8 +71,8 @@ OI::Coro::TaskResult<int> TestBackpressure::CheckDirectBackpressure()
 		++iBad;
 	}
 	const sid_t iSid = stClient.ConnectedSid();
-	const int32_t iDirectRet = co_await OI::Rpc::RpcCall(stClient, stLarge, stOutput, OI::Timer::Seconds(3));
-	const int32_t iPinnedRet = co_await OI::Rpc::RpcCall(stClient, iSid, stLarge, stOutput, OI::Timer::Seconds(3));
+	const int32_t iDirectRet = co_await stClient.Call(stLarge, stOutput, OI::Timer::Seconds(3));
+	const int32_t iPinnedRet = co_await stClient.Call(iSid, stLarge, stOutput, OI::Timer::Seconds(3));
 	if (iDirectRet != OI_ERR_BUSY || iPinnedRet != OI_ERR_BUSY || stOutput.stData.sMessage != "unchanged" || stClient.ConnectedSid() != iSid)
 	{
 		++iBad;
@@ -80,13 +80,13 @@ OI::Coro::TaskResult<int> TestBackpressure::CheckDirectBackpressure()
 	OI::RpcData::HoldReq stSmall;
 	OI::RpcData::HoldRes stSmallOutput;
 	stSmall.iMark = 975;
-	const int32_t iRecoveryRet = co_await OI::Rpc::RpcCall(stClient, stSmall, stSmallOutput, OI::Timer::Seconds(3));
+	const int32_t iRecoveryRet = co_await stClient.Call(stSmall, stSmallOutput, OI::Timer::Seconds(3));
 	if (iRecoveryRet != OI_OK || stSmallOutput.iMark != 975)
 	{
 		++iBad;
 	}
 	stClient.CloseAllSessions();
-	const int32_t iClosedRet = co_await OI::Rpc::RpcCall(stClient, iSid, stSmall, stSmallOutput, OI::Timer::Seconds(3));
+	const int32_t iClosedRet = co_await stClient.Call(iSid, stSmall, stSmallOutput, OI::Timer::Seconds(3));
 	if (iClosedRet != OI_ERR_CONNECT)
 	{
 		++iBad;

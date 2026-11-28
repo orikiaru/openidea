@@ -1,4 +1,5 @@
 #pragma once
+#include "rpc_ids.h"
 #include "oi_lock.h"
 #include "oi_rpc_call.h"
 #include "oi_rpc_session_manager.h"
@@ -19,10 +20,15 @@ class IpcServer : public ::OI::Rpc::ProtoSessionManager
 	// 按 PeerNote.iTag 计数。通知处理和探测查询都会碰到。
 	::OI::Thread::Mutex m_stNoteLocker;
 	std::map<int32_t, int32_t> m_mNoteCount;
+	void BindHold();
+	::OI::Rpc::RpcTask HandleAllEcho(const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::AllEchoReq& stRequest, ::OI::RpcData::AllEchoRes& stResponse);
+	::OI::Rpc::RpcTask HandleEmpty(const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::EmptyReq& stRequest, ::OI::RpcData::EmptyRes& stResponse);
+	::OI::Rpc::RpcTask HandlePeerNote(const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::PeerNoteReq& stRequest);
+	// New protocol handler declarations are inserted here.
 	int32_t NoteCount(int32_t iTag);
-	int32_t HandlePeerNote(const ::OI::RpcData::PeerNoteReq& stRequest);
 
   public:
+	void RegisterProtocols();
 	virtual ~IpcServer();
 	int32_t Init() override;
 	// [HttpProbe] 配了 host 才发一次 GET，打印结果。不等它，监听照常。

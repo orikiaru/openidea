@@ -342,7 +342,7 @@ static OI::Coro::TaskResult<bool> StackOne(int iNumberLocal, std::shared_ptr<std
 {
 	::OI::RpcData::AllEchoReq stRequestLocal;
 	FillAllTypes(stRequestLocal.stData, iNumberLocal);
-	auto stResult = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequestLocal, ::OI::Timer::Seconds(20));
+	auto stResult = co_await IpcClient::GetInstance().Call(stRequestLocal, ::OI::Timer::Seconds(20));
 	pDone->fetch_add(1);
 	co_return stResult.GetRet() == OI_OK&& stResult.GetRes().iCode == 1;
 }
@@ -376,7 +376,7 @@ OI::Coro::Task TestEcho::StackProbe()
 	co_await OI::Coro::yield(4000);
 	::OI::RpcData::AllEchoReq stRequestLocal;
 	FillAllTypes(stRequestLocal.stData, 9);
-	auto stResult = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequestLocal, ::OI::Timer::Seconds(3));
+	auto stResult = co_await IpcClient::GetInstance().Call(stRequestLocal, ::OI::Timer::Seconds(3));
 	int iReturnCodeLocal = stResult.GetRet();
 	LOG_TRACE("stack offline ret=%d", iReturnCodeLocal);
 	fflush(stdout);

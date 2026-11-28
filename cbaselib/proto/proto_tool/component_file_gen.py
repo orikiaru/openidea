@@ -25,6 +25,8 @@ class ComponentFileGen:
         header_file_name = self.GetComponentHeaderFileName()
         component_name = self.component.name
         
+        register = f"    {component_name}::GetInstance().RegisterProtocols();\n" if self.component.protos else ""
+        file_data = file_data.replace("__REGISTER_PROTOCOLS__", register)
         file_data = file_data.replace( '__HEADER_FILE_NAME__', header_file_name)
         file_data = file_data.replace( '__COMPONENT_NAME__', component_name)
         return file_data
@@ -37,7 +39,7 @@ class ComponentFileGen:
         fprintf(stderr, "__COMPONENT_NAME__ Init failed: code=%d\n", iCode);
         return iCode;
     }
-    iCode = __COMPONENT_NAME__::GetInstance().StartServer();
+__REGISTER_PROTOCOLS__    iCode = __COMPONENT_NAME__::GetInstance().StartServer();
     if (iCode != OI_OK)
     {
         fprintf(stderr, "__COMPONENT_NAME__ StartServer failed: code=%d\n", iCode);
@@ -55,7 +57,7 @@ class ComponentFileGen:
         fprintf(stderr, "__COMPONENT_NAME__ Init failed: code=%d\n", iCode);
         return iCode;
     }
-    __COMPONENT_NAME__::GetInstance().Start();
+__REGISTER_PROTOCOLS__    __COMPONENT_NAME__::GetInstance().Start();
 '''     
         return self.DoReplace(file_data)
     
@@ -63,9 +65,10 @@ class ComponentFileGen:
     def GenServerComponentConfig(self):
         file_data = r'''
 [__COMPONENT_NAME__]
+service_name = "__COMPONENT_NAME__"
 ip = ""
 port = ""
-type = ""
+type = "tcp"
 '''
         return self.DoReplace(file_data)
 

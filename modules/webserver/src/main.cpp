@@ -1,3 +1,4 @@
+#include "oi_module_components.h"
 #include "oi_base.h"
 #include "web_server.h"
 #include <cstdio>
@@ -24,6 +25,6 @@ int main(int iArgumentCount, char* vArguments[])
 		}
 		std::printf("web server listen %s:%s\n", stServer.GetStrIP().c_str(), stServer.GetStrPort().c_str());
 		std::fflush(stdout);
-		return OI_OK;
+		return ModuleComponents::Start();
 	});
 }

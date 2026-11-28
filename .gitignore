@@ -4,6 +4,9 @@
 /CMakeSettings.json
 /out
 /modules/include
+/modules/*/inc/oi_module_components.h
+/modules/*/generated/*_protocols.cpp
+/modules/*/oi_module_components.cmake
 /cbaselib/base/inc/framework_protocol
 /deploy/bin
 /*.obj

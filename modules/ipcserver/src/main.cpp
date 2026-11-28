@@ -1,3 +1,4 @@
+#include "oi_module_components.h"
 #include <stdio.h>
 #include "oi_net.h"
 #include "oi_base.h"
@@ -30,28 +31,9 @@ int main(int iArgumentCount, char* vArguments[])
 			fprintf(stderr, "Log Init failed: code=%d\n", iStatus);
 			return iStatus;
 		}
-		iStatus = IpcServer::GetInstance().Init();
+		iStatus = ModuleComponents::Start();
 		if (iStatus != OI_OK)
 		{
-			fprintf(stderr, "IpcServer Init failed: code=%d\n", iStatus);
-			return iStatus;
-		}
-		iStatus = IpcServer::GetInstance().StartServer();
-		if (iStatus != OI_OK)
-		{
-			fprintf(stderr, "IpcServer StartServer failed: code=%d\n", iStatus);
-			return iStatus;
-		}
-		iStatus = IpcUdp::GetInstance().Init();
-		if (iStatus != OI_OK)
-		{
-			fprintf(stderr, "IpcUdp Init failed: code=%d\n", iStatus);
-			return iStatus;
-		}
-		iStatus = IpcUdp::GetInstance().StartServer();
-		if (iStatus != OI_OK)
-		{
-			fprintf(stderr, "IpcUdp StartServer failed: code=%d\n", iStatus);
 			return iStatus;
 		}
 		printf("ipc udp listen port=%u\n", (unsigned)IpcUdp::GetInstance().LocalPort());

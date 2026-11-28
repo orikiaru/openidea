@@ -1,6 +1,6 @@
 # 条件待办（暂不占当前排期）
 
-> 「不值得当前做」不等于问题不存在、已修或已验收。近期仅做根目录 [活动待办](<todo.md>) 八组；本页合并三轮重复记录，保留每个独立未完成事项、延期理由和重新提级条件。已完成历史见 [归档](<docs/fixed.md>)，复现导航见 [补充入口](<docs/todo.md>)。
+> 「不值得当前做」不等于问题不存在、已修或已验收。近期行动见根目录 [活动待办](<todo.md>)；本页合并三轮重复记录，保留每个独立未完成事项、延期理由和重新提级条件。已完成历史见 [归档](<docs/fixed.md>)，复现导航见 [补充入口](<docs/todo.md>)。
 >
 > 证据源：[11-24 review](<docs/review-20261124.md>)（含 11-21 遗留）、[11-25 review](<docs/review-20261125.md>)、[11-26 review](<docs/review-20261126.md>)。它们是完整历史来源，文内行号、优先级与「未修」均为当时快照，不以旧建议顺序覆盖本次分诊。下文代码行号也仅作历史定位；本轮仅文档整理，无新测试、源码或测试改动。11-26 新增条目标「11-26」，全部为代码证据、未实测。
 
@@ -10,7 +10,7 @@
 - **通用 TLS 聚合与 wire 限额边界**：[喂入与 Read](<cbaselib/net/src/oi_tls_session.cpp#L234-L257>)、[跨轮解密入口](<cbaselib/net/src/oi_tls_session.cpp#L431-L461>)可能把前轮半个 record 的产出计入本轮明文额度而误拒。[HTTP 独立 8 MiB + 64 KiB](<cbaselib/http/src/oi_http.cpp#L999-L1001>)已避免本轮回归，不等于通用问题已修。延期：通用限额/record 边界尚无业务复现；真正接入时再用受控跨轮 record 验证，设计分批交付和 BUSY 恢复，不丢、不重复消费。
 - **ServiceTable 短命 observer**：[历史机制](<docs/review-20261125.md#3-新增-p2框架--协议>)是裸指针无注销；当前管理器按进程常驻，两个测试 observer 为 [static](<modules/ipcclient/src/test_multi.cpp#L466-L467>)，栈探针在 ST 外线程注册被拒且已有断言。延期：没有合法短命接入；若未来支持动态生命周期，必须连同锁外已复制的在途通知一起注销/保活，不能只 erase 列表；验收析构后绝不回调及并发通知收尾。
 - **RPC half-close 合同**：[历史链](<docs/review-20261124.md#31-rpc-半关闭丢回包>)为 FIN 摘会话、延后响应按 sid 查不到；仓库客户端不用半关闭，已知后果不因延期消失。提级：外部客户端要求 `shutdown(SHUT_WR)` 后读响应；先明确不支持并文档/回归锁定，或最小延迟摘会话并真实套接字验证原响应与资源收尾，不预先大改连接生命周期。
-- **被接管后的恢复**：`m_bLost` 只置不清，旧进程停止登记，占用方退出/租约过期也只能重启，见 [历史策略疑点](<docs/review-20261124.md#7-已知项状态复核后不变>)。延期：接管究竟永久退让还是允许恢复未定；有自动恢复需求后先定合同，再做空出检测/恢复或显式状态通知及接管交错验收。
+- **被接管后的恢复**：当前每条服务登记各有 `bLost` 状态，被接管后该服务停止登记；占用方退出/租约过期后的自动恢复策略仍未定，见 [历史策略疑点](<docs/review-20261124.md#7-已知项状态复核后不变>)。延期：先确定永久退让还是允许恢复；有自动恢复需求后做空出检测/恢复或显式状态通知及接管交错验收。
 - **PeerConnection 建连失败的暂存请求（11-26）**：[Finish](<cbaselib/proto/src/oi_rpc_peer.cpp#L229-L281>) 建连失败一次就把全部暂存请求以 `OI_ERR_CONNECT` 唤醒，再排重连；[coroutine.md 单向消息](<docs/coroutine.md#单向消息>)、[registry.md](<docs/registry.md#L118>) 写的是「暂存，重连成功再补发」。延期：两种都说得通，需先定合同。最小方向：要么保留请求到重连成功或各自超时，要么改文档写明失败即回 CONNECT。验收：真实断开对端、首次重连失败，按选定合同核对原请求返回码和补发次数，不重复发送。置信度：代码路径确认，未实测。
 - **logd 跨日失败后是否重试**：[轮转历史](<docs/review-20261124.md#21-logd-跨日打开新文件失败后仍不重试未修策略待确认>)中打开失败后继续旧日期文件、轮转标记消费，下一次要等跨日；[已完成历史](<docs/fixed.md#2026-11-21-审查问题修复>)只保证失败继续写且不退出，并非 pending 重试已做。延期：先等运营明确按日文件恢复要求；若要求恢复，保留 pending 并后续批次重试、限频诊断，Linux 注入次日路径为普通文件后恢复，检查当日文件、失败期间不丢及 stderr 原因；若接受现策略，明确写入合同再关闭，不把未决事项当已接受。
 - **逐协议大小限制**：当前仅会话级 `max_frame_bytes`；逐协议非 0 超限丢弃、0 不额外限制尚为设计。延期：无具体协议需求及调用方错误合同；有需求再定配置、拒绝/丢弃结果与边界回归，不称已实现。
@@ -22,6 +22,7 @@
 ### hold 的 redis late ping 偶发超时
 
 - 历史：2026-11-11 Linux MT 的 BLPOP 3 秒在客户端 2 秒超时后，同连接 PING 偶发 `ok=0 status=1 reply_type=-1 wall_ms≈2010`、`hold done bad=1`；单独三次挂一次，无并行负载也出现，Windows/Linux ST 当时未见。正常约 900–1100ms；隔离诊断四次通过耗时 1040/910/844/849ms，后三次 MONITOR 显示同上游连接在 BLPOP 后约 3.01–3.08 秒执行 PING，**不能证明回包送达**。未找到原失败日志、未抓到失败时间线。
+- 本次较早 WSL MT 快照再次观察到 2005 ms 超时，日志在本机 `.local/hosted-final-nov28-mt/linux-mt/mt-tests.log`；随后定向复测 1074 ms 成功。根因仍未查明，等待失败时序定位，定向通过不能关闭该项。
 - 静态核对：超时项仍留队认领自己的回包、断连按会话清理，FIFO 与 `m_iSwept` 账目自洽，未确认旧回复串位；**永不回包仍可能永久占用 `max_pending`**。延期：根因未证，复跑通过不能关闭，也不先放宽时间预算。
 - 复现按 [测试规程](<docs/testing.md>) 的单项/清理步骤运行 `--case hold-redis`，指定 `--artifacts` 与 `--redis-timeline`。保留结果、各进程输出、Redis 时间线及前后清理结果，记录平台、线程、构建版本、Redis 程序、端口偏移、失败轮次、退出码、客户端超时/耗时、PING 状态/类型。
 - 对照 PING/BLPOP 执行时间与上游地址；再抓代理/客户端收发时刻，区分晚到、丢失、错误归属，脱敏且不录完整请求。提级/关闭：复现确认根因后修复，以原失败场景及规定平台/线程模式验证；不能复现就继续观察，不以一次通过关闭，不吞失败或放宽断言。
@@ -57,7 +58,7 @@
 - **wake_bench 恒真与 hold 配置**：[历史弱断言](<docs/review-20261125.md#4-新增-p2p3测试有效性>)的分段求和代数恒真，hold 的 max_clients/idle_ms 为死配置、buckets 接受 0。延期：下次相应基准/边界专项前补真实故障负例与配置生效证明，wake 数字不能继续以恒真断言声称守恒已验证。
 - **Web 诊断与弱断言**：[历史证据](<docs/review-20261125.md#4-新增-p2p3测试有效性>)包括 IPv6 环境阻塞只打印、run_web 主断言丢 stdout；[charset 复用同值输出](<docs/review-20261124.md#63-测试覆盖缺口>)使不写输出也能过。延期：未阻挡当前场景；下次 Web 工具批次/IPv6 环境失败提级，用不同哨兵、保留双流证据并把环境阻塞正确记账。
 - **覆盖缺口**：[原用例清单](<docs/review-20261124.md#63-测试覆盖缺口>)保留 CallAll 部分失败、UDP 真实丢包/重试、每拨号 DNS 次数（非配置串）、WebTest 响应源取消/释放可观察证据；hold/udp 模式和 RpcRace、fake DB 已入近期，不重复延期。其余在对应能力改动前补旧行为能失败的业务断言，新请求恢复不能替代原请求/旧资源结果。
-  - 11-26 新增弱点：[test_isolation](<modules/ipcclient/src/test_isolation.cpp#L140-L148>) 外来 sid 的 `Feed` 注入结果不可观察；[test_rpc_service 冷路由](<modules/ipcclient/src/test_rpc_service.cpp#L279-L308>) 前 9 轮失败被重试吞掉；[TestEcho::StackProbe](<modules/ipcclient/src/test_echo.cpp#L350>) 没有回归断言。第 9 组正在补的六处断言不在此重复。
+  - 11-26 新增弱点：[test_isolation](<modules/ipcclient/src/test_isolation.cpp#L140-L148>) 外来 sid 的 `Feed` 注入结果不可观察；[test_rpc_service 冷路由](<modules/ipcclient/src/test_rpc_service.cpp#L279-L308>) 前 9 轮失败被重试吞掉；[TestEcho::StackProbe](<modules/ipcclient/src/test_echo.cpp#L350>) 没有回归断言。已完成的六处断言见 [归档](<docs/fixed.md#9-linux-pollerr-停读与零窗口关闭不回收已完成>)。
 - **测试错误收尾**：[历史错误路径](<docs/review-20261124.md#62-错误路径资源>)的 TestLog 持续发送失败永不达标、TestHold Pump 异常未 Done、CheckSyncOnLoop 无超时。延期：外围 harness 故障路径，相关异常复现或工具批次提级；须有非 0 失败、原错误原因及安全收尾，不仅超时杀进程。
 - **工具/扫描器范围**：[历史工具缺口](<docs/review-20261124.md#63-测试覆盖缺口>)保留 CIM 无创建时间静默跳过、registry proxy.close 覆盖原异常、log-backpressure 复用 logd.out 截断、matrix 只扫默认 VS；[继承/格式漏 tools 自有 C++、sync --require-text 吃前导点](<docs/review-20261124.md#7-已知项状态复核后不变>)。延期：独立工具批次或再次阻挡证据采集时提级；不得降低进程归属安全条件，补隐藏路径/失败清理与自定义安装位置负例。
   - 11-26 新增：[parallel_matrix 的 lane 占用检查](<tools/parallel_matrix.py#L70-L95>) 只按副本路径匹配命令行，漏掉复制到 `%TEMP%` 的产品进程，端口预检兜底，不是假绿；[config.py replace()](<tools/regression/config.py#L14-L15>) 按键名整文件改写，`timeout_ms` 会同时改到 [ipcclient.toml](<deploy/config/ipcclient.toml#L74-L102>) 多个段，redis-queue-timeout 把 `[TestRedis] timeout_ms` 也改成 100，推测慢机上可能误报。最小方向：replace 限定段名。

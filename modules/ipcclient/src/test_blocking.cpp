@@ -457,7 +457,7 @@ OI::Coro::TaskResult<int> TestBlocking::CheckBlockingCategories()
 			OI::RpcData::HoldReq stRequest;
 			stRequest.iMark = 43;
 			OI::RpcData::HoldRes stResponse;
-			iRpc = co_await OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequest, stResponse, OI::Timer::Seconds(2));
+			iRpc = co_await IpcClient::GetInstance().Call(stRequest, stResponse, OI::Timer::Seconds(2));
 			iMark = stResponse.iMark;
 			bBlocked = !pProbe->bFinished.load() && pQueuedRuns->load() == 0;
 			char vMessage[] = "category";
@@ -816,7 +816,7 @@ OI::Coro::TaskResult<int> TestBlocking::CheckBlockingWork()
 		OI::RpcData::HoldReq stRequest;
 		stRequest.iMark = 42;
 		OI::RpcData::HoldRes stResponse;
-		const int32_t iCode = co_await OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequest, stResponse, OI::Timer::Seconds(2));
+		const int32_t iCode = co_await IpcClient::GetInstance().Call(stRequest, stResponse, OI::Timer::Seconds(2));
 		bRpcProgress = iCode == 0 && stResponse.iMark == 42;
 	}
 	catch (const std::exception& stError)

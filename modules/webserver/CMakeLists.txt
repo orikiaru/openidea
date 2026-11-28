@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 2.6)
 
 add_executable(webserver src/main.cpp src/web_server.cpp)
+include(oi_module_components.cmake)
 target_include_directories(webserver PRIVATE inc ../webtest/inc)
 if(OI_IPC_SINGLE_THREAD)
     target_compile_definitions(webserver PRIVATE _SINGLE_THREAD_)

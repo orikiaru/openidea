@@ -9,11 +9,13 @@
 | 从形参推出，含成员函数 | [`RegisterRpcHandler`](../../cbaselib/proto/inc/oi_rpc_session_manager.h#L52) |
 | 显式请求类型 | [`RegisterRpcHandler`](../../cbaselib/proto/inc/oi_rpc_session_manager.h#L90) |
 | 显式请求和回包 | [`RegisterRpcHandler`](../../cbaselib/proto/inc/oi_rpc_session_manager.h#L95) |
-| 指定会话调用，结果写入输出 | [`RpcCall`](../../cbaselib/proto/inc/oi_rpc_coro.h#L574) |
-| 客户端这条连接 | [`RpcCall`](../../cbaselib/proto/inc/oi_rpc_session_manager.h#L273) |
-| 按服务名任选一台 | [`RouteManager::Call`](../../cbaselib/proto/inc/oi_rpc_session_manager.h#L437) |
-| 多连接任选一台 | [`CallAny`](../../cbaselib/proto/inc/oi_rpc_session_manager.h#L374) |
+| 指定会话调用，结果写入输出 | [`ProtoSessionManager::Call`](../../cbaselib/proto/inc/oi_rpc_session_manager.h#L164) |
+| 客户端这条连接 | [`ProtoClientManager::Call`](../../cbaselib/proto/inc/oi_rpc_session_manager.h#L265) |
+| 按服务名任选一台 | [`RouteManager::Call`](../../cbaselib/proto/inc/oi_rpc_session_manager.h#L497) |
+| 多连接任选一台 | [`CallAny`](../../cbaselib/proto/inc/oi_rpc_session_manager.h#L430) |
 | 带响应体的结果 | [`RpcResult`](../../cbaselib/proto/inc/oi_rpc_coro.h#L493) |
+
+普通模块在组件声明中列出接收的协议，由生成代码登记。下面的手动登记示例适用于未由模块声明生成注册的接入：
 
 ```cpp
 ::OI::Rpc::RpcTask RoomServer::HandleJoin(const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::JoinReq& stRequest, ::OI::RpcData::JoinRes& stResponse)
@@ -37,11 +39,11 @@ if (iRet != OI_OK)
 }
 ```
 
-> **注意：** 平时按服务名调用，见 [服务注册](../registry.md)。`ProtoClientManager::Call` 和 `RpcCall(管理器, sid, ...)` 只用于有状态的对端，例如玩家连接。回归里的 `IpcClient` 是固定测试连接，业务不要照抄。
+> **注意：** 平时按服务名调用，见 [服务注册](../registry.md)。`ProtoClientManager::Call` 和 RPC 协议管理器的 `Call(sid, 请求, 回复, 时长)` 只用于有状态的对端，例如玩家连接。回归里的 `IpcClient` 是固定测试连接，业务不要照抄。
 
 > **注意：** 处理函数 `co_return` 错误码。回包不再另带一个 `iCode`。失败时框架不序列化回复体。
 
-> **注意：** 注册是会话管理器的成员。在自己的 `Init` 里写 `RegisterRpcHandler(fn)` 或 `RegisterRpcHandler(&类::成员)`；在别处写 `管理器.RegisterRpcHandler(fn)`。请求处理表是 `ProtoSessionManager` 的私有锁和 map，按管理器各存一份，登记 `BindRpcHandler`，查找 `FindRpcHandler`（实现在 `oi_rpc_session_manager.cpp`）。只有登记到接收该连接的那个管理器上才生效。同一管理器重复登记同一协议号记日志并抛 `std::logic_error`，不覆盖，模块初始化失败退出。
+> **注意：** 普通模块按组件声明生成登记，不再手动重复登记。手写接入时注册是会话管理器的成员调用：在自己的 `Init` 里写 `RegisterRpcHandler(fn)` 或 `RegisterRpcHandler(&类::成员)`；在别处写 `管理器.RegisterRpcHandler(fn)`。请求处理表是 `ProtoSessionManager` 的私有锁和 map，按管理器各存一份，登记 `BindRpcHandler`，查找 `FindRpcHandler`（实现在 `oi_rpc_session_manager.cpp`）。只有登记到接收该连接的那个管理器上才生效。同一管理器重复登记同一协议号记日志并抛 `std::logic_error`，不覆盖，模块初始化失败退出。
 
 > **注意：** `RegisterRpcHandler(fn)` 从形参推出类型。显式写 `RegisterRpcHandler<Req>(fn)` 或 `RegisterRpcHandler<Req, Res>(fn)`，这两个重载收自由函数或 lambda。成员函数在登记时把当前管理器 `dynamic_cast` 成所属类：当前对象必须是该类或其派生，否则抛 `std::logic_error`。该类还须继承 `ProtoSessionManager`。
 

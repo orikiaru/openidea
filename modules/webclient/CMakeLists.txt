@@ -9,6 +9,7 @@ set(MODULE_SRCS
 )
 
 add_executable(webclient ${MODULE_SRCS})
+include(oi_module_components.cmake)
 
 target_include_directories(webclient
 	PUBLIC

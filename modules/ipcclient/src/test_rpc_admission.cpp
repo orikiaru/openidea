@@ -43,7 +43,7 @@ OI::Coro::TaskResult<int32_t> TestRpcAdmission::AdmissionCall(DeferredRpcProbe* 
 	OI::RpcData::HoldReq stRequest;
 	stRequest.iDelayMilliseconds = 1000;
 	stRequest.iMark = 71;
-	auto stResult = co_await OI::Rpc::RpcCall(*pClient, stRequest, OI::Timer::Seconds(5));
+	auto stResult = co_await pClient->Call(stRequest, OI::Timer::Seconds(5));
 	if (stResult.GetRet() == 0 && stResult.GetRes().iMark != 71)
 	{
 		co_return OI_ERR_FAIL;
@@ -143,7 +143,7 @@ OI::Coro::TaskResult<int> TestRpcAdmission::CheckRpcAdmission()
 		OI::RpcData::HoldReq stRequest;
 		stRequest.iDelayMilliseconds = stCase.iDelayMilliseconds;
 		stRequest.iMark = stCase.iMark;
-		auto stResult = co_await OI::Rpc::RpcCall(vClients[0], stRequest, OI::Timer::Seconds(3));
+		auto stResult = co_await vClients[0].Call(stRequest, OI::Timer::Seconds(3));
 		if (stResult.GetRet() != stCase.iExpected)
 		{
 			++iBad;

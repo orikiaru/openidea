@@ -87,7 +87,7 @@ OI::Coro::TaskResult<int> TestIsolation::IsolationCall(int iIndex)
 	OI::Log::LogClient::GetInstance().StartClient();
 	OI::RpcData::HoldReq stRequest;
 	stRequest.iMark = 10000 + iIndex;
-	auto stResult = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequest, OI::Timer::Seconds(3));
+	auto stResult = co_await IpcClient::GetInstance().Call(stRequest, OI::Timer::Seconds(3));
 	if (stResult.GetRet() != 0 || stResult.GetRes().iMark != stRequest.iMark)
 	{
 		++iBad;

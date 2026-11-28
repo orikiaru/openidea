@@ -14,12 +14,14 @@ class IpcUdp : public ::OI::Rpc::ProtoSessionManager
 	IpcUdp()
 	{
 	}
+	// New protocol handler declarations are inserted here.
 	std::atomic<int32_t> m_iSessions{0};
 
-	::OI::Rpc::RpcTask HandleEcho(const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::UdpEchoReq& stRequest, ::OI::RpcData::UdpEchoRes& stResponse);
-	::OI::Rpc::RpcTask HandleNote(const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::UdpNoteReq& stRequest);
+	::OI::Rpc::RpcTask HandleUdpEcho(const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::UdpEchoReq& stRequest, ::OI::RpcData::UdpEchoRes& stResponse);
+	::OI::Rpc::RpcTask HandleUdpNote(const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::UdpNoteReq& stRequest);
 
   public:
+	void RegisterProtocols();
 	int32_t Init() override;
 	const std::string GetIDString() override;
 

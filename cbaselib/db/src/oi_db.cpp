@@ -247,7 +247,7 @@ void Error::ThrowIfFailed(int32_t iCode) const
 		return;
 	}
 	std::string sDescription = "database=" + IdentifierLabel(sDatabase) + " stage=" + IdentifierLabel(sStage) + " native=" + std::to_string(iNativeCode) + " sqlstate=" + IdentifierLabel(sSqlState);
-	if (sStage == "decode_row")
+	if (sStage == "decode_row" || sStage == "affected_rows")
 	{
 		sDescription += " " + sMessage;
 	}
@@ -268,6 +268,11 @@ Batch& Batch::operator=(const Batch&) = default;
 void Batch::Add(std::string sSql, std::vector<Parameter> vParameters)
 {
 	m_vCommands.push_back({std::move(sSql), std::move(vParameters)});
+}
+
+void Batch::AddExpectAffected(uint64_t iExpected, std::string sSql, std::vector<Parameter> vParameters)
+{
+	m_vCommands.push_back({std::move(sSql), std::move(vParameters), iExpected});
 }
 
 struct Client::State
@@ -476,7 +481,14 @@ struct Client::State
 		for (const auto& stBoundSql : vStatements)
 		{
 			Result stResult;
-			const int32_t iStatus = pConnection->Execute(stBoundSql, stResult, stError);
+			int32_t iStatus = pConnection->Execute(stBoundSql, stResult, stError);
+			if (iStatus == OI_OK && stBoundSql.stExpectedAffected && stResult.iAffected != *stBoundSql.stExpectedAffected)
+			{
+				stError.sStage = "affected_rows";
+				stError.sMessage = "statement=" + std::to_string(vResults.size() + 1) + " expected=" + std::to_string(*stBoundSql.stExpectedAffected) +
+				                   " actual=" + std::to_string(stResult.iAffected);
+				iStatus = OI_ERR_DB_AFFECTED_ROWS;
+			}
 			if (iStatus != OI_OK)
 			{
 				if (bTransaction)

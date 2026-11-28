@@ -1,3 +1,4 @@
+#include "oi_module_components.h"
 #include <stdio.h>
 #include <cstring>
 #include <thread>
@@ -275,6 +276,6 @@ int main(int iArgumentCount, char* vArguments[])
 		{
 			IpcClient::GetInstance().StartClient();
 		}
-		return OI_OK;
+		return ModuleComponents::Start();
 	});
 }

@@ -104,7 +104,7 @@ OI::Coro::TaskResult<int> TestRpcAwait::CheckAwaitOwnership()
 	stRequest.iDelayMilliseconds = 50;
 	stRequest.iMark = 123;
 	// 先解码再移动响应：避免构造结果时提前取走仍未填充的对象。
-	auto stDecodeProbe = OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequest);
+	auto stDecodeProbe = IpcClient::GetInstance().Call(stRequest);
 	OI::RpcData::HoldRes stDecodedSource;
 	stDecodedSource.iMark = 456;
 	OI::Base::BytesStream stReply;
@@ -117,7 +117,7 @@ OI::Coro::TaskResult<int> TestRpcAwait::CheckAwaitOwnership()
 	{
 		++iBad;
 	}
-	auto stRpc = OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequest, OI::Timer::Seconds(3));
+	auto stRpc = IpcClient::GetInstance().Call(stRequest, OI::Timer::Seconds(3));
 	auto pRpc = std::make_shared<decltype(stRpc)>(std::move(stRpc));
 	try
 	{
@@ -206,7 +206,7 @@ OI::Coro::TaskResult<int> TestRpcAwait::CheckAwaitOwnership()
 	// 固定不存在的 sid 不得进入首次连接队列，也不能等待超时。
 	static DeferredRpcProbe stPinnedClient;
 	const auto stBefore = OI::Rpc::RpcCallManager::GetInstance().WaitStats();
-	auto stPinned = co_await OI::Rpc::RpcCall(stPinnedClient, sid_t(12345), stRequest, OI::Timer::Seconds(30));
+	auto stPinned = co_await stPinnedClient.Call(sid_t(12345), stRequest, OI::Timer::Seconds(30));
 	const auto stAfter = OI::Rpc::RpcCallManager::GetInstance().WaitStats();
 	if (stPinned.GetRet() != OI_ERR_CONNECT || stAfter.iCalls != stBefore.iCalls)
 	{

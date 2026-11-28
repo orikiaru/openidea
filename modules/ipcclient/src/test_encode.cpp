@@ -43,13 +43,13 @@ OI::Coro::TaskResult<int> TestEncode::CheckServerEncoding()
 	stRequest.iMark = -2147483600;
 	OI::RpcData::HoldRes stResponse;
 	stResponse.iMark = 91;
-	int32_t iResult = co_await OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequest, stResponse, OI::Timer::Seconds(2));
+	int32_t iResult = co_await IpcClient::GetInstance().Call(stRequest, stResponse, OI::Timer::Seconds(2));
 	if (iResult != OI_ERR_FAIL || stResponse.iMark != 91)
 	{
 		++iBadLocal;
 	}
 	stRequest.iMark = -2147483599;
-	iResult = co_await OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequest, stResponse, OI::Timer::Seconds(2));
+	iResult = co_await IpcClient::GetInstance().Call(stRequest, stResponse, OI::Timer::Seconds(2));
 	if (iResult != OI_ERR_FAIL || stResponse.iMark != 91)
 	{
 		++iBadLocal;
@@ -65,14 +65,14 @@ OI::Coro::TaskResult<int> TestEncode::CheckServerEncoding()
 	}
 	stRequest.iMark = -2147483597;
 	stResponse.iMark = 91;
-	iResult = co_await OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequest, stResponse, OI::Timer::Seconds(2));
+	iResult = co_await IpcClient::GetInstance().Call(stRequest, stResponse, OI::Timer::Seconds(2));
 	if (iResult != OI_ERR_FAIL || stResponse.iMark != 91)
 	{
 		++iBadLocal;
 	}
 	LOG_TRACE("hold client malformed response sid=%llu bad=%d", (unsigned long long)IpcClient::GetInstance().ConnectedSid(), iBadLocal);
 	stRequest.iMark = 92;
-	auto stRecovered = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequest, OI::Timer::Seconds(2));
+	auto stRecovered = co_await IpcClient::GetInstance().Call(stRequest, OI::Timer::Seconds(2));
 	if (stRecovered.GetRet() != 0 || stRecovered.GetRes().iMark != 92)
 	{
 		++iBadLocal;

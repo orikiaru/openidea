@@ -7,6 +7,7 @@ struct BoundSql
 {
 	std::string sSql;
 	std::vector<Parameter> vParameters;
+	std::optional<uint64_t> stExpectedAffected = std::nullopt;
 };
 
 class Connection

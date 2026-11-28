@@ -129,7 +129,7 @@ OI::Coro::TaskResult<int> TestRpcService::CheckCompletedRpcRequests(sid_t iSessi
 			vTasks.push_back(OI::Rpc::RpcCall(stManager, std::move(stRequest), vOutputs[iIndex], OI::Timer::Seconds(3)));
 			break;
 		case 1:
-			vTasks.push_back(OI::Rpc::RpcCall(stManager, iSessionId, std::move(stRequest), vOutputs[iIndex], OI::Timer::Seconds(3)));
+			vTasks.push_back(stManager.Call(iSessionId, std::move(stRequest), vOutputs[iIndex], OI::Timer::Seconds(3)));
 			break;
 		case 2:
 			vTasks.push_back(stManager.Call(std::move(stRequest), vOutputs[iIndex], OI::Timer::Seconds(3)));

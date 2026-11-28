@@ -217,6 +217,8 @@ class Batch
 	Batch(const Batch&);
 	Batch& operator=(const Batch&);
 	void Add(std::string sSql, std::vector<Parameter> vParameters = {});
+	// 指定这一步必须影响的行数，不符则回滚整个事务。
+	void AddExpectAffected(uint64_t iExpected, std::string sSql, std::vector<Parameter> vParameters = {});
 };
 
 struct CleanupError

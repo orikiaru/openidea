@@ -424,7 +424,8 @@ OI::Coro::Task WebClient::RunTlsRegression(const std::string& sHost, int32_t iPo
 	else if (sCase == "hostname" || sCase == "untrusted")
 	{
 		auto stResponse = co_await stClient.Get("/health");
-		if (stResponse.iCode != OI_ERR_CONNECT || (sCase == "hostname" ? stResponse.sError.find("mismatch") == std::string::npos : stResponse.sError.find("certificate") == std::string::npos))
+		const char* pExpectedReason = sCase == "hostname" ? "mismatch" : "certificate";
+		if (stResponse.iCode != OI_ERR_CONNECT || stResponse.sError.find(pExpectedReason) == std::string::npos)
 		{
 			LOG_ERROR("https verification failed code=%d reason=%s", stResponse.iCode, stResponse.sError.c_str());
 			++iBad;
@@ -579,10 +580,27 @@ OI::Coro::Task WebClient::Run()
 	{
 		::OI::Http::Response stQueryResponse = co_await stCli.Get(sPath, vQuery);
 		Json::Value stQueryBody;
-		if (OkStatus(stQueryResponse) != OI_OK || !ParseJson(stQueryResponse.sBody, stQueryBody) || !stQueryBody.isMember("text") || !stQueryBody["text"].isString() || stQueryBody["text"].asString() != sText || (sPath != "/query?" && (!stQueryBody.isMember("existing") || !stQueryBody["existing"].isString() || stQueryBody["existing"].asString() != "original")))
+		if (OkStatus(stQueryResponse) != OI_OK || !ParseJson(stQueryResponse.sBody, stQueryBody) || !stQueryBody.isObject())
 		{
-			LOG_TRACE("web query path failed path=%s code=%d", sPath.c_str(), stQueryResponse.iCode);
-			iBadLocal += 1;
+			LOG_TRACE("web query response failed path=%s code=%d status=%d", sPath.c_str(), stQueryResponse.iCode, stQueryResponse.iStatus);
+			++iBadLocal;
+			continue;
+		}
+		const Json::Value& stQueryText = stQueryBody["text"];
+		if (!stQueryText.isString() || stQueryText.asString() != sText)
+		{
+			LOG_TRACE("web query text mismatch path=%s", sPath.c_str());
+			++iBadLocal;
+			continue;
+		}
+		if (sPath != "/query?")
+		{
+			const Json::Value& stExisting = stQueryBody["existing"];
+			if (!stExisting.isString() || stExisting.asString() != "original")
+			{
+				LOG_TRACE("web query lost existing parameter path=%s", sPath.c_str());
+				++iBadLocal;
+			}
 		}
 	}
 
@@ -593,16 +611,24 @@ OI::Coro::Task WebClient::Run()
 		auto fnCheckRepeat = [vExpectedTexts](const ::OI::Http::Response& stResponse)
 		{
 			Json::Value stBody;
-			if (stResponse.iCode != OI_OK || stResponse.iStatus != 200 || !ParseJson(stResponse.sBody, stBody) ||
-			    !stBody["text"].isString() || stBody["text"].asString() != vExpectedTexts[0] ||
-			    !stBody["texts"].isArray() || stBody["texts"].size() != vExpectedTexts.size())
+			if (stResponse.iCode != OI_OK || stResponse.iStatus != 200 || !ParseJson(stResponse.sBody, stBody) || !stBody.isObject())
 			{
 				return false;
 			}
-			for (size_t iIndex = 0; iIndex < vExpectedTexts.size(); ++iIndex)
+			const auto& stFirst = stBody["text"];
+			if (!stFirst.isString() || stFirst.asString() != vExpectedTexts.front())
 			{
-				if (!stBody["texts"][static_cast<Json::ArrayIndex>(iIndex)].isString() ||
-				    stBody["texts"][static_cast<Json::ArrayIndex>(iIndex)].asString() != vExpectedTexts[iIndex])
+				return false;
+			}
+			const auto& stTexts = stBody["texts"];
+			if (!stTexts.isArray() || stTexts.size() != vExpectedTexts.size())
+			{
+				return false;
+			}
+			for (Json::ArrayIndex iIndex = 0; iIndex < stTexts.size(); ++iIndex)
+			{
+				const auto& stItem = stTexts[iIndex];
+				if (!stItem.isString() || stItem.asString() != vExpectedTexts[iIndex])
 				{
 					return false;
 				}
@@ -841,18 +867,24 @@ OI::Coro::Task WebClient::Run()
 		else
 		{
 			OI::Http::Client stFixtureClient("127.0.0.1", iStreamFixturePort, 120000, false);
-			for (bool bOver : {false, true})
 			{
-				OI::Http::Request stRequest;
-				stRequest.sPath = bOver ? "/buffered-eof-over" : "/buffered-eof-exact";
-				auto stResponse = co_await stFixtureClient.Send(stRequest);
-				const bool bValid = bOver ? stResponse.iCode == OI_ERR_PROTOCOL && stResponse.sBody.empty() :
-				                            stResponse.iCode == OI_OK && stResponse.iStatus == 200 &&
-				                                stResponse.sBody.size() == 8 * 1024 * 1024 &&
-				                                stResponse.sBody.find_first_not_of('e') == std::string::npos;
-				if (!bValid)
+				auto stExact = co_await stFixtureClient.Get("/buffered-eof-exact");
+				if (stExact.iCode != OI_OK || stExact.iStatus != 200)
 				{
-					LOG_ERROR("web buffered EOF failed path=%s code=%d status=%d bytes=%zu", stRequest.sPath.c_str(), stResponse.iCode, stResponse.iStatus, stResponse.sBody.size());
+					LOG_ERROR("web buffered EOF at limit failed code=%d status=%d", stExact.iCode, stExact.iStatus);
+					++iBadLocal;
+				}
+				else if (stExact.sBody.size() != 8 * 1024 * 1024 || stExact.sBody.find_first_not_of('e') != std::string::npos)
+				{
+					LOG_ERROR("web buffered EOF at limit returned wrong body bytes=%zu", stExact.sBody.size());
+					++iBadLocal;
+				}
+			}
+			{
+				auto stOver = co_await stFixtureClient.Get("/buffered-eof-over");
+				if (stOver.iCode != OI_ERR_PROTOCOL || !stOver.sBody.empty())
+				{
+					LOG_ERROR("web buffered EOF over limit code=%d bytes=%zu", stOver.iCode, stOver.sBody.size());
 					++iBadLocal;
 				}
 			}
@@ -877,9 +909,16 @@ OI::Coro::Task WebClient::Run()
 				auto pFixtureSink = std::make_shared<WebTestSink>();
 				stFixtureRequest.pBodySink = pFixtureSink;
 				OI::Http::Response stFixtureResponse = co_await stFixtureClient.Send(stFixtureRequest);
-				const int32_t iExpected = iSize <= 1024 ? OI_OK : OI_ERR_PROTOCOL;
-				if (stFixtureResponse.iCode != iExpected || (iExpected == OI_OK &&
-				                                                (stFixtureResponse.iStatus != 200 || !pFixtureSink->Valid() || pFixtureSink->Size() != 2)))
+				if (iSize > 1024)
+				{
+					if (stFixtureResponse.iCode != OI_ERR_PROTOCOL)
+					{
+						LOG_ERROR("web oversized stream chunk size=%d code=%d", iSize, stFixtureResponse.iCode);
+						++iBadLocal;
+					}
+					continue;
+				}
+				if (stFixtureResponse.iCode != OI_OK || stFixtureResponse.iStatus != 200 || !pFixtureSink->Valid() || pFixtureSink->Size() != 2)
 				{
 					LOG_ERROR("web stream chunk size=%d code=%d status=%d bytes=%zu", iSize, stFixtureResponse.iCode, stFixtureResponse.iStatus, pFixtureSink->Size());
 					++iBadLocal;

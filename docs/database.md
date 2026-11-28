@@ -119,6 +119,8 @@ if (iRet != OI_OK)
 
 用 `OI::Db::Batch stBatch`，逐条 `stBatch.Add(sSql, vParameters)`，再 `co_await stClient.Transaction(std::move(stBatch), vResults, stError)`。整组在同一条借用连接上按顺序执行，成功后结果按语句顺序返回；失败时尝试回滚，连接是否可复用取决于回滚和连接状态。事务仅支持事务表上的 DML 和读取；不要放入 DDL、事务控制、存储过程或会隐式提交的语句，不承诺 DDL 能回滚。提交失败可能存在结果不确定性，应用应按业务需要处理，不自动重试写入。
 
+需要检查某条语句的影响行数时，用 `stBatch.AddExpectAffected(iExpected, sSql, vParameters)`。实际影响行数不等于预期时停止执行并尝试回滚，返回 `OI_ERR_DB_AFFECTED_ROWS`，结果输出保持原值；错误详情包含语句序号、预期和实际行数。行数使用 SQL 驱动返回的真实影响行数语义，更新匹配到但未改变的行不应假定为已影响。
+
 ## 错误与诊断
 
 返回值是统一的 `int32_t` 状态码。驱动错误通过 `Error` 的 `sStage`、`iNativeCode`、`sSqlState` 和 `sMessage` 提供阶段及原生诊断；原生码和 SQLSTATE 可能因失败阶段不存在而为空或零。`stCleanup` 可记录连接清理失败或异常及其独立的诊断字段，调用成功时也应按需检查。MySQL 的文本使用简短安全描述，不直接输出 SDK 或服务端原始错误文本，避免泄露 SQL、参数、地址和凭据。记录诊断时只记录必要的阶段、状态码和安全文本，不记录完整请求或敏感值。

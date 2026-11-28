@@ -9,7 +9,7 @@ const std::string IpcUdp::GetIDString()
 	return "IpcUdp";
 }
 
-::OI::Rpc::RpcTask IpcUdp::HandleEcho(const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::UdpEchoReq& stRequest, ::OI::RpcData::UdpEchoRes& stResponse)
+::OI::Rpc::RpcTask IpcUdp::HandleUdpEcho(const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::UdpEchoReq& stRequest, ::OI::RpcData::UdpEchoRes& stResponse)
 {
 	stResponse.iSeq = stRequest.iSeq;
 	if (stRequest.iSeq == ::OI::RpcData::UDP_PROBE_REJECT)
@@ -35,15 +35,13 @@ const std::string IpcUdp::GetIDString()
 	co_return OI_OK;
 }
 
-::OI::Rpc::RpcTask IpcUdp::HandleNote(const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::UdpNoteReq& stRequest)
+::OI::Rpc::RpcTask IpcUdp::HandleUdpNote(const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::UdpNoteReq& stRequest)
 {
 	co_return stContext.Notify(stRequest);
 }
 
 int32_t IpcUdp::Init()
 {
-	RegisterRpcHandler(&IpcUdp::HandleEcho);
-	RegisterNotifyHandler(&IpcUdp::HandleNote);
 	return ::OI::Rpc::ProtoSessionManager::Init();
 }
 

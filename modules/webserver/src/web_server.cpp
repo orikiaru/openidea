@@ -235,7 +235,7 @@ OI::Coro::Task WebServer::Query(const Request& stRequest, Response& stReply)
 			std::puts("web rpc begin");
 			std::fflush(stdout);
 		}
-		const int32_t iCode = co_await OI::Rpc::RpcCall(WebRpc::GetInstance(), stCall, stResult, OI::Timer::Seconds(5));
+		const int32_t iCode = co_await WebRpc::GetInstance().Call(stCall, stResult, OI::Timer::Seconds(5));
 		if (iCode != OI_OK)
 		{
 			std::fprintf(stderr, "web upstream RPC call failed code=%d\n", iCode);

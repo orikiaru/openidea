@@ -512,6 +512,45 @@ OI_DB_CATCH
 }
 
 #ifdef OI_ENABLE_MYSQL
+OI::Coro::TaskResult<int32_t> TestDb::CheckAffectedRows(OI::Db::Client& stMysql, OI::Db::Client& stObserver, const std::string& sQuotedTable)
+{
+	int32_t iBad = 0;
+	OI::Db::Error stError;
+	std::vector<OI::Db::Result> vResults(1);
+	vResults.front().iAffected = 321;
+	const std::string sInsert = "INSERT INTO " + sQuotedTable + " (v) VALUES (?)";
+	const std::string sDelete = "DELETE FROM " + sQuotedTable + " WHERE v = 91";
+	const std::string sCount = "SELECT COUNT(*) FROM " + sQuotedTable + " WHERE v IN (91,92)";
+	OI::Db::Batch stRollback;
+	stRollback.AddExpectAffected(1, sInsert, {92});
+	stRollback.AddExpectAffected(1, sDelete);
+	stRollback.Add("SELECT missing_column");
+	int32_t iCode = co_await stMysql.Transaction(std::move(stRollback), vResults, stError);
+	Expect(iBad, iCode == OI_ERR_DB_AFFECTED_ROWS && stError.sStage == "affected_rows" && stError.sMessage == "statement=2 expected=1 actual=0", "affected mismatch");
+	Expect(iBad, vResults.size() == 1 && vResults.front().iAffected == 321, "affected output preserved");
+	int64_t iCount = -1;
+	iCode = co_await stObserver.Scalar(sCount, {}, iCount, stError);
+	Expect(iBad, iCode == OI_OK && iCount == 0, "affected mismatch rolls back earlier write");
+
+	OI::Db::Batch stCommit;
+	stCommit.AddExpectAffected(0, sDelete);
+	stCommit.Add(sDelete);
+	stCommit.AddExpectAffected(1, sInsert, {91});
+	iCode = co_await stMysql.Transaction(std::move(stCommit), vResults, stError);
+	Expect(iBad, iCode == OI_OK && vResults.size() == 3 && vResults[0].iAffected == 0 && vResults[2].iAffected == 1, "affected commit results");
+	iCode = co_await stObserver.Scalar(sCount, {}, iCount, stError);
+	Expect(iBad, iCode == OI_OK && iCount == 1, "affected commit visible");
+
+	OI::Db::Batch stUnexpectedWrite;
+	stUnexpectedWrite.AddExpectAffected(0, sDelete);
+	iCode = co_await stMysql.Transaction(std::move(stUnexpectedWrite), vResults, stError);
+	Expect(iBad, iCode == OI_ERR_DB_AFFECTED_ROWS && stError.sMessage == "statement=1 expected=0 actual=1", "affected too many");
+	iCode = co_await stObserver.Scalar(sCount, {}, iCount, stError);
+	Expect(iBad, iCode == OI_OK && iCount == 1, "affected delete rolled back");
+	LOG_TRACE("mysql transaction affected rows bad=%d", iBad);
+	co_return iBad;
+}
+
 OI::Coro::TaskResult<int32_t> TestDb::CheckNativeFloat(OI::Db::Client& stMysql, const std::string& sQuotedTable)
 {
 	const std::array<float, 4> vExpected{std::nextafter(1.0f, 2.0f), -1.2345678f, std::numeric_limits<float>::min(), std::numeric_limits<float>::max()};
@@ -1011,6 +1050,7 @@ OI::Coro::Task TestDb::Run()
 					    stError.sStage.c_str(), stError.iNativeCode);
 					++iBad;
 				}
+				iBad += co_await CheckAffectedRows(stMysql, stObserver, sQuotedTable);
 				iBad += co_await CheckNativeFloat(stMysql, sQuotedTable);
 			}
 			iStatus = co_await stMysql.Call("SELECT missing_column", {}, stResult, stError);

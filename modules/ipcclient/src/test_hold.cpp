@@ -69,8 +69,9 @@ TestHold::TestHold()
 // 服务端反向 Hold 分支的接收端：回同一 mark，证明两个方向都能完成。
 static std::atomic<int32_t> g_iReverseServed{0};
 
-static ::OI::Rpc::RpcTask HandleReverseHold(const ::OI::RpcData::HoldReq& stRequest, ::OI::RpcData::HoldRes& stResponse)
+static ::OI::Rpc::RpcTask HandleReverseHold(const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::HoldReq& stRequest, ::OI::RpcData::HoldRes& stResponse)
 {
+	(void)stContext;
 	stResponse.iMark = stRequest.iMark;
 	if (stRequest.iMark == -2147483598)
 	{
@@ -116,7 +117,7 @@ OI::Coro::TaskResult<TestHold::RaceOutcome> TestHold::RaceOne(int32_t iMarkLocal
 	::OI::RpcData::HoldReq stOne;
 	stOne.iDelayMilliseconds = iDelay;
 	stOne.iMark = iMarkLocal;
-	auto stResult = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), stOne, ::OI::Timer::Seconds(1));
+	auto stResult = co_await IpcClient::GetInstance().Call(stOne, ::OI::Timer::Seconds(1));
 	if (stResult.GetRet() == 0)
 	{
 		co_return stResult.GetRes().iMark == iMarkLocal ? RaceOutcome::Reply : RaceOutcome::Bad;
@@ -132,14 +133,14 @@ OI::Coro::TaskResult<int> TestHold::CheckStandardizedReply()
 	::OI::RpcData::HoldRes stResponseLocal;
 	stRequestLocal.iDelayMilliseconds = 0;
 	stRequestLocal.iMark = 1;
-	auto stDirect = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequestLocal, ::OI::Timer::Seconds(10));
+	auto stDirect = co_await IpcClient::GetInstance().Call(stRequestLocal, ::OI::Timer::Seconds(10));
 	if (!stDirect || stDirect.GetRes().iMark != 1)
 	{
 		++iBadLocal;
 	}
 	static_assert(std::is_same_v<decltype(stDirect.GetRet()), int32_t>);
 	stRequestLocal.iDelayMilliseconds = -1;
-	auto stFailed = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequestLocal);
+	auto stFailed = co_await IpcClient::GetInstance().Call(stRequestLocal);
 	if (stFailed.GetRet() != 1001 || stFailed)
 	{
 		++iBadLocal;
@@ -158,13 +159,13 @@ OI::Coro::TaskResult<int> TestHold::CheckStandardizedReply()
 		++iBadLocal;
 	}
 	stResponseLocal.iMark = 876;
-	int32_t iBusinessReturnCode = co_await ::OI::Rpc::RpcCall(stManagerLocal, stRequestLocal, stResponseLocal);
+	int32_t iBusinessReturnCode = co_await stManagerLocal.Call(stRequestLocal, stResponseLocal);
 	if (iBusinessReturnCode != 1001 || stResponseLocal.iMark != 876)
 	{
 		++iBadLocal;
 	}
 	stRequestLocal.iDelayMilliseconds = 0;
-	iBusinessReturnCode = co_await ::OI::Rpc::RpcCall(stManagerLocal, stRequestLocal, stResponseLocal, ::OI::Timer::Seconds(10));
+	iBusinessReturnCode = co_await stManagerLocal.Call(stRequestLocal, stResponseLocal, ::OI::Timer::Seconds(10));
 	if (iBusinessReturnCode != 0 || stResponseLocal.iMark != 1)
 	{
 		++iBadLocal;
@@ -225,14 +226,14 @@ OI::Coro::TaskResult<int> TestHold::CheckRpcLateReply()
 	::OI::RpcData::HoldRes stResponseLocal;
 	stRequestLocal.iMark = 1;
 	stRequestLocal.iDelayMilliseconds = 600;
-	auto stShortWait = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequestLocal, ::OI::Timer::Milliseconds(150));
+	auto stShortWait = co_await IpcClient::GetInstance().Call(stRequestLocal, ::OI::Timer::Milliseconds(150));
 	if (stShortWait.GetRet() != OI_ERR_TIMEOUT)
 	{
 		++iBadLocal;
 	}
 	co_await OI::Coro::yield(::OI::Timer::Milliseconds(700));
 	stRequestLocal.iDelayMilliseconds = 0;
-	auto stEarly = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequestLocal, ::OI::Timer::Seconds(10));
+	auto stEarly = co_await IpcClient::GetInstance().Call(stRequestLocal, ::OI::Timer::Seconds(10));
 	int iReturnCodeLocal = stEarly.GetRet();
 	if (iReturnCodeLocal == 0)
 	{
@@ -250,7 +251,7 @@ OI::Coro::TaskResult<int> TestHold::CheckRpcLateReply()
 	stRequestLocal.iDelayMilliseconds = 1500;
 	stRequestLocal.iMark = 802;
 	stResponseLocal.iMark = 0;
-	auto stTimeout = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequestLocal, ::OI::Timer::Milliseconds(500));
+	auto stTimeout = co_await IpcClient::GetInstance().Call(stRequestLocal, ::OI::Timer::Milliseconds(500));
 	iReturnCodeLocal = stTimeout.GetRet();
 	LOG_TRACE("hold rpc timeout ret=%d", iReturnCodeLocal);
 	fflush(stdout);
@@ -262,13 +263,13 @@ OI::Coro::TaskResult<int> TestHold::CheckRpcLateReply()
 	stRequestLocal.iDelayMilliseconds = 3000;
 	stRequestLocal.iMark = 803;
 	::OI::RpcData::HoldRes stPendingResponse;
-	auto stPending = ::OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequestLocal, stPendingResponse, ::OI::Timer::Seconds(10));
+	auto stPending = IpcClient::GetInstance().Call(stRequestLocal, stPendingResponse, ::OI::Timer::Seconds(10));
 	co_await OI::Coro::yield(1500);
 	::OI::RpcData::HoldReq stBarrierRequest;
 	::OI::RpcData::HoldRes stBarrierResponse;
 	stBarrierRequest.iMark = 804;
 	stBarrierRequest.iDelayMilliseconds = 0;
-	const int32_t iBarrierRet = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), stBarrierRequest, stBarrierResponse, ::OI::Timer::Seconds(10));
+	const int32_t iBarrierRet = co_await IpcClient::GetInstance().Call(stBarrierRequest, stBarrierResponse, ::OI::Timer::Seconds(10));
 	const size_t iPending = ::OI::Rpc::RpcCallManager::GetInstance().SessionCalls(&IpcClient::GetInstance(), m_iSessionId);
 	const int32_t iFollowRet = co_await stPending;
 	const bool bValid = iBarrierRet == OI_OK && stBarrierResponse.iMark == 804 && iPending == 1 &&
@@ -338,10 +339,14 @@ OI::Coro::TaskResult<int> TestHold::CheckRpcRace()
 		vAllTimeout.emplace_back(100 + iIndex, RaceOutcome::Timeout);
 	}
 	const std::vector<std::pair<int32_t, RaceOutcome>> vDuplicate = {
-		{100, RaceOutcome::Reply}, {100, RaceOutcome::Reply}, {101, RaceOutcome::Timeout},
+	    {100, RaceOutcome::Reply},
+	    {100, RaceOutcome::Reply},
+	    {101, RaceOutcome::Timeout},
 	};
 	const std::vector<std::pair<int32_t, RaceOutcome>> vWrong = {
-		{100, RaceOutcome::Bad}, {101, RaceOutcome::Reply}, {102, RaceOutcome::Timeout},
+	    {100, RaceOutcome::Bad},
+	    {101, RaceOutcome::Reply},
+	    {102, RaceOutcome::Timeout},
 	};
 	if (RaceBad(vAllTimeout) != 0)
 	{
@@ -482,7 +487,7 @@ OI::Coro::TaskResult<int> TestHold::CheckRpcDisconnect(sid_t iSessionId)
 	stRequestLocal.iMark = 4;
 	auto stClose = CloseSessionLater(iSessionId);
 	const int64_t iWallBegin = ::OI::Timer::SteadyMilliseconds();
-	auto stClosed = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), stRequestLocal, ::OI::Timer::Seconds(10));
+	auto stClosed = co_await IpcClient::GetInstance().Call(stRequestLocal, ::OI::Timer::Seconds(10));
 	const long long iWallMilliseconds = HoldTest::WallMs(iWallBegin);
 	co_await stClose;
 	LOG_TRACE("hold rpc disconnected code=%d wall_ms=%lld", stClosed.GetRet(), iWallMilliseconds);
@@ -578,7 +583,7 @@ OI::Coro::Task TestHold::Pump()
 	stReverse.iMark = -2147483598;
 	stReverse.iDelayMilliseconds = 0;
 	::OI::RpcData::HoldRes stReverseReply;
-	const int32_t iReverseRet = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), m_iSessionId, stReverse, stReverseReply, ::OI::Timer::Seconds(5));
+	const int32_t iReverseRet = co_await IpcClient::GetInstance().Call(m_iSessionId, stReverse, stReverseReply, ::OI::Timer::Seconds(5));
 	for (int32_t iWait = 0; iWait < 300 && g_iReverseServed.load() == 0; ++iWait)
 	{
 		co_await OI::Coro::yield(10);

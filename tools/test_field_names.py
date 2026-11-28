@@ -1,4 +1,5 @@
 """Protocol field naming and stable JSON/wire-number regressions."""
+import re
 import sys
 import subprocess
 
@@ -383,15 +384,136 @@ class ModuleGeneratorTest(unittest.TestCase):
             module.components[component.name] = component
             (root / "example/src").mkdir(parents=True)
             generator = ModuleFileGen(module, str(root), str(root))
-            self.assertTrue(generator.GenModuleFile())
+            self.assertTrue(generator.Gen())
             main = (root / "example/src/main.cpp").read_text(encoding="utf-8")
             self.assertRegex(main, r'StartFramework\("\.\./config/example\.toml",\s*\w+,\s*\w+\)')
             startup = main.index("return ::OI::Base::RunFramework([]() -> int32_t")
             logger = main.index("::OI::Log::Init();", startup)
-            component = main.index("Worker::GetInstance().Init();", logger)
-            self.assertIn("return iCode;", main[logger:component])
-            self.assertIn("return iCode;", main[component:main.index("return OI_OK;", component)])
+            call = main.index("return ModuleComponents::Start();", logger)
+            self.assertIn("return iCode;", main[logger:call])
+            header = (root / "example/inc/oi_module_components.h").read_text(encoding="utf-8")
+            init = header.index("Worker::GetInstance().Init();")
+            listen = header.index("Worker::GetInstance().StartServer();", init)
+            self.assertIn("return iCode;", header[init:listen])
+            self.assertIn("return iCode;", header[listen:])
             self.assertNotIn("::OI::Base::StopFramework();", main)
+
+    def test_incremental_process_composition(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            module = Module()
+            module.name = "GameServer"
+            def add(name):
+                component = Component()
+                component.name, component.type = name, "Server"
+                module.components[name] = component
+            add("GameServer")
+            generator = ModuleFileGen(module, str(root), str(root))
+            self.assertTrue(generator.Gen())
+            project = root / "gameserver"
+            main = project / "src/main.cpp"
+            conf = root / "config/gameserver.toml"
+            cmake = project / "CMakeLists.txt"
+            files = [main, cmake, project / "src/gameserver.cpp"]
+            for path in files:
+                with path.open("a", encoding="utf-8") as out:
+                    out.write("\n// business content\n" if path.suffix == ".cpp" else "\n# business content\n")
+            before = {path: path.read_bytes() for path in files}
+            conf.write_text(conf.read_text(encoding="utf-8").replace('port = ""', 'port = "14512"', 1), encoding="utf-8")
+            add("GateServer")
+            add("PlayerServer")
+            self.assertTrue(generator.Gen())
+            self.assertEqual(before, {path: path.read_bytes() for path in files})
+            startup = project / "inc/oi_module_components.h"
+            sources = project / "oi_module_components.cmake"
+            def check(names):
+                init = startup.read_text(encoding="utf-8")
+                self.assertEqual(re.findall(r"(\w+)::GetInstance\(\)\.StartServer\(\)", init), names)
+                self.assertEqual(re.findall(r"src/(\w+)\.cpp", sources.read_text(encoding="utf-8")),
+                                 [name.lower() for name in names])
+            check(["GameServer", "GateServer", "PlayerServer"])
+            config_text = conf.read_text(encoding="utf-8")
+            self.assertIn('[Service]\nname = "gameserver"', config_text)
+            self.assertIn('port = "14512"', config_text)
+            self.assertIn('[GateServer]\nservice_name = "GateServer"', config_text)
+            for name in module.components:
+                self.assertEqual(conf.read_text(encoding="utf-8").count("[" + name + "]"), 1)
+            unchanged = {path: path.stat().st_mtime_ns for path in (conf, startup, sources)}
+            self.assertTrue(generator.Gen())
+            self.assertEqual(unchanged, {path: path.stat().st_mtime_ns for path in unchanged})
+            del module.components["GateServer"]
+            self.assertTrue(generator.Gen())
+            check(["GameServer", "PlayerServer"])
+            self.assertTrue((project / "src/gateserver.cpp").is_file())
+
+    def test_incremental_rpc_and_notify_registration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            proto = root / "messages.proto"
+            proto.write_text("rpcdata Req {} rpcdata Res {} rpc Echo { id 101; request Req; response Res; } "
+                             "rpcdata Note {} rpcdata Ack {} rpc News { id 102; request Note; response Ack; }",
+                             encoding="utf-8")
+            protocols = ProtocolGen(proto)
+            self.assertTrue(protocols.Gen())
+            config = root / "module.proto"
+            def export(entries):
+                config.write_text(f"component Gate Server {{ {entries} }} module Game {{ component Gate; }}", encoding="utf-8")
+                parsed = ModuleGen(protocols, config)
+                return parsed.Gen() and ModuleFileGen(parsed.modules["game"], str(root), str(root)).Gen()
+            self.assertTrue(export("rpc Echo;"))
+            header = root / "game/inc/gate.h"
+            source = root / "game/src/gate.cpp"
+            bindings = root / "game/generated/gate_protocols.cpp"
+            startup = (root / "game/inc/oi_module_components.h").read_text(encoding="utf-8")
+            register = startup.index("Gate::GetInstance().RegisterProtocols()")
+            self.assertLess(startup.index("Gate::GetInstance().Init()"), register)
+            self.assertLess(register, startup.index("Gate::GetInstance().StartServer()"))
+            self.assertEqual(startup.count("Gate::GetInstance().RegisterProtocols()"), 1)
+            source.write_text(source.read_text(encoding="utf-8").replace("co_return OI_ERR_FAIL;", "co_return 715;"), encoding="utf-8")
+            self.assertTrue(export("rpc Echo; notify News;"))
+            code = bindings.read_text(encoding="utf-8")
+            self.assertIn("RegisterRpcHandler(&Gate::HandleEcho);", code)
+            self.assertIn("RegisterNotifyHandler(&Gate::HandleNews);", code)
+            rpc = "::OI::Rpc::RpcTask HandleEcho(const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::Req& stRequest, ::OI::RpcData::Res& stResponse)"
+            notify = "::OI::Rpc::RpcTask HandleNews(const ::OI::Rpc::RpcContext& stContext, const ::OI::RpcData::Note& stRequest)"
+            declarations = header.read_text(encoding="utf-8")
+            implementations = source.read_text(encoding="utf-8")
+            for signature in (rpc, notify):
+                self.assertIn(signature + ";", declarations)
+                self.assertIn(signature.replace(" Handle", " Gate::Handle"), implementations)
+            self.assertIn("co_return 715;", implementations)
+            self.assertTrue(export("rpc Echo; notify News;"))
+            self.assertEqual(source.read_text(encoding="utf-8").count("Gate::HandleNews("), 1)
+            self.assertFalse(export("notify News; rpc News;"))
+            self.assertFalse(export("notify Missing;"))
+            self.assertTrue(export("notify News;"))
+            self.assertNotIn("HandleEcho", bindings.read_text(encoding="utf-8"))
+            self.assertIn("co_return 715;", source.read_text(encoding="utf-8"))
+            self.assertTrue(export(""))
+            self.assertNotIn("RegisterNotifyHandler", bindings.read_text(encoding="utf-8"))
+
+    def test_shipped_ipc_protocol_handlers_follow_generated_signature(self):
+        modules = Path(__file__).resolve().parents[1] / "modules"
+        config = modules / "protoconfig"
+        protocols = ProtocolGen(sorted(path for path in config.glob("*.proto") if path.name != "module.proto"))
+        self.assertTrue(protocols.Gen())
+        manifest = ModuleGen(protocols, config / "module.proto")
+        self.assertTrue(manifest.Gen())
+        for component in manifest.modules["ipcserver"].components.values():
+            source = (modules / "ipcserver/src" / (component.name.lower() + ".cpp")).read_text(encoding="utf-8")
+            source = " ".join(source.split())
+            for name, handler in component.protos.items():
+                with self.subTest(component=component.name, protocol=name):
+                    method = "Handle" + name
+                    if handler.binder:
+                        self.assertIn(f"RegisterRpcHandler({method});", source)
+                    else:
+                        method = f"{component.name}::{method}"
+                    params = ["const ::OI::Rpc::RpcContext& stContext",
+                              f"const ::OI::RpcData::{handler.protocol.GetReq()}& stRequest"]
+                    if handler.kind == "rpc":
+                        params.append(f"::OI::RpcData::{handler.protocol.GetRes()}& stResponse")
+                    self.assertIn(f"::OI::Rpc::RpcTask {method}({', '.join(params)})", source)
 
     def test_dispatch_command_line(self):
         root = Path(__file__).resolve().parents[1]

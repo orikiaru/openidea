@@ -13,7 +13,16 @@
 module LogD {
 }
 
-module IpcClient {
+component IpcServer Server {
+    rpc AllEcho;
+    rpc Hold bind BindHold;
+    notify PeerNote;
+}
+component IpcPeer Client {
+}
+module IpcServer {
+    component IpcServer;
+    component IpcPeer;
 }
 ```
 
@@ -22,6 +31,8 @@ module IpcClient {
 协议支持 `//` 行注释和 `/* ... */` 跨行块注释；声明前及字段行尾都可写注释。注释只留在协议源文件，不写入生成字段或 SQL。
 
 字段号写在每一行前面，这就是线上的序号。缺了、重了，生成失败，不会按出现顺序补号。跳号直接写下一个数字，例如 `20 [json gap] int32_t iGap;`。
+
+字段号的屏蔽和新增由业务维护，生成器不做跨版本字段号历史兼容强校验。MySQL 持久化迁移仍按独立的 SQL 历史规则检查。
 
 ```
 rpcdata DbSample json db {
@@ -68,12 +79,20 @@ rpcdata Role db {
 
 `modules/include` 里的序列化头和 `rpc_ids.h` 每次 cmake 都重写。改这些文件无效。每条 `rpcdata` 写成 `oi_rpcdata_<名字>.h`，例如 `oi_rpcdata_alltypesdata.h`，都在 `OI::RpcData` 里。序列化基类仍在 `OI::Rpc`。`rpc` 不再另生成一层类，也不把函数体 `#include` 进类里。模块下不建 `protocol` 目录，生成时如果还在就删掉。
 
-下面这些只在文件不存在时生成，已有文件会留下：
+进程可组合多个 server 和 client 组件。生成器每次更新 `inc/oi_module_components.h` 和 `oi_module_components.cmake`；main 接入 `ModuleComponents::Start()`、CMake 接入 `include(oi_module_components.cmake)` 一次后，增删组件会同步启动和构建清单。旧的原样生成骨架会自动迁移；定制过的旧入口不会覆盖，导出会提示接入方式，接入后重新导出。
+
+组件中用 `rpc` 和 `notify` 声明本管理器接收并处理的协议；只发送的一侧仍可调用生成的协议类型。普通处理函数缺失时，导出在头文件标记处补声明，并生成一次业务骨架。`rpc Hold bind BindHold` 等自定义绑定调用指定的绑定方法。每个管理器的注册方法生成在 `generated/<manager>_protocols.cpp`，启动时在 `Init` 成功后、监听或连接前调用一次。增删协议会更新注册代码，移除协议不会删除已有业务实现。
+
+仓库随附的 RPC 和 notify 业务处理函数统一返回 `OI::Rpc::RpcTask`，首参为 `const OI::Rpc::RpcContext&`，用 `co_return` 返回结果；RPC 后接请求和回复，notify 后接请求。框架仍兼容手写接入的同步处理函数和不接收 Context 的处理函数。
+
+下面这些业务文件只在不存在时生成，已有内容会留下；配置已有段保留，新增组件的配置段会补入：
 
 - `modules/<name>/src/main.cpp`
 - `modules/<name>/CMakeLists.txt`
 - 组件的 `inc/*.h` 和 `src/*.cpp`
 - `deploy/config/<name>.toml`
+
+新配置模板的 `Service.name` 是进程日志标签；各监听段另写 `service_name`，独立指定服务注册名。
 
 生成的 main 把组件初始化包在 try/catch 里；启动期任何失败（错误码或异常）先 `StopFramework()` 停掉 poll 线程再返回，避免退出时静态析构和 poll 线程并发。
 
@@ -89,7 +108,7 @@ RPC 帧在 IO 线程按读取上限原地解码；嵌套结构和容器复用同
 
 在 `rpc.proto` 增加请求和回复两个 `rpcdata`，字段号自己写上。`rpc` 放在文件最后，一行一条，请求和回复共用一个协议号。调用号最高位是 1 表示请求，回包清掉这一位。数据库行写进 `db.proto`，JSON 样例写进 `json.proto`。
 
-服务端在组件 `Init` 里 `RegisterRpcHandler`。平时客户端 `co_await RouteManager::Call`，见 [服务注册](registry.md) 和 [协程](coroutine.md)。
+组件按声明生成 RPC 和单向消息注册；平时客户端 `co_await RouteManager::Call`，见 [服务注册](registry.md) 和 [协程](coroutine.md)。
 
 现成的服务端是 `AllEcho`：`ipcserver` 的同步处理函数 `HandleAllEcho` 把 `stData` 抄进回复并写 `iCode = 1`。`ipcclient` 的回声用 `IpcClient::Call` 打固定连接，那是回归里的直连，业务调用不要照抄。`Hold` 用来看超时和回包同时到：服务端 `co_await OI::Coro::yield(stRequest.iDelayMilliseconds)` 再回，客户端按调用号认这一次。
 

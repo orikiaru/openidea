@@ -80,7 +80,7 @@ OI::Coro::Task TestEmpty::SendOne(int32_t iTimeoutMilliseconds)
 	try
 	{
 		::OI::RpcData::EmptyReq stRequest;
-		const auto stResult = co_await ::OI::Rpc::RpcCall(IpcClient::GetInstance(), std::move(stRequest), ::OI::Timer::Milliseconds(iTimeoutMilliseconds));
+		const auto stResult = co_await IpcClient::GetInstance().Call(std::move(stRequest), ::OI::Timer::Milliseconds(iTimeoutMilliseconds));
 		iCode = stResult.GetRet();
 	}
 	catch (const std::exception&)
