@@ -165,8 +165,11 @@ OI::Coro::TaskResult<int> TestRpcPending::CheckRpcContext(PendingClient& stPendi
 	int iBadLocal = 0;
 	Req stRequestLocal;
 	stRequestLocal.iMark = 73;
+	Res stReverseReply;
+	stReverseReply.iMark = -73;
+	std::optional<OI::Rpc::RpcTask> stReverseCall;
 	int iCallbacks = 0;
-	auto fnContextHandler = [&](const OI::Rpc::RpcContext& stContext, const Req& stRequest, Res&) -> OI::Rpc::RpcTask
+	auto fnContextHandler = [&stPending, &iBadLocal, &iCallbacks, &stReverseCall, &stReverseReply](const OI::Rpc::RpcContext& stContext, const Req& stRequest, Res&) -> OI::Rpc::RpcTask
 	{
 		co_await OI::Coro::yield(0);
 		if (stContext.iToken != 88 || &stContext.stManager != &stPending || stContext.iSessionId != 77 || stRequest.iMark != 73)
@@ -174,13 +177,25 @@ OI::Coro::TaskResult<int> TestRpcPending::CheckRpcContext(PendingClient& stPendi
 			++iBadLocal;
 		}
 		++iCallbacks;
+		stReverseCall.emplace(stContext.Call(stRequest, stReverseReply, OI::Timer::Seconds(1)));
 		co_return 1001;
 	};
 	co_await OI::Rpc::RpcHandlerBuilder::Run<Req, Res>(fnContextHandler, OI::Rpc::RpcProtoId<Res>::iValue, 88, &stPending, 77,
 	    uint64_t(1) | uint64_t(RPC_REQ_MASK), std::move(stRequestLocal));
-	if (iCallbacks != 1)
+	if (iCallbacks != 1 || !stReverseCall)
 	{
 		++iBadLocal;
+	}
+	else
+	{
+		// 此时原 handler 和 context 已销毁。固定会话 77 不存在；误走自动选连接会触发 SubmitCall 的注入异常。
+		stPending.iFailureMode = 1;
+		const int32_t iCode = co_await *stReverseCall;
+		stPending.iFailureMode = 0;
+		if (iCode != OI_ERR_CONNECT || stReverseReply.iMark != -73)
+		{
+			++iBadLocal;
+		}
 	}
 	LOG_TRACE("hold rpc context bad=%d", iBadLocal);
 	co_return iBadLocal;

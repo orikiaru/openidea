@@ -40,7 +40,10 @@ using RpcTask = OI::Coro::TaskResult<int32_t>;
 template <typename Msg>
 int32_t RpcNotify(::OI::Net::SessionManager& stManager, sid_t iSessionId, const Msg& stMessage);
 
-// 仅需要连接信息的处理函数接收上下文；生命周期覆盖本次处理协程。
+template <typename T>
+struct RpcProtoId;
+
+// 引用在处理协程结束前有效。独立任务按值保存来源，管理器仍由外部持有。
 struct RpcContext
 {
 	// 处理这条请求的任务标识。
@@ -49,6 +52,10 @@ struct RpcContext
 	::OI::Net::SessionManager& stManager;
 	// 请求所在的会话。回包发回这里。
 	sid_t iSessionId;
+
+	// 固定请求来源，连接关闭后返回连接错误。响应须活到调用完成。
+	template <typename Req>
+	[[nodiscard]] RpcTask Call(Req stRequest, typename RpcProtoId<Req>::Response& stResponse, ::OI::Timer::MS stTimeout = ::OI::Timer::Seconds(180)) const;
 
 	// 发回这次请求所在的会话。
 	template <typename Msg>
@@ -63,9 +70,6 @@ struct RpcContext
 		return RpcNotify(stManager, iSessionIdLocal, stMessage);
 	}
 };
-
-template <typename T>
-struct RpcProtoId;
 
 // 请求和回包共用一个协议号。调用号最高位是 1 表示请求，回包清掉这一位。
 // 请求：调用号 + Req；回执：调用号 + int32_t retcode + 成功时的 Res。
@@ -579,6 +583,12 @@ template <typename Req>
 {
 	return RunOutputCall<Req>(stManager, iSessionId, nullptr,
 	    std::optional<Req>(std::in_place, std::move(stRequest)), stResponse, stTimeout);
+}
+
+template <typename Req>
+RpcTask RpcContext::Call(Req stRequest, typename RpcProtoId<Req>::Response& stResponse, ::OI::Timer::MS stTimeout) const
+{
+	return RpcCall(stManager, iSessionId, std::move(stRequest), stResponse, stTimeout);
 }
 
 template <typename Req>

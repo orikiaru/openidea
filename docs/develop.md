@@ -13,7 +13,7 @@
 - 配置在 mgr 的 `Init` 里读一次，存成成员。实体处理时由 mgr 按参数传进去，实体不自己读配置。
 - 要换会话类型就重写 `CloneSession`，不在通道外面挂一层自己的解析。
 - 框架缺能力就在 cbaselib 里补，补齐回归、跑全量，不在业务里绕。例：UDP 用 `type = "udp"` 的 `UDP_Channel`，见 [基础库](cbaselib.md) 的 net 段；会话上的单向发送用 `Notify(sid)` 或 `RpcContext::Notify`，按服务名和多连接用 `RouteManager`、`ProtoMultiClientManager` 的 `Notify`，见 [协程](coroutine.md) 的单向消息。`RpcNotify` 是按 sid 发送的底层函数。处理函数登记在接收该连接的管理器上：自己的 `Init` 里 `RegisterRpcHandler(&类::成员)`，别处写 `管理器.RegisterRpcHandler(&类::成员)`。
-- 应用按原连接回调时用 RPC 协议管理器的 `Call(sid, 请求, 回复, 时长)`；直连客户端用自身的 `Call(请求, 回复, 时长)`，按服务名或实例调用仍用对应入口。多实例管理器的实例号与 sid 不可混用；底层 `RpcCall` 保留兼容及专项用途。
+- 处理函数按原连接回调时用 `stContext.Call(请求, 回复, 时长)`；没有入站上下文时可用 RPC 协议管理器的 `Call(sid, 请求, 回复, 时长)`。独立后台任务按值捕获上下文，但不延长连接或管理器寿命，断线后调用仍失败。直连客户端用自身的 `Call(请求, 回复, 时长)`，按服务名或实例调用仍用对应入口。多实例管理器的实例号与 sid 不可混用；底层 `RpcCall` 保留兼容及专项用途。
 
 ## 2. 模块和代码组织
 

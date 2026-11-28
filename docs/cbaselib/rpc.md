@@ -9,6 +9,7 @@
 | 从形参推出，含成员函数 | [`RegisterRpcHandler`](../../cbaselib/proto/inc/oi_rpc_session_manager.h#L52) |
 | 显式请求类型 | [`RegisterRpcHandler`](../../cbaselib/proto/inc/oi_rpc_session_manager.h#L90) |
 | 显式请求和回包 | [`RegisterRpcHandler`](../../cbaselib/proto/inc/oi_rpc_session_manager.h#L95) |
+| 回调本次请求的原会话 | [`RpcContext::Call`](../../cbaselib/proto/inc/oi_rpc_coro.h#L58) |
 | 指定会话调用，结果写入输出 | [`ProtoSessionManager::Call`](../../cbaselib/proto/inc/oi_rpc_session_manager.h#L164) |
 | 客户端这条连接 | [`ProtoClientManager::Call`](../../cbaselib/proto/inc/oi_rpc_session_manager.h#L265) |
 | 按服务名任选一台 | [`RouteManager::Call`](../../cbaselib/proto/inc/oi_rpc_session_manager.h#L497) |
@@ -39,7 +40,7 @@ if (iRet != OI_OK)
 }
 ```
 
-> **注意：** 平时按服务名调用，见 [服务注册](../registry.md)。`ProtoClientManager::Call` 和 RPC 协议管理器的 `Call(sid, 请求, 回复, 时长)` 只用于有状态的对端，例如玩家连接。回归里的 `IpcClient` 是固定测试连接，业务不要照抄。
+> **注意：** 平时按服务名调用，见 [服务注册](../registry.md)。处理函数回调原会话用 `stContext.Call(请求, 回复, 时长)`；没有入站上下文时用 RPC 协议管理器的 `Call(sid, 请求, 回复, 时长)`。`ProtoClientManager::Call` 用于有状态的直连对端。独立后台任务按值捕获上下文不延长连接或管理器寿命，断线后仍失败。
 
 > **注意：** 处理函数 `co_return` 错误码。回包不再另带一个 `iCode`。失败时框架不序列化回复体。
 

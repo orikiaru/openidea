@@ -96,13 +96,13 @@ static OI::Rpc::RpcTask HandleEncodingRegression(const OI::Rpc::RpcContext& stCo
 	if (stRequest.iMark == -2147483598)
 	{
 		// 先回原请求，让客户端释放出站租约；反向 RPC 独立挂起。
-		OI::Coro::StartTask([iSessionId = stContext.iSessionId]() -> OI::Coro::Task
+		OI::Coro::StartTask([stContext]() -> OI::Coro::Task
 		{
 			OI::RpcData::HoldReq stReverse;
 			stReverse.iMark = -2147483598;
 			stReverse.iDelayMilliseconds = 1000;
 			OI::RpcData::HoldRes stReply;
-			const int32_t iRet = co_await IpcServer::GetInstance().Call(iSessionId, stReverse, stReply, OI::Timer::Seconds(5));
+			const int32_t iRet = co_await stContext.Call(stReverse, stReply, OI::Timer::Seconds(5));
 			const bool bBad = iRet != OI_OK || stReply.iMark != stReverse.iMark;
 			std::printf("hold reverse reply bad=%d code=%d\n", bBad, iRet);
 			fflush(stdout);

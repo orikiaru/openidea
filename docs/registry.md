@@ -76,7 +76,7 @@ Redis 连不上或卡住时，登记和续期回失败，客户端下一次心�
 
 不能从框架里删。一个监听进程上同时有多条连接，回包、断连、Redis 把命令转回哪个客户端，都靠 `SessionManager::SendBytes(sid)` 这张表区分。
 
-客户端本来就是一条连接一个 `iSessionId`。普通业务按服务名调用，指定原连接回调时用 RPC 协议管理器的 `Call(sid, 请求, 回复, 时长)`。多实例管理器的实例号和 sid 不可混用。`RpcHandlerBuilder::Run` 回包时仍拿着这次的 sid；`redisserver` 的 `Issue` / `OnReply` 把 sid 当成「这条客户端连接」用，这块拿不掉。
+客户端本来就是一条连接一个 `iSessionId`。普通业务按服务名调用，处理函数回调原连接用 `stContext.Call(请求, 回复, 时长)`；没有入站上下文时可用 RPC 协议管理器的 `Call(sid, 请求, 回复, 时长)`。多实例管理器的实例号和 sid 不可混用。`RpcHandlerBuilder::Run` 回包时仍拿着这次的 sid；`redisserver` 的 `Issue` / `OnReply` 把 sid 当成「这条客户端连接」用，这块拿不掉。
 
 同一服务名有多份实例时，靠下面的全局服和分区服区分，不是把 sid 删掉。
 
@@ -169,7 +169,7 @@ auto vAll = co_await stRoute.CallAll("gameserver", req);
 
 日志、Redis、访问本框架里的 HTTP 服务，也是这种调用，编码留在框架里。应用不写会话子类。对外的 HTTP 网址，以及 `redisserver` 背后那台真正的 Redis，不是注册表里的服务，地址仍要配置。
 
-监听方的一条连接在框架内部仍是一个 `sessionid`。仓库业务处理函数通过首参 `const OI::Rpc::RpcContext& stContext` 获取连接信息，顺着连接回呼时可用 `stContext.iSessionId` 和 `stContext.stManager`，只在这次处理期间有效。断连按管理器指针和 `sessionid` 一起摘等待，另一个管理器上的相同数字不受影响。
+监听方的一条连接在框架内部仍是一个 `sessionid`。仓库业务处理函数通过首参 `const OI::Rpc::RpcContext& stContext` 使用 `Call` 或 `Notify` 回调原连接。框架保证上下文覆盖本次处理；独立后台任务要按值捕获上下文，但这不延长连接或管理器寿命，断线后调用仍失败。断连按管理器指针和 `sessionid` 一起摘等待，另一个管理器上的相同数字不受影响。
 
 批量调用把服务名拷进任务，任务跑起来再读本地缓存，没拉到过就等下一次秒更新，等待上限是 min(剩余预算, 3000ms)。这一等是挂起，不占线程。创建任务后可以修改或销毁原来的字符串。目标名单以当时的缓存为准，这次之后新登记的不补进这一批。路由连接池管理器常驻，不为每次调用新增共享所有权；连接失效仍由发送、断连和超时路径返回错误。
 

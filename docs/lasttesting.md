@@ -23,24 +23,22 @@
 - 唤醒性能单线程专项：远程 Linux 的 100000 次串行空任务三轮平均分别为 13.590、13.840、13.800 微秒；真 MySQL 的 `mysql_direct_finish_to_resume` 为 1000 样本，p50/p95/p99 分别 15.241/25.457/32.247 微秒，逐段结果在 `st-wake-20261126-200353`。Windows ST 同一轮的串行空任务平均 39.265 微秒；独立 trace 的 `trace_total` p50/p95/p99 为 36.1/69.2/96.5 微秒。串行整链与独立打点采样分别记录，不将两者相减或混为同一测量。
 - Windows `web-stop` 单/多线程各做两轮 control、idle、stop：control 每轮完整接收 9437184 字节；idle 零退出后收到 RST；活跃响应停服每轮收到 8185 字节后 RST，诊断失败。结果位于 `.local/webstop-final-windows-mt`、`.local/webstop-final-windows-st`。这是已观察行为，停服是否应排空在途响应仍待定。
 
-## 全量（2026-11-28，模块组件与原连接调用）
+## 全量（2026-11-28，原会话上下文调用）
 
-受测版本为 `597052b4e06d` 加本轮工作树改动。最后只更新注册就绪夹具，各路使用原构建矩阵生成的二进制重跑 `all`。四路最终回归及前后归属清理均通过。下表耗时为各用例 `seconds` 之和。
+受测为 `8fc29ec8f784310749c6dba7a168f0cea5d22fd1` 加本轮工作树；该提交保留上一轮完整基线。本轮四路最终业务 `all` 均通过、前后按归属清理均退出 0。表中耗时为各用例 `seconds` 之和，不是矩阵墙钟时间。
 
 | 平台 | 线程 | 最终 `all` | 用例耗时合计 |
 | --- | --- | --- | ---: |
-| Windows MSVC x64 Release | 多线程 | 25 通过、1 跳过 | 353.532 秒 |
-| Windows MSVC x64 Release | 单线程 | 25 通过、1 跳过 | 366.813 秒 |
-| WSL Ubuntu GCC 13 Release | 多线程 | 26/26 通过 | 198.444 秒 |
-| WSL Ubuntu GCC 13 Release | 单线程 | 26/26 通过 | 182.688 秒 |
+| Windows MSVC x64 Release | 多线程 | 25 通过、1 跳过 | 355.047 秒 |
+| Windows MSVC x64 Release | 单线程 | 25 通过、1 跳过 | 366.234 秒 |
+| WSL Ubuntu GCC 13 Release | 多线程 | 26/26 通过 | 196.575 秒 |
+| WSL Ubuntu GCC 13 Release | 单线程 | 26/26 通过 | 181.410 秒 |
 
-Windows 跳过 Unix 专属 `tcp-error-rearm`。两平台 CPU 均为 AMD Ryzen 7 9800X3D，Windows CIM 4700 MHz，WSL 采样 4699.902 MHz。最终夹具 SHA-256 为 `c071539a506477f23338848040aa9981d14564eb408f224fde59b44a890d4e44`。结果在 `.local/manager-call-all-final-{mt,st}`（Windows）和 `.local/manager-call-20261128-{mt,st}/all-final`（WSL）。
+Windows 跳过 Unix 专属 `tcp-error-rearm`。两平台 CPU 为 AMD Ryzen 7 9800X3D；Windows CIM 4700 MHz，WSL 本轮环境记录未提供频率读数。Windows MT 原矩阵 583.4 秒；ST 首轮 548.5 秒、24 通过、1 失败、1 跳过：小发送队列业务 PASS 后 webserver 优雅停服超过 3 秒，子场景进程末尾日志未保留，原因未定。ST 同二进制独立 Web 复测 80.266 秒通过，再跑完整 `all` 如上，结果在 `.local/context-web-retest-st` 和 `.local/context-all-retest-st`；复测通过不抹去首轮失败。WSL MT/ST 原矩阵分别 400.0/397.1 秒，结果在 `.local/context-20261128-{mt,st}`。
 
-构建和工具矩阵与最终 `all` 分开计时：Windows MT/ST 原矩阵分别 578.6/586.1 秒，业务 `all` 各 25 通过、1 跳过，结果在 `.local/manager-call-windows-{mt,st}`；WSL MT 原矩阵 410.0 秒，WSL ST 首轮 `all` 为 25/26，注册就绪夹具遗漏初始租约，更新夹具后用同一二进制重跑如上。WSL 两路 ASan/UBSan、MySQL 和静态注册专项通过。Windows 原生 MySQL、迁移和静态注册 MT/ST 均退出 0，row mapping、transaction affected rows、rows、done 均 `bad=0`，在 `.local/manager-call-mysql-{mt,st}`。
+四路 `hold` 均确认独立任务能从真实原会话收到反向 RPC 的正确回复。另一个用例在处理函数内创建调用，等处理函数返回后才等待结果，验证目标会话不存在时返回连接错误且保留回复原值。WSL 两路真 MySQL、静态注册及纯协程 ASan/UBSan 探针通过。Windows 本轮未另跑数据库或百万 empty 专项。
 
-百万次 empty 检查真实回包：Windows MT/ST 分别 `ms=30317` / `ms=30293`、均 `rpc_fail=0`，用例各 32.47 秒，见 `.local/manager-call-empty-{mt,st}`；WSL MT/ST 分别 24.73/24.69 秒，均 `rpc_fail=0`。四路服务端原始 hold 日志均有 `reverse reply bad=0 code=0`；四路覆盖 owner 轮换、快照和真实反向 RPC。生成/签名测试共 30 项；七个业务处理函数的签名检查以仅将 Empty 改回旧签名为负例，唯一失败项是 Empty，恢复后单项通过。
-
-早期快照 Windows ST 出现 logd 清理超时；WSL ST 曾遗漏初始租约；较早 WSL MT Redis late ping 2005 ms 超时，定向复测 1074 ms 成功但根因未明，见[原待办](../todonext.md#hold-的-redis-late-ping-偶发超时)。后续通过不抹去上述失败。Windows 专项前后按归属清理退出 0。
+另在 WSL ST 跑局部 sanitizer 的真实 `hold`：业务结果通过，但退出时 LSan 报 37,640 字节、102 处分配，整体失败。只把测试文件换成 `8fc29ec` 版本、其余链接对象、头文件、参数和服务端相同的对照也得到相同数量及十组分配栈；这不是完整旧二进制基线，根因未明。日志在 `.local/context-20261128-st/asan-{baseline,context}-hold.log`，后续定位见[条件待办](../todonext.md#b-需要抓到复现证据)。
 
 ## 收包额度与解码预算复验（2026-11-25 晚，历史记录）
 

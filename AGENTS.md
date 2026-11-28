@@ -113,7 +113,7 @@ Redis 标准接口只提供单 key 接口，禁止隐式多 key 查询或自动�
 
 # RPC 和单向消息入口
 
-- 单次 RPC 按服务名用 `RouteManager::GetInstance().Call(服务名, 请求, 回复, 时长)`，先看返回码再读回复；单客户端有状态直连用管理器的 `Call(请求, 回复, 时长)`，沿用其连接策略。指定原连接反向 RPC 用 RPC 协议管理器的 `Call(sid, 请求, 回复, 时长)`，断开不改发到新连接。
+- 单次 RPC 按服务名用 `RouteManager::GetInstance().Call(服务名, 请求, 回复, 时长)`，先看返回码再读回复；单客户端有状态直连用管理器的 `Call(请求, 回复, 时长)`，沿用其连接策略。处理函数回调原连接用 `stContext.Call(请求, 回复, 时长)`；没有入站上下文时可用 RPC 协议管理器的 `Call(sid, 请求, 回复, 时长)`，断开不改发到新连接。独立后台任务按值捕获上下文，但它不延长连接或管理器寿命，断线后调用仍失败。
 - 按服务、实例或原会话发单向消息分别使用 `RouteManager`、`ProtoMultiClientManager` 的通知入口或 `RpcContext::Notify` / 管理器的 `Notify(sid, 消息)`。多实例管理器的实例号与 sid 是不同标识，不得混用；其 `Call(实例号, ...)` 不用于指定 sid。底层 `RpcCall` / `RpcNotify` 保留兼容和框架专项用途。
 - `module.proto` 的组件声明列出本管理器接收的 RPC 和 notify，由生成器维护注册；生成及仓库随附业务 handler 统一返回 `RpcTask`，首参 `const RpcContext&`，RPC 后接请求与回复，notify 后接请求。框架手写接入仍兼容同步和不带 Context 的签名。详见 `docs/module.md`、`docs/coroutine.md` 和 `docs/cbaselib/notify.md`。
 
