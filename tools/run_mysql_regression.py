@@ -13,6 +13,7 @@ import time
 from test_process_owner import write_owner, record_process, windows_birth, terminate_verified
 from textio import use_utf8_children
 from regression.cases import normalize_case_name
+from mysql_migration_checks import check_mysql_migrations
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -130,6 +131,8 @@ def main():
             env["OI_TEST_MYSQL_CLIENT"] = str(mysql)
             # The default table name is fixed. Only exercise it in this disposable schema.
             env["OI_TEST_MYSQL_ISOLATED"] = "1"
+            if args.case == "mysql":
+                check_mysql_migrations(client[:-1], env, root)
             command = [sys.executable, str(REPO / "tools" / "run_regressions.py"), "--case", args.case,
                        "--bin-dir", str(args.bin_dir), "--port-offset", str(args.port_offset)]
             if args.artifacts:

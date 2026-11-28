@@ -373,6 +373,11 @@ OI::Coro::TaskResult<int32_t> TestDb::CheckDefaultTable(OI::Db::Client& stMysql,
 		LOG_TRACE("mysql default table create failed status=%d stage=%s", iCode, stError.sStage.c_str());
 		co_return 1;
 	}
+	std::string sIndexColumns;
+	iCode = co_await stMysql.Scalar("SELECT GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) FROM information_schema.STATISTICS "
+	                                "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='dbsample' AND INDEX_NAME='idx_code_id'",
+	    {}, sIndexColumns, stError);
+	Expect(iBad, iCode == OI_OK && sIndexColumns == "sCode,id", "runtime table index uses ordered physical column names");
 
 	DbSample stRow = MakeFullRow();
 	stRow.sName = "default";
@@ -426,6 +431,20 @@ OI::Coro::TaskResult<int32_t> TestDb::CheckDefaultTable(OI::Db::Client& stMysql,
 	Expect(iBad, iCode == OI_OK, "default upsert");
 	iCode = co_await stMysql.SelectAll(vRead, stError);
 	Expect(iBad, iCode == OI_OK && vRead.size() == 2, "default select all");
+	stRow.iId = 0;
+	iCode = co_await stMysql.Insert(stRow, stResult, stError);
+	Expect(iBad, iCode == OI_OK && stResult.iAffected == 1 && stResult.iInsertId > 1, "auto increment insert returns id");
+	stRow.iId = static_cast<int64_t>(stResult.iInsertId);
+	stRow.sName.clear();
+	iCode = co_await stMysql.Select(stRow, stError);
+	Expect(iBad, iCode == OI_OK && stRow.sName == "updated", "read generated primary key");
+	const int64_t iGeneratedId = stRow.iId;
+	stRow.iId = 0;
+	iCode = co_await stMysql.Upsert(stRow, stResult, stError);
+	Expect(iBad, iCode == OI_OK && stResult.iInsertId > static_cast<uint64_t>(iGeneratedId), "upsert allocates a new key");
+	stRow.iId = INT64_MAX;
+	iCode = co_await stMysql.Insert(stRow, stResult, stError);
+	Expect(iBad, iCode == OI_OK && stResult.iInsertId == static_cast<uint64_t>(INT64_MAX), "preserve explicit 64-bit id");
 	LOG_TRACE("mysql default_table bad=%d", iBad);
 	co_return iBad;
 }

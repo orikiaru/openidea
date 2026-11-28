@@ -410,6 +410,26 @@ class ProtocolGen:
                         loginfo("json field is not representable name=", data.GetName(), ",field=", member.GetName(), ",type=", member.GetType())
                         return False
             if data.has_db:
+                fields = {member.name: member for member in data.members if member.db_name}
+                auto = [field for field in fields.values() if field.auto_increment]
+                if auto:
+                    first_key = next(field for field in fields.values() if field.db_key)
+                    indexed_first = auto[0] is first_key or any(names[0] == auto[0].name for _, names in data.db_indexes.values())
+                    if len(auto) != 1 or not re.fullmatch(r"u?int(8|16|32|64)_t", auto[0].type) or not indexed_first:
+                        loginfo("autoincrement needs one integer primary-key member leading an index", data.name, auto[0].name)
+                        return False
+                for name, (_, names) in data.db_indexes.items():
+                    size = 0
+                    for field in names:
+                        member = fields.get(field)
+                        if not member or (member.GetType() not in ORDERED_SCALARS - {"std::string"}
+                                          and DbTypeBase(member.db_type or "") not in DB_SIZED_TYPES):
+                            loginfo("unknown, excluded or unbounded index field", data.name, name, field)
+                            return False
+                        size += DbKeyBytes(member.db_type)
+                    if size > DB_KEY_MAX_BYTES:
+                        loginfo("index too long", data.name, name, size)
+                        return False
                 key_bytes = 0
                 for member in data.members:
                     if not member.db_name:

@@ -18,6 +18,7 @@ class ProtoLexer:
         self.n = len(text)
         self.i = 0
         self.line = 1
+        self.unclosed_comment = False
 
     def fail(self, what):
         loginfo("proto line", self.line, what)
@@ -34,6 +35,15 @@ class ProtoLexer:
             elif self.text.startswith("//", self.i):
                 while self.i < self.n and self.text[self.i] != "\n":
                     self.i += 1
+            elif self.text.startswith("/*", self.i):
+                end = self.text.find("*/", self.i + 2)
+                if end < 0:
+                    self.fail("unterminated block comment")
+                    self.unclosed_comment = True
+                    self.i = self.n
+                    return
+                self.line += self.text.count("\n", self.i, end + 2)
+                self.i = end + 2
             else:
                 return
 
@@ -130,7 +140,7 @@ def ParseType(lex):
         return lex.fail("only vector takes one type argument")
     return "std::vector<" + first + ">"
 
-FIELD_MARKERS = ("json", "nojson", "db", "nodb", "dbjson", "dbkey", "dbtype")
+FIELD_MARKERS = ("json", "nojson", "db", "nodb", "dbjson", "dbkey", "dbtype", "autoincrement")
 
 # 名字可省略。省略时序列化名就是字段名，由后面的标记收尾补上。
 def ParseOptionalName(lex):
@@ -180,6 +190,11 @@ def ApplyFieldMarker(lex, member, word):
             return lex.fail("db and nodb" if member.no_db else "repeated dbkey marker")
         member.db_key = True
         return True
+    if word == "autoincrement":
+        if member.auto_increment:
+            return lex.fail("repeated autoincrement")
+        member.auto_increment = True
+        return True
     if word == "dbtype":
         # [dbtype VARBINARY 64]、[dbtype LONGTEXT]：类型名，带长度的类型后面跟长度。
         if member.no_db or member.db_type:
@@ -222,6 +237,29 @@ def ParseFieldMarkers(lex, member):
             return None
     return True
 
+def ParseDbIndex(lex, data):
+    unique = lex.ident() == "uniqueindex"
+    name = lex.ident()
+    if not data.has_db or not name or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", name):
+        return lex.fail("index needs a db structure and a valid MySQL index name")
+    if name.lower() == "primary" or any(old.lower() == name.lower() for old in data.db_indexes):
+        return lex.fail("reserved or duplicate index " + name)
+    if not lex.punct("("):
+        return None
+    fields = []
+    while True:
+        field = lex.ident()
+        if not field or field in fields or len(fields) == 16:
+            return lex.fail("invalid or duplicate index field in " + name)
+        fields.append(field)
+        if lex.peek_char() != ",":
+            break
+        lex.punct(",")
+    if not lex.punct(")") or not lex.punct(";"):
+        return None
+    data.db_indexes[name] = (unique, fields)
+    return True
+
 def ParseRpcData(lex):
     name = lex.ident()
     if name is not None and not ValidDeclName(name):
@@ -242,6 +280,10 @@ def ParseRpcData(lex):
     data.has_json = "json" in flags
     data.has_db = "db" in flags
     while not lex.eof() and lex.peek_char() != "}":
+        if lex.peek_ident() in ("index", "uniqueindex"):
+            if not ParseDbIndex(lex, data):
+                return None
+            continue
         seq = lex.number()
         if seq is None:
             return None
@@ -377,4 +419,6 @@ def ParseProtoText(text):
         if data is None:
             return None
         datas.append(data)
+    if lex.unclosed_comment:
+        return None
     return datas

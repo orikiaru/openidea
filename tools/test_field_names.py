@@ -290,7 +290,8 @@ class FieldNamesTest(unittest.TestCase):
                                       ("stRaw", "MEDIUMBLOB", "false"),
                                       ("stChild", "MEDIUMTEXT", "false")):
             codec = "Json" if member == "stChild" else "Value"
-            self.assertIn(f'DecodeDb{codec}(sBytes, stRow.{member});\n                }}, "{sql_type}", {key}}}', generated)
+            suffix = ', false, " DEFAULT (0x7B7D)"' if member == "stChild" else ""
+            self.assertIn(f'DecodeDb{codec}(sBytes, stRow.{member});\n                }}, "{sql_type}", {key}{suffix}}}', generated)
         self.assertIn('"iId"', generated)
         self.assertIn('pMember == &Row::iId', generated)
         self.assertIn('"sZone"', generated)

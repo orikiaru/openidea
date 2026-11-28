@@ -95,6 +95,7 @@ file(GLOB OI_PROTO_TOOL_SOURCES "${PROTO_TOOL_DIR}/*.py")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${OI_FRAMEWORK_PROTO_FILES} ${OI_PROTO_TOOL_SOURCES})
 execute_process(
 	COMMAND "${PYTHON_BIN}" "${PROTO_TOOL_DIR}/main.py" "--pb-dispatch=${OI_PB_DISPATCH}" --data-only
+		"--mysql-script-dir=${CMAKE_SOURCE_DIR}/module/mysql_script/framework"
 		"${BASE_LIB_PATH}/base/inc/framework_protocol" -- ${OI_FRAMEWORK_PROTO_FILES}
 	RESULT_VARIABLE OI_FRAMEWORK_PROTO_GEN
 )

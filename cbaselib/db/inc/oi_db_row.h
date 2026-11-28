@@ -285,6 +285,8 @@ struct Field
 	bool (*fnDecode)(const std::string&, C&);
 	const char* pSqlType;
 	bool bKey;
+	bool bAutoIncrement = false;
+	const char* pSqlDefault = "";
 };
 
 template <typename C>
@@ -293,12 +295,22 @@ constexpr size_t FieldCount()
 	return C::DbFieldCount;
 }
 
+// Insert 和 Upsert 把自增字段的零值绑成 SQL NULL，显式 ID 保留原始整型精度。
+inline Parameter InsertParameter(Parameter stValue, bool bAutoIncrement)
+{
+	if (bAutoIncrement && ((stValue.is_signed() && stValue.iSigned == 0) || (stValue.is_unsigned() && stValue.iUnsigned == 0)))
+	{
+		return nullptr;
+	}
+	return stValue;
+}
+
 template <typename C>
 void AppendRowParameters(const C& stRow, std::vector<Parameter>& vParameters)
 {
 	for (const auto& stField : C::DbFields())
 	{
-		vParameters.push_back(stField.fnEncode(stRow));
+		vParameters.push_back(InsertParameter(stField.fnEncode(stRow), stField.bAutoIncrement));
 	}
 }
 

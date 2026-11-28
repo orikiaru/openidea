@@ -10,6 +10,13 @@ DB_SIZED_TYPES = {"VARCHAR": 65535, "CHAR": 255, "VARBINARY": 65535, "BINARY": 2
 DB_TEXT_TYPES = {"VARCHAR", "CHAR", "TEXT", "MEDIUMTEXT", "LONGTEXT"}
 DB_BINARY_TYPES = {"VARBINARY", "BINARY", "BLOB", "MEDIUMBLOB", "LONGBLOB"}
 DB_TYPE_TEXT = re.compile(r"([A-Za-z]+)(?:\((\d+)\))?")
+DB_SCALAR_SQL = {
+    "bool": "TINYINT", "int8_t": "TINYINT", "uint8_t": "TINYINT UNSIGNED",
+    "int16_t": "SMALLINT", "uint16_t": "SMALLINT UNSIGNED",
+    "int32_t": "INT", "uint32_t": "INT UNSIGNED",
+    "int64_t": "BIGINT", "uint64_t": "BIGINT UNSIGNED",
+    "float": "DOUBLE", "double": "DOUBLE",
+}
 
 # 返回规范写法，例如 VARBINARY(64)、LONGTEXT；不合法返回 None。
 def NormalizeDbType(name, length):
@@ -26,6 +33,22 @@ def NormalizeDbType(name, length):
 
 def DbTypeBase(db_type):
     return db_type.split("(")[0]
+
+def DbIndexDefinition(name, index):
+    kind = "UNIQUE INDEX" if index["unique"] else "INDEX"
+    columns = ", ".join("`%s`" % col for col in index["columns"])
+    return "%s `%s` (%s)" % (kind, name, columns)
+
+
+def DbColumnDefault(type_name, as_json):
+    # Old rows need a decodable empty value when ALTER adds a complex field.
+    if as_json:
+        return " DEFAULT (0x5B5D)" if type_name.startswith("std::vector<") else " DEFAULT (0x7B7D)"
+    if type_name.startswith(("std::vector<", "std::map<")):
+        return " DEFAULT (0x000000000400000000000000)"
+    if type_name not in DB_SCALAR_SQL and type_name not in ("Bytes", "std::string"):
+        return " DEFAULT (0x0000000000000000)"
+    return ""
 
 def ParseBoolAttr(text):
     if text is None or text == "":
@@ -59,6 +82,7 @@ class ClassMember:
         self.db_marked = False
         self.db_json = False
         self.db_key = False
+        self.auto_increment = False
         self.db_type = None
     def GetName(self):
         return self.name
@@ -68,6 +92,12 @@ class ClassMember:
         return self.value
     def GetSeq(self):
         return self.seq
+    def DbSqlType(self):
+        if self.db_type:
+            return self.db_type
+        if self.db_json:
+            return "LONGTEXT"
+        return DB_SCALAR_SQL.get(self.type, "LONGBLOB")
     def ParseMember(self, member_xml):
         self.name = member_xml.get("name")
         json_text = member_xml.get("json")
@@ -93,6 +123,9 @@ class ClassMember:
             loginfo("ParseMember dbkey flag invalid name=", self.name, ",dbkey=", member_xml.get("dbkey"))
             return False
         self.db_key = db_key
+        self.auto_increment = ParseBoolAttr(member_xml.get("autoincrement"))
+        if self.auto_increment is None:
+            return False
         db_type_text = member_xml.get("dbtype")
         if db_type_text:
             matched = DB_TYPE_TEXT.fullmatch(db_type_text.strip())
@@ -127,6 +160,7 @@ class SerializeData:
         self.is_key = False
         self.has_json = False
         self.has_db = False
+        self.db_indexes = {}
         self.json_ok = False
 
     def GenLogHeader(self):
@@ -153,6 +187,10 @@ class SerializeData:
         return self.name
     def GetDataName(self):
         return "oi_rpcdata_" + self.name.lower() + ".h"
+    def DbIndexes(self):
+        columns = {member.name: member.db_name for member in self.members}
+        return {name: {"unique": unique, "columns": [columns[field] for field in fields]}
+                for name, (unique, fields) in self.db_indexes.items()}
     def GetProtoFileName(self):
         suffix = ""
         if(self.type == SerializeDataType.RPC):
@@ -215,6 +253,9 @@ class SerializeData:
         db_names = set()
         for member in self.members:
             # 没标 json 的结构不能出现 json 标记。nodb 字段不再是数据库字段，不能再带 db / dbjson。
+            if member.auto_increment and not member.db_key:
+                loginfo("autoincrement requires dbkey", self.name, member.name)
+                return False
             if member.no_json and (member.json_name or member.json_marked):
                 loginfo("json and nojson proto=", self.name, ",field=", member.name)
                 return False
@@ -244,13 +285,13 @@ class SerializeData:
                     return False
                 json_names.add(member.json_name)
             if member.db_name:
-                if not DB_COLUMN_NAME.fullmatch(member.db_name):
+                if not DB_COLUMN_NAME.fullmatch(member.db_name) or len(member.db_name) > 64:
                     loginfo("invalid db column proto=", self.name, ",field=", member.name, ",db=", member.db_name)
                     return False
-                if member.db_name in db_names:
+                if member.db_name.lower() in db_names:
                     loginfo("duplicate db column proto=", self.name, ",db=", member.db_name)
                     return False
-                db_names.add(member.db_name)
+                db_names.add(member.db_name.lower())
         if self.has_json and not json_names:
             loginfo("json rpcdata has no json field name=", self.name)
             return False
@@ -361,4 +402,3 @@ class SerializeData:
         if(timeout):
             self.timeout = timeout
         return self.ParseMember()
-    

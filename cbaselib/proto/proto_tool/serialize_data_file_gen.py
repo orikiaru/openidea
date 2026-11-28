@@ -1,4 +1,4 @@
-from serialize_data_parse import SerializeData
+from serialize_data_parse import SerializeData, DbIndexDefinition, DbColumnDefault
 from serialize_data_parse import SerializeDataType
 import re
 
@@ -258,12 +258,13 @@ __COMPARE____JSON_METHODS____DB_METHODS__};
     # 生成整行回调，字段表的元素类型只依赖行类型。
     def DbFieldEntry(self, member):
         codec = "Json" if member.db_json else "Value"
-        if member.db_type:
-            sql_type = '"%s"' % member.db_type
-        elif member.db_json:
-            sql_type = '"LONGTEXT"'
-        else:
-            sql_type = '::OI::Db::DefaultSqlType<%s>()' % QualType(member.GetType())
+        sql_type = '"%s"' % member.DbSqlType()
+        flags = ["true" if member.db_key else "false"]
+        default = DbColumnDefault(member.GetType(), member.db_json)
+        if member.auto_increment or default:
+            flags.append("true" if member.auto_increment else "false")
+        if default:
+            flags.append('"%s"' % default)
         return ('{"%s",\n'
                 '                +[](const %s& stRow) -> ::OI::Db::Parameter\n'
                 '                {\n'
@@ -275,7 +276,7 @@ __COMPARE____JSON_METHODS____DB_METHODS__};
                 '                }, %s, %s}' %
                 (member.db_name, self.class_name, codec, member.name,
                  self.class_name, codec, member.name, sql_type,
-                 "true" if member.db_key else "false"))
+                 ", ".join(flags)))
 
     def GetDbMethods(self):
         members = [member for member in self.data.members if member.db_name]
@@ -284,6 +285,12 @@ __COMPARE____JSON_METHODS____DB_METHODS__};
         lines.append("    {")
         lines.append('        return "%s";' % self.class_name.lower())
         lines.append("    }")
+        if self.data.db_indexes:
+            clauses = [DbIndexDefinition(name, index) for name, index in self.data.DbIndexes().items()]
+            lines.append("    static constexpr const char* DbIndexDefinitions()")
+            lines.append("    {")
+            lines.append('        return "%s";' % ", ".join(clauses))
+            lines.append("    }")
         lines.append("    static constexpr size_t DbFieldCount = %d;" % len(members))
         lines.append("    static const std::array<::OI::Db::Field<%s>, %d>& DbFields()" % (self.class_name, len(members)))
         lines.append("    {")

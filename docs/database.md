@@ -59,9 +59,24 @@ if (iStatus != OI_OK)
 
 列类型按字段类型推导，`[dbtype]` 可以换字节和文本列的类型，见 [模块和协议](module.md)。表的默认字符集是 `utf8mb4`。
 
-JOIN、任意条件、范围查询、跨表、`ALTER` 和 schema migration 不在这层，调用方用 `Pick` 或带参数的 SQL，表名用 `QuoteName` 加反引号前先自己校验。schema migration 尚未实现。
+JOIN、任意条件、范围查询和跨表操作不在这层，调用方用 `Pick` 或带参数的 SQL，表名用 `QuoteName` 加反引号前先自己校验。协议导出的逐表 SQL 可处理新增列和索引；手工 SQL 的执行仍由调用方负责。
 
 旧版先构造语句再调用的代码，可迁移到这些 `Client` 成员；复杂查询仍使用下文的参数化 SQL。
+
+## 协议索引与逐表 SQL
+
+标记 `db` 的协议结构可在表内声明 `index idx_name(iField, sOther);` 或 `uniqueindex uq_name(sField);`。索引成员按声明顺序映射为数据库列；联合主键的某一个成员也可另加唯一索引，例如按区服和角色组成联合主键，同时让角色 ID 跨区服唯一。协议语法和示例见 [模块和协议](module.md)。
+
+`[dbkey, autoincrement]` 标记自增主键成员：每表最多一个，必须是整数，且是某个索引的首列。`Insert` 和 `Upsert` 的该字段为 0 时绑定原生 SQL NULL，由数据库分配；显式非零值原样绑定。单条 `Insert` 使用带 `Result` 的重载可从 `iInsertId` 获取生成值。MySQL 的 `Upsert` 遇任一 UNIQUE 键冲突会更新已有行；需要冲突时报错时使用 `Insert`。
+
+协议导出将每张默认表的 SQL 写入 `module/mysql_script/<小写表名>.sql`，框架数据定义写入其中的 `framework/` 子目录。每个文件携带逐版历史，面向 MySQL 8（实测 8.0.42 和 8.0.46）；执行账号需要会话临时表权限，普通业务不需要例程权限。先选目标库，再在客户端导入；以下方式也适用于 Windows：
+
+```text
+mysql -u 用户名 -p 目标库
+mysql> source module/mysql_script/dbsample.sql
+```
+
+新增 PB 或 JSON 复杂列时，脚本为已有行填入可解码的空值。现有静态注册使用自定义表名，导出脚本仍按协议默认表名生成。无变更时重复导出保留文件时间戳，新增列或索引追加版本。修改旧列、主键、已有索引或旧字段自增属性会阻止导出；先备份数据，再由使用方手工删除该表 SQL 历史并重建数据库表。工具不执行 `DROP TABLE`。
 
 ## 执行与结果
 

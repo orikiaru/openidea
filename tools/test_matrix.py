@@ -18,6 +18,7 @@ WINDOWS = os.name == "nt"
 # Keep standalone lightweight tests here; argument-dependent probes run after build.
 TOOL_TESTS = (
     ("field-names", "test_field_names.py"),
+    ("mysql-export", "test_mysql_export.py"),
     ("inheritance-tests", "test_inheritance.py"),
     ("agent-route-tests", "test_agent_route.py"),
     ("process-fixtures", "test_regression_platform.py"),

@@ -17,6 +17,8 @@ struct ColumnSpec
 	std::string sSqlType;
 	bool bKey = false;
 	Parameter stValue;
+	bool bAutoIncrement = false;
+	const char* pSqlDefault = "";
 };
 
 // 主键始终需要，部分更新只额外编码选中的列。
@@ -27,7 +29,7 @@ std::vector<ColumnSpec> DescribeRowValues(const C& stRow, bool bAllValues, const
 	vColumns.reserve(C::DbFields().size());
 	for (const auto& stField : C::DbFields())
 	{
-		ColumnSpec stColumn{stField.pColumn, stField.pSqlType, stField.bKey, {}};
+		ColumnSpec stColumn{stField.pColumn, stField.pSqlType, stField.bKey, {}, stField.bAutoIncrement, stField.pSqlDefault};
 		if (bAllValues || stField.bKey || std::find(vPicked.begin(), vPicked.end(), stColumn.sName) != vPicked.end())
 		{
 			stColumn.stValue = stField.fnEncode(stRow);
@@ -152,7 +154,13 @@ int32_t BuildCreateTable(const std::string& sTable, BoundSql& stBoundSql)
 	std::string sKeys;
 	for (const ColumnSpec& stColumn : vColumns)
 	{
-		sSql += QuoteName(stColumn.sName) + " " + stColumn.sSqlType + " NOT NULL, ";
+		sSql += QuoteName(stColumn.sName) + " " + stColumn.sSqlType + " NOT NULL";
+		if (stColumn.bAutoIncrement)
+		{
+			sSql += " AUTO_INCREMENT";
+		}
+		sSql += stColumn.pSqlDefault;
+		sSql += ", ";
 		if (stColumn.bKey)
 		{
 			sKeys += (sKeys.empty() ? "" : ",") + QuoteName(stColumn.sName);
@@ -162,7 +170,13 @@ int32_t BuildCreateTable(const std::string& sTable, BoundSql& stBoundSql)
 	{
 		return OI_ERR_INVALID_ARGUMENT;
 	}
-	sSql += "PRIMARY KEY (" + sKeys + ")) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4";
+	sSql += "PRIMARY KEY (" + sKeys + ")";
+	if constexpr (requires { C::DbIndexDefinitions(); })
+	{
+		sSql += ", ";
+		sSql += C::DbIndexDefinitions();
+	}
+	sSql += ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4";
 	stBoundSql = BoundSql{std::move(sSql), {}};
 	return OI_OK;
 }
@@ -187,7 +201,7 @@ int32_t BuildInsert(const std::string& sTable, const C& stRow, BoundSql& stBound
 	{
 		sNames += (sNames.empty() ? "" : ",") + QuoteName(stColumn.sName);
 		sMarks += sMarks.empty() ? "?" : ",?";
-		vParameters.push_back(std::move(stColumn.stValue));
+		vParameters.push_back(InsertParameter(std::move(stColumn.stValue), stColumn.bAutoIncrement));
 	}
 	stBoundSql = BoundSql{"INSERT INTO " + QuoteName(sTable) + " (" + sNames + ") VALUES (" + sMarks + ")", std::move(vParameters)};
 	return OI_OK;
@@ -216,7 +230,7 @@ int32_t BuildUpsert(const std::string& sTable, const C& stRow, BoundSql& stBound
 	{
 		sNames += (sNames.empty() ? "" : ",") + QuoteName(stColumn.sName);
 		sMarks += sMarks.empty() ? "?" : ",?";
-		vParameters.push_back(stColumn.stValue);
+		vParameters.push_back(InsertParameter(stColumn.stValue, stColumn.bAutoIncrement));
 		if (stColumn.bKey)
 		{
 			if (sFirstKey.empty())

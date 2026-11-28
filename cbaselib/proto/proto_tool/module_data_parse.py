@@ -62,6 +62,8 @@ def ParseModuleText(text):
         if not lex.punct("}"):
             return None
         modules.append((name, component_names))
+    if lex.unclosed_comment:
+        return None
     return components, modules
 
 class ComponentType(Enum):

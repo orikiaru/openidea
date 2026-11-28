@@ -10,7 +10,7 @@ rpcdata DbChild json {
 }
 
 rpcdata DbSample json db {
-    0 [db id] [dbkey] int64_t iId;
+    0 [db id] [dbkey, autoincrement] int64_t iId; // 写入 0 时由 MySQL 分配 id。
     1 [db] [dbtype VARBINARY 64] string sName;
     2 [nojson] int32_t iSecret;
     3 [nodb] string sCache;
@@ -40,4 +40,6 @@ rpcdata DbSample json db {
     27 [dbtype MEDIUMBLOB] Bytes stArchive;
     28 map<string, vector<int32_t>> mGroups;
     29 [dbjson] vector<map<string, int32_t>> vJsonGroups;
+    index idx_name(sName);
+    index idx_code_id(sCode, iId); // 联合索引先按编码查找，再按主键排序。
 }
