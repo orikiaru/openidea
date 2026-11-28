@@ -346,6 +346,10 @@ class ProtocolGen:
         numeric = name in ORDERED_SCALARS and name != "std::string"
         if member.db_type:
             base = DbTypeBase(member.db_type)
+            if base == "BINARY" and not member.db_json and not self.IsDbScalar(parsed):
+                loginfo(f"PB field {data.GetName()}.{member.GetName()} (table {data.DbTableName()}, column {member.db_name}) "
+                        f"cannot use {member.db_type}: MySQL zero-pads fixed-width values. Use VARBINARY or BLOB.")
+                return False
             if member.db_json:
                 allowed = base in DB_TEXT_TYPES
             elif name == "std::string":

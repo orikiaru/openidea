@@ -23,22 +23,22 @@
 - 唤醒性能单线程专项：远程 Linux 的 100000 次串行空任务三轮平均分别为 13.590、13.840、13.800 微秒；真 MySQL 的 `mysql_direct_finish_to_resume` 为 1000 样本，p50/p95/p99 分别 15.241/25.457/32.247 微秒，逐段结果在 `st-wake-20261126-200353`。Windows ST 同一轮的串行空任务平均 39.265 微秒；独立 trace 的 `trace_total` p50/p95/p99 为 36.1/69.2/96.5 微秒。串行整链与独立打点采样分别记录，不将两者相减或混为同一测量。
 - Windows `web-stop` 单/多线程各做两轮 control、idle、stop：control 每轮完整接收 9437184 字节；idle 零退出后收到 RST；活跃响应停服每轮收到 8185 字节后 RST，诊断失败。结果位于 `.local/webstop-final-windows-mt`、`.local/webstop-final-windows-st`。这是已观察行为，停服是否应排空在途响应仍待定。
 
-## 全量（2026-11-28，协议嵌套与静态注册）
+## 全量（2026-11-28，MySQL FLOAT 与 PB 列类型）
 
-受测 HEAD `60a4f182` 加本轮工作树。四路受影响的 14 个源码、用例和 SQL 路径（含删除）按相对路径排序、每文件 LF 规范化摘要的总体 SHA-256 为 `6577d6d99be79d4812a8d75caffcd424a4eec283c8edd7d249505dd8d2fa1998`，四路与源码一致。四路测试前后按归属清理均退出 0，无残留。CPU 均为 AMD Ryzen 7 9800X3D（8 核 16 线程）。
+受测 HEAD `fdfe05f` 加工作树。四路测试前后按归属清理均成功。两平台 CPU 均为 AMD Ryzen 7 9800X3D；Windows CIM 读数 4700 MHz，WSL 预检读数 4699.9 MHz。
 
-| 平台 | 线程 | 频率 MHz | `all` 结果 | 耗时 |
-| --- | --- | ---: | --- | ---: |
-| Windows MSVC x64 Release | 多线程 | 4700 | 25 通过、1 跳过 | 583.6 秒 |
-| Windows MSVC x64 Release | 单线程 | 4700 | 25 通过、1 跳过 | 619.8 秒 |
-| WSL Ubuntu 24.04 GCC 13.3 Release | 多线程 | 4699.902 | 26/26 通过 | 383.2 秒 |
-| WSL Ubuntu 24.04 GCC 13.3 Release | 单线程 | 4699.902 | 26/26 通过 | 377.0 秒 |
+| 平台 | 线程 | `all` 结果 | 耗时 |
+| --- | --- | --- | ---: |
+| Windows MSVC x64 Release | 多线程 | 25 通过、1 跳过 | 597.0 秒 |
+| Windows MSVC x64 Release | 单线程 | 25 通过、1 跳过 | 636.5 秒 |
+| WSL Ubuntu GCC 13.3 Release | 多线程 | 26/26 通过 | 362.5 秒 |
+| WSL Ubuntu GCC 13.3 Release | 单线程 | 26/26 通过 | 359.4 秒 |
 
-Windows 跳过 Unix 专属 `tcp-error-rearm`。Windows 两路真 MySQL 8.0.42 的 `mysql`、`registry-static`、迁移、回放、主键、索引、自增、漂移和 atomic ALTER 均通过，row mapping、rows、done 均为 `bad=0`；真库专项与 `all` 分开执行。WSL 两路真 MySQL 8.0.46 和 ASan/UBSan 均通过。
+Windows 跳过 Unix 专属 `tcp-error-rearm`。Windows 两路另用真 MySQL 8.0.42 验证 MySQL、静态注册和迁移，均通过；WSL 两路的真 MySQL 8.0.46 和 ASan/UBSan 均通过。四路均有 native FLOAT roundtrip、row mapping、rows、done 的 `bad=0`，以及 mysql-export 7 tests OK。
 
-Windows 的 6 项导出测试通过。另在 WSL 用旧版 C++ 实际编码字段号 7 的值 42，新增字符串字段后新版解码得到 42 和空字符串；将原字段从 `int32_t` 改为 `int64_t` 后导出退出 1，诊断包含表、列、子类型、字段号和新旧类型，SQL 与生成头的 SHA-256 校验均未变。
+旧驱动配合同一端到端用例在 WSL 单线程输出 `bad=9`：四个按位检查、四个宽读检查和一个标量检查失败，正常写入及 NULL 检查通过。旧生成器误放行三类 PB 字段的 `BINARY`；新版拒绝，`VARBINARY` 和 `BLOB` 对照通过。
 
-结果目录：Windows 全量 `.local/registry-final-windows`，ST 真库 `.local/registry-final-win-st-mysql`，MT 真库为隔离副本 `windows-mt` 下的 `.local/registry-final-win-mt-mysql`；WSL 为 `.local/final-20261128-wsl`。
+结果目录：Windows 为 `.local/float-final-20261128/{windows-mt,windows-st,mysql-mt,mysql-st}`；WSL 为 `.local/float-pb-20261128-wsl`，旧驱动对照为 `.local/float-old-driver-wsl`。
 
 ## 收包额度与解码预算复验（2026-11-25 晚，历史记录）
 

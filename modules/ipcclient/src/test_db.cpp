@@ -9,6 +9,9 @@
 #include "oi_thread.h"
 #include "oi_log.h"
 #include "test_board.h"
+#include <array>
+#include <bit>
+#include <cmath>
 #include <iterator>
 #include <cstring>
 #include <cstdlib>
@@ -509,6 +512,37 @@ OI_DB_CATCH
 }
 
 #ifdef OI_ENABLE_MYSQL
+OI::Coro::TaskResult<int32_t> TestDb::CheckNativeFloat(OI::Db::Client& stMysql, const std::string& sQuotedTable)
+{
+	const std::array<float, 4> vExpected{std::nextafter(1.0f, 2.0f), -1.2345678f, std::numeric_limits<float>::min(), std::numeric_limits<float>::max()};
+	std::vector<OI::Db::Parameter> vParameters(vExpected.begin(), vExpected.end());
+	OI::Db::Error stError;
+	OI::Db::Result stResult;
+	const std::string sInsert = "INSERT INTO " + sQuotedTable + " (v,score) VALUES (-1,?),(-2,?),(-3,?),(-4,?),(-5,NULL)";
+	int32_t iBad = 0;
+	int32_t iStatus = co_await stMysql.Call(sInsert, std::move(vParameters), stResult, stError);
+	Expect(iBad, iStatus == OI_OK && stResult.iAffected == vExpected.size() + 1, "insert native FLOAT values");
+
+	const std::string sSelect = "SELECT score FROM " + sQuotedTable;
+	iStatus = co_await stMysql.Call(sSelect + " WHERE v < 0 ORDER BY v DESC", {}, stResult, stError);
+	Expect(iBad, iStatus == OI_OK && stResult.vRows.size() == vExpected.size() + 1, "select native FLOAT rows");
+	if (iStatus == OI_OK && stResult.vRows.size() == vExpected.size() + 1)
+	{
+		for (size_t iIndex = 0; iIndex < vExpected.size(); ++iIndex)
+		{
+			const auto stCell = stResult.vRows[iIndex].at("score");
+			Expect(iBad, std::bit_cast<uint32_t>(stCell.as_float()) == std::bit_cast<uint32_t>(vExpected[iIndex]), "native FLOAT bits");
+			Expect(iBad, stCell.as_double() == static_cast<double>(vExpected[iIndex]), "native FLOAT widened to double");
+		}
+		Expect(iBad, stResult.vRows.back().at("score").is_null(), "native FLOAT NULL");
+	}
+	float fScalar = 0;
+	iStatus = co_await stMysql.Scalar(sSelect + " WHERE v=-1", {}, fScalar, stError);
+	Expect(iBad, iStatus == OI_OK && std::bit_cast<uint32_t>(fScalar) == std::bit_cast<uint32_t>(vExpected.front()), "native FLOAT scalar bits");
+	LOG_TRACE("mysql native FLOAT roundtrip bad=%d", iBad);
+	co_return iBad;
+}
+
 OI::Coro::TaskResult<int32_t> TestDb::CheckDbErrors(OI::Db::Client& stMysql, const OI::Mysql::Config& stConfig)
 {
 	int32_t iBad = 0;
@@ -917,7 +951,7 @@ OI::Coro::Task TestDb::Run()
 				++iBad;
 			}
 			// 自增主键：回滚不退还已分配的自增值，回滚后再插入拿到的编号能证明事务里第一条 INSERT 真的执行过。
-			iStatus = co_await stMysql.Call("CREATE TABLE " + sQuotedTable + " (id BIGINT AUTO_INCREMENT PRIMARY KEY, v INT NOT NULL) ENGINE=InnoDB", {}, stResult, stError);
+			iStatus = co_await stMysql.Call("CREATE TABLE " + sQuotedTable + " (id BIGINT AUTO_INCREMENT PRIMARY KEY, v INT NOT NULL, score FLOAT) ENGINE=InnoDB", {}, stResult, stError);
 			if (iStatus != OI_OK)
 			{
 				LOG_TRACE("mysql create test table failed status=%d stage=%s native=%u", iStatus, stError.sStage.c_str(), stError.iNativeCode);
@@ -977,6 +1011,7 @@ OI::Coro::Task TestDb::Run()
 					    stError.sStage.c_str(), stError.iNativeCode);
 					++iBad;
 				}
+				iBad += co_await CheckNativeFloat(stMysql, sQuotedTable);
 			}
 			iStatus = co_await stMysql.Call("SELECT missing_column", {}, stResult, stError);
 			if (iStatus == OI_OK || stError.iNativeCode != 1054)

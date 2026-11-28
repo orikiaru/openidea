@@ -5,6 +5,7 @@
 #include <mysql.h>
 #include <errmsg.h>
 #include <mysqld_error.h>
+#include <charconv>
 #include <cstdio>
 #include <limits>
 #include <stdexcept>
@@ -100,9 +101,7 @@ struct ResultBind
 	BindFlag bNull = 0;
 	BindFlag bError = 0;
 	unsigned char iByte = 0;
-	// 客户端库把 FLOAT / DOUBLE 转文本时按缓冲长度决定位数，1 字节探测会把 1.5 转成 "2"。
-	// 浮点列直接用足够长的缓冲一次取完。
-	bool bReal = false;
+	float fValue = 0;
 	char vRealText[64] = {};
 };
 
@@ -363,21 +362,29 @@ class MysqlConnection final : public OI::Db::Connection
 					m_bHealthy = false;
 					return OI_ERR_DECODE;
 				}
-				vOutput[iIndex].buffer_type = MYSQL_TYPE_BLOB;
-				vFields[iIndex].bReal = pFields[iIndex].type == MYSQL_TYPE_FLOAT || pFields[iIndex].type == MYSQL_TYPE_DOUBLE;
-				if (vFields[iIndex].bReal)
+				auto& stBind = vOutput[iIndex];
+				auto& stValue = vFields[iIndex];
+				stBind.buffer_type = MYSQL_TYPE_BLOB;
+				if (stField.type == MYSQL_TYPE_FLOAT)
 				{
-					vOutput[iIndex].buffer = vFields[iIndex].vRealText;
-					vOutput[iIndex].buffer_length = sizeof(vFields[iIndex].vRealText);
+					stBind.buffer_type = MYSQL_TYPE_FLOAT;
+					stBind.buffer = &stValue.fValue;
+					stBind.buffer_length = sizeof(stValue.fValue);
+				}
+				else if (stField.type == MYSQL_TYPE_DOUBLE)
+				{
+					// SDK 转文本时按缓冲长度决定位数，DOUBLE 直接一次取完。
+					stBind.buffer = stValue.vRealText;
+					stBind.buffer_length = sizeof(stValue.vRealText);
 				}
 				else
 				{
-					vOutput[iIndex].buffer = &vFields[iIndex].iByte;
-					vOutput[iIndex].buffer_length = 1;
+					stBind.buffer = &stValue.iByte;
+					stBind.buffer_length = sizeof(stValue.iByte);
 				}
-				vOutput[iIndex].length = &vFields[iIndex].iLength;
-				vOutput[iIndex].is_null = &vFields[iIndex].bNull;
-				vOutput[iIndex].error = &vFields[iIndex].bError;
+				stBind.length = &stValue.iLength;
+				stBind.is_null = &stValue.bNull;
+				stBind.error = &stValue.bError;
 			}
 			if (mysql_stmt_bind_result(stGuard.pStatement, vOutput.data()) != 0)
 			{
@@ -411,24 +418,37 @@ class MysqlConnection final : public OI::Db::Connection
 						return OI_ERR_FAIL;
 					}
 					auto& stCell = mRow[std::string(pFields[iIndex].name, pFields[iIndex].name_length)];
-					if (vFields[iIndex].bNull)
+					auto& stValue = vFields[iIndex];
+					if (stValue.bNull)
 					{
 						continue;
 					}
-					const size_t iLength = vFields[iIndex].iLength;
+					const auto iType = pFields[iIndex].type;
+					size_t iLength = stValue.iLength;
+					if (iType == MYSQL_TYPE_FLOAT)
+					{
+						// 按精确提升后的值转文本，float 和 double 两种读取都能得到列的原值。
+						char* pBegin = stValue.vRealText;
+						const auto stText = std::to_chars(pBegin, pBegin + sizeof(stValue.vRealText), static_cast<double>(stValue.fValue), std::chars_format::general);
+						if (stValue.bError || stText.ec != std::errc())
+						{
+							return fnFail("fetch_real");
+						}
+						iLength = static_cast<size_t>(stText.ptr - pBegin);
+					}
 					if (!fnCharge(iLength))
 					{
 						m_bHealthy = false;
 						SetError(stError, "result_limit", 0, nullptr);
 						return OI_ERR_FAIL;
 					}
-					if (vFields[iIndex].bReal)
+					if (iType == MYSQL_TYPE_FLOAT || iType == MYSQL_TYPE_DOUBLE)
 					{
-						if (iLength > sizeof(vFields[iIndex].vRealText))
+						if (iLength > sizeof(stValue.vRealText))
 						{
 							return fnFail("fetch_real");
 						}
-						stCell.emplace(vFields[iIndex].vRealText, iLength);
+						stCell.emplace(stValue.vRealText, iLength);
 						continue;
 					}
 					stCell.emplace(iLength, '\0');

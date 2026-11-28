@@ -105,7 +105,7 @@ if (iRet != OI_OK)
 
 行来源由执行查询的驱动记录，同一结果共享。MySQL 已知列使用元数据中的原库和原表；缺列时报告能确定的来源表，纯表达式没有原表时显示 `<unknown>`。后续查询不会覆盖早前结果的来源。
 
-读取原始结果时，用 `stRow.at("id").as_uint32()` 按列名取强类型值；`Cell` 还提供 `is_null()`、`as_string()`、`as_int8()`、`as_uint8()`、`as_int16()`、`as_uint16()`、`as_int32()`、`as_uint32()`、`as_int64()`、`as_uint64()`、`as_float()`、`as_double()` 和 `as_bool()`。缺列、NULL 或转换失败抛 `RowDecodeError`；`is_null()` 可先检查 NULL。字符串引用只在所属行存活且未修改时有效。
+读取原始结果时，用 `stRow.at("id").as_uint32()` 按列名取强类型值；`Cell` 还提供 `is_null()`、`as_string()`、`as_int8()`、`as_uint8()`、`as_int16()`、`as_uint16()`、`as_int32()`、`as_uint32()`、`as_int64()`、`as_uint64()`、`as_float()`、`as_double()` 和 `as_bool()`。缺列、NULL 或转换失败抛 `RowDecodeError`；`is_null()` 可先检查 NULL。MySQL 原生 `FLOAT` 列按 `MYSQL_TYPE_FLOAT` 读取，具名列和标量查询都保留其精度。字符串引用只在所属行存活且未修改时有效。
 
 不希望异常时可先判断：`if (const auto stId = stRow.find("id"); stId && stId->is_uint32())` 再调用 `stId->as_uint32()`。缺列返回空 optional；各 `is_*` 按对应 `as_*` 的转换规则判断能否解码，不抛解码异常。0/1 可同时视为 bool 和数值，`is_string()` 对任何非 NULL 字节串为真。
 
@@ -142,7 +142,7 @@ MySQL 普通 SQL 错误返回 `OI_ERR_DB`（-18），重复键 1062 返回 `OI_E
 
 成员指针反射目前只给标了 `db` 的结构生成。
 
-头一层的整数、浮点、`bool`、`string`、`Bytes` 分别绑定成 `int64_t`、`uint64_t`、`double`、`string` 或 `Blob`。`bool` 写成 0 或 1。`vector`、`map` 和嵌套 `rpcdata` 默认不拆列，调用 `ToDbBlob` 收成一个 blob，读的时候用 `FromDbBlob`。blob 里是这条值自己的 PB，序号为 0。容器 blob 恰好包含一条字段（包括空容器），空 blob、多条字段和尾随字节都拒绝。旧容器 blob 与新格式不兼容，需要先用旧版本读取并迁移，相关读写端同步升级。`vector` 和 `map` 各是一条字段，不是每个元素一条。裸流里的嵌套 rpcdata 带长度前缀；同一字段号出现第二次直接拒绝。RPC 混版本、Redis 里已有的值和裸流的读写两端都受这个格式约束，旧数据要用旧端读取或先迁移，不能把新端当成平滑兼容。字段写了 `[dbjson]` 才改成 `ToJsonText` / `FromJsonText` 的 JSON 文本。数据库不穿透，blob 里的结构不用标 `db`。 `[dbjson]` 编码拒绝无效 UTF-8 和非有限浮点数；直接调用 `EncodeDbJson` 时抛 `std::invalid_argument`。合法 UTF-8 和字符串内 NUL 可经 JSON 编解码往返。单表语句构建只编码所需字段：所需字段无法编码时返回 `OI_ERR_INVALID_ARGUMENT`，输出语句不变；按主键查询或只更新其他有效字段不受该值影响。
+头一层的整数、浮点、`bool`、`string`、`Bytes` 分别绑定成 `int64_t`、`uint64_t`、`double`、`string` 或 `Blob`。`bool` 写成 0 或 1。`vector`、`map` 和嵌套 `rpcdata` 默认不拆列，调用 `ToDbBlob` 收成一个 blob，读的时候用 `FromDbBlob`。blob 里是这条值自己的 PB，序号为 0。容器 blob 恰好包含一条字段（包括空容器），空 blob、多条字段和尾随字节都拒绝。PB 格式的 `vector`、`map` 和嵌套 `rpcdata` 不允许显式指定 `BINARY(n)`：MySQL 补零会导致严格解码失败，应使用 `VARBINARY` 或 `BLOB` 类型；原始 `Bytes` 和 `string` 仍按原规则使用列类型。旧容器 blob 与新格式不兼容，需要先用旧版本读取并迁移，相关读写端同步升级。`vector` 和 `map` 各是一条字段，不是每个元素一条。裸流里的嵌套 rpcdata 带长度前缀；同一字段号出现第二次直接拒绝。RPC 混版本、Redis 里已有的值和裸流的读写两端都受这个格式约束，旧数据要用旧端读取或先迁移，不能把新端当成平滑兼容。字段写了 `[dbjson]` 才改成 `ToJsonText` / `FromJsonText` 的 JSON 文本。数据库不穿透，blob 里的结构不用标 `db`。 `[dbjson]` 编码拒绝无效 UTF-8 和非有限浮点数；直接调用 `EncodeDbJson` 时抛 `std::invalid_argument`。合法 UTF-8 和字符串内 NUL 可经 JSON 编解码往返。单表语句构建只编码所需字段：所需字段无法编码时返回 `OI_ERR_INVALID_ARGUMENT`，输出语句不变；按主键查询或只更新其他有效字段不受该值影响。
 
 
 真 MySQL 回归覆盖 29 个持久字段及 1 个 `nodb` 字段：八种定宽整数、bool、float、double、string、Bytes、PB 和 JSON 各三种复杂类型、嵌套容器及十种可配置文本/二进制列型。单条和批量 CRUD 以相反数据回读，并从 `information_schema` 核对实际列类型；通过标记为 `mysql all field types batch bad=0`。

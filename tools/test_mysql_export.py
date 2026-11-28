@@ -25,6 +25,27 @@ def generate(root, spec):
 
 
 class MysqlExportTest(unittest.TestCase):
+    def test_pb_columns_require_variable_width_binary(self):
+        for field_type, field in [("vector<int32_t>", "vValues"), ("map<string, int32_t>", "mValues"), ("Child", "stChild")]:
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                spec = ("rpcdata Child { 0 int32_t iCount; } rpcdata Player db(game_player) {"
+                        " 0 [dbkey] uint32_t iId; 1 [dbtype BINARY 8] Bytes stBytes; 2 [dbtype BINARY 4] string sCode;"
+                        f" 3 [db payload] [dbtype BINARY 32] {field_type} {field}; }}")
+                rejected = generate(root, spec)
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertIn(f"PB field Player.{field} (table game_player, column payload) cannot use BINARY(32)", rejected.stdout)
+                self.assertIn("Use VARBINARY or BLOB", rejected.stdout)
+                script = root / "sql/game_player.sql"
+                self.assertFalse(script.exists())
+                for db_type, sql_type in [("VARBINARY 32", "VARBINARY(32)"), ("BLOB", "BLOB")]:
+                    with tempfile.TemporaryDirectory() as valid_temp:
+                        valid = Path(valid_temp)
+                        accepted = generate(valid, spec.replace("BINARY 32", db_type))
+                        self.assertEqual(accepted.returncode, 0, accepted.stdout)
+                        sql = (valid / "sql/game_player.sql").read_text(encoding="utf-8")
+                        self.assertIn(f"`payload` {sql_type} NOT NULL", sql)
+
     def test_nested_storage_compatibility(self):
         child = "rpcdata Child json { 7 [json count] int32_t iNumber; }"
         for mode, column, identity in [

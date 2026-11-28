@@ -122,6 +122,7 @@ class DbCase(Case):
                 parse_wake_metrics(text, case, hooks, os.environ["OI_WAKE_P99_LIMIT_US"])
         elif case == "mysql":
             assert "mysql row mapping bad=0" in text
+            assert "mysql native FLOAT roundtrip bad=0" in text
             assert "mysql cell predicates bad=0" in text
             if os.environ.get("OI_TEST_MYSQL_ISOLATED") == "1":
                 assert "mysql default_table bad=0" in text
