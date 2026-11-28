@@ -99,6 +99,10 @@ class LockGuard
 	LockGuard(T&)
 	{
 	}
+	LockGuard(const LockGuard&) = delete;
+	LockGuard& operator=(const LockGuard&) = delete;
+	LockGuard(LockGuard&&) = delete;
+	LockGuard& operator=(LockGuard&&) = delete;
 	~LockGuard()
 	{
 	}
@@ -243,6 +247,10 @@ class LockGuard
 	{
 		m_pLock->Lock();
 	}
+	LockGuard(const LockGuard&) = delete;
+	LockGuard& operator=(const LockGuard&) = delete;
+	LockGuard(LockGuard&&) = delete;
+	LockGuard& operator=(LockGuard&&) = delete;
 	~LockGuard()
 	{
 		m_pLock->UnLock();

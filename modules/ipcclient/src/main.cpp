@@ -238,6 +238,14 @@ int main(int iArgumentCount, char* vArguments[])
 		::OI::Base::StopFramework();
 		return iCode;
 	}
+	if (iArgumentCount == 2 && std::strcmp(vArguments[1], "--timer-shutdown") == 0)
+	{
+		return TestTimer::CheckShutdown(false);
+	}
+	if (iArgumentCount == 2 && std::strcmp(vArguments[1], "--timer-shutdown-init-failure") == 0)
+	{
+		return TestTimer::CheckShutdown(true);
+	}
 	if (iArgumentCount == 2 && std::strcmp(vArguments[1], "--timer-backlog") == 0)
 	{
 		iCode = TestTimer::CheckBacklog();

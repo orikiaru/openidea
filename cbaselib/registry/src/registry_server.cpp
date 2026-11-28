@@ -282,13 +282,13 @@ OI::Coro::Task RegistryServer::Boot()
 		co_await OI::Coro::yield(50);
 	}
 	StartReload();
-	::OI::Timer::FrameworkTimer::AddTimer(new ReloadTimer(), m_iPullMilliseconds);
+	::OI::Timer::FrameworkTimer::AddTimer(std::make_unique<ReloadTimer>(), m_iPullMilliseconds);
 }
 
 OI::Coro::Task RegistryServer::BootMysql()
 {
 	StartReload();
-	::OI::Timer::FrameworkTimer::AddTimer(new ReloadTimer(), m_iPullMilliseconds);
+	::OI::Timer::FrameworkTimer::AddTimer(std::make_unique<ReloadTimer>(), m_iPullMilliseconds);
 	co_return;
 }
 

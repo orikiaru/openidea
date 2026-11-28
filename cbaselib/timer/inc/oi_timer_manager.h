@@ -41,7 +41,6 @@ class FnTimer : public BaseTimer
 	bool OnTimer() override
 	{
 		// Update 已释放时间轮锁，直接执行。
-		std::unique_ptr<FnTimer> pSelf(this);
 		TimerContext stContext(m_iCount - 1);
 		if constexpr (std::is_invocable_v<F&, TimerContext&>)
 		{
@@ -56,7 +55,6 @@ class FnTimer : public BaseTimer
 		{
 			return END_TIMER;
 		}
-		pSelf.release();
 		return RESET_TIMER;
 	}
 };
@@ -133,12 +131,7 @@ class BaseTimerManager
 			}
 		}
 		auto pTimer = std::make_unique<FnTimer<F>>(std::move(fnHandler), iCount);
-		const int32_t iStatus = RegisterTimer(pTimer.get(), iIntervalMilliseconds);
-		if (iStatus == OI_OK)
-		{
-			pTimer.release();
-		}
-		return iStatus;
+		return RegisterTimer(TimerEntry(std::move(pTimer)), iIntervalMilliseconds);
 	}
 
 	// 最近一次 Update 的单调时间和日历时间，给诊断用。
@@ -146,15 +139,15 @@ class BaseTimerManager
 
   private:
 	friend class FrameworkTimer;
-	int32_t RegisterTimer(BaseTimer* pTimer, int iMillisecond);
+	int32_t RegisterTimer(TimerEntry stTimer, int iMillisecond);
 	// 相对延时只用单调时钟；系统校时只影响日历快照。
 	// 把毫秒换成相对上次 tick 的跳数，用单调时钟，不受系统校时影响。
 	int64_t TicksFromNow(int iMillisecond) const;
 
-	// 按目标 tick 挂进对应层。调用方已持有时间轮锁。
-	void add_timer(BaseTimer* pTimer);
+	// 按目标 tick 找到对应的槽。调用方已持有时间轮锁。
+	TimerList& FindSlot(const BaseTimer& stTimer);
 	// 锁外执行 OnTimer。要续期再加锁挂回去。
-	void run_timer(BaseTimer* pTimer);
+	void RunDueTimer(TimerList& vDue);
 	// 推进 1 tick，这一跳到点的放进 vDue。调用方已持有时间轮锁。
 	void run_tick(TimerList& vDue);
 	// 把高层到期的定时器下放到更细的层。
@@ -165,7 +158,6 @@ class BaseTimerManager
 	void DispatchUpdates();
 
   private:
-	friend class TimerLevel;
 	friend class TimerTestAccess;
 	// 保护层级数组和 tick 游标。回调在锁外执行。
 	::OI::Thread::Mutex m_stWheelMutex;

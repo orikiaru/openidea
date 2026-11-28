@@ -76,7 +76,8 @@ struct Message
 	int32_t SetMultipart(const std::vector<FormPart>& vParts);
 	int32_t GetMultipart(std::vector<FormPart>& vParts) const;
 
-	const std::string* GetHeader(std::string_view sName) const;
+	const std::string* GetHeader(std::string_view sName) const&;
+	const std::string* GetHeader(std::string_view sName) const&& = delete;
 };
 
 struct Cookie

@@ -4,6 +4,17 @@
 #include "oi_thread.h"
 #include <cstdio>
 #include <string>
+#include <utility>
+
+template <typename T>
+concept CanBorrowHeader = requires(T&& stMessage) {
+	std::forward<T>(stMessage).GetHeader("Content-Type");
+};
+
+static_assert(CanBorrowHeader<OI::Http::Response&>);
+static_assert(CanBorrowHeader<const OI::Http::Response&>);
+static_assert(!CanBorrowHeader<OI::Http::Response>);
+static_assert(!CanBorrowHeader<const OI::Http::Response>);
 
 OI::Coro::Task WebClient::RunBodylessRegression(int32_t iPort)
 {

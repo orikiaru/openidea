@@ -241,6 +241,20 @@ class HoldCase(Case):
             text = output.read_text(encoding="utf-8", errors="replace")
             assert code == 0 and re.search(r"timer backlog first=1 second=2 final=3 child_first=0 child=1 stop=1 ticks=\d+/\d+ bad=0", text), (code, text)
             print(text, flush=True)
+            for option, failed, finish in (("timer-shutdown", 0, 1), ("timer-shutdown-init-failure", 1, 0)):
+                output = ctx.root / (option + ".out")
+                with output.open("w", encoding="utf-8") as stream:
+                    probe = launch([str(ctx.work / ("ipcclient" + SUFFIX)), "--" + option],
+                                   cwd=ctx.work, stdout=stream, stderr=subprocess.STDOUT)
+                    ctx.procs.append(probe)
+                    record_process(ctx.root, probe)
+                    code = probe.wait(timeout=10)
+                    ctx.procs.remove(probe)
+                text = output.read_text(encoding="utf-8", errors="replace")
+                expected = (f"timer shutdown init_failed={failed} finish={finish} pending_calls=0 "
+                            "capture=1 owned=1 borrowed=1 rejected=1 bad=0")
+                assert code == 0 and expected in text.splitlines(), (code, text)
+                print(expected, flush=True)
         if hold_environment(ctx):
             start_hold_gameservers(ctx)
 

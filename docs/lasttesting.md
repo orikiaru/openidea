@@ -23,22 +23,22 @@
 - 唤醒性能单线程专项：远程 Linux 的 100000 次串行空任务三轮平均分别为 13.590、13.840、13.800 微秒；真 MySQL 的 `mysql_direct_finish_to_resume` 为 1000 样本，p50/p95/p99 分别 15.241/25.457/32.247 微秒，逐段结果在 `st-wake-20261126-200353`。Windows ST 同一轮的串行空任务平均 39.265 微秒；独立 trace 的 `trace_total` p50/p95/p99 为 36.1/69.2/96.5 微秒。串行整链与独立打点采样分别记录，不将两者相减或混为同一测量。
 - Windows `web-stop` 单/多线程各做两轮 control、idle、stop：control 每轮完整接收 9437184 字节；idle 零退出后收到 RST；活跃响应停服每轮收到 8185 字节后 RST，诊断失败。结果位于 `.local/webstop-final-windows-mt`、`.local/webstop-final-windows-st`。这是已观察行为，停服是否应排空在途响应仍待定。
 
-## 全量（2026-11-28，原会话上下文调用）
+## 全量（2026-11-28，定时器释放与借用约束）
 
-受测为 `8fc29ec8f784310749c6dba7a168f0cea5d22fd1` 加本轮工作树；该提交保留上一轮完整基线。本轮四路最终业务 `all` 均通过、前后按归属清理均退出 0。表中耗时为各用例 `seconds` 之和，不是矩阵墙钟时间。
+受测基线为 `b5e3a2d` 加本轮工作树，四路普通全量和前后归属清理通过。表中耗时为构建及测试矩阵墙钟时间。
 
-| 平台 | 线程 | 最终 `all` | 用例耗时合计 |
+| 平台 | 线程 | `all` | 矩阵耗时 |
 | --- | --- | --- | ---: |
-| Windows MSVC x64 Release | 多线程 | 25 通过、1 跳过 | 355.047 秒 |
-| Windows MSVC x64 Release | 单线程 | 25 通过、1 跳过 | 366.234 秒 |
-| WSL Ubuntu GCC 13 Release | 多线程 | 26/26 通过 | 196.575 秒 |
-| WSL Ubuntu GCC 13 Release | 单线程 | 26/26 通过 | 181.410 秒 |
+| Windows MSVC x64 Release | 多线程 | 25 通过、1 跳过 | 593.6 秒 |
+| Windows MSVC x64 Release | 单线程 | 25 通过、1 跳过 | 609.6 秒 |
+| WSL Ubuntu GCC 13 Release | 多线程 | 26/26 通过 | 411.3 秒 |
+| WSL Ubuntu GCC 13 Release | 单线程 | 26/26 通过 | 402.3 秒 |
 
-Windows 跳过 Unix 专属 `tcp-error-rearm`。两平台 CPU 为 AMD Ryzen 7 9800X3D；Windows CIM 4700 MHz，WSL 本轮环境记录未提供频率读数。Windows MT 原矩阵 583.4 秒；ST 首轮 548.5 秒、24 通过、1 失败、1 跳过：小发送队列业务 PASS 后 webserver 优雅停服超过 3 秒，子场景进程末尾日志未保留，原因未定。ST 同二进制独立 Web 复测 80.266 秒通过，再跑完整 `all` 如上，结果在 `.local/context-web-retest-st` 和 `.local/context-all-retest-st`；复测通过不抹去首轮失败。WSL MT/ST 原矩阵分别 400.0/397.1 秒，结果在 `.local/context-20261128-{mt,st}`。
+Windows 跳过 Unix 专属 `tcp-error-rearm`，本轮未选 MySQL；WSL 两路真 MySQL、静态路由及矩阵自带纯协程 ASan/UBSan 探针通过。CPU 均为 AMD Ryzen 7 9800X3D，Windows CIM 4700 MHz，WSL 采样 4699.902 MHz。四路普通 Hold 均通过，正常停服与初始化失败探针均检查待执行回调不运行、拥有对象与捕获释放、借用对象由调用方释放、析构重入登记被拒。WSL 最终逐文件按 CRLF 归一核对 16 个改动源和用例一致；Windows 两路源码副本最终 `git diff HEAD` 摘要为 `33ba47d47c661aa9729bc0fd0550c23aaaa6e0775bf04ae2107fd8d30e307822`，不使用其初始化时的旧摘要。结果见 `.local/timer-shutdown-final-windows-{mt,st}`、`.local/timer-shutdown-20261128-{mt,st}`。
 
-四路 `hold` 均确认独立任务能从真实原会话收到反向 RPC 的正确回复。另一个用例在处理函数内创建调用，等处理函数返回后才等待结果，验证目标会话不存在时返回连接错误且保留回复原值。WSL 两路真 MySQL、静态注册及纯协程 ASan/UBSan 探针通过。Windows 本轮未另跑数据库或百万 empty 专项。
+局部 sanitizer 与上述矩阵探针分开记：定时器原有 104 字节/2 处的独立复现只对探针插桩，修复后同用例不再报告。WSL ST 的真实 Hold 首轮及正常停服、初始化失败两个专项同时对 `test_timer.cpp` 和 `test_rpc_pending.cpp` 插桩，其余对象为 Release；两个停服专项均输出释放及拒绝重入的通过标记，Hold 首轮同时出现 Redis late ping 2001 ms 超时及 LSan 18,528 字节/25 处分配。之后仅对 `test_rpc_pending.cpp` 插桩，与历史插桩范围相同的 Hold 第二轮出现 2013 ms 超时及 22,624 字节/26 个间接分配，不能称整体通过。
 
-另在 WSL ST 跑局部 sanitizer 的真实 `hold`：业务结果通过，但退出时 LSan 报 37,640 字节、102 处分配，整体失败。只把测试文件换成 `8fc29ec` 版本、其余链接对象、头文件、参数和服务端相同的对照也得到相同数量及十组分配栈；这不是完整旧二进制基线，根因未明。日志在 `.local/context-20261128-st/asan-{baseline,context}-hold.log`，后续定位见[条件待办](../todonext.md#b-需要抓到复现证据)。
+同一单文件插桩二进制带 Redis 时间线的终轮 Hold 业务 `bad=0`，late ping 970 ms，MONITOR 显示 BLPOP 后约 3.008 秒收到 PING；LSan 仍报 22,624 字节/26 个间接分配，进程失败。深栈选项复验业务也通过、泄漏数字相同，两轮均无定时器分配栈；日志为 `.local/timer-shutdown-20261128-st/asan-timeline-hold.log`、`asan-deep-hold.log`。前两次超时没有同轮时间线，剩余会话、通道和字节缓冲的完整销毁链根因尚未确认；见[条件待办](../todonext.md#b-需要抓到复现证据)。
 
 ## 收包额度与解码预算复验（2026-11-25 晚，历史记录）
 

@@ -1,4 +1,6 @@
 #include "test_timer.h"
+#include "oi_app.h"
+#include <type_traits>
 #include "hold_test.h"
 #include "oi_rpc_coro.h"
 #include "oi_http.h"
@@ -105,11 +107,116 @@ concept TimerAccepts = requires(OI::Timer::BaseTimerManager& stTimers, T stValue
 };
 static_assert(!TimerAccepts<int*>);
 
+template <typename T>
+constexpr bool IsScopeBoundGuard = !std::is_copy_constructible_v<T> && !std::is_copy_assignable_v<T> &&
+                                   !std::is_move_constructible_v<T> && !std::is_move_assignable_v<T>;
+
+static_assert(IsScopeBoundGuard<OI::Thread::MutexGuard>);
+static_assert(IsScopeBoundGuard<OI::Thread::SpinLockGuard>);
+static_assert(IsScopeBoundGuard<OI::Thread::NativeMutexGuard>);
+
 struct TimerOnceState
 {
 	std::atomic<int32_t> iCalls{0};
 	std::atomic<int32_t> iDestroyed{0};
 };
+
+struct TimerShutdownState
+{
+	int32_t iCalls = 0;
+	int32_t iDestroyed = 0;
+	int32_t iReentryCode = OI_OK;
+	int32_t iFinishCalls = 0;
+};
+
+struct ShutdownCapture
+{
+	std::shared_ptr<TimerShutdownState> pState;
+
+	explicit ShutdownCapture(std::shared_ptr<TimerShutdownState> pStateLocal)
+	    : pState(std::move(pStateLocal))
+	{
+	}
+	~ShutdownCapture()
+	{
+		++pState->iDestroyed;
+		auto fnUnexpected = [pState = pState]()
+		{
+			++pState->iCalls;
+		};
+		pState->iReentryCode = OI::Timer::BaseTimerManager::GetInstance().AddTimer(std::move(fnUnexpected), 60000);
+	}
+};
+
+class ShutdownObjectTimer : public OI::Timer::BaseTimer
+{
+	std::shared_ptr<TimerOnceState> m_pState;
+
+  public:
+	explicit ShutdownObjectTimer(std::shared_ptr<TimerOnceState> pState)
+	    : m_pState(std::move(pState))
+	{
+	}
+	~ShutdownObjectTimer()
+	{
+		++m_pState->iDestroyed;
+	}
+	bool OnTimer() override
+	{
+		++m_pState->iCalls;
+		return OI::Timer::END_TIMER;
+	}
+};
+
+int32_t TestTimer::CheckShutdown(bool bFailInit)
+{
+	auto pPending = std::make_shared<TimerShutdownState>();
+	auto pOwned = std::make_shared<TimerOnceState>();
+	auto pBorrowed = std::make_shared<TimerOnceState>();
+	{
+		ShutdownObjectTimer stTimer(pBorrowed);
+		auto fnInit = [pPending, pOwned, &stTimer, bFailInit]() -> int32_t
+		{
+			auto& stTimers = OI::Timer::BaseTimerManager::GetInstance();
+			auto pCapture = std::make_unique<ShutdownCapture>(pPending);
+			auto fnPending = [pCapture = std::move(pCapture)]()
+			{
+				++pCapture->pState->iCalls;
+			};
+			if (stTimers.AddTimer(std::move(fnPending), 60000) != OI_OK ||
+			    OI::Timer::FrameworkTimer::AddTimer(std::make_unique<ShutdownObjectTimer>(pOwned), 120000) != OI_OK ||
+			    OI::Timer::FrameworkTimer::AddTimer(&stTimer, 60000) != OI_OK)
+			{
+				return OI_ERR_FAIL;
+			}
+			if (bFailInit)
+			{
+				return OI_ERR_INVALID_ARGUMENT;
+			}
+			auto fnFinish = [pPending]()
+			{
+				++pPending->iFinishCalls;
+				OI::Thread::ThreadPool::GetInstance().RequestStop(OI_OK);
+			};
+			return stTimers.AddTimer(std::move(fnFinish), 1);
+		};
+		const int32_t iRun = OI::Base::RunFramework(fnInit);
+		const int32_t iExpected = bFailInit ? OI_ERR_INVALID_ARGUMENT : OI_OK;
+		if (iRun != iExpected || pBorrowed->iDestroyed != 0)
+		{
+			std::fprintf(stderr, "timer shutdown run=%d expected=%d borrowed_destroyed=%d\n", iRun, iExpected, pBorrowed->iDestroyed.load());
+			return OI_ERR_FAIL;
+		}
+	}
+	const int32_t iExpectedFinish = bFailInit ? 0 : 1;
+	const int32_t iCalls = pPending->iCalls + pOwned->iCalls + pBorrowed->iCalls;
+	const bool bPassed = pPending->iFinishCalls == iExpectedFinish && iCalls == 0 && pPending->iDestroyed == 1 &&
+	                     pOwned->iDestroyed == 1 && pBorrowed->iDestroyed == 1 && pPending->iReentryCode == OI_ERR_CANCELLED;
+	std::printf("timer shutdown init_failed=%d finish=%d pending_calls=%d capture=%d owned=%d borrowed=%d rejected=%d bad=%d\n",
+	    bFailInit, pPending->iFinishCalls, iCalls, pPending->iDestroyed, pOwned->iDestroyed.load(),
+	    pBorrowed->iDestroyed.load(), pPending->iReentryCode == OI_ERR_CANCELLED, bPassed ? 0 : 1);
+	return bPassed ? OI_OK : OI_ERR_FAIL;
+}
 
 struct TimerRepeatState
 {
@@ -207,7 +314,7 @@ class TimerTestAccess
 		OI::Thread::MutexGuard stLock(stManager.m_stWheelMutex);
 		const int32_t iMilliseconds = iTicks * stManager.m_iTickOffsetMilliseconds;
 		pTimer->InitData(iMilliseconds, stManager.m_iCurrentTick + iTicks, stManager.m_stCurrentTimeValue, iMilliseconds);
-		stManager.add_timer(pTimer);
+		stManager.FindSlot(*pTimer).emplace_back(pTimer);
 	}
 };
 }

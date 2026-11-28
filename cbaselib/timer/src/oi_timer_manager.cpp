@@ -1,6 +1,6 @@
 #include <unistd.h>
 #include <stdio.h>
-#include "oi_timer_manager.h"
+#include "oi_framework_timer.h"
 #include "oi_thread.h"
 #include "oi_poll.h"
 namespace OI
@@ -109,6 +109,17 @@ int32_t BaseTimerManager::Init()
 	return OI_OK;
 }
 
+void FrameworkTimer::ReleasePendingAfterJoin()
+{
+	auto& stManager = BaseTimerManager::GetInstance();
+	TimerLevelVector vPending;
+	{
+		::OI::Thread::MutexGuard stLock(stManager.m_stWheelMutex);
+		vPending.swap(stManager.m_vTimerLevels);
+	}
+	// 捕获对象的析构可以再次登记定时器，此时新登记会被拒绝。
+}
+
 void BaseTimerManager::OnSignal()
 {
 	// 处在 libuv 的 C 回调里，异常不能穿出去。单个回调的异常 Update 已经接住，这里兜分配失败；错过的 tick 下次按单调时钟补上。
@@ -139,7 +150,7 @@ void BaseTimerManager::Update()
 	int64_t iTicks = 0;
 	{
 		::OI::Thread::MutexGuard stLock(m_stWheelMutex);
-		if (!m_iTickOffsetMilliseconds)
+		if (m_vTimerLevels.empty() || !m_iTickOffsetMilliseconds)
 		{
 			return;
 		}
@@ -165,18 +176,9 @@ void BaseTimerManager::Update()
 			::OI::Thread::MutexGuard stLock(m_stWheelMutex);
 			run_tick(vDue);
 		}
-		for (const auto& pTimer : vDue)
+		while (!vDue.empty())
 		{
-			try
-			{
-				run_timer(pTimer);
-			}
-			catch (...)
-			{
-				// 回调可能已经自行销毁定时器（FnTimer 也如此），不能再访问或删除它。
-				// 本次不自动续期，继续执行同一 tick 中其余到期回调。
-				::OI::Thread::ReportTaskError(std::current_exception());
-			}
+			RunDueTimer(vDue);
 		}
 	}
 	if (iTicks > 0)
@@ -197,14 +199,14 @@ void BaseTimerManager::DispatchUpdates()
 	::OI::Base::SingletonUpdates::Instance().DispatchSecond(m_iCurrentTime);
 }
 
-int32_t BaseTimerManager::RegisterTimer(BaseTimer* pTimer, int iMillisecond)
+int32_t BaseTimerManager::RegisterTimer(TimerEntry stTimer, int iMillisecond)
 {
 	const int32_t iThreadStatus = ::OI::Net::Poll::GetInstance().CheckThreadAccess("BaseTimerManager::AddTimer");
 	if (iThreadStatus != OI_OK)
 	{
 		return iThreadStatus;
 	}
-	if (!pTimer || iMillisecond <= 0)
+	if (!stTimer.pTimer || iMillisecond <= 0)
 	{
 		return OI_ERR_INVALID_ARGUMENT;
 	}
@@ -213,9 +215,13 @@ int32_t BaseTimerManager::RegisterTimer(BaseTimer* pTimer, int iMillisecond)
 	{
 		return OI_ERR_FAIL;
 	}
+	if (m_vTimerLevels.empty())
+	{
+		return OI_ERR_CANCELLED;
+	}
 	const int64_t iTicks = TicksFromNow(iMillisecond);
-	pTimer->InitData(iMillisecond, m_iCurrentTick + iTicks, m_stCurrentTimeValue, iTicks * m_iTickOffsetMilliseconds);
-	add_timer(pTimer);
+	stTimer.pTimer->InitData(iMillisecond, m_iCurrentTick + iTicks, m_stCurrentTimeValue, iTicks * m_iTickOffsetMilliseconds);
+	FindSlot(*stTimer.pTimer).push_back(std::move(stTimer));
 	return OI_OK;
 }
 
@@ -238,16 +244,15 @@ int64_t BaseTimerManager::TicksFromNow(int iMillisecond) const
 	return iTicks;
 }
 
-void BaseTimerManager::add_timer(BaseTimer* pTimer)
+TimerList& BaseTimerManager::FindSlot(const BaseTimer& stTimer)
 {
-	int64_t iOffset = pTimer->m_stData.m_iTriggerTick - m_iCurrentTick;
+	int64_t iOffset = stTimer.m_stData.m_iTriggerTick - m_iCurrentTick;
 	// 新登记或续期的任务至少间隔一跳。级联时已经到期的任务直接进入本跳的待执行批次。
 	if (iOffset <= 0)
 	{
 		iOffset = 1;
 	}
 
-	bool bAdded = false;
 	for (uint32_t iIndexLocal = 0; iIndexLocal < m_iTimerLevelCount - 1; ++iIndexLocal)
 	{
 		TimerLevel& stCurrentLevel = m_vTimerLevels[iIndexLocal];
@@ -259,30 +264,35 @@ void BaseTimerManager::add_timer(BaseTimer* pTimer)
 			continue;
 		}
 
-		stCurrentLevel.AddTimer(this, pTimer, (uint32_t)iLevelOffset);
-		bAdded = true;
-		break;
+		return stCurrentLevel.Slot((uint32_t)iLevelOffset);
 	}
-
-	if (!bAdded)
-	{
-		TimerLevel& stCurrentLevel = m_vTimerLevels[m_iTimerLevelCount - 1];
-		stCurrentLevel.AddTimer(this, pTimer, 0);
-	}
+	return m_vTimerLevels.back().Slot(0);
 }
 
-void BaseTimerManager::run_timer(BaseTimer* pTimer)
+void BaseTimerManager::RunDueTimer(TimerList& vDue)
 {
-	assert(pTimer);
-
-	if (pTimer->OnTimer())
+	auto it = vDue.begin();
+	auto* pTimer = it->pTimer;
+	try
 	{
-		::OI::Thread::MutexGuard stLock(m_stWheelMutex);
-		// 从回调完成时重新计时，错过的周期不在本次补帧中重放。
-		const int64_t iTicks = TicksFromNow(pTimer->GetOffsetTime());
-		pTimer->InitData(pTimer->GetOffsetTime(), m_iCurrentTick + iTicks, m_stCurrentTimeValue, iTicks * m_iTickOffsetMilliseconds);
-		add_timer(pTimer);
+		if (pTimer->OnTimer())
+		{
+			::OI::Thread::MutexGuard stLock(m_stWheelMutex);
+			// 从回调完成时重新计时，错过的周期不在本次补帧中重放。
+			const int64_t iTicks = TicksFromNow(pTimer->GetOffsetTime());
+			pTimer->InitData(pTimer->GetOffsetTime(), m_iCurrentTick + iTicks, m_stCurrentTimeValue, iTicks * m_iTickOffsetMilliseconds);
+			auto& vSlot = FindSlot(*pTimer);
+			vSlot.splice(vSlot.end(), vDue, it);
+			return;
+		}
 	}
+	catch (...)
+	{
+		vDue.erase(it);
+		::OI::Thread::ReportTaskError(std::current_exception());
+		return;
+	}
+	vDue.erase(it);
 }
 
 void BaseTimerManager::try_uniform(TimerList& vDue)
@@ -298,15 +308,15 @@ void BaseTimerManager::try_uniform(TimerList& vDue)
 		m_vTimerLevels[iIndexLocal].RunTick(vSlot);
 		while (!vSlot.empty())
 		{
-			auto* pTimer = vSlot.front();
+			auto* pTimer = vSlot.front().pTimer;
 			if (pTimer->m_stData.m_iTriggerTick <= m_iCurrentTick)
 			{
 				vDue.splice(vDue.end(), vSlot, vSlot.begin());
 			}
 			else
 			{
-				vSlot.pop_front();
-				add_timer(pTimer);
+				auto& vTarget = FindSlot(*pTimer);
+				vTarget.splice(vTarget.end(), vSlot, vSlot.begin());
 			}
 		}
 	}

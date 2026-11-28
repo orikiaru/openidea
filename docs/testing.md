@@ -227,6 +227,8 @@ python3 tools/run_regressions.py --case all --expect-thread mt --artifacts /tmp/
 
 定时器定向用例另创建未初始化的独立管理器，检查 `Update` 不改变 tick 和日历快照、`milling2tick(1)` 返回 0；已初始化单例检查整跳和跨跳向上取整，既有回调断言验证实际派发。驱动要求 `hold timer uninitialized update=1 convert=1 tick=0 ticks=0 unchanged=1 bad=0` 和 `hold timer conversion offset=... bad=0`。
 
+定时器停服探针分别覆盖正常运行结束和初始化回调失败：核对未到期回调未执行、捕获与拥有对象释放、借用对象由调用方释放，以及析构时重新登记被拒绝；正常路径 finish 为 1，初始化失败为 0，两路均要求 `bad=0`。这些是用例要求，实际通过情况以当次结果为准。
+
 排查 Hold 的 Redis 迟到回包时，可对本次测试启动的 Redis 开启只读 MONITOR：
 
 ```sh

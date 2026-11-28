@@ -123,7 +123,7 @@ QueryParams::const_iterator QueryParams::end() const
 	return m_vEntries.end();
 }
 
-const std::string* Message::GetHeader(std::string_view sName) const
+const std::string* Message::GetHeader(std::string_view sName) const&
 {
 	for (const auto& [sKey, sValue] : vHeaders)
 	{

@@ -4,7 +4,7 @@
 #include <exception>
 #include "oi_config.h"
 #include "oi_thread.h"
-#include "oi_timer_manager.h"
+#include "oi_framework_timer.h"
 #include "oi_poll.h"
 #include "oi_singleton.h"
 
@@ -93,12 +93,14 @@ int32_t StartFramework(const char* pConfigPath)
 void StopFramework()
 {
 	::OI::Net::Poll::GetInstance().StopAndJoin();
+	::OI::Timer::FrameworkTimer::ReleasePendingAfterJoin();
 }
 
 int RunFramework()
 {
 	SingletonUpdates::Instance().Start();
 	::OI::Thread::ThreadPool::GetInstance().StartWork();
+	::OI::Timer::FrameworkTimer::ReleasePendingAfterJoin();
 	return ::OI::Thread::ThreadPool::GetInstance().ExitCode();
 }
 
