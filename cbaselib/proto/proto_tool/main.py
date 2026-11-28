@@ -80,6 +80,11 @@ if __name__ == "__main__":
     split = SplitArgs(sys.argv)
     if split is not None:
         head, proto_files = split
+        if head[:1] == ["--baseline-mysql-nested"]:
+            if len(head) != 2 or not proto_files:
+                sys.exit("usage: --baseline-mysql-nested <sql-dir> -- <deployed-proto-files>")
+            proto = ProtocolGen(proto_files)
+            sys.exit(0 if proto.Gen() and export_mysql_scripts(proto.serialize_datas, head[1], baseline_only=True) else 1)
         if head[:1] == ["--data-only"]:
             if len(head) != 2:
                 loginfo("data-only needs output directory then -- proto files")

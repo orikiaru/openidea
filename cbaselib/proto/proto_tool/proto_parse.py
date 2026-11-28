@@ -109,6 +109,7 @@ class ProtocolGen:
     def __init__(self, xml_path):
         self.proto_id_map = {}      #type:Dict[str,SerializeData] 
         self.output_names = {}
+        self.table_names = {}
         self.type_name_map = {}     #type:Dict[str,SerializeData]
         if isinstance(xml_path, (str, os.PathLike)):
             self.xml_paths = [os.fspath(xml_path)]
@@ -480,6 +481,12 @@ class ProtocolGen:
                 loginfo("rpcdata output collision:", filename, self.output_names[filename], data.GetName())
                 return False
             self.output_names[filename] = data.GetName()
+            if data.has_db:
+                table = data.DbTableName().lower()
+                if table in self.table_names:
+                    loginfo("MySQL table name collision:", table, self.table_names[table], data.name)
+                    return False
+                self.table_names[table] = data.name
         if(serialize_type == SerializeDataType.PROTOCOL or serialize_type == SerializeDataType.RPC):
             #排除同协议号。请求和回复共用这一个号。
             if(data.GetID() in self.proto_id_map):

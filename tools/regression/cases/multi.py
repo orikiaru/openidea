@@ -9,6 +9,7 @@ from regression_platform import SUFFIX
 from .. import ports
 from ..config import set_test_flags
 from ..probes import EnvironmentBlocked
+from ..procs import REPO
 from . import Case
 
 
@@ -48,21 +49,20 @@ class MultiCase(Case):
         mysql = os.environ.get("OI_TEST_MYSQL_CLIENT") or shutil.which("mysql")
         if not mysql:
             raise EnvironmentBlocked("registry static needs OI_TEST_MYSQL_CLIENT or mysql on PATH")
-        sql = (
-            "CREATE TABLE IF NOT EXISTS oi_service_instance ("
-            "`name` VARCHAR(64) NOT NULL, `id` INT NOT NULL, `ip` VARCHAR(64) NOT NULL, "
-            "`port` VARCHAR(8) NOT NULL, `zone` VARCHAR(32) NOT NULL, PRIMARY KEY (`name`, `id`)"
-            ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4; "
+        script = REPO / "module/mysql_script/framework/oi_service_instance.sql"
+        seed = (
             "DELETE FROM oi_service_instance WHERE `name`='peerserver'; "
             "INSERT INTO oi_service_instance (`name`, `id`, `ip`, `port`, `zone`) VALUES "
             "('peerserver', 1, '127.0.0.1', '%d', ''), ('peerserver', 2, '127.0.0.1', '%d', '');"
         ) % ports.GAME_PORTS
         command = [mysql, "--no-defaults", "--protocol=tcp", "--host", os.environ["OI_TEST_MYSQL_HOST"],
                    "--port", os.environ["OI_TEST_MYSQL_PORT"], "--user", os.environ["OI_TEST_MYSQL_USER"],
-                   "--database", os.environ["OI_TEST_MYSQL_DATABASE"], "--execute", sql]
+                   "--database", os.environ["OI_TEST_MYSQL_DATABASE"]]
         if os.environ.get("OI_TEST_MYSQL_PASSWORD"):
-            command.insert(-2, "--password=" + os.environ["OI_TEST_MYSQL_PASSWORD"])
-        subprocess.run(command, check=True, timeout=30)
+            command.append("--password=" + os.environ["OI_TEST_MYSQL_PASSWORD"])
+        with script.open("rb") as source:
+            subprocess.run(command, stdin=source, check=True, timeout=30)
+        subprocess.run(command, input=seed.encode("utf-8"), check=True, timeout=30)
         ctx.registry, ctx.registry_path = ctx.start("registry")
         ctx.ready(ctx.registry, ctx.registry_path, "registry server listen")
 

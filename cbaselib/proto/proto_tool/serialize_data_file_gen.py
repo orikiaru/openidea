@@ -283,7 +283,7 @@ __COMPARE____JSON_METHODS____DB_METHODS__};
         lines = []
         lines.append("    static constexpr const char* DbTableName()")
         lines.append("    {")
-        lines.append('        return "%s";' % self.class_name.lower())
+        lines.append('        return "%s";' % self.data.DbTableName())
         lines.append("    }")
         if self.data.db_indexes:
             clauses = [DbIndexDefinition(name, index) for name, index in self.data.DbIndexes().items()]

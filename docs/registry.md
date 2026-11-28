@@ -15,7 +15,7 @@ instances = [
 
 配了 `Registry.ip` 就连 registry。拉取回包里有名单，还有 `bStatic`。为真只使用名单，为假登记自己的地址并按秒心跳；旧 registry 不带该字段时默认登记。查询失败时缓存保持原状。
 
-下面是 registry 进程。它只起一份，单线程，代码在 `cbaselib/registry`。`Registry.config` 不写或是 `dynamic` 时是动态配置，业务进程要上报。`config = "static"` 时是静态配置，名单在表 `oi_service_instance`，由运维维护，业务进程只拉。现在动态配置用 Redis，静态配置用 MySQL；换引擎不改这两个名字。静态配置的库连接用 `Registry.db_host`、`db_port`、`db_user`、`db_password`、`db_database`，可选 `db_tls_ca`，并且构建要带 MySQL 客户端。
+下面是 registry 进程。它只起一份，单线程，代码在 `cbaselib/registry`。`Registry.config` 不写或是 `dynamic` 时是动态配置，业务进程要上报。`config = "static"` 时是静态配置，名单在表 `oi_service_instance`，由运维维护，业务进程只拉。该物理表名由协议声明指定，导出脚本为 `module/mysql_script/framework/oi_service_instance.sql`。现在动态配置用 Redis，静态配置用 MySQL；换引擎不改这两个名字。静态配置的库连接用 `Registry.db_host`、`db_port`、`db_user`、`db_password`、`db_database`，可选 `db_tls_ca`，并且构建要带 MySQL 客户端。
 
 ## 注册空间
 

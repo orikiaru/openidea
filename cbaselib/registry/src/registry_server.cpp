@@ -513,7 +513,7 @@ OI::Coro::Task RegistryServer::ReloadMysql()
 	}
 	std::vector<::OI::RpcData::ServiceLease> vRows;
 	OI::Db::Error stError;
-	const int32_t iCode = co_await m_pMysql->SelectAll("oi_service_instance", vRows, stError);
+	const int32_t iCode = co_await m_pMysql->SelectAll(vRows, stError);
 	m_bReloading = false;
 	if (iCode != OI_OK)
 	{

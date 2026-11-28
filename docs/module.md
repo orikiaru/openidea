@@ -42,7 +42,7 @@ rpcdata DbSample json db {
 
 JSON 会穿透。嵌套的 `rpcdata`、`vector`、`map` 按内层继续生成，里层 `rpcdata` 自己也要标 `json`，否则外层字段无法生成 JSON。`[nojson]` 的字段不检查能不能表达成 JSON，所以不适合 JSON 的 `map` 可以留在同一个结构里，只要标 `[nojson]`。要沿用外部键就写 `[json 键名]`，例如 `0 [json count] int32_t iCount;`。不改名就写成 `0 [json] int32_t iCount;`，键名仍是 `iCount`，和什么都不写一样。
 
-`db` 不穿透，只映射头一层。标记 `db` 的结构生成 `constexpr DbTableName()`，表名是完整结构名的小写形式，不插入下划线（如 `DbSample` 生成 `dbsample`）；单表接口可省略表名，也可显式指定自定义表。整数、浮点、`bool`、`string`、`Bytes` 各是一列。`vector`、`map` 和嵌套 `rpcdata` 默认整段收成 PB blob：序号固定为 0，每个容器恰好一条字段，空容器也包含数量为 0 的 payload。写了 `[dbjson]` 才改用现有 JSON 文本入库，这时里面的 `rpcdata` 必须自己标 `json`，标量不能写 `[dbjson]`。没写 `[dbjson]` 就不做这套 JSON。blob 里的结构不用标 `db`。列名默认是字段名，`[db 列名]` 才换，只写 `[db]` 列名仍是字段名。结构没标 `db`，就不能写 `[db]`、`[nodb]`、`[dbjson]`。字段写了 `[nodb]` 就不再是数据库字段，不能再写 `[db]`、`[dbjson]`、`[dbkey]`、`[dbtype]`。
+`db` 不穿透，只映射头一层。标记 `db` 的结构生成 `constexpr DbTableName()`，默认表名是完整结构名的小写形式，不插入下划线（如 `DbSample` 生成 `dbsample`）；也可用 `rpcdata ServiceLease db(oi_service_instance)` 指定物理表名。表名只认字母、数字、下划线，最长 64；单表接口可省略表名，也可显式指定自定义表。整数、浮点、`bool`、`string`、`Bytes` 各是一列。`vector`、`map` 和嵌套 `rpcdata` 默认整段收成 PB blob：序号固定为 0，每个容器恰好一条字段，空容器也包含数量为 0 的 payload。写了 `[dbjson]` 才改用现有 JSON 文本入库，这时里面的 `rpcdata` 必须自己标 `json`，标量不能写 `[dbjson]`。没写 `[dbjson]` 就不做这套 JSON。blob 里的结构不用标 `db`。列名默认是字段名，`[db 列名]` 才换，只写 `[db]` 列名仍是字段名。结构没标 `db`，就不能写 `[db]`、`[nodb]`、`[dbjson]`。字段写了 `[nodb]` 就不再是数据库字段，不能再写 `[db]`、`[dbjson]`、`[dbkey]`、`[dbtype]`。
 
 `[dbkey]` 标主键字段，可以标多个组成联合主键，`BuildCreateTable` 和按主键读改删的语句靠它，见 [数据库客户端](database.md) 的单表语句。主键只能是整数、`bool`、`string` 或 `Bytes`，`string`、`Bytes` 还必须写定长的 `[dbtype]`；浮点、`vector`、`map`、`rpcdata` 和 `[dbjson]` 不能做主键。`[dbtype]` 换建表时的列类型，类型名不分大小写，生成时统一成大写：`VARCHAR`、`VARBINARY` 后面跟 1 到 65535 的长度，`CHAR`、`BINARY` 跟 1 到 255 的长度，`TEXT`、`MEDIUMTEXT`、`LONGTEXT`、`BLOB`、`MEDIUMBLOB`、`LONGBLOB` 不带长度，例如 `[dbtype VARBINARY 64]`。`string` 可以用其中任何一种；`Bytes` 和 PB blob 只能用二进制类型；`[dbjson]` 只能用文本类型；数值字段不能写。读行时按列名匹配，缺列保持原值，NULL、类型不对、重复列和列数对不上都失败并保持原对象。模块访问数据库见 [数据库客户端](database.md)。
 
@@ -60,7 +60,7 @@ rpcdata Role db {
 
 自增字段写 `[dbkey, autoincrement]`：每表最多一个，必须是整数、属于主键，且是某个索引的首列。插入或 upsert 时字段为 0 会绑定原生 SQL NULL，由数据库分配；显式非零值原样绑定。单条插入可从写入结果的 `iInsertId` 读取生成值。MySQL 的 upsert 遇任一 UNIQUE 键冲突会更新已有行；需要冲突时报错时使用 Insert。
 
-协议导出时，每张默认表生成独立的 `module/mysql_script/<小写表名>.sql`；框架数据定义放在该目录的 `framework/` 子目录。脚本携带逐版历史，导入前先选择目标库；操作示例见 [数据库客户端](database.md#协议索引与逐表-sql)。目标为 MySQL 8，执行账号需要会话临时表权限，普通业务不需要例程权限。新增 PB 或 JSON 复杂列时，为已有行填入可解码的空值。重复导出没有变更时保留文件时间戳；只在新增列或索引时追加版本。旧列、主键、已有索引或字段自增属性发生变更时导出会拒绝：先备份数据，再由使用方手工删除该表 SQL 历史并重建数据库表。生成工具不执行 `DROP TABLE`。
+协议导出时，每张物理表生成独立的 `module/mysql_script/<表名>.sql`；框架数据定义放在该目录的 `framework/` 子目录。脚本携带逐版历史，导入前先选择目标库；操作示例见 [数据库客户端](database.md#协议索引与逐表-sql)。目标为 MySQL 8，执行账号需要会话临时表权限，普通业务不需要例程权限。新增 PB 或 JSON 复杂列时，为已有行填入可解码的空值。重复导出没有变更时保留文件时间戳；新增列、索引或兼容的内嵌结构变化时追加版本。旧列、主键、已有索引或字段自增属性发生变更时导出会拒绝：先备份数据，再由使用方手工删除该表 SQL 历史并重建数据库表。生成工具不执行 `DROP TABLE`。
 
 基础库在 `framework.cmake`。它编三方库和 `cbaselib`，并用 `--data-only` 生成 `cbaselib/proto/protocol/framework.proto`，不加入进程模块。协议号从 -1000 起。`logd` 和 `registry` 也在框架里，不写进 `module.proto`。根目录 `CMakeLists.txt` include 它，再调用 `cbaselib/proto/proto_tool/main.py`。`--` 前面是 `module.proto`、头文件目录、模块目录、部署目录和模块清单，后面是 `OI_PROTO_FILES`。输出到 `modules/include`、`modules` 和 `deploy`。修改任一输入会触发重新配置和生成；生成失败会终止配置。外部工程同样 include `openidea/framework.cmake`，换成自己的协议文件列表、模块文本、输出目录，不再手写基础库列表。开发标准见 [开发标准](develop.md) 第 2 节。
 

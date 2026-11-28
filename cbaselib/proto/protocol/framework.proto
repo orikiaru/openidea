@@ -62,7 +62,7 @@ rpcdata RegPullRes {
 }
 
 // 静态配置读这张表。地址由运维维护，进程不登记。
-rpcdata ServiceLease db {
+rpcdata ServiceLease db(oi_service_instance) {
     0 [db name] [dbkey] [dbtype VARCHAR 64] string sName;
     1 [db id] [dbkey] int32_t iId;
     2 [db ip] [dbtype VARCHAR 64] string sIp;

@@ -160,6 +160,7 @@ class SerializeData:
         self.is_key = False
         self.has_json = False
         self.has_db = False
+        self.db_table = None
         self.db_indexes = {}
         self.json_ok = False
 
@@ -187,6 +188,8 @@ class SerializeData:
         return self.name
     def GetDataName(self):
         return "oi_rpcdata_" + self.name.lower() + ".h"
+    def DbTableName(self):
+        return self.db_table or self.name.lower()
     def DbIndexes(self):
         columns = {member.name: member.db_name for member in self.members}
         return {name: {"unique": unique, "columns": [columns[field] for field in fields]}

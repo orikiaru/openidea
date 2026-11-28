@@ -34,7 +34,7 @@ MySQL 配置必须指定非空数据库名、1 至 65535 的有效端口，以�
 
 ## 结构体单表操作
 
-`oi_db_table.h` 提供 `Client` 的单表入口。标记 `db` 的协议结构生成 `constexpr DbTableName()`，将完整结构名转小写，不插入下划线，例如 `DbSample` 对应 `dbsample`。建表、单条和批量增删改查、按成员选列、带写结果的重载以及 `SelectAll` 均可省略表名，使用该默认值。显式表名重载保留，用于自定义表；表名只认字母、数字、下划线，最长 64，无效时返回 `OI_ERR_INVALID_ARGUMENT`。这些入口返回 `TaskResult<int32_t>`，逐条等待并检查状态码：
+`oi_db_table.h` 提供 `Client` 的单表入口。标记 `db` 的协议结构生成 `constexpr DbTableName()`，默认将完整结构名转小写，不插入下划线，例如 `DbSample` 对应 `dbsample`；`rpcdata ServiceLease db(oi_service_instance)` 可指定物理表名。建表、单条和批量增删改查、按成员选列、带写结果的重载以及 `SelectAll` 均可省略表名，使用该默认值。显式表名重载保留，用于自定义表；表名只认字母、数字、下划线，最长 64，无效时返回 `OI_ERR_INVALID_ARGUMENT`。这些入口返回 `TaskResult<int32_t>`，逐条等待并检查状态码：
 
 | 接口 | 操作 |
 | --- | --- |
@@ -69,14 +69,22 @@ JOIN、任意条件、范围查询和跨表操作不在这层，调用方用 `Pi
 
 `[dbkey, autoincrement]` 标记自增主键成员：每表最多一个，必须是整数，且是某个索引的首列。`Insert` 和 `Upsert` 的该字段为 0 时绑定原生 SQL NULL，由数据库分配；显式非零值原样绑定。单条 `Insert` 使用带 `Result` 的重载可从 `iInsertId` 获取生成值。MySQL 的 `Upsert` 遇任一 UNIQUE 键冲突会更新已有行；需要冲突时报错时使用 `Insert`。
 
-协议导出将每张默认表的 SQL 写入 `module/mysql_script/<小写表名>.sql`，框架数据定义写入其中的 `framework/` 子目录。每个文件携带逐版历史，面向 MySQL 8（实测 8.0.42 和 8.0.46）；执行账号需要会话临时表权限，普通业务不需要例程权限。先选目标库，再在客户端导入；以下方式也适用于 Windows：
+协议导出将每张物理表的 SQL 写入 `module/mysql_script/<表名>.sql`，框架数据定义写入其中的 `framework/` 子目录。每个文件携带逐版历史，面向 MySQL 8（实测 8.0.42 和 8.0.46）；执行账号需要会话临时表权限，普通业务不需要例程权限。先选目标库，再在客户端导入；以下方式也适用于 Windows：
 
 ```text
 mysql -u 用户名 -p 目标库
 mysql> source module/mysql_script/dbsample.sql
 ```
 
-新增 PB 或 JSON 复杂列时，脚本为已有行填入可解码的空值。现有静态注册使用自定义表名，导出脚本仍按协议默认表名生成。无变更时重复导出保留文件时间戳，新增列或索引追加版本。修改旧列、主键、已有索引或旧字段自增属性会阻止导出；先备份数据，再由使用方手工删除该表 SQL 历史并重建数据库表。工具不执行 `DROP TABLE`。
+新增 PB 或 JSON 复杂列时，脚本为已有行填入可解码的空值。无变更时重复导出保留文件时间戳；新增列、索引或兼容的内嵌结构变化追加版本。内嵌 PB 按子类型和字段号检查，JSON 按子类型和实际持久化键检查，容器内的嵌套结构也检查。旧字段删除或类型变化会阻止导出，新增字段兼容；PB 成员只改名，或 JSON 成员改 C++ 名但保留原 JSON 别名，不影响兼容性。修改旧列、主键、已有索引或旧字段自增属性也会阻止导出；有意做不兼容变更时先备份数据，再由使用方手工删除该表 SQL 历史并重建数据库表。要保留旧值时，须先用旧版本解码，再迁移为新编码；单纯重建同型 SQL 列并回填原字节不能转换历史值。工具不执行 `DROP TABLE`。
+
+已有历史若包含结构体却没有内嵌编码基线，先取上一次实际部署使用的协议文件，对对应 SQL 目录执行一次以下命令，再正常导出新协议。仓库自带的基线随代码提供，无需执行此步骤：
+
+```text
+python cbaselib/proto/proto_tool/main.py --baseline-mysql-nested <SQL目录> -- <该批次已部署的协议文件...>
+```
+
+静态注册的协议指定物理表 `oi_service_instance`，框架脚本导出为 `framework/oi_service_instance.sql`。外部项目若仍保留旧版自动生成的 `framework/servicelease.sql`，先备份并将旧产物移出导出目录，再导出；不要求删除数据库中的表。业务侧显式指定表名的接口保持可用。
 
 ## 执行与结果
 

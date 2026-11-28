@@ -267,11 +267,17 @@ def ParseRpcData(lex):
     if name is None:
         return None
     flags = set()
+    table = None
     while lex.peek_ident() in ("key", "json", "db"):
         flag = lex.ident()
         if flag in flags:
             return lex.fail("duplicate rpcdata flag " + flag)
         flags.add(flag)
+        if flag == "db" and lex.peek_char() == "(":
+            lex.punct("(")
+            table = lex.ident()
+            if not table or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", table) or not lex.punct(")"):
+                return lex.fail("db(table) needs a valid MySQL table name")
     if not lex.punct("{"):
         return None
     data = SerializeData(SerializeDataType.RPC_DATA, None)
@@ -279,6 +285,7 @@ def ParseRpcData(lex):
     data.is_key = "key" in flags
     data.has_json = "json" in flags
     data.has_db = "db" in flags
+    data.db_table = table
     while not lex.eof() and lex.peek_char() != "}":
         if lex.peek_ident() in ("index", "uniqueindex"):
             if not ParseDbIndex(lex, data):

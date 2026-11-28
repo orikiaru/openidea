@@ -6,24 +6,60 @@ import os
 from pathlib import Path
 import tempfile
 
-from serialize_data_parse import DbIndexDefinition, DbColumnDefault, DB_COLUMN_NAME
+from proto_parse import ParseType, TypeNames
+from serialize_data_parse import DbIndexDefinition, DbColumnDefault, DB_COLUMN_NAME, SerializeDataType
 
 
 HISTORY = "-- oi-mysql-history-v1 "
 CHECKSUM = "-- oi-mysql-sha256 "
 
 
-def table_schema(data):
+def nested_types(field, types):
+    """Store each reachable rpcdata once, including self-references through containers."""
+    definitions = {}
+    pending = list(TypeNames(ParseType(field.type)))
+    while pending:
+        name = pending.pop()
+        if name not in types or name in definitions:
+            continue
+        fields = {}
+        definitions[name] = fields
+        for member in types[name].members:
+            if field.db_json and not member.json_name:
+                continue
+            key = member.json_name if field.db_json else str(member.seq)
+            fields[key] = member.type
+            pending.extend(TypeNames(ParseType(member.type)))
+    return definitions
+
+
+def table_schema(data, types):
     columns = []
     primary = []
     for field in data.members:
         if not field.db_name:
             continue
-        columns.append(dict(name=field.db_name, sql=field.DbSqlType(), seq=field.seq,
-                            type=field.GetType(), json=field.db_json, auto=field.auto_increment))
+        column = dict(name=field.db_name, sql=field.DbSqlType(), seq=field.seq,
+                      type=field.GetType(), json=field.db_json, auto=field.auto_increment)
+        nested = nested_types(field, types)
+        if nested:
+            column["nested"] = nested
+        columns.append(column)
         if field.db_key:
             primary.append(field.db_name)
     return dict(columns=columns, primary=primary, indexes=data.DbIndexes())
+
+
+def check_nested_column(old, new):
+    for type_name, fields in old["nested"].items():
+        current = new.get("nested", {}).get(type_name, {})
+        for key, old_type in fields.items():
+            field = "JSON key " + key if old["json"] else "PB field #" + key
+            location = "column %s, %s %s" % (old["name"], type_name, field)
+            if key not in current:
+                raise ValueError(location + " removed or renamed (previously " + old_type + ")")
+            if old_type != current[key]:
+                raise ValueError("%s changed type: %s -> %s" % (location, old_type, current[key]))
 
 
 def schema_changes(old, new):
@@ -36,7 +72,9 @@ def schema_changes(old, new):
         if name not in columns:
             raise ValueError("column removed or renamed: " + name)
         for key, value in col.items():
-            if columns[name][key] != value:
+            if key == "nested":
+                check_nested_column(col, columns[name])
+            elif columns[name][key] != value:
                 raise ValueError("column %s changed %s: %s -> %s" % (name, key, value, columns[name][key]))
     existing = set(old_names)
     if [name for name in columns if name in existing] != old_names:
@@ -46,6 +84,12 @@ def schema_changes(old, new):
             raise ValueError("index removed or changed: %s (%s -> %s)" % (name, index, new["indexes"].get(name)))
     return ([name for name in columns if name not in existing],
             [name for name in new["indexes"] if name not in old["indexes"]])
+
+
+def changed_nested_columns(old, new):
+    previous = {col["name"]: col for col in old["columns"]}
+    return [col["name"] for col in new["columns"] if col["name"] in previous and
+            col.get("nested") != previous[col["name"]].get("nested")]
 
 
 def index_check(table, name, columns, unique):
@@ -111,8 +155,11 @@ def render_sql(table, history):
     previous = {"columns": [], "indexes": {}, "primary": primary}
     for version, snapshot in enumerate(history, 1):
         added, indexed = schema_changes(previous, snapshot)
+        nested = changed_nested_columns(previous, snapshot)
         previous = snapshot
         lines.append("-- v%d: columns [%s], indexes [%s]" % (version, ", ".join(added), ", ".join(indexed)))
+        if nested:
+            lines.append("-- Nested encoding history updated for: " + ", ".join(nested))
         for col_pos, col in enumerate(snapshot["columns"]):
             name = col["name"]
             if name in primary or name not in added:
@@ -163,9 +210,10 @@ def export_lock(directory):
         yield
 
 
-def export_mysql_scripts(datas, directory):
+def export_mysql_scripts(datas, directory, baseline_only=False):
     directory = Path(directory)
-    rows = {data.name.lower(): data for data in datas if data.has_db}
+    rows = {data.DbTableName(): data for data in datas if data.has_db}
+    types = {data.name: data for data in datas if data.GetType() == SerializeDataType.RPC_DATA}
     if not rows and not directory.exists():
         return True
     try:
@@ -181,17 +229,29 @@ def export_mysql_scripts(datas, directory):
                 path = directory / (table + ".sql")
                 if not DB_COLUMN_NAME.fullmatch(table) or len(table) > 64:
                     raise ValueError("invalid MySQL table name")
-                schema = table_schema(data)
+                schema = table_schema(data, types)
                 history = read_history(path) if path.exists() else []
                 if history and history[-1] == schema:
                     continue
                 old = history[-1] if history else {"columns": [], "primary": schema["primary"], "indexes": {}}
                 added, indexed = schema_changes(old, schema)
+                nested = changed_nested_columns(old, schema)
+                missing = [col["name"] for col in old["columns"] if col["name"] in nested and "nested" not in col]
+                if baseline_only:
+                    if not history or added or indexed or nested != missing:
+                        raise ValueError("baseline must use the previously deployed protocol, without schema changes")
+                elif missing:
+                    print("MySQL export refused:", path, "- missing nested encoding history for", ", ".join(missing),
+                          "\nUse the previously deployed protocol with --baseline-mysql-nested <sql-dir> -- <proto-files>,"
+                          " then export the new protocol.")
+                    return False
                 history.append(schema)
                 body = render_sql(table, history)
                 headers = HISTORY + json.dumps(history, separators=(",", ":")) + "\n"
                 script = headers + CHECKSUM + sha256((headers + body).encode()).hexdigest() + "\n" + body
                 note = "v%d: added columns [%s], indexes [%s]" % (len(history), ", ".join(added), ", ".join(indexed))
+                if nested:
+                    note += ", nested encoding [%s]" % ", ".join(nested)
                 pending.append((path, script, note))
             # Validate every table before publishing the first file. Replace each file atomically.
             for path, script, note in pending:

@@ -77,7 +77,7 @@ def check_mysql_migrations(client, env, directory):
     equal(sql("SELECT COUNT(*) FROM player WHERE coins=42"), "2")
 
     # Import the actual application and framework deliverables, including their complete type mappings.
-    for file in ("dbsample.sql", "framework/servicelease.sql"):
+    for file in ("dbsample.sql", "framework/oi_service_instance.sql"):
         script = (ROOT / "module/mysql_script" / file).read_text(encoding="utf-8")
         sql(script)
         sql(script)
